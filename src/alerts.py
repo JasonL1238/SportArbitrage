@@ -42,7 +42,8 @@ def alert_discord(opp: ArbOpportunity) -> bool:
     if not url:
         return True
     try:
-        httpx.post(url, json={"content": f"```\n{_format_alert(opp)}\n```"}, timeout=10)
+        resp = httpx.post(url, json={"content": f"```\n{_format_alert(opp)}\n```"}, timeout=10)
+        resp.raise_for_status()
         return True
     except Exception:
         log.exception("Failed to send Discord alert")
@@ -56,11 +57,12 @@ def alert_telegram(opp: ArbOpportunity) -> bool:
         return True
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     try:
-        httpx.post(
+        resp = httpx.post(
             url,
             json={"chat_id": chat_id, "text": _format_alert(opp), "parse_mode": ""},
             timeout=10,
         )
+        resp.raise_for_status()
         return True
     except Exception:
         log.exception("Failed to send Telegram alert")

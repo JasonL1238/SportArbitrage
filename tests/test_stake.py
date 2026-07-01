@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.stake import guaranteed_profit, stake_split
+from src.stake import apply_costs_to_decimal_odds, guaranteed_profit, max_stake_from_liquidity, stake_split
 
 
 class TestStakeSplit:
@@ -72,3 +72,17 @@ class TestGuaranteedProfit:
         stakes = stake_split(odds, total)
         profit = guaranteed_profit(stakes, odds, total)
         assert profit > 0
+
+
+class TestExecutionCosts:
+    def test_fee_reduces_net_winnings_only(self):
+        assert apply_costs_to_decimal_odds(3.0, fee_rate=0.05) == pytest.approx(2.9)
+
+    def test_slippage_reduces_effective_odds(self):
+        assert apply_costs_to_decimal_odds(2.0, slippage_bps=100) == pytest.approx(1.99)
+
+    def test_liquidity_caps_total_stake(self):
+        assert max_stake_from_liquidity([60.0, 40.0], [30.0, 100.0]) == pytest.approx(50.0)
+
+    def test_no_liquidity_returns_none(self):
+        assert max_stake_from_liquidity([60.0, 40.0], [None, None]) is None

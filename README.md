@@ -16,12 +16,15 @@ pip install -r requirements.txt
 
 # 2. Configure environment
 cp .env.example .env
-# Edit .env — at minimum set ODDS_API_KEY and DATABASE_URL
+# Edit .env. For local ESPN testing, no key or database is required.
+# For The Odds API + Postgres, set ODDS_API_KEY and DATABASE_URL.
 
-# 3. Run the scanner (creates tables on first run)
+# 3. Run the scanner
+python -m src.scanner --source espn_odds --sport baseball_mlb
 python -m src.scanner              # scan all target sports
-python -m src.scanner --dry-run    # check events only (no credits used)
+python -m src.scanner --dry-run    # check events only
 python -m src.scanner --sport basketball_nba  # scan one sport
+python -m src.scanner --watch --interval 300  # continuous local monitor
 
 # 4. Open the dashboard
 streamlit run src/dashboard.py
@@ -31,8 +34,10 @@ streamlit run src/dashboard.py
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `ODDS_API_KEY` | Yes | — | API key from [The Odds API](https://the-odds-api.com/) |
-| `DATABASE_URL` | Yes | — | Postgres connection string |
+| `ODDS_API_KEY` | No | — | API key from [The Odds API](https://the-odds-api.com/) when using `odds_api` |
+| `DATABASE_URL` | No | — | Postgres connection string. If omitted, scanner writes local JSONL records to `LOCAL_DATA_DIR` |
+| `LOCAL_DATA_DIR` | No | `.local_data` | Local append-only scan output directory |
+| `ODDS_SOURCES` | No | `odds_api` if keyed, else `espn_odds` | Comma-separated source adapters to run |
 | `DISCORD_WEBHOOK_URL` | No | — | Discord webhook for alerts |
 | `ENABLE_ALERTS` | No | `true` | Enable/disable alert dispatch |
 | `MIN_ARB_MARGIN` | No | `0.01` | Minimum arb margin (1%) |
@@ -42,6 +47,9 @@ streamlit run src/dashboard.py
 | `MARKETS` | No | `h2h,spreads,totals` | Markets to scan |
 | `REGIONS` | No | `us` | Regions to fetch |
 | `CREDIT_FLOOR` | No | `50` | Stop scanning below this credit level |
+| `SCAN_INTERVAL_SECONDS` | No | `300` | Delay between scans in `--watch` mode |
+| `REQUIRE_DISTINCT_BOOKS` | No | `true` | Require at least two books for executable arbs |
+| `REQUIRE_COMPLETE_OUTCOMES` | No | `true` | Skip incomplete markets |
 
 ## Deployment Guide
 
@@ -223,3 +231,5 @@ python -m pytest tests/ -v
 ## Swapping to a Paid API
 
 The `OddsClient` class in `src/odds_client.py` is the only module that touches the network. To use a different data source, implement the same `get_sports()`, `get_events()`, `get_odds()` interface and swap it into `scanner.py`. The arb math, database, and dashboard are API-agnostic.
+
+See `docs/odds_sources.md` for the current source-acquisition plan, including exchanges, prediction markets, sportsbook aggregators, and direct sportsbook risks.

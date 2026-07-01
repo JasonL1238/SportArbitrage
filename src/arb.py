@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Optional
 
 from src.models import ArbOpportunity, BestOutcome, BookmakerMarket, Event
-from src.stake import guaranteed_profit, stake_split
+from src.stake import apply_costs_to_decimal_odds, guaranteed_profit, max_stake_from_liquidity, stake_split
 
 log = logging.getLogger(__name__)
 
@@ -92,6 +92,8 @@ def find_arbs(
     *,
     require_distinct_books: bool = False,
     require_complete_outcomes: bool = False,
+    fee_rate: float = 0.0,
+    slippage_bps: float = 0.0,
 ) -> list[ArbOpportunity]:
     """Scan a list of events and return all arbitrage opportunities above *min_margin*.
 
@@ -123,7 +125,13 @@ def find_arbs(
                             bookmaker_key=bookmaker.key,
                             bookmaker_title=bookmaker.title,
                             decimal_odds=outcome.price,
+                            effective_decimal_odds=apply_costs_to_decimal_odds(
+                                outcome.price,
+                                fee_rate=fee_rate,
+                                slippage_bps=slippage_bps,
+                            ),
                             point=outcome.point,
+                            liquidity=outcome.liquidity,
                         )
 
         for gk, best_by_outcome in market_groups.items():
@@ -134,7 +142,7 @@ def find_arbs(
                 if expected is not None and len(best_list) != expected:
                     continue
 
-            odds = [b.decimal_odds for b in best_list]
+            odds = [b.effective_decimal_odds or b.decimal_odds for b in best_list]
             margin = arb_margin(odds)
 
             if margin >= min_margin:
@@ -144,6 +152,7 @@ def find_arbs(
                 stakes = stake_split(odds, total_stake)
                 profit = guaranteed_profit(stakes, odds, total_stake)
                 inverse_sum = sum(1 / o for o in odds)
+                liquidity_cap = max_stake_from_liquidity(stakes, [b.liquidity for b in best_list])
 
                 opportunities.append(
                     ArbOpportunity(
@@ -162,6 +171,9 @@ def find_arbs(
                         guaranteed_profit=profit,
                         total_stake=total_stake,
                         detected_at=datetime.now(UTC),
+                        fees_applied=fee_rate,
+                        slippage_applied=slippage_bps,
+                        max_executable_stake=liquidity_cap,
                     )
                 )
 

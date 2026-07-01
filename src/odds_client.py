@@ -122,6 +122,10 @@ class OddsClient:
     # ── Parsing helpers ──────────────────────────────────────────────────
 
     @staticmethod
+    def _parse_datetime(value: str) -> datetime:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+    @staticmethod
     def parse_events(raw: list[dict[str, Any]]) -> list[Event]:
         """Parse raw API JSON into typed Event models."""
         events: list[Event] = []
@@ -130,21 +134,29 @@ class OddsClient:
             for bm in item.get("bookmakers", []):
                 mkts: list[BookmakerMarket] = []
                 for m in bm.get("markets", []):
-                    outcomes = [
-                        Outcome(
-                            name=o["name"],
-                            price=float(o["price"]),
-                            point=float(o["point"]) if o.get("point") is not None else None,
-                        )
-                        for o in m.get("outcomes", [])
-                    ]
+                    outcomes: list[Outcome] = []
+                    for o in m.get("outcomes", []):
+                        try:
+                            outcomes.append(
+                                Outcome(
+                                    name=o["name"],
+                                    price=float(o["price"]),
+                                    point=float(o["point"]) if o.get("point") is not None else None,
+                                )
+                            )
+                        except (KeyError, TypeError, ValueError):
+                            log.warning("Skipping malformed outcome in event %s: %s", item.get("id"), o)
+                    if not outcomes:
+                        continue
                     mkts.append(
                         BookmakerMarket(
                             key=m["key"],
-                            last_update=datetime.fromisoformat(m["last_update"]),
+                            last_update=OddsClient._parse_datetime(m["last_update"]),
                             outcomes=outcomes,
                         )
                     )
+                if not mkts:
+                    continue
                 bookmakers.append(Bookmaker(key=bm["key"], title=bm["title"], markets=mkts))
 
             events.append(
@@ -152,7 +164,7 @@ class OddsClient:
                     id=item["id"],
                     sport_key=item["sport_key"],
                     sport_title=item["sport_title"],
-                    commence_time=datetime.fromisoformat(item["commence_time"]),
+                    commence_time=OddsClient._parse_datetime(item["commence_time"]),
                     home_team=item["home_team"],
                     away_team=item["away_team"],
                     bookmakers=bookmakers,

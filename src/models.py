@@ -12,6 +12,10 @@ class Outcome(BaseModel):
     name: str
     price: float  # decimal odds
     point: Optional[float] = None  # spread / total line
+    source_market_id: Optional[str] = None
+    source_selection_id: Optional[str] = None
+    liquidity: Optional[float] = None
+    status: str = "active"
 
 
 class BookmakerMarket(BaseModel):
@@ -44,6 +48,8 @@ class BestOutcome(BaseModel):
     bookmaker_title: str
     decimal_odds: float
     point: Optional[float] = None
+    effective_decimal_odds: Optional[float] = None
+    liquidity: Optional[float] = None
 
 
 class ArbOpportunity(BaseModel):
@@ -62,6 +68,9 @@ class ArbOpportunity(BaseModel):
     guaranteed_profit: float = 0.0
     total_stake: float = 0.0
     detected_at: datetime = datetime.min
+    fees_applied: float = 0.0
+    slippage_applied: float = 0.0
+    max_executable_stake: Optional[float] = None
 
     @property
     def margin_pct(self) -> str:
@@ -89,3 +98,35 @@ class PaperTrade(BaseModel):
     odds_at_check_json: Optional[str] = None
     would_have_profit: Optional[float] = None
     notes: str = ""
+
+
+class PriceQuote(BaseModel):
+    """Source-agnostic normalized market data row.
+
+    This is the adapter boundary for sportsbooks, exchanges, and prediction
+    markets.  Arbitrage logic can consume grouped quotes once event/market
+    matching is confident enough.
+    """
+
+    source: str
+    sport: str
+    league: Optional[str] = None
+    event_name: str
+    home_team: Optional[str] = None
+    away_team: Optional[str] = None
+    participant: Optional[str] = None
+    market_type: str
+    line: Optional[float] = None
+    selection: str
+    decimal_odds: Optional[float] = None
+    price: Optional[float] = None
+    implied_probability: Optional[float] = None
+    timestamp: datetime
+    event_start_time: Optional[datetime] = None
+    source_event_id: str
+    source_market_id: Optional[str] = None
+    source_selection_id: Optional[str] = None
+    liquidity: Optional[float] = None
+    limit: Optional[float] = None
+    status: str = "active"
+    raw_payload_ref: Optional[str] = None

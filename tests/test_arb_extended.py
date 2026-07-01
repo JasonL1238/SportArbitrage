@@ -283,6 +283,44 @@ class TestEdgeCases:
         assert opp.home_team == "Team A"
         assert opp.away_team == "Team B"
         assert opp.total_stake == 250.0
-        assert opp.implied_prob_sum == pytest.approx(sum(1 / b.decimal_odds for b in opp.best_outcomes))
+        assert opp.implied_prob_sum == pytest.approx(sum(1 / (b.effective_decimal_odds or b.decimal_odds) for b in opp.best_outcomes))
         assert opp.margin_pct.endswith("%")
         assert opp.detected_at.tzinfo is not None
+
+    def test_fees_and_slippage_reduce_margin(self, two_way_arb_event):
+        raw = find_arbs([two_way_arb_event], min_margin=0.01, total_stake=100.0)
+        after_costs = find_arbs(
+            [two_way_arb_event],
+            min_margin=0.01,
+            total_stake=100.0,
+            fee_rate=0.10,
+            slippage_bps=50,
+        )
+
+        assert len(raw) == 1
+        assert len(after_costs) == 1
+        assert after_costs[0].margin < raw[0].margin
+        assert after_costs[0].fees_applied == 0.10
+        assert after_costs[0].slippage_applied == 50
+
+    def test_large_costs_can_remove_arb(self, two_way_arb_event):
+        after_costs = find_arbs(
+            [two_way_arb_event],
+            min_margin=0.01,
+            total_stake=100.0,
+            fee_rate=0.40,
+            slippage_bps=500,
+        )
+
+        assert after_costs == []
+
+    def test_liquidity_cap_is_recorded(self, two_way_arb_event):
+        for bookmaker in two_way_arb_event.bookmakers:
+            for market in bookmaker.markets:
+                for outcome in market.outcomes:
+                    outcome.liquidity = 25.0
+
+        opp = find_arbs([two_way_arb_event], min_margin=0.01, total_stake=100.0)[0]
+
+        assert opp.max_executable_stake is not None
+        assert opp.max_executable_stake < 100.0

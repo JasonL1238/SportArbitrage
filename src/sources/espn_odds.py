@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import json
 import logging
-import time
 from datetime import UTC, datetime
 from typing import Any
 
@@ -26,18 +25,21 @@ from src.sources.base import SourceHealth, SourceSnapshot
 
 log = logging.getLogger(__name__)
 
-_SPORT_URLS: dict[str, str] = {
-    "basketball_nba": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/odds",
-    "americanfootball_nfl": "https://site.api.espn.com/apis/site/v2/sports/football/nfl/odds",
-    "baseball_mlb": "https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/odds",
-    "icehockey_nhl": "https://site.api.espn.com/apis/site/v2/sports/hockey/nhl/odds",
+_SPORT_PATHS: dict[str, tuple[str, str]] = {
+    "basketball_nba": ("basketball", "nba"),
+    "americanfootball_nfl": ("football", "nfl"),
+    "baseball_mlb": ("baseball", "mlb"),
+    "icehockey_nhl": ("hockey", "nhl"),
 }
 
 _EVENTS_URLS: dict[str, str] = {
-    "basketball_nba": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard",
-    "americanfootball_nfl": "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard",
-    "baseball_mlb": "https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard",
-    "icehockey_nhl": "https://site.api.espn.com/apis/site/v2/sports/hockey/nhl/scoreboard",
+    key: f"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/scoreboard"
+    for key, (sport, league) in _SPORT_PATHS.items()
+}
+
+_SUMMARY_URLS: dict[str, str] = {
+    key: f"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/summary"
+    for key, (sport, league) in _SPORT_PATHS.items()
 }
 
 PARSER_VERSION = "1"
@@ -66,7 +68,9 @@ class EspnOddsAdapter:
             resp = self._client.get(url)
             resp.raise_for_status()
             data = resp.json()
-            events = data.get("events", [])
+            events = [e for e in data.get("events", []) if _is_upcoming_event(e)]
+            for event in events:
+                event["_sport_key"] = sport_key
             self._record_success()
             return events
         except Exception as exc:
@@ -74,8 +78,9 @@ class EspnOddsAdapter:
             raise
 
     def fetch_odds(self, sport_key: str) -> SourceSnapshot:
-        url = _SPORT_URLS.get(sport_key)
-        if not url:
+        events_url = _EVENTS_URLS.get(sport_key)
+        summary_url = _SUMMARY_URLS.get(sport_key)
+        if not events_url or not summary_url:
             return SourceSnapshot(
                 source_key=self.source_key,
                 sport_key=sport_key,
@@ -86,16 +91,36 @@ class EspnOddsAdapter:
 
         self._fetch_count += 1
         try:
-            resp = self._client.get(url)
+            resp = self._client.get(events_url)
             resp.raise_for_status()
-            payload = resp.text
+            data = resp.json()
+            events = [e for e in data.get("events", []) if _is_upcoming_event(e)]
+
+            for event in events:
+                event["_sport_key"] = sport_key
+                event_id = event.get("id")
+                if not event_id:
+                    continue
+                summary_resp = self._client.get(summary_url, params={"event": event_id})
+                summary_resp.raise_for_status()
+                summary = summary_resp.json()
+                odds_payload = summary.get("pickcenter") or summary.get("odds") or []
+                if isinstance(odds_payload, dict):
+                    odds_payload = [odds_payload]
+                if not odds_payload:
+                    continue
+                comps = event.get("competitions") or []
+                if comps:
+                    comps[0]["odds"] = odds_payload
+
+            payload = json.dumps(events)
             self._record_success()
             return SourceSnapshot(
                 source_key=self.source_key,
                 sport_key=sport_key,
                 raw_payload=payload,
                 fetched_at=datetime.now(UTC),
-                url=url,
+                url=events_url,
                 status_code=resp.status_code,
                 content_type=resp.headers.get("content-type"),
                 parser_version=PARSER_VERSION,
@@ -240,7 +265,27 @@ def _parse_espn_odds(raw: list[dict[str, Any]]) -> list[Event]:
     return events
 
 
+def _is_upcoming_event(item: dict[str, Any]) -> bool:
+    comps = item.get("competitions") or []
+    if not comps:
+        return False
+
+    status_type = (comps[0].get("status") or {}).get("type") or {}
+    if status_type.get("completed") is True:
+        return False
+
+    commence_str = item.get("date", comps[0].get("date", ""))
+    try:
+        commence_time = datetime.fromisoformat(commence_str.replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return True
+    return commence_time > datetime.now(UTC)
+
+
 def _extract_sport_key(item: dict[str, Any]) -> str:
+    if item.get("_sport_key"):
+        return str(item["_sport_key"])
+
     league = item.get("league", {})
     slug = league.get("slug", "")
     if "nba" in slug.lower():

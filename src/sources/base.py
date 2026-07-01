@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Protocol, runtime_checkable
 
-from src.models import Event
+from src.models import Event, PriceQuote
 
 
 @dataclass
@@ -79,4 +79,26 @@ class SourceAdapter(Protocol):
 
     def close(self) -> None:
         """Release any held resources (HTTP clients, sockets, etc.)."""
+        ...
+
+
+@runtime_checkable
+class QuoteSourceAdapter(Protocol):
+    """Protocol for sources that emit normalized market-data quotes directly."""
+
+    @property
+    def source_key(self) -> str:
+        """Unique source identifier."""
+        ...
+
+    def fetch_quotes(self, **kwargs: Any) -> list[PriceQuote]:
+        """Fetch fresh normalized quotes."""
+        ...
+
+    def healthcheck(self) -> SourceHealth:
+        """Return current health status."""
+        ...
+
+    def close(self) -> None:
+        """Release held resources."""
         ...

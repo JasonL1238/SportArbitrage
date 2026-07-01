@@ -110,6 +110,11 @@ class TestEspnEdgeCases:
         events = _parse_espn_odds([])
         assert events == []
 
+    def test_adapter_supplied_sport_key_is_preserved(self):
+        raw = [dict(ESPN_MLB_ODDS_SNAPSHOT[0], _sport_key="baseball_mlb")]
+        events = _parse_espn_odds(raw)
+        assert events[0].sport_key == "baseball_mlb"
+
 
 class TestEspnMultiProvider:
     def test_parses_two_providers(self):
