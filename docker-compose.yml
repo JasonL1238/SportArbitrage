@@ -1,0 +1,41 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: sportarbitrage
+      POSTGRES_USER: arb
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-arb_dev_pass}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U arb -d sportarbitrage"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  scanner:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://arb:${POSTGRES_PASSWORD:-arb_dev_pass}@postgres:5432/sportarbitrage
+    command: ["python", "-m", "src.scanner"]
+
+  dashboard:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://arb:${POSTGRES_PASSWORD:-arb_dev_pass}@postgres:5432/sportarbitrage
+    ports:
+      - "8501:8501"
+    command: ["streamlit", "run", "src/dashboard.py", "--server.address=0.0.0.0", "--server.port=8501"]
+
+volumes:
+  pgdata:
