@@ -13,6 +13,7 @@ from typing import Any
 import httpx
 
 from src.models import PriceQuote
+from src.market_decomposer import decompose_market_text, decompose_polymarket_market
 from src.sources.base import SourceHealth
 
 log = logging.getLogger(__name__)
@@ -181,15 +182,17 @@ def parse_polymarket_quotes(
         timestamp = _parse_book_timestamp(book.get("timestamp"))
         condition_id = str(market.get("condition_id") or book.get("market") or "")
         question = str(market.get("question") or market.get("market_slug") or condition_id)
+        decomposition = decompose_market_text(question, source="polymarket", sport_hint=_infer_sport(market))
         event_start = _parse_datetime(market.get("game_start_time") or market.get("end_date_iso"))
 
         quotes.append(
             PriceQuote(
                 source="polymarket",
-                sport=_infer_sport(market),
+                sport=decomposition.sport,
                 league=None,
-                event_name=question,
-                market_type="prediction_binary",
+                event_name=decomposition.event_name,
+                participant=decomposition.participant,
+                market_type=decomposition.market_kind,
                 selection=str(token.get("outcome") or token_id),
                 decimal_odds=1 / ask_price,
                 price=ask_price,
@@ -202,6 +205,8 @@ def parse_polymarket_quotes(
                 liquidity=best_ask[1],
                 status="active" if market.get("active", True) and not market.get("closed", False) else "inactive",
                 raw_payload_ref=condition_id,
+                market_confidence=decomposition.confidence,
+                market_notes=decomposition.notes,
             )
         )
     return quotes
@@ -232,6 +237,7 @@ def parse_polymarket_gamma_quotes(events: list[dict[str, Any]]) -> list[PriceQuo
                 continue
             timestamp = _parse_datetime(market.get("updatedAt") or event.get("updatedAt")) or datetime.now(UTC)
             market_id = str(market.get("conditionId") or market.get("id") or "")
+            decomposition = decompose_polymarket_market(event, market)
             for idx, outcome in enumerate(outcomes):
                 price = _float_or_none(prices[idx])
                 if price is None or price <= 0 or price > 1:
@@ -239,10 +245,11 @@ def parse_polymarket_gamma_quotes(events: list[dict[str, Any]]) -> list[PriceQuo
                 quotes.append(
                     PriceQuote(
                         source="polymarket",
-                        sport=_infer_sport({**event, **market}),
+                        sport=decomposition.sport,
                         league=None,
-                        event_name=event_name,
-                        market_type="prediction_binary",
+                        event_name=decomposition.event_name,
+                        participant=decomposition.participant,
+                        market_type=decomposition.market_kind,
                         selection=str(outcome),
                         decimal_odds=1 / price,
                         price=price,
@@ -255,6 +262,8 @@ def parse_polymarket_gamma_quotes(events: list[dict[str, Any]]) -> list[PriceQuo
                         liquidity=_float_or_none(market.get("liquidityNum") or market.get("liquidity")),
                         status="active",
                         raw_payload_ref=market_id,
+                        market_confidence=decomposition.confidence,
+                        market_notes=decomposition.notes,
                     )
                 )
     return quotes

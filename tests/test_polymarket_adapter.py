@@ -57,6 +57,7 @@ def test_parse_polymarket_quotes_from_order_book():
     yes = next(q for q in quotes if q.selection == "YES")
     assert yes.source == "polymarket"
     assert yes.sport == "basketball_nba"
+    assert yes.market_type == "moneyline"
     assert yes.source_market_id == "cond_1"
     assert yes.source_selection_id == "yes_token"
     assert yes.price == pytest.approx(0.56)
@@ -109,9 +110,11 @@ def test_parse_polymarket_gamma_sports_quotes():
     yes = next(q for q in quotes if q.selection == "Yes")
     assert yes.source == "polymarket"
     assert yes.sport == "soccer"
+    assert yes.market_type == "futures"
     assert yes.source_event_id == "evt_1"
     assert yes.source_market_id == "cond_1"
     assert yes.source_selection_id == "yes_token"
     assert yes.price == pytest.approx(0.1005)
     assert yes.decimal_odds == pytest.approx(1 / 0.1005)
     assert yes.liquidity == pytest.approx(1234.5)
+    assert yes.market_confidence is not None and yes.market_confidence > 0.7

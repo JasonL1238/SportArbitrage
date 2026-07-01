@@ -37,6 +37,7 @@ def test_parse_kalshi_quotes_from_public_market_data():
     yes = next(q for q in quotes if q.selection == "YES")
     assert yes.source == "kalshi"
     assert yes.sport == "baseball_mlb"
+    assert yes.market_type == "futures"
     assert yes.source_event_id == "KXMLBGAME-26JUL011507NYMTOR"
     assert yes.source_market_id == "KXMLBGAME-26JUL011507NYMTOR-NYM"
     assert yes.price == pytest.approx(0.56)
@@ -44,6 +45,7 @@ def test_parse_kalshi_quotes_from_public_market_data():
     assert yes.implied_probability == pytest.approx(0.56)
     assert yes.liquidity == pytest.approx(12.5)
     assert yes.timestamp.isoformat() == "2026-07-01T19:09:28.402526+00:00"
+    assert yes.market_confidence is not None and yes.market_confidence > 0.5
 
 
 def test_parse_kalshi_quotes_skips_inactive_and_zero_prices():

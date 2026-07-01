@@ -130,3 +130,5 @@ class PriceQuote(BaseModel):
     limit: Optional[float] = None
     status: str = "active"
     raw_payload_ref: Optional[str] = None
+    market_confidence: Optional[float] = None
+    market_notes: Optional[str] = None

@@ -12,6 +12,7 @@ from typing import Any
 import httpx
 
 from src.models import PriceQuote
+from src.market_decomposer import decompose_kalshi_market
 from src.sources.base import SourceHealth
 
 log = logging.getLogger(__name__)
@@ -89,6 +90,7 @@ def parse_kalshi_quotes(markets: list[dict[str, Any]]) -> list[PriceQuote]:
     for market in markets:
         if market.get("status") != "active":
             continue
+        decomposition = decompose_kalshi_market(market)
         timestamp = _parse_datetime(market.get("updated_time")) or datetime.now(UTC)
         event_start = _parse_datetime(
             market.get("expected_expiration_time")
@@ -105,11 +107,11 @@ def parse_kalshi_quotes(markets: list[dict[str, Any]]) -> list[PriceQuote]:
             quotes.append(
                 PriceQuote(
                     source="kalshi",
-                    sport=_infer_sport(market),
+                    sport=decomposition.sport,
                     league=None,
-                    event_name=str(market.get("title") or market.get("ticker") or ""),
-                    participant=_subtitle_for_selection(market, selection),
-                    market_type="prediction_binary",
+                    event_name=decomposition.event_name,
+                    participant=decomposition.participant,
+                    market_type=decomposition.market_kind,
                     selection=selection,
                     decimal_odds=1 / price,
                     price=price,
@@ -123,6 +125,8 @@ def parse_kalshi_quotes(markets: list[dict[str, Any]]) -> list[PriceQuote]:
                     or _float_or_none(market.get("liquidity_dollars")),
                     status="active",
                     raw_payload_ref=str(market.get("ticker") or ""),
+                    market_confidence=decomposition.confidence,
+                    market_notes=decomposition.notes,
                 )
             )
     return quotes

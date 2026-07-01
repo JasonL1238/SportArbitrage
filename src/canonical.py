@@ -157,3 +157,39 @@ def token_similarity(a: str, b: str) -> float:
     if not tokens_a or not tokens_b:
         return 0.0
     return len(tokens_a & tokens_b) / len(tokens_a | tokens_b)
+
+
+def infer_sport_from_text(raw: str) -> str | None:
+    """Infer a sport key from team aliases or common league keywords in free text."""
+    normed = normalize_name(raw)
+    best_sport: str | None = None
+    best_hits = 0
+    for sport_key, aliases in _SPORT_ALIAS_MAPS.items():
+        hits = 0
+        for alias in aliases:
+            if alias and alias in normed:
+                hits += 1
+        if hits > best_hits:
+            best_sport = sport_key
+            best_hits = hits
+
+    if best_sport:
+        return best_sport
+
+    for token, sport in [
+        ("nba", "basketball_nba"),
+        ("wnba", "basketball_wnba"),
+        ("nfl", "americanfootball_nfl"),
+        ("mlb", "baseball_mlb"),
+        ("nhl", "icehockey_nhl"),
+        ("soccer", "soccer"),
+        ("football", "americanfootball_nfl"),
+        ("baseball", "baseball_mlb"),
+        ("hockey", "icehockey_nhl"),
+        ("world cup", "soccer"),
+        ("epl", "soccer"),
+    ]:
+        if token in normed:
+            return sport
+
+    return None
