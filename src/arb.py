@@ -558,10 +558,6 @@ class Opportunity:
         return min(profit for _, profit in self.outcome_profits)
 
     @property
-    def guaranteed_roi(self) -> float:
-        return self.guaranteed_profit / self.total_stake
-
-    @property
     def can_push(self) -> bool:
         """Can every leg be refunded, leaving the position at zero?"""
         return any(label == "push" for label, _ in self.outcome_profits)
