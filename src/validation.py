@@ -21,7 +21,8 @@ the sports now collected:
   horizon comes from :attr:`~src.leagues.League.max_schedule_horizon`.
 * A 20-minute start-time tolerance splits nearly every tennis match into two
   events, because each book publishes its own "not before" estimate.  The
-  tolerance comes from :attr:`~src.leagues.League.same_event_tolerance`.
+  tolerance comes from :attr:`~src.leagues.League.time_disagreement_threshold`,
+  which is deliberately tighter than the clustering width used to *join* them.
 * "A draw on a moneyline is a misparsed third runner" is true for a full-game
   baseball or hockey moneyline and false for a soccer 90-minute or a hockey
   regulation moneyline.  Draw legality comes from
@@ -793,12 +794,24 @@ def _check_cross_source(quotes: Sequence[Quote], report: ValidationReport) -> No
         # apart.  The widest league present is used, matching what
         # src.events.reconcile_event_keys does when books classify one fixture
         # into two leagues.
-        tolerance = max(c.same_event_tolerance for c in known)
+        # The *reporting* threshold, not the clustering tolerance.  Clustering is
+        # deliberately generous so a fixture two books time differently still
+        # joins; reporting is strict so the disagreement is still visible once it
+        # has.  Using the clustering width here would mean the wider a sport's
+        # window got, the less it could ever notice — and soccer's window is 12
+        # hours precisely because one book was three hours out on a kickoff.
+        tolerance = max(c.time_disagreement_threshold for c in known)
         starts = {source: row.commence_time for source, row in rows.items()}
         spread = max(starts.values()) - min(starts.values())
         if spread > tolerance:
             report.add(
-                Severity.ERROR,
+                # A warning, not an error: clustering has already decided these
+                # rows describe one fixture and joined them, so the data is usable.
+                # What is left to say is that one book's clock looks wrong — worth
+                # surfacing, but it does not make the run unclean, and grading it an
+                # error would fail every run containing a tennis match whose two
+                # books published different "not before" estimates.
+                Severity.WARNING,
                 "start_time_disagreement",
                 f"start times differ by {spread}, more than the {tolerance} that "
                 f"{'/'.join(sorted({c.key for c in known}))} treats as one fixture: "
@@ -918,19 +931,31 @@ def _check_coverage(quotes: Sequence[Quote], report: ValidationReport) -> None:
             if not missing:
                 continue
             fraction = len(have) / len(events)
-            # "Present for most, absent for a few" only means a partial rename when
-            # there are enough events for "most" and "a few" to be distinguishable.
-            # On a three-event slate one absence is 33% and trips the rule, but a
-            # soccer book simply not posting a handicap on one fixture is ordinary,
-            # not a format change — there is no sample here to tell the two apart.
+            # A per-event gap is graded a WARNING, not an ERROR, and the reason is
+            # that a single run cannot tell the two causes apart.
+            #
+            # A renamed label and ordinary market heterogeneity look identical from
+            # here.  Live, this fired on Pinnacle lacking a handicap for 17 of 80
+            # soccer fixtures and Kambi for 16 of 127 — which is simply what soccer
+            # is: a Premier League match carries an Asian handicap and a Faroese
+            # cup tie does not.  Graded ERROR, every real run failed validation
+            # permanently, and a report that always says FAIL carries no signal at
+            # all; the two genuine errors in that same run were buried under it.
+            #
+            # What *is* still an error is the market disappearing from a sport
+            # entirely, which is what `core_market_absent` above reports.
+            # Distinguishing a rename from thin pricing needs run-to-run history —
+            # a spike against this source's own past coverage — which the store has
+            # and this function, seeing one run, does not.
             if fraction >= 0.5 and len(events) >= MIN_EVENTS_TO_DIAGNOSE_A_RENAME:
                 report.add(
-                    Severity.ERROR,
+                    Severity.WARNING,
                     "core_market_absent_for_event",
                     f"{len(missing)} of {len(events)} {sport.value} events lack "
                     f"{market.value}/{period.value}, which this source prices for the other "
-                    f"{len(have)} (e.g. {sorted(missing)[0]}) — a market label has probably "
-                    "changed for some games only",
+                    f"{len(have)} (e.g. {sorted(missing)[0]}) — either those fixtures are "
+                    "priced thinly or a market label has changed for some games; comparing "
+                    "against this source's past coverage is what tells the two apart",
                     source=source,
                 )
             else:

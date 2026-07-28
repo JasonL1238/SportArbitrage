@@ -52,7 +52,7 @@ from src import leagues as league_registry
 from src.events import build_event_key, orient, resolve_doubleheaders
 from src.leagues import League
 from src.normalize import american_to_decimal, implied_probability
-from src.participants import Participant, canonical_participant
+from src.participants import Participant, canonical_participant, is_pairing
 from src.raw_store import RawResponse
 from src.schema import (
     MARKETS_REQUIRING_LINE,
@@ -777,6 +777,15 @@ def _accept_matchup(matchup: dict[str, Any], outcome: ParseOutcome) -> _Game | N
         )
         return None
     home_name, away_name = sides
+
+    # A doubles entry names two players a side ("Alvarez / Magadan"), so it is
+    # deliberately unresolvable — but it is a market this collector does not cover,
+    # not a participant it failed to recognise.  Grading it a rejection failed the
+    # entire Pinnacle run over one doubles match in the tennis slate, discarding
+    # 2300 good rows across five other sports.
+    if any(is_pairing(name) for name in (home_name, away_name)):
+        outcome.skipped["doubles_or_team_pairing"] += 1
+        return None
 
     resolved = [canonical_participant(name, competition) for name in (home_name, away_name)]
     if any(participant is None for participant in resolved):

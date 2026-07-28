@@ -105,3 +105,54 @@ class TestTotalRanges:
 def _in_range(key: str, total: float) -> bool:
     low, high = league(key).plausible_total_range
     return low <= total <= high
+
+
+class TestClusteringVersusReporting:
+    """Joining a fixture and noticing a bad clock are different questions.
+
+    Both were once answered by one number, which forced a choice between them: a
+    window wide enough to join a fixture two books time differently is also wide
+    enough to stop reporting that they differ.  Keeping them apart gets both.
+    """
+
+    @pytest.mark.parametrize("competition", LEAGUES, ids=lambda c: c.key)
+    def test_reporting_is_never_looser_than_joining(self, competition) -> None:
+        """A gap that splits a fixture into two events is always worth reporting,
+        so the reporting threshold must sit inside the clustering window."""
+        assert competition.time_disagreement_threshold <= competition.same_event_tolerance
+
+    def test_baseball_alone_keeps_a_tight_clustering_window(self) -> None:
+        """Only baseball plays the same pair twice in a day, so only baseball has
+        a genuinely different fixture close enough for a wide window to swallow."""
+        assert league("MLB").same_event_tolerance <= timedelta(minutes=90)
+        for key in ("WNBA", "NHL", "NFL", "EPL", "ATP"):
+            assert league(key).same_event_tolerance > timedelta(minutes=90), key
+
+    def test_soccer_joins_a_three_hour_disagreement_and_still_reports_it(self) -> None:
+        """The live case: Kambi listed Dortmund v Hamburger at 13:30Z where
+        FanDuel and Pinnacle both said 16:30Z.  Under a 90-minute window that
+        split in two, so Kambi never joined the other two and the pair gained a
+        `#2` ordinal for a fixture that does not exist."""
+        epl = league("EPL")
+        gap = timedelta(hours=3)
+        assert gap <= epl.same_event_tolerance, "must still be treated as one fixture"
+        assert gap > epl.time_disagreement_threshold, "must still be reported"
+
+    def test_tennis_treats_an_hours_long_gap_as_normal(self) -> None:
+        """A tennis match starts when the previous match on court ends, so each
+        book publishes its own estimate and being hours out is the feed working.
+        Reporting it would put a finding on nearly every match."""
+        atp = league("ATP")
+        gap = timedelta(hours=4)
+        assert gap <= atp.same_event_tolerance
+        assert gap <= atp.time_disagreement_threshold, "should not be reported"
+
+    @pytest.mark.parametrize("competition", LEAGUES_BY_SPORT[Sport.TENNIS], ids=lambda c: c.key)
+    def test_every_tennis_tour_agrees_on_both_thresholds(self, competition) -> None:
+        """All five tours are the same product; one of them silently keeping the
+        team-sport default would report every match on that tour."""
+        assert competition.same_event_tolerance == league("ATP").same_event_tolerance
+        assert (
+            competition.time_disagreement_threshold
+            == league("ATP").time_disagreement_threshold
+        )

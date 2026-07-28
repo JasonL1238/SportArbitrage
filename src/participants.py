@@ -385,6 +385,19 @@ def _open_slug(raw: str, *, sport: Sport) -> str | None:
     return _SOCCER_ALIASES.get(slug, slug)
 
 
+def is_pairing(raw: str | None) -> bool:
+    """Does *raw* name two competitors rather than one?
+
+    Adapters need this to tell "out of scope" from "broken".  A tennis doubles
+    entry — ``"Luis Carlos Alvarez / Alan Magadan"`` — is deliberately
+    unresolvable, but it is a market this collector does not cover rather than a
+    participant it failed to recognise.  Without the distinction an adapter
+    reports a rejection, and a rejection fails the whole source: one doubles
+    match in Pinnacle's tennis slate took the entire book's run down.
+    """
+    return bool(raw) and bool(_PAIRING.search(raw))
+
+
 def resolve_open(raw: str | None, sport: Sport) -> Participant | None:
     """Resolve an open-roster competitor by deterministic normalization."""
     if not raw:

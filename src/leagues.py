@@ -100,13 +100,56 @@ class League:
     "after the preceding match on court" and each book publishes its own estimate
     — the same first-round match is routinely listed hours apart.  Tennis can
     afford it: the same two players never meet twice in one day, so there is no
-    second fixture for a wide window to swallow."""
+    second fixture for a wide window to swallow.
+
+    Soccer needs more than 90 minutes for the same reason, established from live
+    data: Kambi listed Dortmund v Hamburger at 13:30Z while FanDuel and Pinnacle
+    both said 16:30Z.  Under a 90-minute window that split into two clusters, so
+    Kambi's copy never joined the other two *and* the pair acquired a ``#2``
+    ordinal implying a second fixture that does not exist.  Two clubs do not meet
+    twice in a day, so a wide window costs nothing here either.
+
+    The width is therefore set by "how far apart can two reports of one fixture
+    be", and bounded by "how close can two genuinely different fixtures be".  Only
+    baseball has the second constraint bite."""
+
+    time_disagreement_threshold: timedelta = timedelta(minutes=20)
+    """How far apart two books' start times may be before it is worth *reporting*.
+
+    Deliberately separate from :attr:`same_event_tolerance`, and much tighter.
+    The two answer different questions: clustering asks "is this one fixture?" and
+    wants to be generous, because the cost of splitting is a lost join on exactly
+    the events both books cover.  Reporting asks "is one of these books wrong?"
+    and wants to be strict, because a three-hour disagreement about a kickoff is a
+    real defect in somebody's feed even once the rows have been correctly joined.
+
+    Folding them into one number forces a choice between joining the fixture and
+    noticing the problem.  Keeping them apart gets both."""
 
 
 #: Tennis start times are estimates ("not before"), and each book publishes its
 #: own, so the same match is routinely listed hours apart.  Widening the window
 #: is safe because the same two players never meet twice on one day.
 TENNIS_TOLERANCE = timedelta(hours=14)
+
+#: And for the same reason tennis needs a loose *reporting* threshold too.  A
+#: soccer kickoff is a scheduled fact, so two books three hours apart means one is
+#: wrong and it is worth saying so.  A tennis match starts when the previous match
+#: on that court finishes, so two books hours apart is the feed working normally —
+#: warning on it would put a finding on nearly every match and drown the ones that
+#: mean something.
+TENNIS_DISAGREEMENT_THRESHOLD = timedelta(hours=6)
+
+#: Soccer books disagree by hours on kickoff (observed: 13:30Z vs 16:30Z for one
+#: Bundesliga fixture).  Two clubs never meet twice in a day and never on
+#: consecutive days, so nothing can be fused by a window this wide.
+SOCCER_TOLERANCE = timedelta(hours=12)
+
+#: The North American leagues without doubleheaders.  The same two teams can meet
+#: on *consecutive* days (an NHL or NBA back-to-back), and the closest such pair
+#: is an evening game followed by an afternoon one — around 18 hours.  Six hours
+#: absorbs any listing disagreement while staying well clear of that.
+NO_DOUBLEHEADER_TOLERANCE = timedelta(hours=6)
 
 
 def _l(*args, **kwargs) -> League:
@@ -124,12 +167,15 @@ LEAGUES: tuple[League, ...] = (
     # unverified against live game data; the WNBA is mid-season and is what the
     # basketball support was actually validated on.
     _l("NBA", Sport.BASKETBALL, "National Basketball Association", roster="nba",
-       max_schedule_horizon=timedelta(days=400), plausible_total_range=(150.0, 300.0)),
+       max_schedule_horizon=timedelta(days=400), plausible_total_range=(150.0, 300.0),
+       same_event_tolerance=NO_DOUBLEHEADER_TOLERANCE),
     _l("WNBA", Sport.BASKETBALL, "Women's National Basketball Association", roster="wnba",
-       max_schedule_horizon=timedelta(days=400), plausible_total_range=(120.0, 250.0)),
+       max_schedule_horizon=timedelta(days=400), plausible_total_range=(120.0, 250.0),
+       same_event_tolerance=NO_DOUBLEHEADER_TOLERANCE),
     # ── hockey ───────────────────────────────────────────────────────────────
     _l("NHL", Sport.HOCKEY, "National Hockey League", roster="nhl",
-       max_schedule_horizon=timedelta(days=400), plausible_total_range=(3.0, 12.0)),
+       max_schedule_horizon=timedelta(days=400), plausible_total_range=(3.0, 12.0),
+       same_event_tolerance=NO_DOUBLEHEADER_TOLERANCE),
     # Pinnacle carries no NHL games in the offseason, but it does price club
     # friendlies, and those are the only real hockey markets it offers.  Without
     # a league to map them onto they were dropped as `league_not_registered`,
@@ -137,10 +183,11 @@ LEAGUES: tuple[League, ...] = (
     # visible "prices friendlies, not the NHL".  Open roster: these are club and
     # junior sides with no fixed membership list.
     _l("HOCKEY_OTHER", Sport.HOCKEY, "Other hockey competition", scheduling_tz=UTC_TZ,
-       plausible_total_range=(3.0, 15.0)),
+       plausible_total_range=(3.0, 15.0), same_event_tolerance=NO_DOUBLEHEADER_TOLERANCE),
     # ── football ─────────────────────────────────────────────────────────────
     _l("NFL", Sport.FOOTBALL, "National Football League", roster="nfl",
-       max_schedule_horizon=timedelta(days=400), plausible_total_range=(20.0, 80.0)),
+       max_schedule_horizon=timedelta(days=400), plausible_total_range=(20.0, 80.0),
+       same_event_tolerance=NO_DOUBLEHEADER_TOLERANCE),
     # ── tennis ───────────────────────────────────────────────────────────────
     # Tour-level rather than per-tournament: Pinnacle exposes one "league" per
     # tournament *round* (37 of them on one day), which is a scheduling detail,
@@ -148,41 +195,53 @@ LEAGUES: tuple[League, ...] = (
     # them costs nothing and keeps coverage reporting legible.
     _l("ATP", Sport.TENNIS, "ATP Tour", scheduling_tz=UTC_TZ, has_home_away=False,
        max_schedule_horizon=timedelta(days=30), plausible_total_range=(12.0, 60.0),
-       same_event_tolerance=TENNIS_TOLERANCE),
+       same_event_tolerance=TENNIS_TOLERANCE,
+       time_disagreement_threshold=TENNIS_DISAGREEMENT_THRESHOLD),
     _l("WTA", Sport.TENNIS, "WTA Tour", scheduling_tz=UTC_TZ, has_home_away=False,
        max_schedule_horizon=timedelta(days=30), plausible_total_range=(12.0, 60.0),
-       same_event_tolerance=TENNIS_TOLERANCE),
+       same_event_tolerance=TENNIS_TOLERANCE,
+       time_disagreement_threshold=TENNIS_DISAGREEMENT_THRESHOLD),
     _l("ATP_CHALLENGER", Sport.TENNIS, "ATP Challenger Tour", scheduling_tz=UTC_TZ,
        has_home_away=False, plausible_total_range=(12.0, 60.0),
-       same_event_tolerance=TENNIS_TOLERANCE),
+       same_event_tolerance=TENNIS_TOLERANCE,
+       time_disagreement_threshold=TENNIS_DISAGREEMENT_THRESHOLD),
     _l("ITF", Sport.TENNIS, "ITF Tour", scheduling_tz=UTC_TZ, has_home_away=False,
-       plausible_total_range=(12.0, 60.0), same_event_tolerance=TENNIS_TOLERANCE),
+       plausible_total_range=(12.0, 60.0), same_event_tolerance=TENNIS_TOLERANCE,
+       time_disagreement_threshold=TENNIS_DISAGREEMENT_THRESHOLD),
     # A catch-all, for the same reason soccer has one: a match must never be
     # dropped merely because its tour is unrecognised.  Without this, an adapter
     # meeting a competition like "Mens UTR Pro Series, Argentina" has to either
     # guess a tour or discard the match, and guessing mislabels coverage.
     _l("TENNIS_OTHER", Sport.TENNIS, "Other tennis competition", scheduling_tz=UTC_TZ,
        has_home_away=False, plausible_total_range=(12.0, 60.0),
-       same_event_tolerance=TENNIS_TOLERANCE),
+       same_event_tolerance=TENNIS_TOLERANCE,
+       time_disagreement_threshold=TENNIS_DISAGREEMENT_THRESHOLD),
     # ── soccer ───────────────────────────────────────────────────────────────
     # Soccer is registered per competition where the books agree on one, and
     # otherwise under a catch-all so a fixture is never dropped merely because
     # its competition is unrecognised.  Identity does not depend on which of
     # these a book chose.
     _l("EPL", Sport.SOCCER, "English Premier League", scheduling_tz=UTC_TZ,
-       max_schedule_horizon=timedelta(days=400), plausible_total_range=(0.5, 8.0)),
+       max_schedule_horizon=timedelta(days=400), plausible_total_range=(0.5, 8.0),
+       same_event_tolerance=SOCCER_TOLERANCE),
     _l("MLS", Sport.SOCCER, "Major League Soccer", scheduling_tz=UTC_TZ,
-       max_schedule_horizon=timedelta(days=400), plausible_total_range=(0.5, 8.0)),
+       max_schedule_horizon=timedelta(days=400), plausible_total_range=(0.5, 8.0),
+       same_event_tolerance=SOCCER_TOLERANCE),
     _l("LA_LIGA", Sport.SOCCER, "Spanish La Liga", scheduling_tz=UTC_TZ,
-       max_schedule_horizon=timedelta(days=400), plausible_total_range=(0.5, 8.0)),
+       max_schedule_horizon=timedelta(days=400), plausible_total_range=(0.5, 8.0),
+       same_event_tolerance=SOCCER_TOLERANCE),
     _l("SERIE_A", Sport.SOCCER, "Italian Serie A", scheduling_tz=UTC_TZ,
-       max_schedule_horizon=timedelta(days=400), plausible_total_range=(0.5, 8.0)),
+       max_schedule_horizon=timedelta(days=400), plausible_total_range=(0.5, 8.0),
+       same_event_tolerance=SOCCER_TOLERANCE),
     _l("BUNDESLIGA", Sport.SOCCER, "German Bundesliga", scheduling_tz=UTC_TZ,
-       max_schedule_horizon=timedelta(days=400), plausible_total_range=(0.5, 8.0)),
+       max_schedule_horizon=timedelta(days=400), plausible_total_range=(0.5, 8.0),
+       same_event_tolerance=SOCCER_TOLERANCE),
     _l("LIGUE_1", Sport.SOCCER, "French Ligue 1", scheduling_tz=UTC_TZ,
-       max_schedule_horizon=timedelta(days=400), plausible_total_range=(0.5, 8.0)),
+       max_schedule_horizon=timedelta(days=400), plausible_total_range=(0.5, 8.0),
+       same_event_tolerance=SOCCER_TOLERANCE),
     _l("SOCCER_OTHER", Sport.SOCCER, "Other soccer competition", scheduling_tz=UTC_TZ,
-       max_schedule_horizon=timedelta(days=400), plausible_total_range=(0.5, 8.0)),
+       max_schedule_horizon=timedelta(days=400), plausible_total_range=(0.5, 8.0),
+       same_event_tolerance=SOCCER_TOLERANCE),
 )
 
 BY_KEY: dict[str, League] = {league.key: league for league in LEAGUES}

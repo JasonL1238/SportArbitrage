@@ -18,7 +18,14 @@ from pathlib import Path
 import pytest
 
 from src.arb import best_prices, find_opportunities
-from src.collector import collect_once, replay_run
+from src.collector import SOURCE_FACTORIES, collect_once, replay_run
+
+
+def _paths_by_source(store, run_id):
+    grouped: dict[str, list] = {}
+    for source_key, path in store.raw_paths(run_id):
+        grouped.setdefault(source_key, []).append(path)
+    return grouped.items()
 from src.events import reconcile_event_keys
 from src.raw_store import RawStore
 from src.schema import Market, Period, Sport
@@ -128,6 +135,54 @@ class TestFullRun:
         result, store, raw_store = collected
         ok, problems = replay_run(result.run_id, store=store, raw_store=raw_store)
         assert ok, problems
+
+    def test_replay_reconciles_before_comparing_and_before_scoping(
+        self, collected, monkeypatch
+    ) -> None:
+        """The regression the plain replay test structurally cannot catch.
+
+        ``reconcile_event_keys`` rewrites ``event_key``, which is part of
+        ``dedup_key``, so a stored row and a freshly parsed one disagree wherever
+        reconciliation did anything.  ``replay_run`` originally compared *raw*
+        parse output against *reconciled* stored rows, so it could never match
+        those rows: on a live run a tennis match Pinnacle timed 5½ hours before
+        FanDuel came back as "lost" at one date and "invented" at the next, and a
+        soccer fixture two books timed 3 hours apart gained a phantom ``#2``.  Both
+        were correct behaviour being reported as corruption.
+
+        The captured fixtures need no reconciliation, which is exactly why the
+        existing replay test passed throughout the bug — so this asserts the
+        ordering itself rather than an outcome that depends on the capture.
+
+        Both halves matter.  Reconciliation has to happen, and it has to happen
+        *before* the scope filter: clustering start times is global, so narrowing to
+        one sport first would cluster a subset and could legitimately produce keys
+        that differ from the ones stored.
+        """
+        import src.collector as collector
+
+        calls: list[list] = []
+        real = collector.reconcile_event_keys
+
+        def spy(quotes):
+            calls.append(list(quotes))
+            return real(quotes)
+
+        monkeypatch.setattr(collector, "reconcile_event_keys", spy)
+
+        result, store, raw_store = collected
+        ok, problems = replay_run(
+            result.run_id, store=store, raw_store=raw_store, sports=["hockey"]
+        )
+        assert ok, problems
+        assert calls, "replay compared without reconciling — stored keys are reconciled"
+
+        handed_over = calls[0]
+        sports_seen = {quote.sport.value for quote in handed_over}
+        assert len(sports_seen) > 1, (
+            "reconciliation was handed a scoped subset; clustering is global and "
+            f"must see every source's rows, got only {sports_seen}"
+        )
 
     def test_replay_can_be_scoped_to_one_sport(self, collected) -> None:
         """Scoping must narrow both sides of the comparison; a scope applied to

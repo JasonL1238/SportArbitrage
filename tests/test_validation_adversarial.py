@@ -651,7 +651,7 @@ class TestPriceEncoding:
                 market=Market.MONEYLINE,
                 event_key="MLB-ATL@MLB-NYM:2026-07-28",
                 selection=Selection.HOME,
-                decimal_odds=1.001,
+                decimal_odds=1.0005,
                 american_odds=-100000,
                 source_market_id="book_a-absurd",
             )
@@ -730,7 +730,12 @@ class TestCoverage:
             for row in book(source, entry, with_total=not (source == "book_a" and index < 3))
         ]
         report = validate(thinned)
-        assert "core_market_absent_for_event" in _codes(report, Severity.ERROR)
+        # A warning, not an error: one run cannot separate a renamed label from a
+        # book pricing some fixtures thinly, and an always-failing report has no
+        # signal left in it.  A market vanishing from the sport entirely is what
+        # `core_market_absent` still grades an error.
+        assert "core_market_absent_for_event" in _codes(report, Severity.WARNING)
+        assert "core_market_absent_for_event" not in _codes(report, Severity.ERROR)
 
     def test_a_market_missing_everywhere_is_reported_once_not_twice(self) -> None:
         """A source with no totals at all is a slate-wide gap; reporting it per
@@ -822,7 +827,7 @@ class TestCrossSourceIdentity:
         ]
         quotes = [q for q in quotes if q.source != "book_b"] + shifted
         report = validate(quotes)
-        assert "start_time_disagreement" in _codes(report, Severity.ERROR)
+        assert "start_time_disagreement" in _codes(report, Severity.WARNING)
 
     def test_a_one_minute_start_time_difference_is_tolerated(self) -> None:
         """Every captured FanDuel start time is a minute later than the others."""

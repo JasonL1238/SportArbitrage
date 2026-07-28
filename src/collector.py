@@ -777,10 +777,29 @@ def replay_run(
 ) -> tuple[bool, list[str]]:
     """Re-parse a stored run's raw responses and compare to what was stored.
 
-    This is the offline reproduction guarantee: if parsing is not a pure
-    function of the captured bytes, this fails.  A sport/league scope narrows
-    *both* sides of the comparison, so replaying one sport out of a mixed run is
-    not mistaken for the parser having lost every other sport's rows.
+    This is the offline reproduction guarantee: if parsing is not a pure function
+    of the captured bytes, this fails.  A sport/league scope narrows *both* sides
+    of the comparison, so replaying one sport out of a mixed run is not mistaken
+    for the parser having lost every other sport's rows.
+
+    Two things have to happen in the same order they happened during collection,
+    or the comparison is not like-for-like and reports a failure that is really an
+    artefact of the replay:
+
+    **Reconciliation must be re-applied.**  ``reconcile_event_keys`` can rewrite
+    ``event_key``, which is part of ``dedup_key``, so stored rows carry
+    reconciled keys and freshly parsed ones do not.  Without this step replay
+    failed whenever reconciliation had changed anything — a tennis match that
+    Pinnacle timed 5½ hours before FanDuel came back as "lost" at one date and
+    "invented" at the next, and a soccer fixture two books timed differently came
+    back with a phantom ``#2``.  Both were correct behaviour being reported as
+    corruption.
+
+    **Reconciliation must run before the scope filter, over every source.**
+    Clustering start times is a global operation: which fixture a row belongs to
+    depends on what the *other* books said about it.  Filtering to one sport first
+    would cluster a subset and could legitimately produce different keys from the
+    ones stored.
     """
     problems: list[str] = []
     stored = store.load_quotes(run_id, sports=sports, leagues=leagues)
@@ -800,15 +819,17 @@ def replay_run(
         source = factory()
         try:
             raws = [raw_store.read(path) for path in paths]
-            replayed.extend(
-                quote
-                for quote in source.parse(raws).quotes
-                if in_scope(quote, sports, leagues)
-            )
+            # Unscoped on purpose — see the note above.  Scoping happens after
+            # reconciliation, because clustering needs every source's view of a
+            # fixture to land on the same key the collector stored.
+            replayed.extend(source.parse(raws).quotes)
         except Exception as exc:  # noqa: BLE001
             problems.append(f"{source_key}: replay raised {type(exc).__name__}: {exc}")
         finally:
             source.close()
+
+    replayed, _ = reconcile_event_keys(replayed)
+    replayed = [quote for quote in replayed if in_scope(quote, sports, leagues)]
 
     stored_map = {q.dedup_key: q for q in stored}
     replay_map = {q.dedup_key: q for q in replayed}

@@ -8,9 +8,20 @@ therefore enforced rather than assumed.
 """
 from __future__ import annotations
 
-#: Below this, a decimal price implies worse than -10000 American — risking ten
-#: thousand to win one.  No book prices that, so such a value is a units error.
-MIN_DECIMAL_ODDS = 1.01
+#: The floor of the domain.  Anything at or below 1.0 is "risk everything to win
+#: nothing" and cannot be a price at all; a units error lands far outside this.
+#:
+#: This was 1.01, on the reasoning that a price worse than -10000 American — risk
+#: ten thousand to win one hundred — is not something a book publishes.  A live
+#: run falsified that: Pinnacle quoted **-11540** (decimal 1.00867) on a heavy
+#: favourite in an ITF tennis match, and FanDuel quoted 1.005 on a suspended
+#: runner.  Both are real prices, so rejecting them was rejecting data rather than
+#: catching a fault, and it reported a genuine quote as a scaling error.
+#:
+#: 1.001 is -100000: still impossible to reach by any real scaling mistake
+#: (Kambi's undivided thousandths land above :data:`MAX_DECIMAL_ODDS`, not below
+#: this), while leaving room for whatever extreme a book actually prints.
+MIN_DECIMAL_ODDS = 1.001
 
 #: Longer than any price on a two-sided baseball market.
 MAX_DECIMAL_ODDS = 1000.0

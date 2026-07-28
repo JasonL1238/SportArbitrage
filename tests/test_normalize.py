@@ -117,11 +117,19 @@ class TestPlausibility:
     def test_real_prices_are_plausible(self, odds: float) -> None:
         assert is_plausible_decimal_odds(odds)
 
-    @pytest.mark.parametrize("odds", [1.0, 1.001, 1.009, 1001.0, 5000.0])
+    @pytest.mark.parametrize("odds", [1.0, 0.5, 1.0009, 1001.0, 5000.0])
     def test_absurd_prices_are_not(self, odds: float) -> None:
-        """1.001 is "risk 10,000 to win 10" — arithmetically fine, and a units
-        error every time it appears in a real feed."""
+        """At or below 1.0 is "risk everything to win nothing" and not a price at
+        all; above the ceiling is where an undivided thousandths value lands."""
         assert not is_plausible_decimal_odds(odds)
+
+    @pytest.mark.parametrize("odds", [1.00867, 1.005, 1.01])
+    def test_extreme_but_real_prices_are_plausible(self, odds: float) -> None:
+        """The bound was 1.01 on the reasoning that no book prices worse than
+        -10000 American.  A live run falsified that: Pinnacle quoted -11540
+        (decimal 1.00867) on an ITF favourite and FanDuel 1.005 on a suspended
+        runner.  Rejecting those reported genuine quotes as scaling errors."""
+        assert is_plausible_decimal_odds(odds)
 
     def test_the_bounds_themselves_are_plausible(self) -> None:
         assert is_plausible_decimal_odds(MIN_DECIMAL_ODDS)
