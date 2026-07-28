@@ -163,15 +163,44 @@ python -m src.report --serve 8000     # serve it on localhost instead of file://
 python -m src.report --quote-runs 20  # embed price rows for 20 runs, not 6
 ```
 
-Nine sections, all switchable between stored runs: how to read a price at all; the
-run end to end (fetch → raw → parse → validate → persist, with counts at each
-step); per-source health; a coverage grid of every game against every book; a
+It is a click-through, not one long scroll. One panel is on screen at a time and
+the rail switches between eleven of them: how to read a price at all and what the
+four collected markets are; this run end to end (fetch → raw → parse → validate →
+persist, with counts at each step); which sports two or more books priced;
+per-source health; a coverage grid of every fixture against every book; a
 filterable table of all normalized rows; price movement across consecutive runs;
 validation findings and the overround distribution; the raw-capture ledger with
 checksums; a glossary; and the field reference.
 
+Three more panels are reached by clicking rather than from the rail, each opening
+the thing that was clicked:
+
+| Click | Opens |
+|---|---|
+| a sportsbook card, a skip row, a saved page | that **book** — what it published, what it left alone, every page saved from it |
+| a fixture row | that **fixture** — every bet on it, with each book's price side by side |
+| a bet row, anywhere it appears | that **bet** — every book's price, the other sides of the same market with the book's cut on that bet specifically, and the price at every collection |
+
+Routing is through `location.hash`, not `history.pushState`, because pushState
+throws on `file://` — where this page is usually opened. So every panel is
+linkable, the back button works, and a breadcrumb trail says how deep you are
+(*Fixtures › Guardians at Reds › Guardians win*). The detail panels are rendered
+while still off screen: a link straight into one has to open on something, and a
+panel filled only on arrival is a render path nothing exercises until a reader
+finds it broken. `tests/dashboard_routes.mjs` visits every panel plus a real
+fixture, book and bet key drawn from the page's own payload.
+
+Nothing on the page is one dense block. Each panel is a stack of cards, each card
+carries a two-line brief above its data saying what the block is and how to read
+it, and the wide tables group their columns under band headings — *what the bet
+is* / *what it pays* / *can you place it* — so twelve columns read as three things
+rather than twelve. The band spans are derived from the column list itself,
+because a hand-written `colspan` that drifts silently files every cell under the
+wrong label; `tests/dashboard_smoke.mjs` checks the spans cover exactly the
+headings present.
+
 The copy is written for someone who has never placed a bet. Enum values are
-translated (`run_line` → "Winner with a handicap"), and every row leads with a
+translated (`spread` → "Winner with a handicap"), and every row leads with a
 sentence rather than notation — `away +1.5` is shown as "Guardians win, or lose by
 1", derived from the market, period, selection, line and side together. Whole-number
 lines say where the push is: `-1.0` becomes "Reds win by 2 or more (a 1-run win
@@ -180,9 +209,12 @@ inventing a club the validator would have rejected. The book's own shorthand sta
 available as a tooltip on every row, and `#schema` keeps the untranslated field
 list for querying the database directly.
 
-Those sentences are claims about what a bet settles on, so 19 of them are asserted
+Those sentences are claims about what a bet settles on, so 22 of them are asserted
 in `tests/dashboard_smoke.mjs` — a wrong sentence is worse than notation, because a
-reader has no way to tell it is wrong.
+reader has no way to tell it is wrong. Three of the 22 use the pre-v4 market names,
+because the view normalizes `run_line`/`total_runs`/`team_total_runs` onto
+`spread`/`total`/`team_total`: without that, a page built from an older database
+would take the totals branch for a handicap and describe it as a total.
 
 The report is strictly a view. It never fetches anything, and every number on the
 page comes from a query in `src/report.py`, so generating it cannot change what

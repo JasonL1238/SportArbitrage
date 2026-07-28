@@ -171,7 +171,12 @@ WNBA: tuple[RosterRow, ...] = (
     ("DAL", "Dallas Wings", "Dallas", "Wings"),
     ("GSV", "Golden State Valkyries", "Golden State", "Valkyries"),
     ("IND", "Indiana Fever", "Indiana", "Fever"),
-    ("LAS", "Los Angeles Sparks", "Los Angeles", "Sparks"),
+    # "LA" rather than the also-used "LAS", because "las" is the first word of
+    # "Las Vegas Aces" and an abbreviation that is an ordinary word inside
+    # another club's name resolves to two clubs and therefore to none.  The
+    # collision guard in src.participants would drop it automatically; choosing a
+    # non-colliding abbreviation keeps the abbreviation itself usable.
+    ("LA", "Los Angeles Sparks", "Los Angeles", "Sparks"),
     ("LVA", "Las Vegas Aces", "Las Vegas", "Aces"),
     ("MIN", "Minnesota Lynx", "Minnesota", "Lynx"),
     ("NYL", "New York Liberty", "New York", "Liberty"),

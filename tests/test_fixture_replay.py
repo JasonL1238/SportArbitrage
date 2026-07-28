@@ -1,330 +1,280 @@
-"""Regression tests over real captured payloads.
+"""Offline replay of the whole multi-sport slate, from stored bytes only.
 
-Each of these locks a specific defect shut.  Every expected number was read off
-the captured fixtures and cross-checked against the raw JSON by hand, so a
-change in parser behaviour shows up as a failure here rather than as a silent
-change in what gets collected.
+``tests/fixtures/raw`` holds verbatim envelopes written by
+:class:`src.raw_store.RawStore` during real live runs on 2026-07-28, so
+everything here runs against bytes a sportsbook actually sent rather than against
+a hand-written approximation of them.
+
+**Scope.** Each adapter's own parsing rules are pinned in
+``tests/test_{fanduel,pinnacle,kambi}_adapter.py``, and the clauses every adapter
+must satisfy are in ``tests/test_source_contract.py``.  This file holds only what
+neither of those can see: what emerges when all three books are parsed *together*
+and run through the pipeline's own reconciliation.
+
+It used to restate each adapter's thousandths scaling, period mapping and
+pitcher-conditional handling.  Those are now asserted in the per-adapter files
+against far more data, so keeping them here as well was three copies of one
+assertion in three places, free to drift apart.  They were removed rather than
+left to rot.
+
+Nothing here is presented as live data.  These are captures, and the counts
+printed below describe that capture, not today's slate.
 """
 from __future__ import annotations
 
-import statistics
+import collections
 
 import pytest
 
-from src.raw_store import RawResponse
-from src.schema import Market, Period, QuoteStatus, Selection
-from src.sources.betrivers_kambi import BetRiversKambiAdapter, parse_kambi
-from src.sources.fanduel import FanDuelAdapter, parse_fanduel
-from src.sources.pinnacle import PinnacleAdapter, parse_pinnacle
-from src.validation import validate
-from tests.conftest import FIXTURE_DATE
-
-# ── FanDuel ──────────────────────────────────────────────────────────────────
+from src.arb import find_opportunities
+from src.events import reconcile_event_keys
+from src.leagues import league
+from src.schema import Market, Period, Quote, QuoteStatus, Selection, Sport
+from src.validation import Severity, validate
+from src.vocab import CORE_MARKETS_BY_SPORT, SELECTIONS_BY_MARKET, draw_is_priced
 
 
-def test_fanduel_parses_only_real_games(fanduel_raw: list[RawResponse]) -> None:
-    outcome = parse_fanduel(fanduel_raw[0])
-    assert len(outcome.quotes) == 96
-    assert len(outcome.event_keys) == 16
-    assert outcome.rejections == []
-    # The page carries 20 "events"; four are futures containers ("MLB Futures",
-    # "MLB Player Awards", "MLB Player Markets") and must not become games.
-    assert outcome.skipped["non_game_event"] == 4
+@pytest.fixture(scope="module")
+def replayed(all_fixture_quotes: list[Quote]) -> list[Quote]:
+    """The captured slate after cross-source event reconciliation.
 
-
-def test_fanduel_never_emits_a_free_text_market_type(fanduel_raw: list[RawResponse]) -> None:
-    """Unmapped market names used to pass through as the market type itself,
-    producing values like ``american_league_cy_young_2026``."""
-    outcome = parse_fanduel(fanduel_raw[0])
-    assert {q.market for q in outcome.quotes} == {
-        Market.MONEYLINE,
-        Market.RUN_LINE,
-        Market.TOTAL_RUNS,
-    }
-    assert {q.period for q in outcome.quotes} == {Period.FULL_GAME}
-
-
-def test_fanduel_strips_probable_pitcher_from_team_names(fanduel_raw: list[RawResponse]) -> None:
-    """Event names are ``"Phillies (A Nola) @ Marlins (S Alcantara)"``; the
-    pitcher suffix must not end up in the team fields or the event key."""
-    outcome = parse_fanduel(fanduel_raw[0])
-    rows = [q for q in outcome.quotes if q.event_key == f"PHI@MIA:{FIXTURE_DATE}"]
-    assert rows, "expected the Phillies/Marlins game"
-    assert {q.home_team for q in rows} == {"Miami Marlins"}
-    assert {q.away_team for q in rows} == {"Philadelphia Phillies"}
-    assert all("(" not in q.home_team and "(" not in q.away_team for q in outcome.quotes)
-
-
-def test_fanduel_golden_values(fanduel_raw: list[RawResponse]) -> None:
-    """Hand-verified against the captured JSON for one game."""
-    outcome = parse_fanduel(fanduel_raw[0])
-    rows = {
-        (q.market, q.selection): q
-        for q in outcome.quotes
-        if q.event_key == f"PHI@MIA:{FIXTURE_DATE}"
-    }
-
-    moneyline_away = rows[(Market.MONEYLINE, Selection.AWAY)]
-    assert moneyline_away.decimal_odds == pytest.approx(1.943396226415094)
-    assert moneyline_away.american_odds == -106
-    assert moneyline_away.line is None
-
-    run_line_away = rows[(Market.RUN_LINE, Selection.AWAY)]
-    run_line_home = rows[(Market.RUN_LINE, Selection.HOME)]
-    assert run_line_away.line == -1.5
-    assert run_line_home.line == 1.5
-    assert run_line_away.decimal_odds == pytest.approx(2.62)
-    assert run_line_away.american_odds == 162
-
-    total_over = rows[(Market.TOTAL_RUNS, Selection.OVER)]
-    assert total_over.line == 8.5
-    assert total_over.decimal_odds == pytest.approx(1.925925925925926)
-    assert total_over.american_odds == -108
-
-
-# ── Pinnacle ─────────────────────────────────────────────────────────────────
-
-
-def test_pinnacle_excludes_special_matchups(pinnacle_raw: list[RawResponse]) -> None:
-    """528 matchups, only 11 of which are games.  Treating the other 517 as
-    events produced 528 "events" and selections like ``"5+"``."""
-    matchups = next(r for r in pinnacle_raw if r.endpoint == "matchups")
-    markets = next(r for r in pinnacle_raw if r.endpoint == "markets-straight")
-    outcome = parse_pinnacle(matchups, markets)
-
-    assert len(outcome.event_keys) == 11
-    assert outcome.skipped["matchup_type:special"] == 521
-    assert outcome.rejections == []
-    assert len(outcome.quotes) == 803
-    # Every event key is a real matchup key, never a prop description.
-    assert all(
-        "@" in key and key.split(":")[1].startswith("2026-") for key in outcome.event_keys
-    )
-
-
-def test_pinnacle_period_mapping(pinnacle_raw: list[RawResponse]) -> None:
-    """Numeric periods are undocumented; these mappings were verified against
-    line values and against Kambi's explicitly labelled markets."""
-    matchups = next(r for r in pinnacle_raw if r.endpoint == "matchups")
-    markets = next(r for r in pinnacle_raw if r.endpoint == "markets-straight")
-    quotes = parse_pinnacle(matchups, markets).quotes
-
-    full_game_totals = [
-        q.line for q in quotes if q.market is Market.TOTAL_RUNS and q.period is Period.FULL_GAME
-    ]
-    first_five_totals = [
-        q.line
-        for q in quotes
-        if q.market is Market.TOTAL_RUNS and q.period is Period.FIRST_5_INNINGS
-    ]
-    first_inning_totals = [
-        q.line
-        for q in quotes
-        if q.market is Market.TOTAL_RUNS and q.period is Period.FIRST_1_INNING
-    ]
-
-    # Alternate lines widen each range, so compare the centres: a full game is
-    # priced around 8.5 runs and its first five innings around half that.
-    assert statistics.median(full_game_totals) == pytest.approx(8.5, abs=0.5)
-    assert statistics.median(first_five_totals) == pytest.approx(4.5, abs=0.5)
-    # A single inning is priced at 0.5 runs; three innings never would be.
-    assert set(first_inning_totals) == {0.5}
-
-
-def test_pinnacle_does_not_use_source_clock_as_observation_time(
-    pinnacle_raw: list[RawResponse],
-) -> None:
-    """``cutoffAt`` is when betting closes, in the future.  It was previously
-    written into the observation timestamp, making fresh rows look future-dated."""
-    matchups = next(r for r in pinnacle_raw if r.endpoint == "matchups")
-    markets = next(r for r in pinnacle_raw if r.endpoint == "markets-straight")
-    quotes = parse_pinnacle(matchups, markets).quotes
-
-    assert {q.observed_at for q in quotes} == {markets.fetched_at}
-    assert all(q.observed_at < q.commence_time for q in quotes)
-
-
-def test_pinnacle_run_lines_are_mirrored(pinnacle_raw: list[RawResponse]) -> None:
-    matchups = next(r for r in pinnacle_raw if r.endpoint == "matchups")
-    markets = next(r for r in pinnacle_raw if r.endpoint == "markets-straight")
-    quotes = parse_pinnacle(matchups, markets).quotes
-
-    groups: dict[tuple, dict] = {}
-    for quote in quotes:
-        if quote.market is Market.RUN_LINE:
-            groups.setdefault(quote.market_key, {})[quote.selection] = quote
-    assert groups
-    for sides in groups.values():
-        if Selection.HOME in sides and Selection.AWAY in sides:
-            assert sides[Selection.HOME].line == pytest.approx(-sides[Selection.AWAY].line)
-
-
-# ── BetRivers / Kambi ────────────────────────────────────────────────────────
-
-
-def test_kambi_scales_lines_out_of_thousandths(kambi_raw: list[RawResponse]) -> None:
-    """Kambi sends both odds and lines in thousandths.  Only the odds were
-    divided, so a total of 8.0 was emitted as a line of 8000."""
-    outcome = _parse_kambi(kambi_raw)
-    lines = [q.line for q in outcome.quotes if q.line is not None]
-    assert lines
-    assert max(abs(line) for line in lines) <= 20.0
-
-    totals = [
-        q.line
-        for q in outcome.quotes
-        if q.market is Market.TOTAL_RUNS and q.period is Period.FULL_GAME
-    ]
-    assert 5.0 <= min(totals) and max(totals) <= 14.0
-
-
-def test_kambi_collects_full_market_set_not_just_the_headline(
-    kambi_raw: list[RawResponse],
-) -> None:
-    """listView carries one bet offer per event; the per-event endpoint carries
-    the rest.  Collecting only listView yielded 2 rows per game and no lines."""
-    outcome = _parse_kambi(kambi_raw)
-    assert len(outcome.event_keys) == 16
-    assert len(outcome.quotes) == 755
-    assert {q.market for q in outcome.quotes} == {
-        Market.MONEYLINE,
-        Market.RUN_LINE,
-        Market.TOTAL_RUNS,
-        Market.TEAM_TOTAL_RUNS,
-    }
-    assert outcome.rejections == []
-
-
-def test_kambi_excludes_pitcher_conditional_moneylines(kambi_raw: list[RawResponse]) -> None:
-    """"Match Odds (X must start)" is a different market from the moneyline.
-    Collecting both would put several conflicting prices on one selection."""
-    outcome = _parse_kambi(kambi_raw)
-    assert any(key.startswith("criterion:Match Odds (") for key in outcome.skipped)
-
-    seen: set[tuple] = set()
-    for quote in outcome.quotes:
-        assert quote.dedup_key not in seen, f"duplicate selection {quote.dedup_key}"
-        seen.add(quote.dedup_key)
-
-
-def test_kambi_resolves_city_abbreviated_team_names(kambi_raw: list[RawResponse]) -> None:
-    """Kambi sends "CHI White Sox", "WAS Nationals", "NY Mets".  These failed to
-    resolve, rejecting 14 of 16 games."""
-    outcome = _parse_kambi(kambi_raw)
-    assert outcome.rejections == []
-    assert len(outcome.event_keys) == 16
-
-
-def test_kambi_records_source_price_change_time_separately(
-    kambi_raw: list[RawResponse],
-) -> None:
-    outcome = _parse_kambi(kambi_raw)
-    with_change = [q for q in outcome.quotes if q.last_change_at is not None]
-    assert with_change
-    assert all(q.last_change_at <= q.observed_at for q in with_change)
-
-
-def _parse_kambi(kambi_raw: list[RawResponse]):
-    listview = next(r for r in kambi_raw if r.endpoint == "listview")
-    betoffers = [r for r in kambi_raw if r.endpoint.startswith("betoffer-batch-")]
-    return parse_kambi(listview, betoffers)
-
-
-# ── whole-slate properties ───────────────────────────────────────────────────
-
-
-def test_fixture_slate_passes_validation(all_fixture_quotes) -> None:
-    report = validate(all_fixture_quotes)
-    assert report.ok, "\n".join(str(f) for f in report.errors[:20])
-    assert report.warnings == [], "\n".join(str(f) for f in report.warnings[:20])
-    assert report.quote_count == 1654
-    assert report.event_count == 16
-    assert report.source_count == 3
-
-
-def test_every_event_is_priced_by_at_least_two_books(all_fixture_quotes) -> None:
-    by_event: dict[str, set[str]] = {}
-    for quote in all_fixture_quotes:
-        by_event.setdefault(quote.event_key, set()).add(quote.source)
-    assert by_event
-    assert all(len(sources) >= 2 for sources in by_event.values())
-
-
-def test_doubleheader_gets_distinct_keys_consistently(all_fixture_quotes) -> None:
-    """The captured slate contains a Cleveland/Cincinnati doubleheader.  Both
-    books must agree on which game is which, or the join is wrong."""
-    keys = {q.event_key for q in all_fixture_quotes if q.event_key.startswith("CLE@CIN")}
-    assert keys == {f"CLE@CIN:{FIXTURE_DATE}", f"CLE@CIN:{FIXTURE_DATE}#2"}
-
-    for key in sorted(keys):
-        starts = {q.source: q.commence_time for q in all_fixture_quotes if q.event_key == key}
-        assert len(starts) >= 2
-        spread = max(starts.values()) - min(starts.values())
-        assert spread.total_seconds() <= 120
-
-
-def test_parsing_is_deterministic(fanduel_raw, pinnacle_raw, kambi_raw) -> None:
-    """Replay depends on parsing being a pure function of the captured bytes."""
-    for adapter_cls, raws in (
-        (FanDuelAdapter, fanduel_raw),
-        (PinnacleAdapter, pinnacle_raw),
-        (BetRiversKambiAdapter, kambi_raw),
-    ):
-        adapter = adapter_cls()
-        try:
-            first = adapter.parse(raws).quotes
-            second = adapter.parse(raws).quotes
-        finally:
-            adapter.close()
-        assert [q.model_dump() for q in first] == [q.model_dump() for q in second]
-
-
-def test_no_quote_is_priced_at_or_below_evens_boundary(all_fixture_quotes) -> None:
-    assert all(1.0 < q.decimal_odds <= 1000.0 for q in all_fixture_quotes)
-    assert all(q.american_odds != 0 for q in all_fixture_quotes)
-
-
-def test_all_rows_carry_a_raw_reference(all_fixture_quotes) -> None:
-    assert all(q.raw_ref for q in all_fixture_quotes)
-    assert all(q.status in (QuoteStatus.ACTIVE, QuoteStatus.SUSPENDED) for q in all_fixture_quotes)
-
-
-def test_kambi_offer_close_time_is_not_read_as_a_suspension_flag(
-    kambi_raw: list[RawResponse],
-) -> None:
-    """Kambi's ``closed`` is the betting cutoff *timestamp*, not a boolean.
-
-    Treating any non-empty value as truthy marked 741 of 757 perfectly open
-    offers as suspended — while every outcome in the payload reported ``OPEN``.
-    That also silenced the overround check, which skips markets that are not
-    fully active, so the strongest correctness test stopped covering this book.
+    Reconciliation belongs to the pipeline, not to any adapter, so the rows an
+    adapter emits are not the rows anything downstream sees.  Replaying without it
+    would exercise a shape that never reaches the store.
     """
-    outcome = _parse_kambi(kambi_raw)
-    active = [q for q in outcome.quotes if q.status is QuoteStatus.ACTIVE]
-    # Every cutoff in the fixture is hours after the 07:03Z capture.
-    assert len(active) == len(outcome.quotes)
+    quotes, _ = reconcile_event_keys(all_fixture_quotes)
+    return quotes
 
 
-def test_kambi_marks_a_past_cutoff_as_suspended(kambi_raw: list[RawResponse]) -> None:
-    """The cutoff still has to be honoured once it has passed."""
-    import json
+class TestCoverage:
+    def test_every_sport_is_present_in_the_capture(self, replayed) -> None:
+        """A sport dropping out of the fixtures is either a lost capture or an
+        adapter regression, and either way every cross-book claim below becomes
+        vacuously true for it."""
+        found = {quote.sport for quote in replayed}
+        missing = sorted(s.value for s in set(Sport) - found)
+        assert not missing, f"no rows for {missing}"
 
-    from src.raw_store import RawResponse as _Raw
+    def test_all_three_books_contributed(self, replayed) -> None:
+        assert {quote.source for quote in replayed} == {
+            "fanduel",
+            "pinnacle",
+            "betrivers_kambi",
+        }
 
-    listview = next(r for r in kambi_raw if r.endpoint == "listview")
-    betoffer = next(r for r in kambi_raw if r.endpoint.startswith("betoffer-batch-"))
-    payload = betoffer.json()
-    for offer in payload["betOffers"]:
-        offer["closed"] = "2026-07-28T06:00:00Z"  # before the 07:03Z capture
-    rewritten = _Raw(
-        source=betoffer.source,
-        endpoint=betoffer.endpoint,
-        url=betoffer.url,
-        status_code=betoffer.status_code,
-        body=json.dumps(payload),
-        fetched_at=betoffer.fetched_at,
-        content_type=betoffer.content_type,
-    )
-    quotes = parse_kambi(listview, [rewritten]).quotes
-    assert quotes
-    assert all(q.status is QuoteStatus.SUSPENDED for q in quotes)
+    def test_each_sport_has_its_core_markets_from_some_book(self, replayed) -> None:
+        """No single book prices everything, but the slate as a whole must cover a
+        sport's core markets or the sport is not really collected."""
+        seen: dict[Sport, set[Market]] = collections.defaultdict(set)
+        for quote in replayed:
+            if quote.period is Period.FULL_GAME:
+                seen[quote.sport].add(quote.market)
+        for sport, expected in CORE_MARKETS_BY_SPORT.items():
+            missing = sorted(m.value for m in expected - seen[sport])
+            assert not missing, f"{sport.value} is missing {missing}"
+
+    def test_the_per_sport_cross_book_count_is_recorded(self, replayed) -> None:
+        """A record, not a threshold.
+
+        How many books price the same event is a property of the calendar as much
+        as of the code — in late July the NHL has barely any cross-book slate and
+        the NBA has none at all.  Printing the numbers keeps "this sport is
+        supported" an evidenced claim rather than an assumed one.
+        """
+        per_sport: dict[Sport, dict[str, set[str]]] = collections.defaultdict(
+            lambda: collections.defaultdict(set)
+        )
+        for quote in replayed:
+            per_sport[quote.sport][quote.event_key].add(quote.source)
+        for sport, events in sorted(per_sport.items(), key=lambda kv: kv[0].value):
+            shared = [e for e, books in events.items() if len(books) >= 2]
+            books = sorted({b for bs in events.values() for b in bs})
+            print(
+                f"{sport.value:<11} {len(events):>4} events, "
+                f"{len(shared):>4} priced by 2+ books, from {books}"
+            )
+
+
+class TestCrossBookIdentity:
+    def test_books_sharing_an_event_agree_on_the_participants(self, replayed) -> None:
+        """The join only means something if the books mean the same fixture.
+
+        Where home advantage is real they must agree on which side is home; in
+        tennis the ordering is imposed by ``src.events.orient`` and the books have
+        no opinion, so only the pair is compared.
+        """
+        by_event: dict[str, dict[str, tuple[str, ...]]] = collections.defaultdict(dict)
+        for quote in replayed:
+            if league(quote.league).has_home_away:
+                identity: tuple[str, ...] = (quote.home_participant, quote.away_participant)
+            else:
+                identity = tuple(sorted((quote.home_participant, quote.away_participant)))
+            by_event[quote.event_key][quote.source] = identity
+        for event_key, per_source in by_event.items():
+            assert len(set(per_source.values())) == 1, f"{event_key}: {per_source}"
+
+    def test_books_sharing_an_event_agree_on_the_sport(self, replayed) -> None:
+        by_event: dict[str, set[Sport]] = collections.defaultdict(set)
+        for quote in replayed:
+            by_event[quote.event_key].add(quote.sport)
+        for event_key, sports in by_event.items():
+            assert len(sports) == 1, f"{event_key} spans {sports}"
+
+    def test_an_event_key_holds_one_start_time_window(self, replayed) -> None:
+        """Two different fixtures under one key is the doubleheader mis-join, and
+        it is silent — every row still looks individually valid."""
+        by_event: dict[str, list[Quote]] = collections.defaultdict(list)
+        for quote in replayed:
+            by_event[quote.event_key].append(quote)
+        for event_key, rows in by_event.items():
+            times = {q.commence_time for q in rows}
+            tolerance = max(league(q.league).same_event_tolerance for q in rows)
+            assert max(times) - min(times) <= tolerance, (
+                f"{event_key} spans {max(times) - min(times)}, over the {tolerance} tolerance"
+            )
+
+    def test_books_sharing_an_event_agree_on_the_favourite(self, replayed) -> None:
+        """The check that caught a real phantom-arbitrage generator.
+
+        Two books differ on the *size* of a price constantly; they do not disagree
+        about which competitor is favoured.  A mirrored pair means one book's
+        prices are attached to the wrong participant — which is what Pinnacle's
+        tennis rows did on 5 of 8 matches, because the book's own home/away label
+        was trusted where our ordering is imposed instead.  Every row looked
+        individually valid, so only a cross-book comparison could see it.
+        """
+        by_event: dict[str, dict[str, dict[Selection, float]]] = collections.defaultdict(
+            lambda: collections.defaultdict(dict)
+        )
+        for quote in replayed:
+            if quote.market is not Market.MONEYLINE or quote.period is not Period.FULL_GAME:
+                continue
+            if quote.selection in (Selection.HOME, Selection.AWAY):
+                by_event[quote.event_key][quote.source][quote.selection] = quote.decimal_odds
+
+        # Only events with a *clear* favourite can be compared this way.  On a
+        # pick'em the two books genuinely disagree about which side is a hair
+        # shorter — the captured HOU@LAA has FanDuel at 1.909/1.943 and Pinnacle at
+        # 1.962/1.943 — and that disagreement carries no information.  Requiring a
+        # gap in implied probability keeps the check pointed at the failure it
+        # exists for: a mirrored pair, where the tennis rows differed by 1.24
+        # against 4.12.
+        clear_favourite = 0.05
+
+        def edge(prices: dict[Selection, float]) -> float:
+            return 1 / prices[Selection.HOME] - 1 / prices[Selection.AWAY]
+
+        compared = 0
+        for event_key, per_source in by_event.items():
+            complete = {
+                src: prices
+                for src, prices in per_source.items()
+                if {Selection.HOME, Selection.AWAY} <= set(prices)
+                and abs(edge(prices)) > clear_favourite
+            }
+            if len(complete) < 2:
+                continue
+            verdicts = {src: edge(prices) > 0 for src, prices in complete.items()}
+            assert len(set(verdicts.values())) == 1, (
+                f"{event_key}: books disagree on the favourite — {complete}"
+            )
+            compared += 1
+        assert compared > 10, f"only {compared} events compared — too few to mean anything"
+
+    def test_reconciliation_is_idempotent_on_the_capture(self, replayed) -> None:
+        again, changes = reconcile_event_keys(replayed)
+        assert changes == []
+        assert [q.event_key for q in again] == [q.event_key for q in replayed]
+
+
+class TestDeterminism:
+    def test_replaying_the_same_bytes_twice_is_identical(
+        self, fanduel_raw, pinnacle_raw, kambi_raw
+    ) -> None:
+        """Replay, regression testing and reproducing a live failure offline all
+        rest on this and nothing else."""
+        from src.sources.betrivers_kambi import BetRiversKambiAdapter
+        from src.sources.fanduel import FanDuelAdapter
+        from src.sources.pinnacle import PinnacleAdapter
+
+        for cls, raws in (
+            (FanDuelAdapter, fanduel_raw),
+            (PinnacleAdapter, pinnacle_raw),
+            (BetRiversKambiAdapter, kambi_raw),
+        ):
+            adapter = cls()
+            try:
+                first = [q.model_dump() for q in adapter.parse(raws).quotes]
+                second = [q.model_dump() for q in adapter.parse(raws).quotes]
+            finally:
+                adapter.close()
+            assert first == second, cls.__name__
+
+    def test_every_row_is_traceable_to_stored_bytes(
+        self, all_fixture_quotes, fanduel_raw, pinnacle_raw, kambi_raw
+    ) -> None:
+        """Both provenance refs must resolve by plain membership, so an orphaned
+        row is a failure rather than something a reader has to go and check."""
+        stored = {raw.ref for raw in (*fanduel_raw, *pinnacle_raw, *kambi_raw)}
+        for quote in all_fixture_quotes:
+            assert quote.raw_ref in stored, quote.raw_ref
+            if quote.identity_raw_ref is not None:
+                assert quote.identity_raw_ref in stored, quote.identity_raw_ref
+
+
+class TestValidationOnTheRealSlate:
+    def test_the_captured_slate_has_no_validation_errors(self, replayed) -> None:
+        """The end-to-end assertion this file exists for.
+
+        An ERROR means the data is wrong or unusable, so a real capture producing
+        one is a parser fault rather than something to tune away.  Warnings are
+        allowed: a book legitimately prices markets another does not.
+        """
+        report = validate(replayed)
+        errors = [f for f in report.findings if f.severity is Severity.ERROR]
+        assert errors == [], "\n".join(str(f) for f in errors[:10])
+
+    def test_no_book_prices_a_complete_market_to_lose(self, replayed) -> None:
+        """Implied probabilities summing below 1.0 at one book means the prices or
+        the lines were mispaired.  It is the signature of a parser fault, and it is
+        also exactly what a phantom arbitrage looks like."""
+        grouped: dict[tuple[str, str, str], list[Quote]] = collections.defaultdict(list)
+        for quote in replayed:
+            grouped[quote.market_key].append(quote)
+
+        checked = 0
+        for market_key, rows in grouped.items():
+            if any(r.status is not QuoteStatus.ACTIVE for r in rows):
+                continue
+            expected = set(SELECTIONS_BY_MARKET[rows[0].market])
+            if rows[0].market is Market.MONEYLINE and not draw_is_priced(
+                rows[0].sport, rows[0].period
+            ):
+                expected.discard(Selection.DRAW)
+            if {r.selection for r in rows} != expected:
+                continue
+            overround = sum(r.implied_probability for r in rows)
+            assert overround >= 1.0 - 1e-9, f"{market_key} sums to {overround:.4f}"
+            checked += 1
+        assert checked > 100, f"only {checked} complete markets checked — too few to mean anything"
+
+
+class TestArbitrageOnTheRealSlate:
+    def test_the_captured_slate_is_reported_honestly(self, replayed) -> None:
+        """Three correctly-priced books produce no arbitrage, and that is the
+        expected result rather than a bug.
+
+        What matters is *why*.  "No opportunities" because nothing was mispriced
+        and "no opportunities" because nothing was comparable are entirely
+        different claims, and only the first one says the pipeline works — so the
+        comparable count is asserted, not just the opportunity count.
+        """
+        report = find_opportunities(replayed)
+        print(
+            f"comparable cross-book markets: {report.comparable_group_count}, "
+            f"opportunities: {len(report.opportunities)}, "
+            f"refusals: {sum(report.refusals.values()) if hasattr(report, 'refusals') else 0}"
+        )
+        assert report.comparable_group_count > 0, (
+            "no market was comparable across books, so 'no arbitrage' means nothing"
+        )

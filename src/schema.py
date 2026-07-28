@@ -79,7 +79,26 @@ class Quote(BaseModel):
     """When *this collector* fetched the payload.  Never a source-supplied
     time — those live in :attr:`last_change_at`."""
     raw_ref: str
-    """Reference to the stored raw response this row was parsed from."""
+    """Reference to the stored raw response **the price** was parsed from.
+
+    Single-valued, always.  It is the response whose ``fetched_at`` is
+    :attr:`observed_at`, so the two are mechanically checkable against each
+    other."""
+
+    identity_raw_ref: str | None = None
+    """Reference to the stored response that supplied the *event identity*, when
+    that came from a different call than the price.
+
+    Pinnacle needs two requests — ``matchups`` gives the participants and start
+    time, ``markets/straight`` gives the prices — so a row parsed from the second
+    owes its teams to the first.  Without this the identity provenance is not
+    traceable from the row at all.
+
+    It is a separate field rather than a second value packed into
+    :attr:`raw_ref` because a compound ``"a+b"`` string would give that field an
+    undeclared grammar: every reader and every check would have to know to split
+    it, and the ones that did not would silently compare a concatenation against a
+    set of real references and conclude the row was orphaned."""
 
     # ── event identity ───────────────────────────────────────────────────────
     sport: Sport

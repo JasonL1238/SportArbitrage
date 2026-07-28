@@ -119,17 +119,50 @@ def _build_roster(roster_name: str) -> _Roster:
             return
         index[norm] = abbr
 
+    abbr_keys: set[str] = set()
     for abbr, name, city, nickname in rows:
+        abbr_keys.add(_normalize(abbr))
         add(abbr, abbr)
         add(name, abbr)
         add(nickname, abbr)
         if city:
-            add(city, abbr)
+            # A city alone is deliberately NOT registered as an identity: it
+            # names a place, not a club.  Every spelling observed from the three
+            # books carries a nickname or an abbreviation ("CHI White Sox",
+            # "Cincinnati Reds", "LA Chargers"), so nothing real is lost — and
+            # registering it caused a genuine cross-league false match, where
+            # "Cincinnati Reds" resolved against the NFL roster as the Bengals
+            # purely on the shared city.
             add(f"{city} {nickname}", abbr)
 
     # Anything that resolved to two different clubs is not an identity.
     for norm in collisions:
         index.pop(norm, None)
+
+    # An abbreviation that is also an ordinary word inside another club's name is
+    # not an identity either.  This is not hypothetical: the WNBA's Los Angeles
+    # Sparks abbreviate to LAS, and "las" is the first word of "Las Vegas Aces",
+    # so every Aces row resolved to two clubs and therefore to none.  Detecting
+    # it structurally keeps the guarantee true as rosters change, instead of
+    # relying on someone noticing the next collision by hand.
+    word_tokens: set[str] = set()
+    for abbr, name, city, nickname in rows:
+        for text in (name, city, nickname):
+            if text:
+                word_tokens.update(_words(text, drop_parentheticals=True))
+    for abbr_key in abbr_keys:
+        if abbr_key in word_tokens and index.get(abbr_key) is not None:
+            owner = index[abbr_key]
+            # Only drop it when the colliding word belongs to a *different* club.
+            others = {
+                a
+                for a, name, city, nickname in rows
+                if a != owner
+                and abbr_key in _words(f"{name} {city} {nickname}", drop_parentheticals=True)
+            }
+            if others:
+                index.pop(abbr_key, None)
+
     for fragment in AMBIGUOUS.get(roster_name, frozenset()):
         index.pop(_normalize(fragment), None)
 
@@ -213,8 +246,8 @@ _FUTURES_MARKERS: frozenset[str] = frozenset(
         "relegated",
         "relegation",
         "promotion",
-        "topgoalscorer",
-        "toplscorer",
+        "goalscorer",
+        "topscorer",
         "conference",
         "division",
     }
@@ -222,6 +255,22 @@ _FUTURES_MARKERS: frozenset[str] = frozenset(
 
 #: A season span such as ``2026/2027`` — another outright marker.
 _SEASON_SPAN = re.compile(r"\b20\d{2}\s*/\s*\d{2,4}\b")
+
+#: A pairing of two competitors rather than one, as in a tennis doubles entry
+#: ``"R Galloway / E King"``.  These must be **unresolvable**, not normalized.
+#:
+#: Two separate reasons, either of which is sufficient.  The slug for an
+#: open-roster competitor is order-independent, which is what lets "Xiyu Wang"
+#: and "Wang Xiyu" join — applied to a pairing it scrambles four names into one
+#: meaningless token (``e.galloway.king.r``) that could collide with a different
+#: pairing of the same surnames.  And doubles entries are written with
+#: initialised surnames, which cannot be reconciled with another book's spelling
+#: of the same pair anyway.  A row that can never join is worse than no row: it
+#: inflates coverage while contributing nothing.
+#: Only *symbol* separators count.  The word "and" must not: "Brighton and Hove
+#: Albion" is one club, and treating it as a pairing rejected a real Premier
+#: League fixture outright.
+_PAIRING = re.compile(r"\s(?:/|&|\+|\bvs?\b)\s", re.IGNORECASE)
 
 #: Generic club-type tokens that books add or omit inconsistently for the *same*
 #: club and that never by themselves distinguish two clubs: "FC Tulsa" and
@@ -296,6 +345,8 @@ def _open_slug(raw: str, *, sport: Sport) -> str | None:
     if not raw or not raw.strip():
         return None
     if _SEASON_SPAN.search(raw):
+        return None
+    if _PAIRING.search(raw):
         return None
 
     # Parentheticals are kept for soccer, because "(W)" is the only thing

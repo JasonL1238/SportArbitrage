@@ -130,6 +130,14 @@ LEAGUES: tuple[League, ...] = (
     # ── hockey ───────────────────────────────────────────────────────────────
     _l("NHL", Sport.HOCKEY, "National Hockey League", roster="nhl",
        max_schedule_horizon=timedelta(days=400), plausible_total_range=(3.0, 12.0)),
+    # Pinnacle carries no NHL games in the offseason, but it does price club
+    # friendlies, and those are the only real hockey markets it offers.  Without
+    # a league to map them onto they were dropped as `league_not_registered`,
+    # which made Pinnacle's hockey contribution a silent zero rather than a
+    # visible "prices friendlies, not the NHL".  Open roster: these are club and
+    # junior sides with no fixed membership list.
+    _l("HOCKEY_OTHER", Sport.HOCKEY, "Other hockey competition", scheduling_tz=UTC_TZ,
+       plausible_total_range=(3.0, 15.0)),
     # ── football ─────────────────────────────────────────────────────────────
     _l("NFL", Sport.FOOTBALL, "National Football League", roster="nfl",
        max_schedule_horizon=timedelta(days=400), plausible_total_range=(20.0, 80.0)),
@@ -149,6 +157,13 @@ LEAGUES: tuple[League, ...] = (
        same_event_tolerance=TENNIS_TOLERANCE),
     _l("ITF", Sport.TENNIS, "ITF Tour", scheduling_tz=UTC_TZ, has_home_away=False,
        plausible_total_range=(12.0, 60.0), same_event_tolerance=TENNIS_TOLERANCE),
+    # A catch-all, for the same reason soccer has one: a match must never be
+    # dropped merely because its tour is unrecognised.  Without this, an adapter
+    # meeting a competition like "Mens UTR Pro Series, Argentina" has to either
+    # guess a tour or discard the match, and guessing mislabels coverage.
+    _l("TENNIS_OTHER", Sport.TENNIS, "Other tennis competition", scheduling_tz=UTC_TZ,
+       has_home_away=False, plausible_total_range=(12.0, 60.0),
+       same_event_tolerance=TENNIS_TOLERANCE),
     # ── soccer ───────────────────────────────────────────────────────────────
     # Soccer is registered per competition where the books agree on one, and
     # otherwise under a catch-all so a fixture is never dropped merely because

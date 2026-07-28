@@ -22,17 +22,44 @@ from src.normalize import (
     american_to_decimal,
     is_plausible_decimal_odds,
 )
+from src.events import build_event_key
+from src.leagues import is_known, league
+from src.participants import canonical_participant
 from src.schema import (
-    LEAGUE_MLB,
     MARKETS_REQUIRING_LINE,
     MARKETS_REQUIRING_SIDE,
     SELECTIONS_BY_MARKET,
-    SPORT_BASEBALL,
     Market,
+    Period,
     QuoteStatus,
     Selection,
+    Sport,
+    draw_is_priced,
 )
-from src.teams import canonical_team
+
+#: The largest line magnitude each sport plausibly publishes.  A total of 8.0
+#: arriving as 8000 is a units error, not a line, and books that send lines in
+#: thousandths make that a live risk rather than a hypothetical one.
+MAX_ABS_LINE: dict[Sport, float] = {
+    Sport.BASEBALL: 15.0,
+    Sport.HOCKEY: 12.0,
+    Sport.SOCCER: 12.0,
+    Sport.TENNIS: 15.0,
+    Sport.BASKETBALL: 300.0,
+    Sport.FOOTBALL: 90.0,
+}
+
+#: The increment a sport's lines land on.  Half-point lines everywhere except
+#: soccer and tennis, where Asian handicaps and totals legitimately use quarter
+#: lines (-0.25, +0.75) that split the stake across two numbers.
+LINE_INCREMENT: dict[Sport, float] = {
+    Sport.BASEBALL: 0.5,
+    Sport.BASKETBALL: 0.5,
+    Sport.FOOTBALL: 0.5,
+    Sport.HOCKEY: 0.5,
+    Sport.SOCCER: 0.25,
+    Sport.TENNIS: 0.25,
+}
 
 #: Every adapter under contract, with the fixture that feeds it.
 ADAPTERS = ["fanduel", "pinnacle", "betrivers_kambi"]
@@ -115,31 +142,71 @@ class TestInterface:
 
 
 class TestRowIdentity:
-    def test_sport_and_league_are_the_declared_constants(self, adapter_case) -> None:
-        _, outcome, _ = adapter_case
+    def test_league_is_registered_and_matches_the_sport(self, adapter_case) -> None:
+        """A league the registry does not know cannot be validated, scheduled, or
+        joined — reconciliation skips it and every per-league check reads a
+        default."""
+        key, outcome, _ = adapter_case
         for quote in outcome.quotes:
-            assert quote.sport == SPORT_BASEBALL
-            assert quote.league == LEAGUE_MLB
+            assert is_known(quote.league), f"{key}: unregistered league {quote.league!r}"
+            assert league(quote.league).sport is quote.sport, (
+                f"{key}: {quote.league} is not a {quote.sport.value} league"
+            )
+
+    def test_the_period_has_recorded_settlement_rules(self, adapter_case) -> None:
+        """Collecting a window whose tie semantics are unknown means guessing
+        whether a tie voids the bet, and that guess is worth the whole stake."""
+        key, outcome, _ = adapter_case
+        for quote in outcome.quotes:
+            assert quote.settlement is not None, f"{key}: {quote.sport}/{quote.period}"
+
+    def test_a_draw_appears_only_where_the_books_price_one(self, adapter_case) -> None:
+        """A draw on a full-game baseball or hockey moneyline is a misparsed third
+        runner; on a soccer 90-minute or hockey regulation market it is correct."""
+        key, outcome, _ = adapter_case
+        for quote in outcome.quotes:
+            if quote.selection is Selection.DRAW:
+                assert draw_is_priced(quote.sport, quote.period), (
+                    f"{key}: draw on {quote.sport.value}/{quote.period.value}"
+                )
 
     def test_source_matches_the_adapter_key(self, adapter_case) -> None:
         key, outcome, _ = adapter_case
         assert {q.source for q in outcome.quotes} == {key}
 
-    def test_team_names_resolve_to_real_clubs(self, adapter_case) -> None:
+    def test_participants_resolve_within_their_league(self, adapter_case) -> None:
         """A passthrough feed string here breaks every cross-source join, and a
         market label reaching this field is how futures become games."""
         key, outcome, _ = adapter_case
         for quote in outcome.quotes:
+            competition = league(quote.league)
             for role, name in (("home", quote.home_team), ("away", quote.away_team)):
-                assert canonical_team(name) is not None, f"{key}: {role} {name!r}"
+                assert canonical_participant(name, competition) is not None, (
+                    f"{key}: {role} {name!r} does not resolve in {quote.league}"
+                )
 
-    def test_team_names_are_the_canonical_spelling(self, adapter_case) -> None:
-        """Emitting the canonical name rather than the feed's spelling is what
-        makes rows comparable without re-normalising at every read."""
+    def test_participant_keys_match_the_display_names(self, adapter_case) -> None:
+        """The row carries both an identity and a display name; if they disagree,
+        the thing everything joins on is not the thing a human is reading."""
+        key, outcome, _ = adapter_case
+        for quote in outcome.quotes:
+            competition = league(quote.league)
+            home = canonical_participant(quote.home_team, competition)
+            away = canonical_participant(quote.away_team, competition)
+            assert home.key == quote.home_participant, f"{key}: {quote.home_team!r}"
+            assert away.key == quote.away_participant, f"{key}: {quote.away_team!r}"
+
+    def test_roster_participants_use_the_canonical_spelling(self, adapter_case) -> None:
+        """For a closed roster there is one correct spelling, and emitting it
+        rather than the feed's makes rows comparable without re-normalising at
+        every read.  Open rosters have no canonical form to demand."""
         _, outcome, _ = adapter_case
         for quote in outcome.quotes:
-            assert canonical_team(quote.home_team).name == quote.home_team
-            assert canonical_team(quote.away_team).name == quote.away_team
+            competition = league(quote.league)
+            if competition.roster is None:
+                continue
+            assert canonical_participant(quote.home_team, competition).name == quote.home_team
+            assert canonical_participant(quote.away_team, competition).name == quote.away_team
 
     def test_event_keys_are_well_formed(self, adapter_case) -> None:
         _, outcome, _ = adapter_case
@@ -158,7 +225,7 @@ class TestRowIdentity:
         by_event: dict[str, set] = defaultdict(set)
         for quote in outcome.quotes:
             by_event[quote.event_key].add(
-                (quote.home_team, quote.away_team, quote.commence_time)
+                (quote.home_participant, quote.away_participant, quote.commence_time)
             )
         for event_key, identities in by_event.items():
             assert len(identities) == 1, f"{key}: {event_key} holds {identities}"
@@ -207,21 +274,42 @@ class TestMarketVocabulary:
             else:
                 assert quote.side is None
 
-    def test_lines_are_on_a_baseball_scale(self, adapter_case) -> None:
+    def test_lines_are_on_their_sports_scale(self, adapter_case) -> None:
         """A total of 8.0 arriving as 8000 is a units error, not a line.  Books
         that send lines in thousandths make this a live risk."""
         key, outcome, _ = adapter_case
         for quote in outcome.quotes:
             if quote.line is None:
                 continue
-            assert abs(quote.line) <= 30.0, f"{key}: line {quote.line}"
+            limit = MAX_ABS_LINE[quote.sport]
+            assert abs(quote.line) <= limit, (
+                f"{key}: {quote.sport.value} line {quote.line} exceeds {limit}"
+            )
 
-    def test_lines_land_on_half_run_increments(self, adapter_case) -> None:
-        _, outcome, _ = adapter_case
+    def test_totals_are_plausible_for_their_league(self, adapter_case) -> None:
+        """A 2.5-point NFL total and a 165-goal soccer total are both a market
+        mapped to the wrong sport, and neither is caught by a units check alone."""
+        key, outcome, _ = adapter_case
+        for quote in outcome.quotes:
+            if quote.market is not Market.TOTAL or quote.period is not Period.FULL_GAME:
+                continue
+            low, high = league(quote.league).plausible_total_range
+            assert low <= quote.line <= high, (
+                f"{key}: {quote.league} full-game total {quote.line} outside {low}-{high}"
+            )
+
+    def test_lines_land_on_their_sports_increment(self, adapter_case) -> None:
+        """Half-point lines everywhere except soccer and tennis, where quarter
+        lines are real and split the stake across two numbers."""
+        key, outcome, _ = adapter_case
         for quote in outcome.quotes:
             if quote.line is None:
                 continue
-            assert abs(quote.line * 2 - round(quote.line * 2)) < 1e-9, quote.line
+            step = LINE_INCREMENT[quote.sport]
+            scaled = quote.line / step
+            assert abs(scaled - round(scaled)) < 1e-9, (
+                f"{key}: {quote.sport.value} line {quote.line} is not a multiple of {step}"
+            )
 
     def test_two_sided_markets_mirror_their_lines(self, adapter_case) -> None:
         """The pairing rule the arbitrage engine depends on: a run line's two
@@ -315,13 +403,22 @@ class TestPrices:
         for market_key, rows in grouped.items():
             if len(rows) < 2 or any(r.status is not QuoteStatus.ACTIVE for r in rows):
                 continue
-            required = SELECTIONS_BY_MARKET[rows[0].market]
             present = {r.selection for r in rows}
             if rows[0].market is Market.MONEYLINE:
-                if not {Selection.HOME, Selection.AWAY} <= present:
+                # The expected outcome count is sport-dependent: a soccer
+                # 90-minute moneyline and a hockey regulation one have three
+                # legs, everything else has two.  A two-way market missing a leg
+                # and a genuine two-way market are otherwise indistinguishable,
+                # and only the complete one can be checked for overround.
+                needed = {Selection.HOME, Selection.AWAY}
+                if draw_is_priced(rows[0].sport, rows[0].period):
+                    needed = needed | {Selection.DRAW}
+                if not needed <= present:
                     continue
-            elif not (required & present) == required:
-                continue
+            else:
+                required = SELECTIONS_BY_MARKET[rows[0].market]
+                if not (required & present) == required:
+                    continue
             overround = sum(r.implied_probability for r in rows)
             assert overround >= 1.0 - 1e-9, f"{key}: {market_key} sums to {overround:.4f}"
 
@@ -369,23 +466,35 @@ class TestCrossAdapterConsistency:
     def test_all_adapters_agree_on_event_key_construction(self, parsed) -> None:
         """A key built differently by one adapter joins to nothing, and the
         symptom is an absence rather than an error."""
-        from src.events import build_event_key
-
         for key, (outcome, _) in parsed.items():
             for quote in outcome.quotes:
-                away = canonical_team(quote.away_team).abbr
-                home = canonical_team(quote.home_team).abbr
-                expected = build_event_key(away, home, quote.commence_time)
+                expected = build_event_key(
+                    quote.away_participant,
+                    quote.home_participant,
+                    quote.commence_time,
+                    league(quote.league),
+                )
                 # A doubleheader ordinal is the only permitted difference.
                 assert quote.event_key.split("#")[0] == expected, (
                     f"{key}: {quote.event_key} != {expected}"
                 )
 
-    def test_sources_that_share_an_event_agree_on_the_teams(self, parsed) -> None:
+    def test_sources_that_share_an_event_agree_on_the_participants(self, parsed) -> None:
+        """Books must agree on who is playing.  Where home advantage is real they
+        must also agree on which side is home; in tennis the ordering is imposed
+        by src.events.orient and the books have no opinion, so only the pair is
+        compared there."""
         by_event: dict[str, dict[str, tuple[str, str]]] = defaultdict(dict)
         for key, (outcome, _) in parsed.items():
             for quote in outcome.quotes:
-                by_event[quote.event_key][key] = (quote.home_team, quote.away_team)
+                competition = league(quote.league)
+                if competition.has_home_away:
+                    identity = (quote.home_participant, quote.away_participant)
+                else:
+                    identity = tuple(
+                        sorted((quote.home_participant, quote.away_participant))
+                    )
+                by_event[quote.event_key][key] = identity
         for event_key, per_source in by_event.items():
             assert len(set(per_source.values())) == 1, f"{event_key}: {per_source}"
 
@@ -396,3 +505,21 @@ class TestCrossAdapterConsistency:
         for outcome, _ in parsed.values():
             counts.update(outcome.event_keys)
         assert [event for event, n in counts.items() if n >= 2]
+
+    def test_every_sport_reports_how_many_books_cover_it(self, parsed) -> None:
+        """Not an assertion about coverage but a record of it.
+
+        A sport is only usable when at least two books price the same event, and
+        that is a property of the day rather than of the code — the NHL has no
+        cross-book slate in July.  Printing the count keeps "this sport is
+        supported" an evidenced claim instead of an assumed one.
+        """
+        per_sport: dict[Sport, dict[str, set[str]]] = defaultdict(lambda: defaultdict(set))
+        for key, (outcome, _) in parsed.items():
+            for quote in outcome.quotes:
+                per_sport[quote.sport][quote.event_key].add(key)
+        for sport, events in sorted(per_sport.items(), key=lambda kv: kv[0].value):
+            shared = [e for e, books in events.items() if len(books) >= 2]
+            print(
+                f"{sport.value}: {len(events)} events, {len(shared)} priced by 2+ books"
+            )

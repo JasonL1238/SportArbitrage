@@ -10,29 +10,54 @@ real money.
 The traps, and how each is closed:
 
 **Mispaired lines.**  ``line`` on a row is stated from that row's own
-perspective, so a home run line of -1.5 and an away run line of +1.5 are the two
+perspective, so a home spread of -1.5 and an away spread of +1.5 are the two
 halves of one market.  Pairing is therefore done on a single canonical
 orientation (:func:`canonical_line`) rather than on the raw field, which makes
 "home -1.5 against away +2.5" impossible to express.
 
 **Push.**  Home -1 and away +1 are complementary until the home team wins by
-exactly one run, at which point *both* legs refund and the profit is zero rather
-than the advertised margin.  Rather than carry a boolean that callers may ignore,
+exactly one, at which point *both* legs refund and the profit is zero rather than
+the advertised margin.  Rather than carry a boolean that callers may ignore,
 every opportunity enumerates its settlement outcomes explicitly and reports the
 *minimum* profit across all of them.  A push outcome cannot be overlooked
 because it is part of the number.
 
-**Incompatible contracts.**  A two-way first-five-innings moneyline where a tie
-refunds is a different contract from a three-way one where a tie is a losing
-outcome.  Backing home at the first and away at the second is not an arbitrage:
-a tie loses both legs, and on fair prices it looks like a 5% edge.  So legs are
-only combined across books offering the same outcome set (:func:`contract_shape`).
+**A tie that no field on the row mentions.**  This is the sport-aware core of the
+module.  :data:`src.vocab.PERIOD_RULES` records, per ``(sport, period)``, whether
+the window can end level and whether the books price a draw for it, and those two
+bits decide the outcome set:
 
-**A tie whose settlement cannot be determined.**  Worse than the above, a
-two-way partial-period moneyline is *ambiguous*: either the book voids ties, or
-it prices a three-way market whose draw leg arrived without a price and was
-dropped.  The two readings differ by the entire bankroll and no field on the row
-distinguishes them, so no position is reported at all.
+* ``(FOOTBALL, FULL_GAME)`` can end level and US books price no draw, so an NFL
+  game still tied after overtime **voids** the two-way moneyline.  That is a push
+  outcome created by nothing on the row, and it is enumerated exactly like a
+  whole-number spread landing on its number.  Without it, a 4.8% "guaranteed"
+  NFL moneyline position is really a 4.8% position with a floor of zero.
+* ``(BASEBALL | BASKETBALL | HOCKEY | TENNIS, FULL_GAME)`` cannot end level —
+  extra innings, overtime and the shootout run until somebody wins — so a
+  complete two-way moneyline there has no push outcome at all, and inventing one
+  would understate the profit floor as zero for an impossible outcome.
+* ``(SOCCER, FULL_GAME)`` and ``(HOCKEY, REGULATION)`` price the draw, so a
+  *complete* market has three legs.  A two-way market in one of those windows is
+  **incomplete**, and which way the missing tie settles differs by the whole
+  bankroll: either the book voids ties, or its draw leg arrived without a price
+  and was dropped, in which case a level score loses both legs.  Nothing on the
+  row says which, so no position is reported (``ambiguous_tie_settlement``).
+
+**Quarter lines.**  A soccer Asian total of 2.75 splits the stake between 2.5 and
+3.0, so a match landing on exactly 3 refunds half the stake and settles the other
+half.  That is a *half* push, enumerated as its own outcome with its own
+multipliers, and its profit works out to exactly half the profit of the side whose
+half survives — so a quarter line reduces a real edge rather than reversing it,
+which is why it can be reported at all instead of refused.  A line at a
+granularity this module does not model *is* refused, with a counted reason, rather
+than settled as if it were a half line: 200 of the captured slate's lines are
+quarter lines, so this is a live case and not a hypothetical one.
+
+**Incompatible contracts.**  A two-way moneyline where a tie refunds is a
+different contract from a three-way one where a tie is a losing outcome.  Backing
+home at the first and away at the second is not an arbitrage: a tie loses both
+legs, and on fair prices it looks like a 5% edge.  So legs are only combined
+across books offering the same outcome set (:func:`contract_shape`).
 
 **Prices from a book that contradicts itself.**  A book whose own complete market
 prices below 1.0 has been mispaired by the parser.  No leg is drawn from it, even
@@ -63,13 +88,16 @@ from datetime import datetime, timedelta
 from typing import Iterable, Sequence
 
 from src.schema import (
-    PERIODS_ALLOWING_DRAW,
-    BaseballQuote,
     Market,
     Period,
+    Quote,
     QuoteStatus,
     Selection,
     Side,
+    Sport,
+    draw_is_priced,
+    scoring_unit,
+    tie_possible,
 )
 
 #: Only report an edge above this. Zero means "any strictly positive edge", but
@@ -92,18 +120,42 @@ _EPSILON = 1e-9
 
 #: Above this, a "free" edge is more likely to be a stale price, a palpable
 #: error the book will void, or two markets that are not the same contract —
-#: than it is to be money.  Real cross-book baseball arbitrage lives in the
-#: fractions of a percent to low single digits.  Flagged, not hidden: the
+#: than it is to be money.  Real cross-book arbitrage on a liquid market lives in
+#: the fractions of a percent to low single digits.  Flagged, not hidden: the
 #: judgement of whether an 8% edge is real belongs to whoever reads the report.
 IMPLAUSIBLE_MARGIN = 0.05
 
-#: Full-game markets other than the moneyline need the full nine innings to have
-#: action, and books do not agree on what happens when they do not get them.
-_SHORTENED_GAME_RISK = (
-    "full-game {market} needs all nine innings for action, and books disagree on "
-    "rain-shortened games (some void both sides, some settle an outcome already "
-    "determined) — unlike the moneyline, which has action after five innings "
-    "everywhere, so this position is not void-symmetric"
+#: Above *this*, the position is refused outright rather than flagged, because no
+#: reading of it is an arbitrage.  Two books do not price the same two-way market
+#: 25% apart; what produces a number like that is a leg that is not the bet it
+#: claims to be — most often a selection mapped to the wrong participant, which
+#: prices the favourite as the underdog and leaves both legs backing the same
+#: competitor.  The captured tennis slate contains exactly that: two books whose
+#: home/away price assignment for one match is inverted, showing a 54% "edge" on
+#: two perfectly ordinary prices.  Reporting that as money, even with a warning
+#: note attached, is the single most expensive thing this module could do.
+REFUSE_MARGIN = 0.25
+
+#: Void asymmetry on a shortened or abandoned contest, per sport.  A moneyline
+#: has action once a book's minimum has been played and every book agrees on that
+#: minimum; the derived markets do not have that agreement, so a position built
+#: from them is not void-symmetric even when the prices are.
+_VOID_RISK: dict[Sport, str] = {
+    Sport.BASEBALL: (
+        "full-game {market} needs all nine innings for action, and books disagree on "
+        "rain-shortened games (some void both sides, some settle an outcome already "
+        "determined) — unlike the moneyline, which has action after five innings "
+        "everywhere, so this position is not void-symmetric"
+    ),
+    Sport.SOCCER: (
+        "full-game {market} on an abandoned match is voided by some books and settled "
+        "by others once the outcome is already determined, so the two legs may not void "
+        "together"
+    ),
+}
+_VOID_RISK_DEFAULT = (
+    "full-game {market} on a suspended or abandoned game is not settled the same way by "
+    "every book, so confirm both legs void together before treating this as risk-free"
 )
 
 
@@ -194,27 +246,81 @@ WIN = "win"
 PUSH = "push"
 LOSE = "lose"
 
-#: What a leg returns per unit staked, by settlement result.
-_MULTIPLIER = {PUSH: 1.0, LOSE: 0.0}
+#: Half the stake wins and half is refunded (or half loses and half is refunded).
+#: These exist only for quarter lines, where the bet really is two half-stake bets
+#: at the two adjacent lines.
+HALF_WIN = "half_win"
+HALF_LOSE = "half_lose"
 
 
-def canonical_line(quote: BaseballQuote) -> float | None:
+def _return_multiplier(result: str, decimal_odds: float) -> float:
+    """What one unit staked returns under *result*, stake included."""
+    if result == WIN:
+        return decimal_odds
+    if result == HALF_WIN:
+        # Half the stake wins at the full price; the other half is refunded.
+        return (decimal_odds + 1.0) / 2.0
+    if result == PUSH:
+        return 1.0
+    if result == HALF_LOSE:
+        return 0.5
+    return 0.0
+
+
+#: Line granularities this module can settle.
+LINE_WHOLE = "whole"
+LINE_HALF = "half"
+LINE_QUARTER = "quarter"
+LINE_UNSUPPORTED = "unsupported"
+
+
+def line_granularity(line: float) -> str:
+    """Classify a line by what it can do at settlement.
+
+    * ``whole`` — the market can land exactly on it and refund both sides.
+    * ``half`` — cannot be landed on; the ubiquitous -1.5 / 8.5 case.
+    * ``quarter`` — the stake splits between the two adjacent lines, so landing
+      on the whole one refunds half the stake and settles the other half.
+    * ``unsupported`` — anything else.  Named rather than silently treated as a
+      half line, because "no push outcome exists" is precisely the assumption
+      that turns a mis-settled market into a reported guarantee.
+    """
+    fraction = abs(line) % 1.0
+    for value, granularity in (
+        (0.0, LINE_WHOLE),
+        (0.25, LINE_QUARTER),
+        (0.5, LINE_HALF),
+        (0.75, LINE_QUARTER),
+        (1.0, LINE_WHOLE),
+    ):
+        if abs(fraction - value) < 1e-9:
+            return granularity
+    return LINE_UNSUPPORTED
+
+
+def canonical_line(quote: Quote) -> float | None:
     """The market's line in one fixed orientation, independent of selection.
 
-    Run lines are stated per side (home -1.5, away +1.5), so the raw field
-    cannot be used to decide whether two rows are opposite halves of the same
-    market.  Expressing every run line from the home team's perspective makes
-    that decidable.  Totals are already shared by both sides.
+    Spreads are stated per side (home -1.5, away +1.5), so the raw field cannot
+    be used to decide whether two rows are opposite halves of the same market.
+    Expressing every spread from the home team's perspective makes that
+    decidable.  Totals are already shared by both sides.
     """
     if quote.line is None:
         return None
-    if quote.market is Market.RUN_LINE:
+    if quote.market is Market.SPREAD:
         return quote.line if quote.selection is Selection.HOME else -quote.line
     return quote.line
 
 
+def _sides(market: Market) -> tuple[Selection, Selection]:
+    if market is Market.SPREAD:
+        return (Selection.HOME, Selection.AWAY)
+    return (Selection.OVER, Selection.UNDER)
+
+
 def contract_shape(
-    market: Market, period: Period, rows: Iterable[BaseballQuote]
+    sport: Sport, market: Market, period: Period, rows: Iterable[Quote]
 ) -> frozenset[Selection]:
     """Which outcomes one book's version of this market settles on.
 
@@ -224,48 +330,76 @@ def contract_shape(
     rather than as a one-outcome market.  Getting that distinction wrong either
     invents incompatibility or, worse, hides it.
 
-    Only a moneyline on a partial period can differ between books.  A tie is
-    impossible over nine innings, and no book prices a draw on a handicap or a
-    total.
+    Only a moneyline can differ between books, and only in a window where a draw
+    is a priced outcome at all — which is a fact about the sport, not about the
+    period alone: a hockey ``REGULATION`` moneyline is three-way while the same
+    fixture's ``FULL_GAME`` moneyline is two-way, because the shootout decides it.
     """
     if market is Market.MONEYLINE:
-        if period in PERIODS_ALLOWING_DRAW and any(
+        if draw_is_priced(sport, period) and any(
             row.selection is Selection.DRAW for row in rows
         ):
             return frozenset({Selection.HOME, Selection.AWAY, Selection.DRAW})
         return frozenset({Selection.HOME, Selection.AWAY})
-    if market is Market.RUN_LINE:
+    if market is Market.SPREAD:
         return frozenset({Selection.HOME, Selection.AWAY})
     return frozenset({Selection.OVER, Selection.UNDER})
 
 
-def _pushable(market: Market, period: Period, line: float | None) -> bool:
-    """Can this market land exactly on its line?
+def _landing_outcome(
+    sport: Sport, market: Market, period: Period, line: float | None
+) -> tuple[str, dict[Selection, str]] | None:
+    """The extra outcome created by the market landing on its own line.
 
-    Only with a whole-number line, because runs are integers.  The ubiquitous
-    half-run lines cannot push, which is why alternate integer lines are the
-    ones that need care.
-
-    A run line at zero is the exception: it pushes only if the game can end
-    level, and a full nine-inning game cannot — extra innings are played until
-    someone wins.  Treating a full-game pick'em as pushable understated its
-    profit floor as zero when the outcome producing that zero is impossible.
+    ``None`` means the market cannot land on its line, so there is no third
+    outcome to cover.  Assuming that wrongly is expensive in both directions: a
+    push that is not enumerated overstates the guarantee by the whole margin,
+    while a push that cannot happen understates it as zero.
     """
     if line is None or market is Market.MONEYLINE:
-        return False
-    if not abs(line - round(line)) < 1e-9:
-        return False
-    if (
-        market is Market.RUN_LINE
-        and period is Period.FULL_GAME
-        and abs(line) < 1e-9
-    ):
-        return False
-    return True
+        return None
+    granularity = line_granularity(line)
+    if granularity in (LINE_HALF, LINE_UNSUPPORTED):
+        # A half line cannot be landed on.  An unsupported granularity is refused
+        # by the caller, so it must not silently produce "no push outcome" here.
+        return None
+
+    left, right = _sides(market)
+    if granularity == LINE_WHOLE:
+        # A spread of zero is the exception: it pushes only if the contest can end
+        # level.  A full nine-inning game cannot — extra innings are played until
+        # somebody wins — while an NFL game can, and a soccer 90 minutes can.
+        if market is Market.SPREAD and abs(line) < 1e-9 and not tie_possible(sport, period):
+            return None
+        return ("push", {left: PUSH, right: PUSH})
+
+    # Quarter line: the stake is two half-stake bets, at the whole line and at the
+    # half line either side of it.  Only the whole one can be landed on, and when
+    # it is, that half refunds while the other half settles normally.
+    whole = float(round(line))
+    if market is Market.SPREAD and abs(whole) < 1e-9 and not tie_possible(sport, period):
+        return None
+    if market is Market.SPREAD:
+        # Home is helped by a *larger* line, so the surviving half wins when it
+        # sits above the whole number the margin landed on.
+        half_winner, half_loser = (
+            (Selection.HOME, Selection.AWAY) if whole < line else (Selection.AWAY, Selection.HOME)
+        )
+    else:
+        # Over wins when the total exceeds its line, so its surviving half wins
+        # when the landing whole number sits above the quarter line.
+        half_winner, half_loser = (
+            (Selection.OVER, Selection.UNDER) if whole > line else (Selection.UNDER, Selection.OVER)
+        )
+    return (f"half_push_at_{whole:g}", {half_winner: HALF_WIN, half_loser: HALF_LOSE})
 
 
 def settlement_outcomes(
-    market: Market, period: Period, line: float | None, shape: frozenset[Selection]
+    sport: Sport,
+    market: Market,
+    period: Period,
+    line: float | None,
+    shape: frozenset[Selection],
 ) -> list[tuple[str, dict[Selection, str]]]:
     """Every way the market can settle, and what each selection does in it.
 
@@ -280,31 +414,31 @@ def settlement_outcomes(
             (selection.value, {other: WIN if other is selection else LOSE for other in shape})
             for selection in sorted(shape, key=lambda s: s.value)
         ]
-        if period in PERIODS_ALLOWING_DRAW and Selection.DRAW not in shape:
-            # A five-inning game can end level. A book pricing only two
-            # selections must therefore be voiding the tie — it cannot be
-            # keeping both stakes. So the tie refunds every leg and the
-            # position makes nothing, which is emphatically not the advertised
-            # margin. Omitting this outcome is how a partial-period "arb" gets
-            # reported as risk-free when its real floor is zero.
+        if Selection.DRAW not in shape and tie_possible(sport, period):
+            # The window can end level and the draw is not one of the priced
+            # selections, so a level result voids every leg. This is the NFL case:
+            # a game still tied after overtime refunds both sides of a two-way
+            # moneyline, and no field on either row mentions it. It is also the
+            # reading forced on a two-way market in a draw-pricing window, which
+            # the detector refuses outright — see ``ambiguous_tie_settlement`` —
+            # because there the alternative reading is that the tie *loses* both
+            # legs.
             outcomes.append(("push", {selection: PUSH for selection in shape}))
         return outcomes
 
-    if market is Market.RUN_LINE:
+    if market is Market.SPREAD:
         outcomes = [
             ("home_covers", {Selection.HOME: WIN, Selection.AWAY: LOSE}),
             ("away_covers", {Selection.HOME: LOSE, Selection.AWAY: WIN}),
         ]
-        if _pushable(market, period, line):
-            outcomes.append(("push", {Selection.HOME: PUSH, Selection.AWAY: PUSH}))
-        return outcomes
-
-    outcomes = [
-        ("over", {Selection.OVER: WIN, Selection.UNDER: LOSE}),
-        ("under", {Selection.OVER: LOSE, Selection.UNDER: WIN}),
-    ]
-    if _pushable(market, period, line):
-        outcomes.append(("push", {Selection.OVER: PUSH, Selection.UNDER: PUSH}))
+    else:
+        outcomes = [
+            ("over", {Selection.OVER: WIN, Selection.UNDER: LOSE}),
+            ("under", {Selection.OVER: LOSE, Selection.UNDER: WIN}),
+        ]
+    landing = _landing_outcome(sport, market, period, line)
+    if landing is not None:
+        outcomes.append(landing)
     return outcomes
 
 
@@ -312,10 +446,23 @@ def settlement_outcomes(
 
 #: Identity of one *comparable market*: the thing whose two sides can be bet
 #: against each other at different books.
+#:
+#: ``sport`` is deliberately absent, and its absence is checked rather than
+#: assumed: ``event_key`` is built from namespaced participant keys
+#: (``MLB-PHI``, ``SOCCER-arsenal``), so two sports cannot collide in one group
+#: through legitimate data, and a row whose ``sport`` field is *mislabelled*
+#: should produce a counted refusal rather than silently drop out of its own
+#: group.  :func:`_examine_group` enforces that.
+#:
+#: ``is_alternate`` is absent for a different reason: a bet at 8.5 is a bet at 8.5
+#: whichever screen the book showed it on, and refusing to compare a main line
+#: against another book's alternate line at the same number would discard real
+#: positions.  What must not happen is two rows for one selection at one book at
+#: the same alternate status, and that is refused explicitly below.
 MarketGroup = tuple[str, Market, Period, Side | None, float | None]
 
 
-def group_key(quote: BaseballQuote) -> MarketGroup:
+def group_key(quote: Quote) -> MarketGroup:
     return (
         quote.event_key,
         quote.market,
@@ -329,7 +476,7 @@ def group_key(quote: BaseballQuote) -> MarketGroup:
 class ArbLeg:
     """One bet in an arbitrage position."""
 
-    quote: BaseballQuote
+    quote: Quote
     stake: float
 
     @property
@@ -363,6 +510,7 @@ class Opportunity:
     """A position that cannot lose, with the arithmetic to prove it."""
 
     event_key: str
+    sport: Sport
     home_team: str
     away_team: str
     commence_time: datetime
@@ -370,7 +518,7 @@ class Opportunity:
     period: Period
     side: Side | None
     line: float | None
-    """Canonical line — home perspective for run lines."""
+    """Canonical line — home perspective for spreads."""
     legs: tuple[ArbLeg, ...]
     total_stake: float
     outcome_profits: tuple[tuple[str, float], ...]
@@ -403,8 +551,9 @@ class Opportunity:
         """Worst case over every settlement outcome, after rounding.
 
         This is what the position actually makes.  It is lower than
-        ``roi * total_stake`` whenever rounding bites, and it is zero on any
-        market that can push.
+        ``roi * total_stake`` whenever rounding bites, it is zero on any market
+        that can push, and it is reduced — not zeroed — on a quarter line, where
+        only half the stake is refunded.
         """
         return min(profit for _, profit in self.outcome_profits)
 
@@ -414,7 +563,13 @@ class Opportunity:
 
     @property
     def can_push(self) -> bool:
+        """Can every leg be refunded, leaving the position at zero?"""
         return any(label == "push" for label, _ in self.outcome_profits)
+
+    @property
+    def can_half_push(self) -> bool:
+        """Is this a quarter line, where landing on the whole number refunds half?"""
+        return any(label.startswith("half_push") for label, _ in self.outcome_profits)
 
     @property
     def is_risk_free(self) -> bool:
@@ -436,7 +591,8 @@ class Opportunity:
         line = "" if self.line is None else f" @ {self.line:+g}"
         side = f" ({self.side.value})" if self.side else ""
         head = (
-            f"{self.event_key} {self.market.value}/{self.period.value}{side}{line}: "
+            f"{self.event_key} {self.sport.value} "
+            f"{self.market.value}/{self.period.value}{side}{line}: "
             f"margin {self.margin * 100:.2f}%, guaranteed "
             f"{self.guaranteed_profit:+.2f} on {self.total_stake:.0f}"
         )
@@ -465,6 +621,7 @@ class Diagnostic:
     period: Period
     code: str
     detail: str
+    sport: Sport | None = None
 
 
 @dataclass
@@ -488,7 +645,7 @@ class ArbReport:
 
 
 def find_opportunities(
-    quotes: Sequence[BaseballQuote],
+    quotes: Sequence[Quote],
     *,
     total_stake: float = DEFAULT_TOTAL_STAKE,
     min_margin: float = DEFAULT_MIN_MARGIN,
@@ -509,7 +666,7 @@ def find_opportunities(
     """
     report = ArbReport(opportunities=[], diagnostics=[])
 
-    grouped: dict[MarketGroup, list[BaseballQuote]] = defaultdict(list)
+    grouped: dict[MarketGroup, list[Quote]] = defaultdict(list)
     for quote in quotes:
         grouped[group_key(quote)].append(quote)
     report.group_count = len(grouped)
@@ -546,7 +703,7 @@ def _examine_group(
     period: Period,
     side: Side | None,
     line: float | None,
-    rows: list[BaseballQuote],
+    rows: list[Quote],
     report: ArbReport,
     total_stake: float,
     min_margin: float,
@@ -555,21 +712,55 @@ def _examine_group(
     require_distinct_sources: bool,
     as_of: datetime | None = None,
 ) -> None:
+    sport = rows[0].sport
+
     def reject(code: str, detail: str) -> None:
         report.diagnostics.append(
             Diagnostic(
-                event_key=event_key, market=market, period=period, code=code, detail=detail
+                event_key=event_key,
+                market=market,
+                period=period,
+                code=code,
+                detail=detail,
+                sport=sport,
             )
         )
+
+    # Every settlement rule below is looked up by sport, so a group holding two
+    # sports is a group whose rules are unknowable. It cannot arise from
+    # legitimate data — event keys are built from namespaced participant keys —
+    # so if it happens, a row's sport is mislabelled and the fix is upstream.
+    # Counted rather than silently split, because a silent split hides it.
+    if len({row.sport for row in rows}) > 1:
+        reject(
+            "mixed_sport",
+            "rows under one event key disagree about the sport: "
+            + "; ".join(
+                sorted({f"{row.source}: {row.sport.value}" for row in rows})
+            )
+            + " — the settlement rules differ by sport, so no position is reported",
+        )
+        return
+
+    # A line at a granularity the settlement model does not cover would be
+    # settled as though it could never land on its own number, which is exactly
+    # the assumption that turns a mis-settled market into a reported guarantee.
+    if line is not None and line_granularity(line) == LINE_UNSUPPORTED:
+        reject(
+            "unsupported_line_granularity",
+            f"line {line:g} is neither a whole, half nor quarter line, so how it settles "
+            "when the market lands on it is not modelled here; no position is reported",
+        )
+        return
 
     # The contract each book is offering, judged from *all* its rows for this
     # market including suspended ones: suspending a price does not change which
     # outcomes the market settles on.
-    rows_by_source: dict[str, list[BaseballQuote]] = defaultdict(list)
+    rows_by_source: dict[str, list[Quote]] = defaultdict(list)
     for row in rows:
         rows_by_source[row.source].append(row)
     shapes: dict[str, frozenset[Selection]] = {
-        source: contract_shape(market, period, source_rows)
+        source: contract_shape(sport, market, period, source_rows)
         for source, source_rows in rows_by_source.items()
     }
 
@@ -588,7 +779,7 @@ def _examine_group(
     # same number — and taking the better of those is correct. Two rows with the
     # *same* alternate flag, however, is a parser fault, and betting the better
     # of them would be betting on the fault.
-    best: dict[str, dict[Selection, BaseballQuote]] = defaultdict(dict)
+    best: dict[str, dict[Selection, Quote]] = defaultdict(dict)
     seen: set[tuple[str, Selection, bool]] = set()
     duplicated = False
     for row in active:
@@ -660,24 +851,25 @@ def _examine_group(
         if len(needed) < 2:
             continue
 
-        # A partial-period moneyline priced as two-way is ambiguous, and the two
-        # readings differ by the entire bankroll. If the book genuinely voids
-        # ties, a level score refunds both legs and the position makes nothing.
-        # If instead the book prices a three-way market whose draw leg simply
-        # arrived without a price — which adapters drop silently — then a level
-        # score *loses both legs*. Nothing on the row distinguishes these, so
-        # this is not reported as risk-free at all.
+        # A two-way moneyline in a window where the books *do* price a draw is
+        # ambiguous, and the two readings differ by the entire bankroll. If the
+        # book genuinely voids ties, a level score refunds both legs and the
+        # position makes nothing. If instead this is a three-way market whose draw
+        # leg simply arrived without a price — which adapters drop silently — then
+        # a level score *loses both legs*. Nothing on the row distinguishes these,
+        # so no position is reported. This is the soccer 90-minute and hockey
+        # regulation case as much as the first-five-innings one it was written for.
         if (
             market is Market.MONEYLINE
-            and period in PERIODS_ALLOWING_DRAW
+            and draw_is_priced(sport, period)
             and Selection.DRAW not in shape
         ):
             reject(
                 "ambiguous_tie_settlement",
-                f"two-way moneyline on {period.value}: a tie either voids both legs or "
-                "loses both, depending on whether this is genuinely a two-way market or "
-                "a three-way one whose draw price was dropped — the row cannot say which, "
-                "so no position is reported",
+                f"two-way moneyline on {sport.value}/{period.value}, where the books price "
+                "a draw: a tie either voids both legs or loses both, depending on whether "
+                "this is genuinely a two-way market or a three-way one whose draw price was "
+                "dropped — the row cannot say which, so no position is reported",
             )
             continue
 
@@ -718,6 +910,26 @@ def _examine_group(
         if margin <= min_margin + _EPSILON:
             continue
 
+        # An impossible edge is a mapping fault, not money. Refused before
+        # anything else is checked, and counted, because the alternative — a note
+        # on a reported "opportunity" — puts a 54% phantom at the top of the
+        # report, ranked above every real position.
+        if margin >= REFUSE_MARGIN:
+            reject(
+                "margin_implausibly_large",
+                f"a {margin * 100:.1f}% edge on "
+                + " vs ".join(
+                    f"{chosen[selection].source} {selection.value} "
+                    f"@ {chosen[selection].decimal_odds:.3f}"
+                    for selection in sorted(needed, key=lambda s: s.value)
+                )
+                + " is not a price two books both published for the same contract: suspect a "
+                "selection mapped to the wrong participant (which leaves both legs backing the "
+                "same competitor), a market that is not the one it claims to be, or a stale "
+                "quote — no position is reported",
+            )
+            continue
+
         legs_quotes = [chosen[selection] for selection in sorted(needed, key=lambda s: s.value)]
 
         spread = max(q.observed_at for q in legs_quotes) - min(
@@ -736,13 +948,21 @@ def _examine_group(
         # entire bankroll together. Reconciliation makes a mislabelled orientation
         # land in a different group, and validation reports it — but this is the
         # one guard that costs nothing, so it is not left to them.
-        identities = {(q.home_team, q.away_team, q.commence_time) for q in legs_quotes}
+        #
+        # Compared on the resolved participant keys rather than on display names,
+        # because for an open-roster competition the display name is the book's
+        # own spelling: "Wolves" and "Wolverhampton" are one club, and comparing
+        # the strings would refuse every legitimate soccer and tennis position.
+        identities = {
+            (q.home_participant, q.away_participant, q.commence_time) for q in legs_quotes
+        }
         if len(identities) > 1:
             reject(
                 "legs_disagree_on_the_game",
                 "the chosen legs do not describe the same fixture: "
                 + "; ".join(
-                    f"{q.source}: {q.away_team} @ {q.home_team} {q.commence_time.isoformat()}"
+                    f"{q.source}: {q.away_participant} @ {q.home_participant} "
+                    f"{q.commence_time.isoformat()}"
                     for q in legs_quotes
                 ),
             )
@@ -750,6 +970,7 @@ def _examine_group(
 
         opportunity = _build_opportunity(
             event_key=event_key,
+            sport=sport,
             market=market,
             period=period,
             side=side,
@@ -780,9 +1001,9 @@ def _best_assignment(
     *,
     needed: frozenset[Selection],
     eligible: Sequence[str],
-    best: dict[str, dict[Selection, BaseballQuote]],
+    best: dict[str, dict[Selection, Quote]],
     require_distinct_sources: bool,
-) -> tuple[dict[Selection, BaseballQuote], float] | None:
+) -> tuple[dict[Selection, Quote], float] | None:
     """Pick the book for each selection that minimises total implied probability.
 
     Searched rather than chosen greedily, because the best price per selection
@@ -792,7 +1013,7 @@ def _best_assignment(
     a handful of books raised to at most three selections.
     """
     selections = sorted(needed, key=lambda s: s.value)
-    winner: tuple[dict[Selection, BaseballQuote], float] | None = None
+    winner: tuple[dict[Selection, Quote], float] | None = None
 
     source_options = [
         [source for source in eligible if selection in best[source]] for selection in selections
@@ -816,18 +1037,19 @@ def _best_assignment(
 def _build_opportunity(
     *,
     event_key: str,
+    sport: Sport,
     market: Market,
     period: Period,
     side: Side | None,
     line: float | None,
     shape: frozenset[Selection],
-    legs_quotes: Sequence[BaseballQuote],
+    legs_quotes: Sequence[Quote],
     total_stake: float,
     stake_increment: float,
 ) -> Opportunity:
     odds = [quote.decimal_odds for quote in legs_quotes]
     ideal = stake_split(odds, total_stake)
-    outcomes = settlement_outcomes(market, period, line, shape)
+    outcomes = settlement_outcomes(sport, market, period, line, shape)
 
     def evaluate(stakes: Sequence[float]) -> tuple[list[tuple[str, float]], float]:
         """Profit in every settlement outcome, and the floor across them."""
@@ -840,8 +1062,7 @@ def _build_opportunity(
                 # nothing, which is the right treatment for a leg that does not
                 # participate in that outcome.
                 result = results.get(quote.selection, LOSE)
-                multiplier = quote.decimal_odds if result == WIN else _MULTIPLIER[result]
-                returned += stake * multiplier
+                returned += stake * _return_multiplier(result, quote.decimal_odds)
             profits.append((label, returned - staked))
         return profits, min(profit for _, profit in profits)
 
@@ -857,26 +1078,39 @@ def _build_opportunity(
     )
     staked = sum(leg.stake for leg in legs)
     profits, _ = evaluate(best_stakes)
+    labels = [label for label, _ in profits]
 
     notes: list[str] = []
-    if any(label == "push" for label, _ in profits):
+    if "push" in labels:
         if line is None:
             notes.append(
-                f"{period.value} can end level and this is a two-way market, so a tie voids "
-                "every leg — the guaranteed profit is therefore zero, not the margin"
+                f"a {sport.value} {period.value} can end level and the books price no draw, "
+                "so a tie voids every leg — the guaranteed profit is therefore zero, not "
+                "the margin"
             )
         else:
             notes.append(
-                f"line {line:g} is a whole number, so the market can land exactly on it and "
-                "refund every leg — the guaranteed profit is therefore zero"
+                f"line {line:g} is a whole number of {scoring_unit(sport, period)}, so the "
+                "market can land exactly on it and refund every leg — the guaranteed profit "
+                "is therefore zero"
             )
+    if any(label.startswith("half_push") for label in labels):
+        whole = float(round(line)) if line is not None else 0.0
+        notes.append(
+            f"line {line:g} is a quarter line: the stake splits between "
+            f"{line - 0.25:g} and {line + 0.25:g}, so landing on exactly {whole:g} refunds "
+            "half of each leg and settles the other half — the floor below is what that "
+            "outcome pays, not the headline margin"
+        )
     if any(quote.is_alternate for quote in legs_quotes):
         notes.append("uses an alternate line, which is usually offered at a lower limit")
     if Selection.DRAW in shape:
         notes.append("three-way market: all three outcomes are covered")
     if market is not Market.MONEYLINE:
         if period is Period.FULL_GAME:
-            notes.append(_SHORTENED_GAME_RISK.format(market=market.value))
+            notes.append(
+                _VOID_RISK.get(sport, _VOID_RISK_DEFAULT).format(market=market.value)
+            )
         else:
             notes.append(
                 f"partial-period {market.value} ({period.value}); confirm both books void "
@@ -918,6 +1152,7 @@ def _build_opportunity(
 
     return Opportunity(
         event_key=event_key,
+        sport=sport,
         home_team=legs_quotes[0].home_team,
         away_team=legs_quotes[0].away_team,
         commence_time=legs_quotes[0].commence_time,
@@ -936,15 +1171,13 @@ def _build_opportunity(
 # ── best-price surface ───────────────────────────────────────────────────────
 
 
-def best_prices(
-    quotes: Sequence[BaseballQuote],
-) -> dict[MarketGroup, dict[Selection, BaseballQuote]]:
+def best_prices(quotes: Sequence[Quote]) -> dict[MarketGroup, dict[Selection, Quote]]:
     """Best available price for every selection of every comparable market.
 
     Useful on its own: it is the line-shopping view, and it is what an
     opportunity is drawn from.
     """
-    surface: dict[MarketGroup, dict[Selection, BaseballQuote]] = defaultdict(dict)
+    surface: dict[MarketGroup, dict[Selection, Quote]] = defaultdict(dict)
     for quote in quotes:
         if quote.status is not QuoteStatus.ACTIVE:
             continue

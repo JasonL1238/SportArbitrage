@@ -68,7 +68,7 @@ try {
   new Function(script + `
     globalThis.__describeBet = describeBet;
     globalThis.__nick = nick;
-    globalThis.__teamNames = DATA.team_names;
+    globalThis.__participants = DATA.participants;
   `)();
 } catch (err) {
   errors.push(err);
@@ -80,9 +80,15 @@ if (errors.length) {
 }
 
 // Prove the render actually produced markup rather than silently no-oping.
-const required = ['stat-strip', 'flow', 'matrix', 'source-cards', 'skips', 'coverage',
-  'event-detail', 'odds-table', 'runs-chart', 'move-table', 'quality-strip',
-  'findings', 'overround', 'rejections', 'raws', 'schema-table', 'vocab'];
+const required = ['stat-strip', 'flow', 'matrix', 'sports-grid', 'leagues-grid', 'sports-gaps',
+  'source-cards', 'skips', 'coverage', 'event-detail', 'odds-table', 'runs-chart',
+  'move-table', 'quality-strip', 'findings', 'overround', 'rejections', 'raws',
+  'schema-table', 'vocab', 'sport-pick', 'sport-meta',
+  // The drill-down panels are rendered while off screen, so a link straight into one
+  // opens on something. An empty one here means a reader would arrive at a blank page.
+  'crumbs', 'event-title', 'event-sub',
+  'book-title', 'book-state', 'book-stats', 'book-mix', 'book-skips', 'book-raws',
+  'bet-title', 'bet-sub', 'bet-spread', 'bet-books', 'bet-sides', 'bet-history'];
 // An empty result set legitimately renders as a text-only empty state, not markup.
 const filled = (id) => {
   const n = nodes.get(id);
@@ -114,10 +120,15 @@ for (const id of ['lede', 'odds-count', 'move-count', 'move-note', 'event-sub', 
 
 // The plain-English sentence is a claim about what a bet settles on. A wrong one is
 // worse than notation, because the reader has no way to tell it is wrong. HOME/AWAY are
-// used as team names so these cases test the grammar, not the team list.
+// used as participant keys so these cases test the grammar, not the participant table.
+//
+// The units are part of the claim now: the same handicap is runs in baseball, goals in
+// hockey and points in football, and a sentence that says the wrong one is describing a
+// bet that does not exist.
 {
   const bet = (o) => Object.assign(
-    { market: 'moneyline', period: 'full_game', selection: 'home', side: null, line: null, is_alternate: false }, o);
+    { sport: 'baseball', market: 'moneyline', period: 'full_game', selection: 'home',
+      side: null, line: null, is_alternate: false }, o);
   const say = (o) => globalThis.__describeBet(bet(o), 'HOME', 'AWAY');
   const cases = [
     [{}, 'HOME win'],
@@ -125,23 +136,44 @@ for (const id of ['lede', 'odds-count', 'move-count', 'move-note', 'event-sub', 
     [{ period: 'first_5_innings', selection: 'away' }, 'AWAY ahead after 5 innings'],
     [{ period: 'first_1_inning', selection: 'draw' }, 'Scores level after 1 inning'],
     // Half numbers settle outright; whole numbers can land on the handicap and refund.
+    [{ market: 'spread', line: -1.5 }, 'HOME win by 2 or more'],
+    [{ market: 'spread', line: -2.5 }, 'HOME win by 3 or more'],
+    [{ market: 'spread', line: -1 }, 'HOME win by 2 or more (a 1-run win refunds)'],
+    [{ market: 'spread', selection: 'away', line: 1.5 }, 'AWAY win, or lose by 1'],
+    [{ market: 'spread', selection: 'away', line: 2.5 }, 'AWAY win, or lose by 2 or fewer'],
+    [{ market: 'spread', selection: 'away', line: 1 }, 'AWAY win (a 1-run loss refunds)'],
+    [{ market: 'spread', selection: 'away', line: 2 }, 'AWAY win, or lose by 1 (a 2-run loss refunds)'],
+    [{ market: 'total', selection: 'over', line: 8.5 }, 'Both sides together score 9 runs or more'],
+    [{ market: 'total', selection: 'under', line: 8.5 }, 'Both sides together score 8 runs or fewer'],
+    [{ market: 'total', selection: 'over', line: 8 }, 'Both sides together score 9 runs or more (exactly 8 refunds)'],
+    [{ market: 'total', selection: 'under', line: 8 }, 'Both sides together score 7 runs or fewer (exactly 8 refunds)'],
+    [{ market: 'total', selection: 'over', line: 4.5, period: 'first_5_innings' },
+      'Both sides together score 5 runs or more in the first 5 innings'],
+    [{ market: 'team_total', selection: 'over', side: 'home', line: 4.5 }, 'HOME score 5 runs or more'],
+    [{ market: 'team_total', selection: 'under', side: 'away', line: 3.5 }, 'AWAY score 3 runs or fewer'],
+    [{ market: 'total', selection: 'over', line: 8.5, is_alternate: true },
+      'Both sides together score 9 runs or more · extra line'],
+    // Every sport counts something different, and the sentence has to say which.
+    [{ sport: 'hockey', market: 'total', selection: 'over', line: 5.5 },
+      'Both sides together score 6 goals or more'],
+    [{ sport: 'hockey', market: 'spread', line: -1 },
+      'HOME win by 2 or more (a 1-goal win refunds)'],
+    // Regulation-only hockey is three-way, because 60 minutes really can end level.
+    [{ sport: 'hockey', period: 'regulation', selection: 'draw' }, 'Scores level in regulation'],
+    [{ sport: 'soccer', selection: 'draw' }, 'Scores level — a draw'],
+    [{ sport: 'soccer', market: 'total', selection: 'under', line: 2.5 },
+      'Both sides together score 2 goals or fewer'],
+    [{ sport: 'basketball', market: 'spread', line: -7.5 }, 'HOME win by 8 or more'],
+    [{ sport: 'basketball', market: 'total', selection: 'over', line: 214.5 },
+      'Both sides together score 215 points or more'],
+    [{ sport: 'football', market: 'total', selection: 'over', line: 44.5 },
+      'Both sides together score 45 points or more'],
+    [{ sport: 'tennis', selection: 'away' }, 'AWAY win'],
+    // A database written before the vocabulary was made sport-neutral must still
+    // describe its bets correctly, not fall through to the totals branch.
     [{ market: 'run_line', line: -1.5 }, 'HOME win by 2 or more'],
-    [{ market: 'run_line', line: -2.5 }, 'HOME win by 3 or more'],
-    [{ market: 'run_line', line: -1 }, 'HOME win by 2 or more (a 1-run win refunds)'],
-    [{ market: 'run_line', selection: 'away', line: 1.5 }, 'AWAY win, or lose by 1'],
-    [{ market: 'run_line', selection: 'away', line: 2.5 }, 'AWAY win, or lose by 2 or fewer'],
-    [{ market: 'run_line', selection: 'away', line: 1 }, 'AWAY win (a 1-run loss refunds)'],
-    [{ market: 'run_line', selection: 'away', line: 2 }, 'AWAY win, or lose by 1 (a 2-run loss refunds)'],
-    [{ market: 'total_runs', selection: 'over', line: 8.5 }, 'Both teams together score 9 or more'],
-    [{ market: 'total_runs', selection: 'under', line: 8.5 }, 'Both teams together score 8 or fewer'],
-    [{ market: 'total_runs', selection: 'over', line: 8 }, 'Both teams together score 9 or more (exactly 8 refunds)'],
-    [{ market: 'total_runs', selection: 'under', line: 8 }, 'Both teams together score 7 or fewer (exactly 8 refunds)'],
-    [{ market: 'total_runs', selection: 'over', line: 4.5, period: 'first_5_innings' },
-      'Both teams together score 5 or more in the first 5 innings'],
-    [{ market: 'team_total_runs', selection: 'over', side: 'home', line: 4.5 }, 'HOME score 5 or more'],
-    [{ market: 'team_total_runs', selection: 'under', side: 'away', line: 3.5 }, 'AWAY score 3 or fewer'],
-    [{ market: 'total_runs', selection: 'over', line: 8.5, is_alternate: true },
-      'Both teams together score 9 or more · extra line'],
+    [{ market: 'total_runs', selection: 'under', line: 8.5 }, 'Both sides together score 8 runs or fewer'],
+    [{ market: 'team_total_runs', selection: 'over', side: 'away', line: 4.5 }, 'AWAY score 5 runs or more'],
   ];
   const wrong = cases.filter(([input, expected]) => say(input) !== expected)
     .map(([input, expected]) => `  got "${say(input)}"\n  want "${expected}"`);
@@ -150,18 +182,19 @@ for (const id of ['lede', 'odds-count', 'move-count', 'move-note', 'event-sub', 
     process.exit(1);
   }
 
-  // And the team list must actually shorten a real spelling to a nickname.
-  const spellings = Object.keys(globalThis.__teamNames);
-  if (spellings.length) {
-    const sample = spellings[0];
-    const nickname = globalThis.__teamNames[sample].nickname;
-    if (globalThis.__nick(sample) !== nickname) {
-      console.error(`TEAM NAME NOT SHORTENED: ${sample} -> ${globalThis.__nick(sample)}, want ${nickname}`);
+  // And the participant table must actually shorten a resolved identity to a name a
+  // person would say, rather than leaving the key on screen.
+  const keys = Object.keys(globalThis.__participants || {});
+  if (keys.length) {
+    const sample = keys[0];
+    const short = globalThis.__participants[sample].short;
+    if (globalThis.__nick(sample) !== short) {
+      console.error(`PARTICIPANT NOT SHORTENED: ${sample} -> ${globalThis.__nick(sample)}, want ${short}`);
       process.exit(1);
     }
-    console.log(`plain English ok (${cases.length} cases); ${spellings.length} team spellings mapped, e.g. "${sample}" -> "${nickname}"`);
+    console.log(`plain English ok (${cases.length} cases); ${keys.length} participants mapped, e.g. "${sample}" -> "${short}"`);
   } else {
-    console.error('NO TEAM NAMES IN PAYLOAD: every bet would be described with a raw book spelling');
+    console.error('NO PARTICIPANTS IN PAYLOAD: every bet would be described with a raw key');
     process.exit(1);
   }
 }
@@ -172,6 +205,31 @@ const strip = (h) => h.replace(/<[^>]+>/g, ' ').replace(/&rarr;/g, '->').replace
 for (const id of (process.env.DUMP || '').split(',').filter(Boolean)) {
   const h = nodes.get(id)?.innerHTML || nodes.get(id)?.textContent || '';
   console.log(`\n== ${id} ==\n${strip(h).slice(0, +(process.env.DUMPLEN || 900))}`);
+}
+
+// The wide tables carry a band row above their headings.  If its colspans do not add
+// up to the number of columns, every cell below shifts under the wrong band label —
+// which reads as a mislabelled column rather than as a broken table.
+{
+  const problems = [];
+  const skipped = [];
+  for (const id of ['odds-table', 'event-detail', 'coverage', 'move-table', 'raws', 'matrix',
+                    'sports-grid', 'leagues-grid']) {
+    const node = nodes.get(id);
+    // An empty result set is a text-only state with no header at all to check.
+    if (node?.dataset?.wasTable) { skipped.push(id); continue; }
+    const markup = node?.innerHTML || '';
+    const rows = markup.match(/<tr[^>]*>[\s\S]*?<\/tr>/g) || [];
+    const bandRow = rows.find((r) => r.includes('class="grouped"'));
+    if (!bandRow) { problems.push(`${id}: no band row`); continue; }
+    const spans = [...bandRow.matchAll(/colspan="(\d+)"/g)].reduce((a, m) => a + +m[1], 0);
+    const headings = (rows[1]?.match(/<th/g) || []).length;
+    if (spans !== headings) problems.push(`${id}: bands cover ${spans} of ${headings} columns`);
+  }
+  console.log(problems.length ? 'MISALIGNED COLUMN BANDS: ' + problems.join('; ')
+    : 'column bands align with their headings'
+      + (skipped.length ? ` (empty, not checked: ${skipped.join(', ')})` : ''));
+  if (problems.length) process.exit(1);
 }
 
 // Generated SVG must be well-formed; an unclosed tag swallows the rest of the chart.

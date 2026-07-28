@@ -1,0 +1,32 @@
+{
+ "envelope_version": 2,
+ "source": "pinnacle",
+ "endpoint": "matchups:league:SOCCER_OTHER:2636",
+ "url": "https://guest.api.arcadia.pinnacle.com/0.1/leagues/2636/matchups",
+ "status_code": 200,
+ "content_type": "application/json",
+ "fetched_at": "2026-07-28T08:31:57.129001+00:00",
+ "request_params": {},
+ "headers": {
+  "date": "Tue, 28 Jul 2026 08:31:51 GMT",
+  "content-type": "application/json",
+  "transfer-encoding": "chunked",
+  "connection": "keep-alive",
+  "server": "cloudflare",
+  "vary": "Accept-Encoding, X-API-Key",
+  "access-control-allow-origin": "*",
+  "access-control-allow-methods": "HEAD, GET, POST, PUT, DELETE, OPTIONS",
+  "access-control-allow-headers": "Accept, Content-Type, X-API-Key, X-Device-UUID, X-Session, X-Language, X-Customer-Culture",
+  "access-control-max-age": "86400",
+  "cache-control": "public, max-age=877, must-revalidate",
+  "content-encoding": "gzip",
+  "last-modified": "Tue, 28 Jul 2026 08:21:10 GMT",
+  "age": "718",
+  "cf-cache-status": "HIT",
+  "strict-transport-security": "max-age=0",
+  "cf-ray": "a22287adbb78f40f-SJC"
+ },
+ "sha256": "076fa1edc5b804ef6be710fa0ddee0c1dd6ad810818fa86175a1cd5da91d87eb",
+ "byte_size": 2534,
+ "body": "[\n  {\n    \"ageLimit\": 0,\n    \"altTeaser\": false,\n    \"featureOrder\": -1,\n    \"hasAltSpread\": true,\n    \"hasAltTotal\": true,\n    \"hasBetshare\": false,\n    \"hasLive\": true,\n    \"hasMarkets\": true,\n    \"id\": 1632245265,\n    \"isBetshareEnabled\": false,\n    \"isFeatured\": false,\n    \"isHighlighted\": true,\n    \"isLive\": false,\n    \"isPromoted\": false,\n    \"league\": {\n      \"ageLimit\": 0,\n      \"featureOrder\": 1,\n      \"group\": \"Europe\",\n      \"id\": 2636,\n      \"isFeatured\": true,\n      \"isHidden\": false,\n      \"isPromoted\": false,\n      \"isSticky\": false,\n      \"matchupCount\": 1,\n      \"matchupCountSE\": 1,\n      \"name\": \"UEFA - Super Cup\",\n      \"sequence\": 1,\n      \"sport\": {\n        \"featureOrder\": 0,\n        \"id\": 29,\n        \"isFeatured\": true,\n        \"isHidden\": false,\n        \"isSticky\": false,\n        \"matchupCount\": 637,\n        \"matchupCountSE\": 632,\n        \"name\": \"Soccer\",\n        \"primaryMarketType\": \"moneyline\"\n      }\n    },\n    \"liveMode\": null,\n    \"parent\": null,\n    \"parentId\": null,\n    \"parlayRestriction\": \"unique_matchups\",\n    \"participants\": [\n      {\n        \"alignment\": \"home\",\n        \"name\": \"Paris Saint-Germain\",\n        \"order\": 0,\n        \"stats\": [\n          {\n            \"period\": 0\n          },\n          {\n            \"period\": 1\n          },\n          {\n            \"period\": 8\n          }\n        ]\n      },\n      {\n        \"alignment\": \"away\",\n        \"name\": \"Aston Villa\",\n        \"order\": 1,\n        \"stats\": [\n          {\n            \"period\": 0\n          },\n          {\n            \"period\": 1\n          },\n          {\n            \"period\": 8\n          }\n        ]\n      }\n    ],\n    \"periods\": [\n      {\n        \"cutoffAt\": \"2026-08-12T19:00:00Z\",\n        \"hasMoneyline\": true,\n        \"hasSpread\": true,\n        \"hasTeamTotal\": true,\n        \"hasTotal\": true,\n        \"period\": 0,\n        \"status\": \"open\"\n      },\n      {\n        \"cutoffAt\": \"2026-08-12T19:00:00Z\",\n        \"hasMoneyline\": true,\n        \"hasSpread\": true,\n        \"hasTeamTotal\": true,\n        \"hasTotal\": true,\n        \"period\": 1,\n        \"status\": \"open\"\n      },\n      {\n        \"cutoffAt\": \"2026-08-12T19:00:00Z\",\n        \"hasMoneyline\": true,\n        \"hasSpread\": false,\n        \"hasTeamTotal\": false,\n        \"hasTotal\": false,\n        \"period\": 8,\n        \"status\": \"open\"\n      }\n    ],\n    \"rotation\": 14888,\n    \"startTime\": \"2026-08-12T19:00:00Z\",\n    \"state\": {},\n    \"status\": \"pending\",\n    \"totalMarketCount\": 11,\n    \"type\": \"matchup\",\n    \"units\": \"Regular\",\n    \"version\": 676374037\n  }\n]\n"
+}

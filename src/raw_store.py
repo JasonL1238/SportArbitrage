@@ -47,7 +47,15 @@ class RawResponse:
     source: str
     endpoint: str
     """Logical label for which call this was, e.g. ``"listview"`` or
-    ``"betoffer:1028545498"``.  Part of the stored filename."""
+    ``"betoffer:1028545498"``.  Part of the stored filename.
+
+    Constraint on adapters: the label is slugified for the filename and for
+    :attr:`ref`, and slugification folds every run of non-alphanumerics to a
+    single ``-``.  Two labels that differ *only* in such punctuation —
+    ``la_liga`` and ``la-liga`` — therefore produce the same ``ref``, which makes
+    a row's provenance ambiguous.  Keep labels distinct in their alphanumerics.
+    Parsing is unaffected either way: the envelope stores the label verbatim and
+    replay reads it from there, not from the filename."""
     url: str
     status_code: int
     body: str
