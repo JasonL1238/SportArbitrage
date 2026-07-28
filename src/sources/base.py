@@ -1,102 +1,144 @@
-"""Source adapter protocol and common data structures.
+"""The source contract.
 
-Every odds source (paid API, public page, exchange feed) implements
-``SourceAdapter`` so the scanner can treat them uniformly.
+One protocol, deliberately: fetching and parsing are separate so that parsing
+is a pure function of stored bytes.  ``fetch_raw`` touches the network and
+returns captured responses; ``parse`` turns those responses into normalized
+rows and never performs I/O.  Replay is then just ``parse`` over responses
+loaded from disk, which is what the regression tests do.
+
+Adapters do not keep health state.  The collector derives health from what
+actually happened during a run, so there is one implementation of that logic
+instead of one per adapter.
 """
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Protocol, Sequence, runtime_checkable
 
-from src.models import Event, PriceQuote
+from src.raw_store import RawResponse
+from src.schema import Quote
+
+
+@dataclass(frozen=True)
+class Rejection:
+    """A record that should have parsed but did not.
+
+    Rejections are failures — they mean the source offered something in scope
+    that this parser could not faithfully represent.  They are counted and
+    stored so a format change shows up as a spike rather than as silence.
+    """
+
+    source: str
+    reason: str
+    """Stable machine-readable code, e.g. ``"unknown_team"``."""
+    detail: str
+    context: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
-class SourceSnapshot:
-    """Raw fetch result before parsing."""
+class ParseOutcome:
+    """Everything a parse produced: rows, failures, and deliberate omissions."""
 
-    source_key: str
-    sport_key: str
-    raw_payload: str
-    fetched_at: datetime
-    url: str | None = None
-    status_code: int | None = None
-    headers_json: str | None = None
-    content_type: str | None = None
-    parser_version: str = "1"
-    parse_error: str | None = None
-    credits_used: int | None = None
-    credits_remaining: int | None = None
+    quotes: list[Quote] = field(default_factory=list)
+    rejections: list[Rejection] = field(default_factory=list)
+    skipped: Counter[str] = field(default_factory=Counter)
+    """Counts of *out-of-scope* input, keyed by reason.  Player props, futures
+    and pitcher-conditional markets are expected and not errors — but they are
+    counted so "we collected everything" is never assumed."""
+
+    def extend(self, other: ParseOutcome) -> None:
+        self.quotes.extend(other.quotes)
+        self.rejections.extend(other.rejections)
+        self.skipped.update(other.skipped)
+
+    def reject(self, source: str, reason: str, detail: str, **context: Any) -> None:
+        self.rejections.append(Rejection(source=source, reason=reason, detail=detail, context=context))
+
+    @property
+    def event_keys(self) -> set[str]:
+        return {quote.event_key for quote in self.quotes}
 
 
-@dataclass
+@dataclass(frozen=True)
 class SourceHealth:
-    """Point-in-time health report for a source adapter."""
+    """Outcome of one source's participation in one collection run."""
 
     source_key: str
-    is_healthy: bool
-    last_success: datetime | None = None
-    last_failure: datetime | None = None
-    error_message: str | None = None
+    ok: bool
+    checked_at: datetime
+    request_count: int = 0
+    raw_bytes: int = 0
     latency_ms: float | None = None
-    fetch_count: int = 0
-    failure_count: int = 0
+    quote_count: int = 0
+    event_count: int = 0
+    rejection_count: int = 0
+    skipped_count: int = 0
+    unchanged_payloads: int = 0
+    error_kind: str | None = None
+    error_message: str | None = None
+
+    def summary(self) -> str:
+        if not self.ok:
+            return f"{self.source_key}: FAILED [{self.error_kind}] {self.error_message}"
+        parts = [
+            f"{self.quote_count} quotes",
+            f"{self.event_count} events",
+            f"{self.request_count} requests",
+            f"{self.raw_bytes / 1024:.0f} KiB",
+        ]
+        if self.latency_ms is not None:
+            parts.append(f"{self.latency_ms:.0f} ms")
+        if self.rejection_count:
+            parts.append(f"{self.rejection_count} REJECTED")
+        if self.skipped_count:
+            parts.append(f"{self.skipped_count} out of scope")
+        if self.unchanged_payloads:
+            parts.append(
+                f"{self.unchanged_payloads}/{self.request_count} payloads byte-identical to "
+                "the previous run"
+            )
+        return f"{self.source_key}: OK ({', '.join(parts)})"
 
 
 @runtime_checkable
-class SourceAdapter(Protocol):
-    """Protocol that every odds source must satisfy."""
+class OddsSource(Protocol):
+    """A sportsbook that can supply pregame game markets.
+
+    One adapter per **book**, not per book-and-sport: the adapter owns the book's
+    HTTP session, its raw-capture conventions and its parsing rules, and is
+    parameterized by which leagues to collect.  Splitting it per sport would
+    duplicate all of that three to six times over and open a new session per
+    sport for no benefit.
+    """
 
     @property
     def source_key(self) -> str:
-        """Unique identifier for this source (e.g. ``"odds_api"``)."""
+        """Stable identifier, e.g. ``"pinnacle"``."""
         ...
-
-    def discover_events(self, sport_key: str) -> list[dict[str, Any]]:
-        """Return raw event metadata for *sport_key* (lightweight, no odds)."""
-        ...
-
-    def fetch_odds(self, sport_key: str) -> SourceSnapshot:
-        """Fetch a full odds snapshot for *sport_key*."""
-        ...
-
-    def parse_events(self, raw: list[dict[str, Any]]) -> list[Event]:
-        """Turn raw JSON structures into normalised ``Event`` models."""
-        ...
-
-    def healthcheck(self) -> SourceHealth:
-        """Return current health status."""
-        ...
-
-    def supports_delta(self) -> bool:
-        """Whether the source supports incremental (delta) updates."""
-        ...
-
-    def confidence_score(self) -> float:
-        """0.0–1.0 reliability score for the data this source provides."""
-        ...
-
-    def close(self) -> None:
-        """Release any held resources (HTTP clients, sockets, etc.)."""
-        ...
-
-
-@runtime_checkable
-class QuoteSourceAdapter(Protocol):
-    """Protocol for sources that emit normalized market-data quotes directly."""
 
     @property
-    def source_key(self) -> str:
-        """Unique source identifier."""
+    def leagues(self) -> tuple[str, ...]:
+        """Canonical league keys this instance is configured to collect.
+
+        The collector reports coverage against this, so a league that is
+        configured but returns nothing is visible as a gap rather than being
+        indistinguishable from one that was never requested.
+        """
         ...
 
-    def fetch_quotes(self, **kwargs: Any) -> list[PriceQuote]:
-        """Fetch fresh normalized quotes."""
+    def fetch_raw(self) -> list[RawResponse]:
+        """Perform the network calls and return every captured response.
+
+        Must raise a :class:`src.sources.guards.SourceError` subclass on
+        blocked, empty, non-JSON, or structurally changed responses rather
+        than returning nothing.
+        """
         ...
 
-    def healthcheck(self) -> SourceHealth:
-        """Return current health status."""
+    def parse(self, raws: Sequence[RawResponse]) -> ParseOutcome:
+        """Turn captured responses into normalized rows.  No I/O."""
         ...
 
     def close(self) -> None:

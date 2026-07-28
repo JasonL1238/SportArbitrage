@@ -1,235 +1,263 @@
-# SportArbitrage
+# MLB Odds Collector
 
-A cloud-ready sports arbitrage research scanner. Pulls odds from [The Odds API](https://the-odds-api.com/), detects pre-match arbitrage opportunities, stores results in Postgres, sends Discord alerts with deduplication, and provides a Streamlit dashboard with paper-trading verification and analytics.
+A local pipeline that continuously collects real MLB betting data from three
+sportsbooks and normalizes it into one validated schema.
 
-## Disclaimer
+Every source is a **public endpoint of the sportsbook's own website**, fetched
+directly with `httpx`. There are no third-party odds APIs, data vendors,
+scraping services, proxies, hosted browsers, accounts, API keys, or paid tiers —
+and nothing that could later require payment. The only dependencies are `httpx`
+and `pydantic`; storage is stdlib `sqlite3`.
 
-This tool is for **educational research only**. It does not automate betting, scrape sportsbook websites, bypass geolocation, CAPTCHA, or anti-bot systems, or violate any sportsbook terms of service. It uses only legal odds API data. Betting execution remains manual. In Illinois, sports wagering is overseen by the [Illinois Gaming Board](https://igb.illinois.gov/) — only place bets manually through licensed sportsbooks.
+Nothing here logs in, defeats a CAPTCHA, or works around a geo-block or bot
+protection. When a source returns a challenge, login page, or block, the run
+records it as a failure for that source and moves on.
 
-## Quick Start (Local)
+## Sources
 
-```bash
-# 1. Clone and install
-git clone https://github.com/JasonL1238/SportArbitrage.git
-cd SportArbitrage
-pip install -r requirements.txt
+| Source | Endpoint | Markets collected |
+|---|---|---|
+| `fanduel` | `sbapi.il.sportsbook.fanduel.com/api/content-managed-page` | full-game moneyline, run line, total runs |
+| `pinnacle` | `guest.api.arcadia.pinnacle.com/0.1/leagues/246` | moneyline, run line, totals, team totals — full game, first 5 innings, first inning, incl. alternate lines |
+| `betrivers_kambi` | `eu-offering-api.kambicdn.com/offering/v2018/rsiusil` | moneyline, run line, totals, team totals — full game, first 5 innings, first inning |
 
-# 2. Configure environment
-cp .env.example .env
-# Edit .env. For local ESPN testing, no key or database is required.
-# For The Odds API + Postgres, set ODDS_API_KEY and DATABASE_URL.
-
-# 3. Run the scanner
-python -m src.scanner --source espn_odds --sport baseball_mlb
-python -m src.scanner              # scan all target sports
-python -m src.scanner --dry-run    # check events only
-python -m src.scanner --sport basketball_nba  # scan one sport
-python -m src.scanner --watch --interval 300  # continuous local monitor
-
-# 4. Open the dashboard
-streamlit run src/dashboard.py
-```
-
-## Environment Variables
-
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `ODDS_API_KEY` | No | — | API key from [The Odds API](https://the-odds-api.com/) when using `odds_api` |
-| `DATABASE_URL` | No | — | Postgres connection string. If omitted, scanner writes local JSONL records to `LOCAL_DATA_DIR` |
-| `LOCAL_DATA_DIR` | No | `.local_data` | Local append-only scan output directory |
-| `ODDS_SOURCES` | No | `odds_api` if keyed, else `espn_odds` | Comma-separated source adapters to run |
-| `DISCORD_WEBHOOK_URL` | No | — | Discord webhook for alerts |
-| `ENABLE_ALERTS` | No | `true` | Enable/disable alert dispatch |
-| `MIN_ARB_MARGIN` | No | `0.01` | Minimum arb margin (1%) |
-| `MAX_ODDS_AGE_SECONDS` | No | `300` | Max age for bookmaker odds |
-| `DEFAULT_STAKE` | No | `100` | Default total stake |
-| `TARGET_SPORTS` | No | NBA, MLB, NFL, NHL | Comma-separated sport keys |
-| `MARKETS` | No | `h2h,spreads,totals` | Markets to scan |
-| `REGIONS` | No | `us` | Regions to fetch |
-| `CREDIT_FLOOR` | No | `50` | Stop scanning below this credit level |
-| `SCAN_INTERVAL_SECONDS` | No | `300` | Delay between scans in `--watch` mode |
-| `REQUIRE_DISTINCT_BOOKS` | No | `true` | Require at least two books for executable arbs |
-| `REQUIRE_COMPLETE_OUTCOMES` | No | `true` | Skip incomplete markets |
-
-## Deployment Guide
-
-### 1. Create a Neon Postgres Database
-
-1. Sign up at [neon.tech](https://neon.tech) (free tier available)
-2. Create a new project
-3. Copy the **pooled connection string** from the dashboard — it looks like:
-   ```
-   postgresql://user:pass@ep-xxx.us-east-2.aws.neon.tech/sportarbitrage?sslmode=require
-   ```
-4. Run the scanner once locally to create all tables automatically:
-   ```bash
-   DATABASE_URL="postgresql://..." python -m src.scanner --dry-run
-   ```
-
-### 2. Set Up Discord Webhook
-
-1. Open your Discord server
-2. Go to **Server Settings → Integrations → Webhooks**
-3. Click **New Webhook**, choose a channel, and copy the URL
-4. Set `DISCORD_WEBHOOK_URL` in your `.env` or GitHub Secrets
-
-### 3. Add GitHub Repository Secrets
-
-Go to your repo on GitHub → **Settings → Secrets and variables → Actions → New repository secret**. Add:
-
-| Secret | Value |
-|--------|-------|
-| `ODDS_API_KEY` | Your Odds API key |
-| `DATABASE_URL` | Your Neon Postgres connection string |
-| `DISCORD_WEBHOOK_URL` | Your Discord webhook URL |
-
-### 4. Deploy Scheduled Scans
-
-The repository includes a GitHub Actions workflow at `.github/workflows/scan.yml` that:
-
-- Runs every 2 hours on a cron schedule (adjustable)
-- Can be triggered manually via `workflow_dispatch`
-- Installs dependencies and runs tests
-- Executes a full scan with your secrets
-
-To adjust the schedule, edit the `cron` value in the workflow file. GitHub Actions cron uses UTC.
-
-### 5. Running Locally
+## Quick start
 
 ```bash
-# Install dependencies
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 
-# Set up environment
-cp .env.example .env
-# Edit .env with your DATABASE_URL, ODDS_API_KEY, etc.
-
-# Run a scan
-python -m src.scanner
-
-# Open the dashboard
-streamlit run src/dashboard.py
+python -m src.collector collect          # one pass over all three books
+python -m src.collector runs             # recent runs + per-source health
+python -m src.collector show --limit 20  # normalized rows from the last run
+python -m src.collector replay           # re-parse the last run's stored bytes
+python -m src.collector lines            # best price per market, across books
+python -m src.collector arb              # arbitrage in the last run
+python -m src.collector health           # per-source success rate over time
+python -m src.report --open              # browsable dashboard of everything stored
+python -m pytest tests/ -q               # incl. tests over real captured payloads
 ```
 
-### 6. Checking Logs
+Arbitrage over a stored run, with the reasons anything was refused:
 
-- **GitHub Actions**: Go to your repo → Actions tab → click on a workflow run to see logs
-- **Database**: Use the Neon SQL Editor to query `scan_runs`, `alert_logs`, or `arb_opportunities`
-- **Dashboard**: The Analytics tab shows rolling summaries of scans, alerts, and verified arbs
-
-## Credit Budget
-
-The Odds API free tier gives **500 credits/month**. Each odds call costs `markets × regions` credits.
-
-| Setting | Default | Credits |
-|---------|---------|---------|
-| Region | `us` | 1 |
-| Markets | `h2h,spreads,totals` | 3 |
-| **Per sport scan** | | **3 credits** |
-
-That gives you roughly **166 sport-scans/month** (~5/day). The scanner tracks remaining credits via the `x-requests-remaining` header and will stop scanning when credits drop below a configurable floor (default 50).
-
-## Project Structure
-
-```
-SportArbitrage/
-├── README.md
-├── .env.example
-├── .gitignore
-├── requirements.txt
-├── .github/workflows/
-│   └── scan.yml          # GitHub Actions cron workflow
-├── src/
-│   ├── config.py         # environment variables and defaults
-│   ├── models.py         # pydantic data models
-│   ├── normalize.py      # odds format conversion
-│   ├── arb.py            # arbitrage detection + stale odds filter
-│   ├── stake.py          # stake split and profit calculation
-│   ├── db.py             # Postgres persistence (6 tables)
-│   ├── dedup.py          # alert deduplication logic
-│   ├── odds_client.py    # The Odds API client
-│   ├── scanner.py        # CLI scan orchestrator
-│   ├── alerts.py         # terminal + Discord notifications
-│   └── dashboard.py      # Streamlit dashboard
-└── tests/
-    ├── conftest.py
-    ├── test_odds_conversion.py
-    ├── test_arb.py
-    ├── test_stake.py
-    ├── test_dedup.py
-    └── test_alerts.py
+```bash
+python -m src.collector arb --stake 500 --min-margin 0.5 --verbose
 ```
 
-## Database Schema
+Continuous collection, unattended:
 
-| Table | Purpose |
-|-------|---------|
-| `scan_runs` | Scan session metadata, status, and error tracking |
-| `raw_snapshots` | Raw API JSON per sport fetch |
-| `normalized_odds` | One row per bookmaker-outcome for historical analysis |
-| `arb_opportunities` | Detected arbs with dedup keys |
-| `alert_logs` | Alert dispatch history with dedup tracking |
-| `paper_trade_checks` | Manual verification log |
-
-## Arbitrage Detection
-
-For each event and market, the scanner picks the best decimal odds per outcome across all bookmakers and checks:
-
-```
-2-way:  1/best_odds_A + 1/best_odds_B < 1
-3-way:  1/best_home + 1/best_draw + 1/best_away < 1
+```bash
+python -m src.collector collect --watch --interval 300
 ```
 
-If the sum is less than 1, the margin (1 − sum) is the theoretical profit percentage. The scanner then computes the optimal stake split so every outcome returns the same payout.
+Collect from a subset, or skip the database while still storing raw responses:
 
-Bookmaker odds older than `MAX_ODDS_AGE_SECONDS` (default 5 minutes) are filtered before detection.
+```bash
+python -m src.collector collect --source pinnacle --source fanduel
+python -m src.collector collect --no-store
+```
 
-## Alert Deduplication
+Everything lands under `data/` (gitignored): raw responses in `data/raw/`,
+normalized rows in `data/collector.sqlite3`. Override with `MLB_DATA_DIR`,
+`MLB_RAW_DIR`, `MLB_DB_PATH`, `MLB_INTERVAL_SECONDS`, `MLB_HTTP_TIMEOUT`.
 
-Alerts are deduplicated by a fingerprint of the event, market, line, and outcome/bookmaker combination. An alert is suppressed if:
+## How a run works
 
-- The same fingerprint was alerted within the last 10 minutes, **unless**
-- The margin has improved by at least 0.5 percentage points
+```
+fetch_raw() → store raw bytes → parse() → reconcile → validate() → arb → persist
+   guards      data/raw/*.json   pure fn   event ids   graded      risk   sqlite
+                                                       checks      free
+```
 
-Opportunities are always stored regardless of alert status.
+Event identity is reconciled across **all** sources at once, before validation.
+Each adapter can only number a doubleheader over its own slate, which makes `#2`
+a per-source ordinal rather than an identity — so if one book lists both games
+and another lists only the second, the second book's game 2 would otherwise be
+joined onto the first book's game 1. `src/events.py` re-derives every key by
+clustering start times globally.
+
+Raw bytes are written to disk **before** anything interprets them, and `parse()`
+is a pure function of those bytes with no I/O. Replay is therefore just `parse()`
+over stored envelopes, and `collector replay` asserts a re-parse reproduces the
+stored rows exactly.
+
+A failing source does not abort a run. A run is `ok` only when validation passes
+*and* at least two sportsbooks produced data.
+
+## The schema
+
+One row is one priced selection: `src/schema.py`, table `quote`.
+
+`market`, `period`, and `selection` are **closed enums**. A source value that
+cannot be mapped to one is counted as out of scope or rejected — never passed
+through as free text, because a free-text fallback makes unnormalized data look
+normalized.
+
+- `market`: `moneyline`, `run_line`, `total_runs`, `team_total_runs`
+- `period`: `full_game`, `first_5_innings`, `first_1_inning`
+- `selection`: `home`, `away`, `draw`, `over`, `under`
+- `line` is always from the selection's own perspective, so `home.line ==
+  -away.line` on a run line and `over.line == under.line` on a total.
+- `event_key` (`AWAY@HOME:YYYY-MM-DD` on the US/Eastern scheduling date, `#2`
+  for the second game of a doubleheader) is the cross-source join key.
+- `observed_at` is when *this collector* fetched the payload. A source's own
+  clock never lands there; `last_change_at` holds the source-reported price
+  change time when a source provides one.
+
+## Validation
+
+`src/validation.py` grades findings. `ERROR` means the data is wrong or unusable;
+`WARNING` means suspicious. Beyond per-field checks it asserts things a single
+row cannot know about itself:
+
+- **Overround** — a complete market's implied probabilities must sum above 1.0.
+  A book does not price itself to lose, so a sum below 1.0 means the parser
+  mispaired prices or lines.
+- **Line mirroring** — run-line sides must be opposites; both sides of a total
+  must share a line.
+- **Cross-source agreement** — books must agree on which team is home and on
+  start time within 20 minutes.
+- **Duplicates** — two different prices for one selection is an error (this is
+  how pitcher-conditional moneylines leak in as the moneyline).
+- **Core-market coverage** — if a book stops returning moneylines entirely, a
+  label has probably been renamed upstream. Caught as an error rather than
+  appearing as a quiet drop in row count.
+- **Futures leakage** — a "game" starting more than 30 days out is a futures
+  market that was parsed as a game.
+- **Market-group homogeneity** — one `source_market_id` must identify one
+  market. Several lines, both teams' totals, or two periods fused under one id
+  makes every other market-level check read an arbitrary row, and the failure is
+  silent because a fused group still looks complete.
+- **Price encoding** — American and decimal odds are compared on *net payout*,
+  not on the decimal price, so the tolerance means the same thing for a −5000
+  favourite as for a +2400 longshot. An American value between −100 and +100 is
+  not a price at all and is rejected.
+- **Availability** — a source marking almost everything suspended contributes
+  nothing downstream while its row count still looks healthy. Books on one slate
+  do not disagree by 80 points on whether it is open, so that gap is reported.
+
+Soft failures are detected explicitly in `src/sources/guards.py`: empty bodies,
+CAPTCHA and bot challenges, login pages, blocks and geo-restrictions, non-JSON
+responses, and changed payload shapes. Marker scanning only runs on bodies that
+are not valid JSON, so a market legitimately named "please log in" is not
+mistaken for a login page.
+
+## Freshness
+
+Repeated runs can legitimately return byte-identical payloads — an MLB market at
+3am ET does not move. To keep that distinguishable from a stuck or cached feed,
+each fetch is compared to the previous fetch of the same endpoint and reported
+as `N/M payloads byte-identical to the previous run`. Response headers (`age`,
+`x-cache`, `cache-control`) are stored alongside each payload for auditing, and
+`last_change_at` carries the book's own view of when the price last moved.
 
 ## Dashboard
 
-Run `streamlit run src/dashboard.py` to open the dashboard with six tabs:
-
-1. **Current Opportunities** — latest arbs filtered by sport, market, margin, bookmaker
-2. **Alerted Opportunities** — opportunities that triggered Discord alerts
-3. **Stake Calculator** — input a total stake to see the split and guaranteed profit
-4. **History** — all logged opportunities with timestamps
-5. **Paper Trading** — log manual verification status per opportunity
-6. **Analytics** — rolling metrics: theoretical arbs, alerts sent, verified executable %, average margin, projected monthly EV
-
-## Paper-Trading Workflow
-
-After each scan:
-1. Check the dashboard for new candidates
-2. Manually verify on each sportsbook whether the odds are still available
-3. Log the result in the Paper Trading tab with one of:
-   `unchecked`, `real`, `stale`, `odds_changed`, `limit_issue`, `not_available`, `placed_manually`, `ignored`
-4. After 2–4 weeks, check the Analytics tab
-
-| Metric | Good sign |
-|--------|-----------|
-| Candidate arbs per week | 5+ |
-| Real usable arbs per week | 1–3+ |
-| Average margin | 1%+ |
-| Verified executable % | 50%+ |
-
-If these are weak after 4 weeks, do **not** upgrade to paid infrastructure.
-
-## Running Tests
+`python -m src.report` reads the SQLite store and writes one self-contained HTML
+file — no server, no build step, no network access at all. Open it and you can see
+what the collector grabbed and what it refused:
 
 ```bash
-python -m pytest tests/ -v
+python -m src.report                  # writes data/dashboard.html
+python -m src.report --open           # ... and opens it
+python -m src.report --serve 8000     # serve it on localhost instead of file://
+python -m src.report --quote-runs 20  # embed price rows for 20 runs, not 6
 ```
 
-## Swapping to a Paid API
+Nine sections, all switchable between stored runs: how to read a price at all; the
+run end to end (fetch → raw → parse → validate → persist, with counts at each
+step); per-source health; a coverage grid of every game against every book; a
+filterable table of all normalized rows; price movement across consecutive runs;
+validation findings and the overround distribution; the raw-capture ledger with
+checksums; a glossary; and the field reference.
 
-The `OddsClient` class in `src/odds_client.py` is the only module that touches the network. To use a different data source, implement the same `get_sports()`, `get_events()`, `get_odds()` interface and swap it into `scanner.py`. The arb math, database, and dashboard are API-agnostic.
+The copy is written for someone who has never placed a bet. Enum values are
+translated (`run_line` → "Winner with a handicap"), and every row leads with a
+sentence rather than notation — `away +1.5` is shown as "Guardians win, or lose by
+1", derived from the market, period, selection, line and side together. Whole-number
+lines say where the push is: `-1.0` becomes "Reds win by 2 or more (a 1-run win
+refunds)". Team names come from `src.teams`, so the page can say "Reds" without
+inventing a club the validator would have rejected. The book's own shorthand stays
+available as a tooltip on every row, and `#schema` keeps the untranslated field
+list for querying the database directly.
 
-See `docs/odds_sources.md` for the current source-acquisition plan, including exchanges, prediction markets, sportsbook aggregators, and direct sportsbook risks.
+Those sentences are claims about what a bet settles on, so 19 of them are asserted
+in `tests/dashboard_smoke.mjs` — a wrong sentence is worse than notation, because a
+reader has no way to tell it is wrong.
+
+The report is strictly a view. It never fetches anything, and every number on the
+page comes from a query in `src/report.py`, so generating it cannot change what
+was collected. Runs are listed in full but price rows are only embedded for the
+most recent `--quote-runs`; the page says so on any run it is not holding rows
+for, rather than showing an empty table as if nothing had been collected.
+
+## Repository layout
+
+```
+src/
+  collector.py     pipeline + CLI
+  schema.py        the one normalized schema (closed enums)
+  validation.py    graded correctness checks
+  arb.py           cross-book arbitrage, settlement modelling, stake sizing
+  teams.py         strict MLB team canonicalization (30 clubs, no fuzzy guessing)
+  events.py        event keys + global cross-source doubleheader reconciliation
+  raw_store.py     raw-response envelopes and replay
+  store.py         sqlite persistence
+  normalize.py     odds conversions
+  report.py        dashboard: queries the store, renders one standalone HTML file
+  report_assets.py the dashboard's inline stylesheet, markup and script
+  settings.py      local paths
+  sources/
+    base.py        the source protocol: fetch_raw() + pure parse()
+    guards.py      empty / blocked / CAPTCHA / login / format-change detection
+    fanduel.py  pinnacle.py  betrivers_kambi.py
+docs/
+  INPUT_CONTRACT.md   what a scraper must deliver, and current adapter gaps
+tests/
+  fixtures/raw/               real captured responses from a live 2026-07-28 run
+  test_source_contract.py     the input contract, executable
+  test_integration.py         whole pipeline end to end, incl. the CLI
+  test_validation_adversarial.py   deliberately corrupted input
+```
+
+## Arbitrage
+
+`src/arb.py` finds positions that cannot lose. The arithmetic is trivial; the
+module is almost entirely about refusing to call something an arbitrage when it
+is not, because the costly failure is a *false* positive.
+
+- **Pairing is on a canonical line.** Run lines are stated per side, so home
+  −1.5 and away +1.5 are grouped as one market while home −1.5 and away +2.5
+  are not. That second pair is a *middle*, which risks the stake to win more —
+  a different product, deliberately not reported here.
+- **Every settlement outcome is enumerated,** and the reported profit is the
+  minimum across them. So a whole-number line — where the game can land exactly
+  on it and refund every leg — reports a floor of zero rather than its headline
+  margin. Push risk cannot be overlooked because it *is* the number.
+- **Only identical contracts are combined.** A two-way first-five-innings
+  moneyline where a tie voids is not the same contract as a three-way one where
+  a tie loses; pairing them looks like a 5% edge on two perfectly fair prices.
+- **A two-way partial-period moneyline is refused outright.** A tie either voids
+  both legs or loses both, and since adapters drop an unpriced draw leg silently,
+  nothing on the row says which. The readings differ by the whole bankroll.
+- **Stakes are rounded to whole units and the guarantee recomputed after.** An
+  edge thinner than one betting unit is reported as rejected, not as free money.
+- **Refusals are counted and explained.** "No opportunities" is only meaningful
+  beside how many markets were genuinely comparable across books, so both are
+  always reported.
+
+On the captured slate the answer is **zero opportunities across 38 cross-book
+markets** — three correctly-priced books, as expected. `tests/test_arb.py`
+therefore uses clearly-labelled synthetic quotes for the positive cases; they are
+never presented as observed prices.
+
+## The scraper contract
+
+`docs/INPUT_CONTRACT.md` states exactly what a source adapter must deliver, and
+`tests/test_source_contract.py` enforces every mechanically checkable clause of
+it against each registered adapter. A new adapter is finished when that file
+passes with it registered — not when it returns rows.
+
+## Scope
+
+This collects and normalizes odds and identifies arbitrage in the collected
+data. It does not place bets, serve a UI, or send alerts.

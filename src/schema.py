@@ -1,0 +1,241 @@
+"""The single normalized schema for collected betting data.
+
+Every source adapter must emit :class:`Quote` rows and nothing else.  The
+market/period/selection vocabularies are **closed enums** defined in
+:mod:`src.vocab`: a source value that cannot be mapped to one of them is rejected
+upstream rather than being passed through as free text.  That is deliberate — a
+free-text fallback makes unnormalized data look normalized, which is the failure
+this schema exists to prevent.
+
+One row = one priced selection, at one line, from one book, observed at one
+instant.  ``line`` is always expressed from the perspective of that row's
+selection (home -1.5 / away +1.5), so a two-sided market always satisfies
+``home.line == -away.line`` for spreads and ``over.line == under.line`` for
+totals.  :mod:`src.validation` enforces this.
+
+The row carries both a display name and a resolved identity for each
+participant.  ``home_team``/``away_team`` are for humans; ``home_participant``/
+``away_participant`` are the keys everything joins on.  Keeping the identity on
+the row means reconciliation never has to re-resolve a name it already resolved
+once, and a book's spelling can change without moving an event.
+"""
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from enum import StrEnum
+
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+
+from src.vocab import (
+    CORE_MARKETS_BY_SPORT,
+    MARKETS_REQUIRING_LINE,
+    MARKETS_REQUIRING_SIDE,
+    PERIOD_RULES,
+    SELECTIONS_BY_MARKET,
+    Market,
+    Period,
+    PeriodRules,
+    QuoteStatus,
+    Selection,
+    Side,
+    Sport,
+    draw_is_priced,
+    is_collectable,
+    period_rules,
+    scoring_unit,
+    tie_possible,
+)
+
+__all__ = [
+    "CORE_MARKETS_BY_SPORT",
+    "MARKETS_REQUIRING_LINE",
+    "MARKETS_REQUIRING_SIDE",
+    "PERIOD_RULES",
+    "SELECTIONS_BY_MARKET",
+    "Market",
+    "Period",
+    "PeriodRules",
+    "Quote",
+    "QuoteStatus",
+    "Selection",
+    "Side",
+    "Sport",
+    "draw_is_priced",
+    "is_collectable",
+    "period_rules",
+    "scoring_unit",
+    "tie_possible",
+]
+
+
+class Quote(BaseModel):
+    """One priced selection from one sportsbook."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", use_enum_values=False)
+
+    # ── provenance ───────────────────────────────────────────────────────────
+    source: str
+    observed_at: datetime
+    """When *this collector* fetched the payload.  Never a source-supplied
+    time — those live in :attr:`last_change_at`."""
+    raw_ref: str
+    """Reference to the stored raw response this row was parsed from."""
+
+    # ── event identity ───────────────────────────────────────────────────────
+    sport: Sport
+    league: str
+    """Canonical league key from :mod:`src.leagues`.  Carried for coverage
+    reporting; deliberately *not* part of :attr:`event_key`, because books
+    disagree about classification and that must not break a join."""
+    event_key: str
+    """Cross-source event identity: ``AWAY@HOME:YYYY-MM-DD`` built from
+    participant keys on the league's scheduling date, with ``#n`` appended when
+    the same pair meets twice in a day."""
+    source_event_id: str
+    home_participant: str
+    away_participant: str
+    """Resolved participant keys — what everything joins on."""
+    home_team: str
+    away_team: str
+    """Canonical display names, for humans."""
+    commence_time: datetime
+
+    # ── market identity ──────────────────────────────────────────────────────
+    market: Market
+    period: Period
+    selection: Selection
+    side: Side | None = None
+    line: float | None = None
+    is_alternate: bool = False
+
+    # ── price ────────────────────────────────────────────────────────────────
+    decimal_odds: float
+    american_odds: int
+    implied_probability: float
+
+    # ── source detail ────────────────────────────────────────────────────────
+    source_market_id: str | None = None
+    source_selection_id: str | None = None
+    limit_amount: float | None = None
+    status: QuoteStatus = QuoteStatus.ACTIVE
+    last_change_at: datetime | None = None
+    """Source-reported time the price last changed, when the source provides
+    one.  Distinct from :attr:`observed_at` so freshness is never inferred from a
+    source's own clock."""
+
+    @field_validator("observed_at", "commence_time", "last_change_at")
+    @classmethod
+    def _require_utc(cls, value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            raise ValueError("datetimes must be timezone-aware")
+        return value.astimezone(UTC)
+
+    @field_validator(
+        "source",
+        "league",
+        "event_key",
+        "source_event_id",
+        "home_participant",
+        "away_participant",
+        "home_team",
+        "away_team",
+    )
+    @classmethod
+    def _require_nonblank(cls, value: str) -> str:
+        if not value or not value.strip():
+            raise ValueError("must not be blank")
+        return value.strip()
+
+    @field_validator("decimal_odds")
+    @classmethod
+    def _check_decimal_odds(cls, value: float) -> float:
+        # 1.0 means "risk everything to win nothing" — never a real price.
+        if not 1.0 < value <= 1000.0:
+            raise ValueError(f"decimal_odds out of range: {value}")
+        return value
+
+    @model_validator(mode="after")
+    def _check_market_shape(self) -> Quote:
+        if not is_collectable(self.sport, self.period):
+            raise ValueError(
+                f"{self.sport.value}/{self.period.value} has no recorded settlement "
+                "rules, so it must not be collected"
+            )
+        legal = SELECTIONS_BY_MARKET[self.market]
+        if self.selection not in legal:
+            raise ValueError(
+                f"selection {self.selection} illegal for market {self.market} "
+                f"(legal: {sorted(s.value for s in legal)})"
+            )
+        if self.market in MARKETS_REQUIRING_LINE and self.line is None:
+            raise ValueError(f"market {self.market} requires a line")
+        if self.market not in MARKETS_REQUIRING_LINE and self.line is not None:
+            raise ValueError(f"market {self.market} must not carry a line")
+        if self.market in MARKETS_REQUIRING_SIDE and self.side is None:
+            raise ValueError(f"market {self.market} requires a side")
+        if self.market not in MARKETS_REQUIRING_SIDE and self.side is not None:
+            raise ValueError(f"market {self.market} must not carry a side")
+        # A draw is only legal where the books actually price one.  A full-game
+        # baseball or hockey moneyline cannot push — extra innings and the
+        # shootout decide them — so a "draw" there is a misparsed third runner.
+        if self.selection is Selection.DRAW and not draw_is_priced(self.sport, self.period):
+            raise ValueError(
+                f"draw is not a priced outcome for {self.sport.value}/{self.period.value}"
+            )
+        if self.home_participant == self.away_participant:
+            raise ValueError(
+                f"home and away are the same participant: {self.home_participant}"
+            )
+        return self
+
+    # ── derived identity ─────────────────────────────────────────────────────
+
+    @property
+    def settlement(self) -> PeriodRules:
+        """The settlement facts for this row's scoring window."""
+        return period_rules(self.sport, self.period)
+
+    @property
+    def scoring_unit(self) -> str:
+        return scoring_unit(self.sport, self.period)
+
+    @property
+    def market_key(self) -> tuple[str, str, str]:
+        """Identity of the market this row belongs to.
+
+        Keyed on the *source's own* market id, because that is what defines one
+        market at the book.  Deriving the group from this row's own line instead
+        would tear a spread in half — the home row is at -1.5 and the away row at
+        +1.5 — and then pair each half with the opposite side of a different
+        alternate-line market.
+        """
+        market_id = self.source_market_id or (
+            f"{self.market.value}|{self.period.value}|"
+            f"{self.side.value if self.side else ''}|{self.line}|{self.is_alternate}"
+        )
+        return (self.source, self.source_event_id, market_id)
+
+    @property
+    def dedup_key(self) -> tuple[str, ...]:
+        """Identity of this exact priced selection at one observation.
+
+        ``is_alternate`` is part of the identity because books genuinely offer the
+        same bet twice: the main market at 8.5 and an alternate-line market that
+        also happens to sit at 8.5, at slightly different prices and limits.  Both
+        rows are real.  Leaving the flag out made them collide, which reported
+        legitimate data as a ``conflicting_duplicate`` error and — because the
+        storage layer enforces this key — aborted the insert of the entire run's
+        quotes.
+        """
+        return (
+            self.source,
+            self.event_key,
+            self.market.value,
+            self.period.value,
+            self.side.value if self.side else "",
+            self.selection.value,
+            "" if self.line is None else f"{self.line:g}",
+            "alt" if self.is_alternate else "main",
+        )

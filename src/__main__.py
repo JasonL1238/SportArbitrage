@@ -1,3 +1,5 @@
-from src.scanner import main
+import sys
 
-main()
+from src.collector import main
+
+sys.exit(main())
