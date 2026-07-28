@@ -58,10 +58,6 @@ class Participant:
     roster: str | None = None
     """Closed roster this came from, or ``None`` for an open-roster resolution."""
 
-    @property
-    def is_roster_member(self) -> bool:
-        return self.roster is not None
-
 
 # ── shared text normalization ────────────────────────────────────────────────
 
