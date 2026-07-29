@@ -25,6 +25,7 @@ from src.normalize import (
 from src.events import build_event_key
 from src.leagues import is_known, league
 from src.participants import canonical_participant
+from src.sources import registry
 from src.schema import (
     MARKETS_REQUIRING_LINE,
     MARKETS_REQUIRING_SIDE,
@@ -61,24 +62,24 @@ LINE_INCREMENT: dict[Sport, float] = {
     Sport.TENNIS: 0.25,
 }
 
-#: Every adapter under contract, with the fixture that feeds it.
-ADAPTERS = ["fanduel", "pinnacle", "betrivers_kambi"]
+#: Every adapter under contract — **read off the registry**, never listed here.
+#:
+#: This file's own docstring says an adapter is finished when this passes with it
+#: added, and for three books the only thing making that true was somebody
+#: remembering to edit a literal.  A source added to the registry and forgotten
+#: here would escape every clause below while looking, from the outside, exactly
+#: as finished as the others.  ``tests/conftest.py`` raises if a registered
+#: source has no captured payloads, so "no fixture" is a loud failure rather than
+#: a silent skip.
+ADAPTERS = list(registry.keys())
 
 
 @pytest.fixture(scope="session")
-def parsed(fanduel_raw, pinnacle_raw, kambi_raw):
-    """Each adapter's full ParseOutcome from its captured responses."""
-    from src.sources.betrivers_kambi import BetRiversKambiAdapter
-    from src.sources.fanduel import FanDuelAdapter
-    from src.sources.pinnacle import PinnacleAdapter
-
+def parsed(registered_raws):
+    """Each registered adapter's full ParseOutcome from its captured responses."""
     outcomes = {}
-    for key, cls, raws in (
-        ("fanduel", FanDuelAdapter, fanduel_raw),
-        ("pinnacle", PinnacleAdapter, pinnacle_raw),
-        ("betrivers_kambi", BetRiversKambiAdapter, kambi_raw),
-    ):
-        adapter = cls()
+    for key, raws in registered_raws.items():
+        adapter = registry.descriptor(key).replay_instance()
         try:
             outcomes[key] = (adapter.parse(raws), raws)
         finally:
@@ -99,25 +100,92 @@ class TestInterface:
         assert key.strip() == key and key
 
     def test_parsing_is_deterministic(self, adapter_case, parsed) -> None:
-        """Replay, regression testing and offline reproduction all rest on this
-        and nothing else."""
-        key, _, raws = adapter_case
-        from src.sources.betrivers_kambi import BetRiversKambiAdapter
-        from src.sources.fanduel import FanDuelAdapter
-        from src.sources.pinnacle import PinnacleAdapter
+        """Same bytes, same instance, same rows — twice.
 
-        cls = {
-            "fanduel": FanDuelAdapter,
-            "pinnacle": PinnacleAdapter,
-            "betrivers_kambi": BetRiversKambiAdapter,
-        }[key]
-        adapter = cls()
+        Necessary but **not** sufficient for the purity clause, which is why the
+        test below exists: this one passes just as happily when ``parse`` reads
+        configuration off the instance, because both calls read the same
+        configuration.
+        """
+        key, _, raws = adapter_case
+        adapter = registry.descriptor(key).replay_instance()
         try:
             first = [q.model_dump() for q in adapter.parse(raws).quotes]
             second = [q.model_dump() for q in adapter.parse(raws).quotes]
         finally:
             adapter.close()
         assert first == second
+
+    def test_parsing_does_not_depend_on_how_the_instance_was_configured(
+        self, adapter_case
+    ) -> None:
+        """The clause replay actually rests on, tested where it can fail.
+
+        ``src.collector.replay_run`` builds an adapter with **no arguments** and
+        re-parses the stored bytes, so any configuration ``parse`` reads off its
+        instance is a way for replay to disagree with collection — silently, and
+        reported as rows the parser lost or invented.
+
+        FanDuel did exactly this: narrowed to one league, the same soccer capture
+        parsed to 30 rows on collection and 381 on replay.  Determinism alone did
+        not catch it, because a single instance is self-consistent.  Two
+        differently-configured instances over one set of bytes is what does.
+        """
+        key, _, raws = adapter_case
+        descriptor = registry.descriptor(key)
+        default = descriptor.replay_instance()
+        try:
+            expected = [q.model_dump() for q in default.parse(raws).quotes]
+            declared = list(default.leagues)
+        finally:
+            default.close()
+        if len(declared) < 2:
+            pytest.skip(f"{key} collects one league, so there is nothing to narrow")
+
+        narrowed = descriptor.build(leagues=declared[:1])
+        try:
+            assert [q.model_dump() for q in narrowed.parse(raws).quotes] == expected
+        finally:
+            narrowed.close()
+
+    def test_the_rows_carry_the_registered_source_key_not_the_modules(
+        self, adapter_case
+    ) -> None:
+        """Two instances of one adapter class must be distinguishable in the data.
+
+        ``source`` is the first element of ``dedup_key``, so a parser that read
+        its identity off a module constant would file the LeoVegas tenant's
+        prices under BetRivers and collide the two on insert — and replay, which
+        builds an adapter with no arguments at all, could never reproduce the
+        right key.  It comes off the envelope instead.
+        """
+        key, outcome, raws = adapter_case
+        assert {raw.source for raw in raws} == {key}
+        assert {quote.source for quote in outcome.quotes} == {key}
+
+    def test_the_adapter_declares_what_it_prices(self, adapter_case) -> None:
+        """Coverage reporting must be able to say "this source has no totals for
+        soccer" instead of inferring it from an absence — and validation must not
+        fault a book for a market it never claimed."""
+        key, outcome, _ = adapter_case
+        adapter = registry.descriptor(key).replay_instance()
+        try:
+            claims = adapter.capabilities()
+        finally:
+            adapter.close()
+        assert claims, f"{key} declares no capabilities"
+        for league, markets in claims.items():
+            assert is_known(league), f"{key} claims unregistered league {league!r}"
+            assert markets, f"{key} claims league {league} with no markets"
+        # Nothing it produced may be outside what it claimed for that league.
+        for quote in outcome.quotes:
+            declared = claims.get(quote.league)
+            if declared is None or quote.period is not Period.FULL_GAME:
+                continue
+            assert quote.market in declared, (
+                f"{key} produced {quote.market.value} for {quote.league} without "
+                "claiming it"
+            )
 
     def test_the_adapter_produced_rows_at_all(self, adapter_case) -> None:
         key, outcome, _ = adapter_case
@@ -288,12 +356,17 @@ class TestMarketVocabulary:
 
     def test_totals_are_plausible_for_their_league(self, adapter_case) -> None:
         """A 2.5-point NFL total and a 165-goal soccer total are both a market
-        mapped to the wrong sport, and neither is caught by a units check alone."""
+        mapped to the wrong sport, and neither is caught by a units check alone.
+
+        Judged against the **ladder** bound rather than the main-line band: a
+        venue's alternate totals run well past its headline number, and Kalshi
+        quotes MLB totals from 1.5 to 13.5 against a main-line floor of 4.
+        """
         key, outcome, _ = adapter_case
         for quote in outcome.quotes:
             if quote.market is not Market.TOTAL or quote.period is not Period.FULL_GAME:
                 continue
-            low, high = league(quote.league).plausible_total_range
+            low, high = league(quote.league).plausible_line_range
             assert low <= quote.line <= high, (
                 f"{key}: {quote.league} full-game total {quote.line} outside {low}-{high}"
             )
@@ -523,3 +596,25 @@ class TestCrossAdapterConsistency:
             print(
                 f"{sport.value}: {len(events)} events, {len(shared)} priced by 2+ books"
             )
+
+
+@pytest.mark.parametrize("key", [entry.key for entry in registry.SOURCES])
+def test_every_registered_source_declares_at_least_one_league(key: str) -> None:
+    """An adapter that declares nothing removes itself from the health denominator.
+
+    ``league_coverage`` builds its entries from ``set(configured) | set(rows)``,
+    so a source with an empty ``leagues`` **and** no rows contributes none — and
+    ``_check_source_health`` then grades the collapse against a denominator that
+    silently excludes it.  Measured: two producing sources plus two silent ones
+    is a 50% share and a warning; add three silent sources that declare nothing
+    and the message honestly prints "2 of 7" while the *grade* comes from a
+    hidden 2-of-4.  A pipeline that has lost five of seven books reads as a
+    warning.
+
+    Every adapter satisfies this today and ``build_sources`` refuses to construct
+    an instance with no serviceable league — but nothing asserted it, and the
+    check that depends on it is the one that says whether a run is usable.
+    """
+    source = registry.descriptor(key).replay_instance()
+    assert source.leagues, f"{key} declares no leagues"
+    assert all(str(league).strip() for league in source.leagues), key

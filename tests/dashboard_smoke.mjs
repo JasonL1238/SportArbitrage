@@ -69,6 +69,8 @@ try {
     globalThis.__describeBet = describeBet;
     globalThis.__nick = nick;
     globalThis.__participants = DATA.participants;
+    globalThis.__movementCounts = movementCounts;
+    globalThis.__moneylineSides = moneylineSides;
   `)();
 } catch (err) {
   errors.push(err);
@@ -153,6 +155,21 @@ for (const id of ['lede', 'odds-count', 'move-count', 'move-note', 'event-sub', 
     [{ market: 'team_total', selection: 'under', side: 'away', line: 3.5 }, 'AWAY score 3 runs or fewer'],
     [{ market: 'total', selection: 'over', line: 8.5, is_alternate: true },
       'Both sides together score 9 runs or more · extra line'],
+    // Quarter lines split the stake across the two neighbouring half-lines, so
+    // the middle outcome pays half.  There is no third case in the sentence
+    // builder unless one is written: they used to fall into the whole-number
+    // branch and assert an impossible refund ("a 0.25-goal win refunds"), and
+    // worse, hide the half-win a draw pays.  254 rows on the captured slate.
+    [{ sport: 'soccer', market: 'spread', line: -0.25 },
+      'HOME win by 1 or more; a 0-goal win pays half'],
+    [{ sport: 'soccer', market: 'spread', selection: 'away', line: 0.25 },
+      'AWAY win, or lose by fewer than 0; a 0-goal loss pays half'],
+    [{ sport: 'soccer', market: 'spread', line: -0.75 },
+      'HOME win by 1 or more; a 1-goal win pays half'],
+    [{ sport: 'soccer', market: 'total', selection: 'over', line: 3.25 },
+      'Both sides together score 4 goals or more; exactly 3 pays half'],
+    [{ sport: 'soccer', market: 'total', selection: 'under', line: 2.75 },
+      'Both sides together score 2 goals or fewer; exactly 3 pays half'],
     // Every sport counts something different, and the sentence has to say which.
     [{ sport: 'hockey', market: 'total', selection: 'over', line: 5.5 },
       'Both sides together score 6 goals or more'],
@@ -243,5 +260,76 @@ for (const id of (process.env.DUMP || '').split(',').filter(Boolean)) {
     if (opens !== closes + selfClosed) problems.push(`${tag}: ${opens} open vs ${closes} closed + ${selfClosed} self-closed`);
   }
   console.log(problems.length ? 'MALFORMED SVG: ' + problems.join('; ') : `svg well-formed (${svg.length} chars of chart markup)`);
+  if (problems.length) process.exit(1);
+}
+
+// A book's margin can only be read off a market it priced completely. Summing two
+// legs of a three-way — a suspended draw, or an exchange with no resting draw offer
+// — makes a healthy market look like a book pricing itself to lose (0.757), which
+// the page rendered as "impossible prices: 1" beside "problems found: 0", and as
+// "smarkets keeps -23.3%" on the bet panel. Validation refuses to sum such a market
+// for exactly this reason; the page now reads the same settlement table.
+{
+  const sides = globalThis.__moneylineSides;
+  const cases = [
+    ['soccer', 'full_game', 3],
+    ['hockey', 'regulation', 3],
+    ['hockey', 'full_game', 2],
+    ['baseball', 'full_game', 2],
+    ['baseball', 'first_1_inning', 3],
+    ['football', 'full_game', 2],   // can tie, but the draw is not priced
+    ['tennis', 'full_game', 2],
+  ];
+  const problems = [];
+  for (const [sport, period, want] of cases) {
+    const got = sides(sport, period);
+    if (got !== want) problems.push(`${sport}/${period}: ${got} sides, want ${want}`);
+  }
+  console.log(problems.length ? 'MONEYLINE SHAPE WRONG: ' + problems.join('; ')
+    : `a complete moneyline is sized from the settlement table (${cases.length} windows)`);
+  if (problems.length) process.exit(1);
+}
+
+// ...and no venue on the real page is reported keeping an *implausible* cut. A
+// genuinely crossed two-way book shows a small negative cut and that is honest;
+// summing two legs of a three-way produced "keeps -23.3%", which is not a market
+// state any venue survives.
+{
+  const text = [...nodes.values()].map((n) => (n.innerHTML || '') + (n.textContent || '')).join(' ');
+  const cuts = [...text.matchAll(/keeps (-?\d+(?:\.\d+)?)%/g)].map((m) => Number(m[1]));
+  const absurd = cuts.filter((c) => c < -5);
+  console.log(absurd.length ? 'IMPLAUSIBLE VENUE CUT RENDERED: ' + absurd.join(', ') + '%'
+    : `no venue is reported keeping an implausible cut (${cuts.length} cuts shown)`);
+  if (absurd.length) process.exit(1);
+}
+
+// "N bets held exactly the same price" is the page's staleness signal, so it must
+// count only bets that were *seen more than once*. Counting `series.size - moved`
+// folded every bet observed in a single collection into the held-steady claim, and
+// that number grows by exactly the rows of a venue that went missing.
+{
+  const series = (...lengths) => new Map(lengths.map((n, i) => [i, { values: Array(n).fill(1.5) }]));
+  const cases = [
+    // [series lengths, moved, expected {comparable, once, stable}]
+    [[2, 2, 2], 0, { comparable: 3, once: 0, stable: 3 }],
+    [[2, 2, 1], 0, { comparable: 2, once: 1, stable: 2 }],
+    [[2, 2, 1], 1, { comparable: 2, once: 1, stable: 1 }],
+    [[1, 1, 1], 0, { comparable: 0, once: 3, stable: 0 }],
+    // the reviewer's measured case: 4,452 seen twice, 2,922 seen once, none moved
+    [[...Array(4452).fill(2), ...Array(2922).fill(1)], 0,
+      { comparable: 4452, once: 2922, stable: 4452 }],
+    [[], 0, { comparable: 0, once: 0, stable: 0 }],
+  ];
+  const problems = [];
+  for (const [lengths, moved, want] of cases) {
+    const got = globalThis.__movementCounts(series(...lengths), moved);
+    for (const key of ['comparable', 'once', 'stable']) {
+      if (got[key] !== want[key]) {
+        problems.push(`${lengths.length} series/${moved} moved: ${key} ${got[key]}, want ${want[key]}`);
+      }
+    }
+  }
+  console.log(problems.length ? 'MOVEMENT COUNTS WRONG: ' + problems.join('; ')
+    : `movement counts hold across ${cases.length} shapes`);
   if (problems.length) process.exit(1);
 }

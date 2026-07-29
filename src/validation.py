@@ -40,10 +40,13 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import datetime, timedelta
 from enum import StrEnum
-from typing import Iterable, Sequence
+from statistics import median
+from typing import Any, Collection, Iterable, Mapping, Sequence
 
+from src.arb import MAX_OBSERVATION_SPREAD
+from src.commission import net_decimal_odds
 from src.leagues import League, is_known
 from src.leagues import league as get_league
 from src.normalize import (
@@ -96,6 +99,107 @@ def core_markets(sport: Sport) -> frozenset[tuple[Market, Period]]:
 #: "complete" means is sport-dependent; see :func:`_required_selections`.
 MIN_OVERROUND = 1.0
 MAX_OVERROUND = 1.6
+
+#: The same floor for an **order-driven** venue, where the reasoning above does
+#: not hold.
+#:
+#: A sportsbook quotes both sides of a market itself and will not price itself to
+#: lose, so a sum below 1.0 there is evidence about the *parser*.  An exchange or
+#: prediction market publishes two independent books; nobody quoted them against
+#: each other, and when the two best asks briefly cross, that is a real — small,
+#: fleeting — intra-venue arbitrage rather than a mispairing.  Failing the run
+#: over it would report a true observation as a parse fault, in the words "the
+#: prices or lines are mispaired", which are false.
+#:
+#: The captured slate is already on the boundary: Kalshi's tightest two
+#: moneylines sum to exactly 1.0000 and Matchbook's to 1.0023, so one cent of
+#: movement on any of them turns a healthy run into a failed one.
+#:
+#: Not removed, only widened, because a *large* negative sum on an order book is
+#: still evidence of a fault — a crossed market of more than a couple of percent
+#: does not persist for the seconds it takes to collect it.
+#: The systematic-mispricing gate.  A venue whose *typical* market prices below
+#: fair is not a venue with thin books, it is a parser reading one side of the
+#: order book where the other is meant — and the median says so where a rate
+#: cannot.
+#:
+#: Measured on this session's live slates, honest median gross overround per
+#: order-driven source: Kalshi 1.0100, SX Bet 1.0156-1.0200, Polymarket 1.0300,
+#: Matchbook 1.0323-1.0346, Smarkets 1.1055-1.1121.  Every one holds a spread,
+#: which is what a venue is.  A trap deep enough to manufacture a cross-book
+#: edge drags the median under 1.0; the deep lay-read-as-back trap measured on
+#: the fixtures puts 98% of markets below fair, so its median is far under.
+#:
+#: This replaced a *rate* gate — "more than a quarter of complete markets sum
+#: below 0.99" — which the live data killed: honest sources run 15-20% by that
+#: measure (Polymarket touched 20.2%) against a 25% threshold, and a realistic
+#: 1.5% trap moves Matchbook's rate from 16% to 18%.  The honest band and the
+#: trap band overlapped, so the gate could convict a healthy venue — failing the
+#: run and telling the operator every price from it is suspect — while missing
+#: the trap it was for.  The median has real separation on the same data.
+#:
+#: What this gate catches, measured by re-pricing one venue's whole book on a
+#: captured 46,220-row slate (uniform shift, decimal and American kept
+#: consistent):
+#:
+#: ==========  ======  ======  ======
+#: venue       1.5%    3%      6%
+#: ==========  ======  ======  ======
+#: Kalshi      caught  caught  caught
+#: Polymarket  --      caught  caught
+#: SX Bet      --      caught  caught
+#: Matchbook   --      (a)     caught
+#: Smarkets    --      (a)     (a)
+#: ==========  ======  ======  ======
+#:
+#: (a) not by this gate — by per-market ``negative_overround`` errors, which
+#: fail the run for a different stated reason.
+#:
+#: **A uniform misread shallower than the venue's own spread is not detected by
+#: anything, and no honest gate can be built from this data.** The obvious
+#: candidate — a source's signed median deviation from the cross-source
+#: consensus — was measured and rejected: honest venues on that slate run
+#: SX Bet -0.0112, Polymarket -0.0102, Kalshi -0.0089, Matchbook -0.0055,
+#: Smarkets -0.0042, while a 1.5% misread moves each by only ~0.006, so
+#: *trapped Smarkets* (-0.0093) sits inside the honest band, below *honest
+#: SX Bet*. Any flat threshold convicts a healthy venue before it catches a
+#: trapped one. ``_check_price_agreement`` cannot see it either: its bar is a
+#: 0.15 deviation in implied probability (:data:`MAX_PRICE_DEVIATION`, set where
+#: it is because the largest honest deviation observed is 0.083) and a 1.5%
+#: shift moves implied probability by about 0.007.
+#:
+#: The residual exposure is bounded and worth stating plainly: such a misread
+#: inflates that venue's apparent edge by the size of the shift, so it can
+#: manufacture *thin* phantom positions. It cannot manufacture large ones —
+#: :data:`src.arb.REFUSE_MARGIN` refuses those — and the per-market net check
+#: still fires wherever the shift crosses the book after commission.
+#:
+#: A second thing it cannot catch, for the same reason: a misread confined to
+#: **one market type**. The median's premise is that a misread moves every
+#: market the same way, and adapters parse each market type separately, so a
+#: moneyline-only misread is at least as likely a parser bug as a whole-book
+#: one. Trapping only Kalshi's moneyline series leaves its median at 1.0100 —
+#: unmoved, because the other market types outvote it — and the gate stays
+#: silent while the per-market check reports the individual crossings. Judging
+#: the median per ``(source, market)`` instead was considered and not done: it
+#: multiplies the number of small samples, which is precisely what the sample
+#: floor above exists to keep from convicting a healthy venue.
+#: ...over at least this many complete markets.  Twenty, not five: at five, a
+#: venue with three markets crossed by half a cent — every one of them *benign*
+#: after commission, and printed as such two lines above — had its median drag
+#: under 1.0 and the run failed with "every price from this source is suspect".
+#: A quiet scoped hour is not evidence about a parser.  Every honest source on
+#: the live slates carries hundreds of complete markets, and so does any slate a
+#: trap could hide in.
+MIN_SUB_UNITY_MARKETS = 20
+
+#: How deep a *net-of-commission* crossing an order book may show before it is
+#: judged a fault rather than a market state.  A book crossed by less than a
+#: cent is a real, fleeting thing two resting orders produce — this module's
+#: notes record Kalshi's tightest live moneylines summing to exactly 1.0000,
+#: one cent of movement away — while a crossing deeper than that does not
+#: survive the seconds it takes to collect it.
+ORDER_BOOK_CROSSING_TOLERANCE = 0.01
 
 #: American and decimal odds are both published by some books, and the American
 #: value is an integer, so the two can only agree to within that rounding.
@@ -182,8 +286,40 @@ class ValidationReport:
         )
 
 
-def validate(quotes: Sequence[Quote]) -> ValidationReport:
-    """Run every check over one run's worth of normalized rows."""
+def validate(
+    quotes: Sequence[Quote],
+    *,
+    capabilities: Mapping[tuple[str, str], frozenset[Market]] | None = None,
+    order_book_sources: Collection[str] = (),
+) -> ValidationReport:
+    """Run every check over one run's worth of normalized rows.
+
+    *capabilities* maps ``(source_key, league)`` to the markets that source
+    **claimed** to price on this run, as published by
+    :meth:`src.sources.base.OddsSource.capabilities`.  Supplying it stops the
+    coverage check faulting a book for a market it never offered — Pinnacle
+    prices no tennis totals, and a ``--tier core`` run deliberately does not ask
+    FanDuel for soccer handicaps — while leaving the check's real job intact:
+    a market a source *does* claim and has stopped returning is still an error.
+
+    Left ``None``, every source is held to its sport's full core market set,
+    which is the older and stricter behaviour.
+
+    *order_book_sources* names the venues where a row exists **only because
+    somebody offered it** — exchanges and prediction markets.  Two checks change
+    meaning there, and both were written when every source was a sportsbook:
+
+    * A book that prices a market prices all of it, so a missing draw leg is a
+      leg the parser dropped.  On an exchange the draw runner is there and
+      nobody has bid on it, which is an empty book rather than a parser fault.
+    * A book that lists a fixture posts a spread on it.  An exchange lists the
+      market and waits; on a thin slate the spread genuinely has no resting
+      order.
+
+    Reported as warnings rather than errors for those sources — still visible,
+    because a persistently empty market is worth knowing about, but not a reason
+    to call the run unclean.  A sportsbook is held to the original bar.
+    """
     report = ValidationReport(
         quote_count=len(quotes),
         event_count=len({q.event_key for q in quotes}),
@@ -193,14 +329,49 @@ def validate(quotes: Sequence[Quote]) -> ValidationReport:
         report.add(Severity.ERROR, "no_quotes", "validation received zero quotes")
         return report
 
+    order_driven = frozenset(order_book_sources)
     _check_rows(quotes, report)
     _check_duplicates(quotes, report)
     markets = _group_markets(quotes)
     report.market_count = len(markets)
-    _check_markets(markets, report)
+    _check_markets(markets, report, order_driven)
     _check_cross_source(quotes, report)
-    _check_coverage(quotes, report)
+    _check_line_orientation(quotes, report)
+    _check_price_agreement(quotes, report, order_driven)
+    _check_observation_window(quotes, report)
+    _check_coverage(quotes, report, capabilities or {}, order_driven)
     return report
+
+
+# ── consensus ────────────────────────────────────────────────────────────────
+
+
+def _modal(values: Mapping[str, Any]) -> Any:
+    """The value most sources agree on, ties broken deterministically.
+
+    Every cross-source check below is an **order statistic** if it is phrased as
+    "do any two sources differ", and an order statistic fires near-certainly once
+    there are enough sources: with three books a league disagreement is worth
+    reading, with thirty it is a warning on every shared event and it buries the
+    findings that mean something.  Phrasing them as "which sources differ from
+    the consensus" keeps the signal proportional to the number of *outliers*
+    rather than to the number of sources.
+
+    Ties are broken on the value's own text so the answer does not depend on
+    dictionary order — two sources against two is not a consensus, and whichever
+    way it resolves, it must resolve the same way twice.
+    """
+    counts = Counter(values.values())
+    best = max(counts.values())
+    return sorted((value for value, n in counts.items() if n == best), key=str)[0]
+
+
+def _outliers(values: Mapping[str, Any]) -> tuple[Any, dict[str, Any]]:
+    """``(consensus, {source: differing value})``."""
+    consensus = _modal(values)
+    return consensus, {
+        source: value for source, value in values.items() if value != consensus
+    }
 
 
 # ── row-level ────────────────────────────────────────────────────────────────
@@ -388,7 +559,10 @@ def _check_line_plausibility(
     """
     if quote.line is None:
         return
-    low, high = competition.plausible_total_range
+    # The *ladder* bound, not the main-line band: a book quotes alternates well
+    # past its headline number, and Kalshi's MLB totals reach 1.5 runs.  See
+    # League.plausible_line_range for which end of it does the real work.
+    low, high = competition.plausible_line_range
     unit = scoring_unit(quote.sport, quote.period)
 
     if quote.market in (Market.TOTAL, Market.TEAM_TOTAL):
@@ -549,8 +723,15 @@ def _required_selections(sport: Sport, market: Market, period: Period) -> set[Se
 
 
 def _check_markets(
-    markets: dict[tuple[str, str, str], list[Quote]], report: ValidationReport
+    markets: dict[tuple[str, str, str], list[Quote]],
+    report: ValidationReport,
+    order_book_sources: frozenset[str] = frozenset(),
 ) -> None:
+    # Per order-driven source: (complete two-way-or-more markets, of which
+    # gross-sub-1.0).  A *systematically* sub-1.0 source is the bid-read-as-ask
+    # parser trap; a sporadic one is a thin book — the distinction lives at the
+    # source level, not per market, and is judged after the loop.
+    sub_unity: dict[str, list[int]] = {}
     for rows in markets.values():
         first = rows[0]
         source = first.source
@@ -626,13 +807,25 @@ def _check_markets(
             # below 1.0, so it looks either like free money or like the book
             # pricing itself to lose, when the truth is that a third of the
             # probability is missing from the sum.
+            # On an exchange the draw contract exists and nobody has offered on
+            # it, which is an empty book rather than a dropped leg — so it is
+            # said, not failed.  A sportsbook that prices a market prices all of
+            # it, and there a missing draw really is a third of the probability
+            # gone from the sum.
+            order_driven = source in order_book_sources
             report.add(
-                Severity.ERROR,
+                Severity.WARNING if order_driven else Severity.ERROR,
                 "draw_leg_missing",
                 f"{label} prices only {sorted(s.value for s in selections)}, but a draw is "
                 f"a settlement outcome of {first.sport.value}/{first.period.value} and the "
-                "books price it — the draw leg was dropped, so this is not a fair two-way "
-                "market and its probabilities do not sum to a market at all",
+                "books price it — "
+                + (
+                    "on an order-driven venue that means nobody is currently offering "
+                    "the draw, so the market is incomplete rather than mis-parsed"
+                    if order_driven
+                    else "the draw leg was dropped, so this is not a fair two-way market "
+                    "and its probabilities do not sum to a market at all"
+                ),
                 source=source,
                 event_key=first.event_key,
             )
@@ -680,13 +873,61 @@ def _check_markets(
         active = [row for row in rows if row.status is QuoteStatus.ACTIVE]
         if not missing and len(active) == len(rows) and len(rows) >= 2:
             overround = sum(row.implied_probability for row in rows)
+            order_driven = source in order_book_sources
+            if order_driven:
+                sub_unity.setdefault(source, []).append(overround)
             if overround < MIN_OVERROUND:
+                # On an order-driven venue the boundary is the **net** sum: the
+                # two sides are separate books, and "crossed" only means
+                # anything if somebody could actually take both at a profit —
+                # which is a question about prices *after the venue's own
+                # commission*.  A Kalshi market resting at 49¢/49¢ sums to 0.98
+                # gross and ~1.015 net of its ~1.75¢-per-side contract fee, so
+                # makers legitimately sit there; a flat 0.99 gross floor filed
+                # it as "a book does not price itself to lose" — a sportsbook
+                # sentence about a venue that is not a book — and failed the
+                # run.  The parser trap the flat floor was calibrated against
+                # (bid read as ask, which sub-1.0s *most* of a source's
+                # markets) is caught after the loop, at the source level, where
+                # it actually lives.
+                net = (
+                    sum(
+                        1.0 / net_decimal_odds(source, row.decimal_odds)
+                        for row in rows
+                    )
+                    if order_driven
+                    else overround
+                )
+                benign = order_driven and net >= MIN_OVERROUND - ORDER_BOOK_CROSSING_TOLERANCE
+
                 report.add(
-                    Severity.ERROR,
+                    Severity.WARNING if benign else Severity.ERROR,
                     "negative_overround",
                     f"{label}{line_label} implied probabilities sum to {overround:.4f} < 1.0 "
-                    f"over {len(rows)} outcomes — a book does not price itself to lose, so "
-                    "the prices or lines are mispaired",
+                    f"over {len(rows)} outcomes — "
+                    + (
+                        (
+                            "the two sides are separate order books, and after the "
+                            f"venue's own commission they sum to {net:.4f}, so nobody "
+                            "can take both at a profit: a thin market whose sides "
+                            "have not met, not a mispairing"
+                            if net >= MIN_OVERROUND
+                            else "the two sides are separate order books, crossed by "
+                            f"under a cent after the venue's own commission ({net:.4f}) "
+                            "— a real, fleeting state two resting orders can produce, "
+                            "not a mispairing"
+                        )
+                        if benign
+                        else (
+                            "even after the venue's own commission both sides "
+                            f"could be taken at a profit (net sum {net:.4f}) — "
+                            "a real but extraordinary crossed book, or a "
+                            "mispairing; verify before trusting either reading"
+                            if order_driven
+                            else "a book does not price itself to lose, so the "
+                            "prices or lines are mispaired"
+                        )
+                    ),
                     source=source,
                     event_key=first.event_key,
                 )
@@ -699,8 +940,560 @@ def _check_markets(
                     event_key=first.event_key,
                 )
 
+    # The lay-read-as-back parser trap, judged where it lives: at the source, on
+    # the **median**.  Reading one side of the book where the other is meant
+    # moves every market the same way, so the venue stops holding a spread — and
+    # a venue that does not hold a spread is not a venue.  See
+    # :data:`MIN_SUB_UNITY_MARKETS` for why this is a median and not a rate, and
+    # for what it deliberately cannot catch.
+    for source_key, overrounds in sorted(sub_unity.items()):
+        if len(overrounds) < MIN_SUB_UNITY_MARKETS:
+            continue  # too few markets for a middle to mean anything
+        middle = median(overrounds)
+        # This gate and the per-market lines above it answer **different
+        # questions**, and the message says so rather than appearing to argue
+        # with them.  Per market: "can both sides be taken at a profit right
+        # now?" — a money question, judged after the venue's commission.  Here:
+        # "does this venue hold a spread at all?" — a parser question, judged on
+        # the quoted prices, because a commission is not part of whether the
+        # parser read the right side of the book.
+        #
+        # Requiring executable evidence as well was tried and rejected: it kept
+        # detection of a 6% misread on every venue but lost 3% on SX Bet,
+        # Matchbook and Polymarket, whose own commissions are large enough that
+        # a 3% shift never crosses their own book — while still inflating their
+        # prices against *other* books, which is where the phantom position
+        # would be built.
+        if middle < MIN_OVERROUND:
+            report.add(
+                Severity.ERROR,
+                "systematic_sub_unity_pricing",
+                f"{source_key}'s typical market prices below fair — the median of "
+                f"its {len(overrounds)} complete markets sums to {middle:.4f}, under "
+                "1.0 on the quoted prices.  A venue holds a spread; one that does "
+                "not is a parser reading one side of the order book where the other "
+                "is meant, and every price from this source is suspect.  This is a "
+                "question about the parser, not about takeability: individual "
+                "markets above may still be reported as fine, because after this "
+                "venue's commission nobody could take both of their sides",
+                source=source_key,
+            )
+
 
 # ── cross-source ─────────────────────────────────────────────────────────────
+
+
+#: A source whose main handicap sits on the *opposite side of zero* from the
+#: consensus this often is not disagreeing about the number, it is hanging the
+#: handicap on the wrong competitor.
+#:
+#: Measured on the live slate: the worst honest source with a usable sample is
+#: Matchbook at 14% of 79 fixtures, and flipping any source's sign puts it at
+#: 72–98%.  Sixty per cent sits in the empty space between.
+MAX_LINE_SIGN_DISAGREEMENT_RATE = 0.60
+
+#: Below this the disagreement is ordinary: two books either side of a half-point
+#: on a near-pick'em fixture.  Reported above it so a partial fault is visible
+#: before it becomes a total one.
+NOTABLE_LINE_SIGN_DISAGREEMENT_RATE = 0.10
+
+#: ...over at least this many shared fixtures.  Below it the rate is noise —
+#: Kalshi shares 15 main handicaps on the live slate and scores 47% honestly.
+MIN_LINE_SIGN_FIXTURES = 20
+
+
+#: How far one source's implied probability may sit from the consensus before it
+#: is a different opinion about the *bet* rather than about the price.
+#:
+#: Books disagree about a price by a point or two; on the live slate the largest
+#: deviation any source shows from the median of three or more is **0.083**, and
+#: not one of the ten exceeds 0.15 on a single market.  Negating one source's
+#: spread lines — which moves every price onto the opposite handicap — puts 17.5%
+#: of its markets past it, with a maximum of 0.60.
+MAX_PRICE_DEVIATION = 0.15
+
+#: ...and the share of a source's markets that may exceed it.  Two per cent is
+#: above the noise (which is zero) and far below a systematic fault.
+MAX_PRICE_OUTLIER_RATE = 0.02
+
+#: ...over at least this many outliers.
+#:
+#: Without a floor the *rate* alone condemned a thin source on one price:
+#: Smarkets shares 46 markets on the live slate, so a single wide quote is 2.17%
+#: and an ERROR.  On an order-driven venue that is the venue working normally —
+#: a lone resting order far from fair — and this pipeline has already taken
+#: Smarkets down once for exactly that.
+#:
+#: A *market-count* floor was the first attempt and was worse than the problem.
+#: At 100 it exempted Smarkets permanently — 46 compared markets — from the only
+#: check that can see a source whose prices are attached to the wrong side while
+#: its participants are correct.  Mirroring Smarkets' prices produced **12
+#: positions up to a 24.97% "guaranteed" margin and a byte-identical validation
+#: report**.  The outlier floor alone does the whole job: one wide quote is 1 and
+#: passes, a mirror is 26 of 46 and does not.
+MIN_PRICE_OUTLIERS = 5
+
+#: Below three sources there is no consensus to deviate from — a median of two is
+#: their midpoint, and both are equally far from it.
+MIN_SOURCES_FOR_PRICE_CONSENSUS = 3
+
+
+#: Two prices further apart than this could not have been available at the same
+#: moment, so they are not the two legs of anything, however real both are.
+#:
+#: **The detector's own bound, imported rather than restated.**  This check
+#: exists to explain a refusal that ``src.arb`` makes silently; a second copy of
+#: the number could drift from it, and a report that disagrees with the gate it
+#: describes is worse than no report.
+#:
+#: It bites because a source paced to its own published rate limit can take
+#: longer than this to finish its pass: Smarkets makes 155 requests 3.1 s apart
+#: and takes 7m40s, against 20 s or less for the other nine.  Most of its
+#: selections therefore cannot pair with anything.  Those rows are real and
+#: useful for line shopping; they are not arbitrage legs, and the run said
+#: nothing to distinguish the two.
+MAX_USABLE_OBSERVATION_GAP = MAX_OBSERVATION_SPREAD
+
+
+def _check_observation_window(quotes: Sequence[Quote], report: ValidationReport) -> None:
+    """Which sources were collected too far apart to be compared with each other.
+
+    Not a fault in any source — it is a property of the pass.  Reported because
+    the alternative is a coverage number that looks like comparison surface and
+    is not: the detector refuses these pairs, correctly and silently, and an
+    operator reading "8 sources on this fixture" has no way to know that two of
+    them can never be legs of one position.
+
+    Measured **pairwise**, between the two prices that would actually be the
+    legs.  Two earlier forms of this check were both wrong, in opposite
+    directions, and each looked right on the data that motivated it:
+
+    Against the run's *consensus*, the limit is silently doubled — two sources
+    179 seconds either side of the middle are 358 seconds apart, are refused by
+    the detector on every market they share, and both clear a 180-second test
+    comfortably.
+
+    Against each source's *median* observation time, the limit is applied to a
+    number that describes no actual price.  Nine of the ten sources finish
+    inside 20 seconds, so their median stands in for every quote they hold;
+    Smarkets takes 7m40s, and its median says nothing about when any particular
+    market was read.  On live data that form reported all 996 of Smarkets'
+    shared selections as lost when 72 of them were comparable, and raised a
+    warning against polymarket, which had lost nothing at all.
+
+    So: actual observation times, compared against the bound the detector
+    itself applies.
+    """
+    groups: dict[tuple, dict[str, list[datetime]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
+    for quote in quotes:
+        groups[
+            (quote.event_key, quote.market, quote.period, quote.side,
+             quote.line, quote.selection)
+        ][quote.source].append(quote.observed_at)
+
+    shared: Counter[str] = Counter()
+    stranded: Counter[str] = Counter()
+    # The partner a stranded source came closest to reaching, which is the one
+    # worth naming: it says how far the pass would have to move, and which two
+    # sources to move.
+    nearest: dict[str, tuple[timedelta, str]] = {}
+    for by_source in groups.values():
+        if len(by_source) < 2:
+            continue
+        for source, times in by_source.items():
+            shared[source] += 1
+            closest = min(
+                (
+                    min(abs(mine - theirs) for mine in times for theirs in other),
+                    partner,
+                )
+                for partner, other in by_source.items()
+                if partner != source
+            )
+            if closest[0] <= MAX_USABLE_OBSERVATION_GAP:
+                continue  # some partner here is close enough to pair with
+            stranded[source] += 1
+            held = nearest.get(source)
+            if held is None or closest < held:
+                nearest[source] = closest
+
+    for source in sorted(stranded):
+        gap, partner = nearest[source]
+        count = stranded[source]
+        report.add(
+            Severity.WARNING,
+            "collected_outside_the_comparable_window",
+            f"{count} of {source}'s {shared[source]} shared market(s) have no partner "
+            f"priced close enough in time to be taken together — the nearest, "
+            f"{partner}, is {describe_gap(gap)} away at its closest, further than two "
+            f"prices may be apart, so those markets cannot be compared however many "
+            f"sources the coverage grid shows on them",
+            source=source,
+        )
+
+
+def describe_gap(gap: timedelta) -> str:
+    seconds = int(gap.total_seconds())
+    if seconds < 90:
+        return f"{seconds} seconds"
+    return f"{seconds // 60} minutes"
+
+
+def _check_price_agreement(
+    quotes: Sequence[Quote],
+    report: ValidationReport,
+    order_book_sources: frozenset[str] = frozenset(),
+) -> None:
+    """Does each source price the same bet roughly as the others do?
+
+    The general net beneath the specific checks.  ``_check_line_orientation``
+    names a handicap hung on the wrong competitor, but it can only judge a source
+    that publishes **one** primary line per fixture — and four of the ten publish
+    a symmetric ladder instead.  For those, negating every line maps the set of
+    lines onto itself while moving each *price* onto the opposite handicap, which
+    is invisible to a check that compares only the numbers.  Flipping Matchbook's
+    spreads that way added **58 reported positions**, the largest at ``margin
+    24.90%, guaranteed +32.81 on 100``, and produced a byte-identical validation
+    report.
+
+    Comparing prices catches it, and is not specific to that fault: a selection
+    mapped to the wrong participant, a market that is not the market it claims to
+    be, a stale or unit-wrong price all show up the same way — as one source
+    disagreeing with everybody about what a bet is worth.
+
+    Against the **median** of three or more, because two sources have no
+    consensus between them: their median is the midpoint and each is equally far
+    from it, so one flipped book would indict the honest one just as hard.
+    """
+    groups: dict[tuple, dict[str, float]] = defaultdict(dict)
+    for quote in quotes:
+        if quote.status is not QuoteStatus.ACTIVE:
+            continue
+        key = (
+            quote.event_key, quote.market, quote.period, quote.side,
+            quote.line, quote.selection,
+        )
+        # Best price per source, not first: ``is_alternate`` is not in the key,
+        # so a source with a main and an extra row at one number would otherwise
+        # contribute whichever arrived first.  ``src.arb`` takes the better one.
+        held = groups[key].get(quote.source)
+        if held is None or quote.implied_probability < held:
+            groups[key][quote.source] = quote.implied_probability
+
+    outliers: dict[str, list[tuple[str, float]]] = defaultdict(list)
+    compared: Counter[str] = Counter()
+    # ...and the same two counts per sport.  A source mirrored in **one** sport
+    # is diluted below the bar by the sports it gets right: BetRivers mirrored in
+    # basketball alone is 17% of its basketball markets and 1.99% overall, just
+    # under a 2% threshold, for 58 phantom positions and no finding.  Orientation
+    # already grades this way; this check is the one that catches a price mirror
+    # at all, so it needs it more.
+    by_sport: dict[tuple[str, str], list[tuple[str, float]]] = defaultdict(list)
+    by_sport_compared: Counter[tuple[str, str]] = Counter()
+    sport_of: dict[tuple, str] = {}
+    for quote in quotes:
+        sport_of.setdefault(
+            (quote.event_key, quote.market, quote.period, quote.side,
+             quote.line, quote.selection),
+            quote.sport.value,
+        )
+    # Per (source, market) rather than per selection, so an order-driven venue
+    # can be asked whether it disagrees about the *market* or about one side of
+    # it.  See below.
+    sides_outlying: Counter[tuple[str, tuple]] = Counter()
+    pending: list[tuple[str, tuple, str, str, float]] = []
+
+    for key, per_source in groups.items():
+        if len(per_source) < MIN_SOURCES_FOR_PRICE_CONSENSUS:
+            continue
+        consensus = median(per_source.values())
+        sport = sport_of.get(key, "")
+        # Everything but the selection, with the line stated from **one side's**
+        # perspective so a contract's two halves group and two contracts do not.
+        #
+        # A spread states its halves at opposite numbers — measured, 960 of 960
+        # two-sided groups in the captured corpus are mirrored — so keyed on the
+        # raw line, home -1.5 and away +1.5 never shared a key.  Every
+        # (order-driven source, spread) pair then had exactly one side *by
+        # construction*, the one-outlying-side exemption applied unconditionally,
+        # and a swapped spread at an exchange was silent while the detector
+        # reported 10 positions at 7.5%.
+        #
+        # Taking the magnitude fixed that and broke the other half: ``home -1.5 /
+        # away +1.5`` and ``home +1.5 / away -1.5`` are **different contracts**,
+        # and 133 fixtures in the corpus have a source posting both.  Collapsing
+        # them gave a venue thin on one side of each a second outlying side and
+        # an ERROR it had not earned — the exemption's own case, refused.
+        #
+        # Negating the away side states both halves from the home side and keeps
+        # the two contracts apart.  Totals are untouched: OVER and UNDER already
+        # share one number, and neither is ``AWAY``.
+        event_key, market, period, side, line, selection = key
+        canonical = (
+            -line if line is not None and selection is Selection.AWAY else line
+        )
+        market_key = (event_key, market, period, side, canonical)
+        for source, implied in per_source.items():
+            compared[source] += 1
+            by_sport_compared[(source, sport)] += 1
+            gap = abs(implied - consensus)
+            if gap > MAX_PRICE_DEVIATION:
+                sides_outlying[(source, market_key)] += 1
+                pending.append((source, market_key, key[0], sport, gap))
+
+    for source, market_key, event_key, sport, gap in pending:
+        # On an order book, one outlying side is not evidence about the parser.
+        #
+        # A sportsbook posts both sides of a market it is making, so a price
+        # nothing like the consensus there means the row is not the bet it
+        # claims to be — which is what this check says in its own message. An
+        # exchange posts whatever somebody left resting, with nobody
+        # market-making to hold it near fair value, so its best *takeable* price
+        # on a side nobody wants can be anything at all.  Live: Matchbook's
+        # Mannarino/Michelsen moneyline, home 1.400 against a 1.408/1.417/1.423
+        # consensus and away 1.05 against ~2.9 — with 1660.56 resting behind the
+        # home price and 6.64 behind the away one.  That is a thin book, and it
+        # failed the run.
+        #
+        # The discriminator is already in the data and needs no new threshold:
+        # every fault this check names — a handicap on the wrong competitor, a
+        # selection mapped to the wrong side, a market filed as another market —
+        # moves **at least two** sides together, because it is a permutation.  A
+        # single outlying side beside sides that agree to three decimal places
+        # is the one thing none of them can produce.
+        #
+        # *Exactly one*, not "fewer than all".  A swap on a **three-way** market
+        # moves home and away and leaves the draw invariant, so "fewer than all"
+        # read 2 of 3 as a thin book and exempted the swap outright: on a
+        # constructed EPL slate with matchbook's home and away exchanged, the
+        # run reported **10 positions at margin 13.57%, guaranteed +14.27 on
+        # 100** and the validation report held no price-agreement finding at
+        # all.  ``margin_implausibly_large`` does not catch it either — the
+        # whole band a 0.15 deviation produces sits under ``REFUSE_MARGIN``.
+        #
+        # It also makes the rule apply where its rationale is strongest and
+        # "fewer than all" could not reach: a venue quoting **one** side of a
+        # market others price fully is the thinnest book there is, and 122 of
+        # the 447 order-driven (source, market) pairs on the captured slate are
+        # exactly that.
+        if source in order_book_sources and sides_outlying[(source, market_key)] == 1:
+            continue
+        outliers[source].append((event_key, gap))
+        by_sport[(source, sport)].append((event_key, gap))
+
+    for source, entries in sorted(outliers.items()):
+        total = compared[source]
+        rate = len(entries) / total
+        worst_rate = max(
+            (
+                len(rows) / max(by_sport_compared[(key, sport)], 1)
+                for (key, sport), rows in by_sport.items()
+                if key == source and len(rows) >= MIN_PRICE_OUTLIERS
+            ),
+            default=0.0,
+        )
+        if (
+            max(rate, worst_rate) <= MAX_PRICE_OUTLIER_RATE
+            or len(entries) < MIN_PRICE_OUTLIERS
+        ):
+            continue
+        worst = max(gap for _, gap in entries)
+        examples = ", ".join(sorted({event for event, _ in entries})[:_EXAMPLES])
+        report.add(
+            Severity.ERROR,
+            "prices_disagree_with_every_other_source",
+            f"{source} prices {len(entries)} of {total} shared market(s) more than "
+            f"{MAX_PRICE_DEVIATION:.2f} of implied probability away from what the other "
+            f"sources say (worst {worst:.2f}; e.g. {examples}) — books differ by a point "
+            "or two, not by this, so these rows are not the bet they claim to be: a "
+            "handicap on the wrong competitor, a selection mapped to the wrong side, or "
+            "a market that is not the one it is filed under",
+            source=source,
+        )
+
+
+def _check_line_orientation(quotes: Sequence[Quote], report: ValidationReport) -> None:
+    """Do the books agree about *which competitor* the handicap favours?
+
+    Nothing checked this.  ``_check_group`` verifies that a spread mirrors within
+    one source's own market — which a sign flip satisfies perfectly, since both
+    of its sides flip together — and the cross-source checks compare sport,
+    participants, orientation, league and start time, never the line.
+
+    So an adapter attaching the handicap to the wrong side produced **no finding
+    at all**.  On the live slate, flipping one source's spread signs adds up to
+    185 positions that exist only because of the flip, median margin 17.9%, the
+    largest printed as ``margin 24.86%, guaranteed +33.02 on 100``.  Most carry
+    the detector's implausible-margin note, but not all of them do, and a note is
+    not a finding.
+
+    Compared on the **main** line only and against the median rather than
+    pairwise: books genuinely differ by half a point or so, and a book that is
+    merely half a point off must not be indicted for it.  What no honest source
+    does is put the favourite on the other side, over and over.
+    """
+    # Only sources that publish **one** primary handicap per fixture are judged.
+    #
+    # A source that publishes a symmetric ladder has no side to be wrong about:
+    # Kalshi lists "PIT wins by over 1.5/2.5/3.5" *and* "AZ wins by over
+    # 1.5/2.5/3.5", which is home -1.5,-2.5,-3.5 and home +1.5,+2.5,+3.5, and
+    # flipping every sign maps that set onto itself.  There is nothing there to
+    # check, and including it by picking one row arbitrarily does not add
+    # information — it adds noise, and it dilutes the sources where the check
+    # does work.
+    laddered: dict[str, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
+    for quote in quotes:
+        if (
+            quote.market is not Market.SPREAD
+            or quote.is_alternate
+            or quote.selection is not Selection.HOME
+            or quote.line is None
+            or quote.status is not QuoteStatus.ACTIVE
+        ):
+            continue
+        laddered[quote.event_key][quote.source].append(quote.line)
+    main: dict[str, dict[str, float]] = {
+        event_key: {
+            source: lines[0] for source, lines in per_source.items() if len(lines) == 1
+        }
+        for event_key, per_source in laddered.items()
+    }
+
+    disagreements: dict[str, list[str]] = defaultdict(list)
+    shared: Counter[str] = Counter()
+    for event_key, per_source in main.items():
+        if len(per_source) < 2:
+            continue
+        consensus = median(per_source.values())
+        if consensus == 0:
+            # A pick'em says nothing about which side is favoured.
+            continue
+        for source, line in per_source.items():
+            shared[source] += 1
+            if line != 0 and (line > 0) != (consensus > 0):
+                disagreements[source].append(event_key)
+
+    for source, events in sorted(disagreements.items()):
+        total = shared[source]
+        rate = len(events) / total
+        if rate < NOTABLE_LINE_SIGN_DISAGREEMENT_RATE:
+            # Books really do land either side of a pick'em, and saying so on
+            # every run would drown the case this check exists for.
+            continue
+        systematic = (
+            total >= MIN_LINE_SIGN_FIXTURES
+            and rate > MAX_LINE_SIGN_DISAGREEMENT_RATE
+        )
+        report.add(
+            Severity.ERROR if systematic else Severity.WARNING,
+            "line_favours_the_other_competitor",
+            f"{source}'s main handicap favours the opposite competitor from the other "
+            f"sources on {len(events)} of {total} shared fixture(s) "
+            f"({rate * 100:.0f}%; e.g. {', '.join(sorted(events)[:_EXAMPLES])})"
+            + (
+                " — that is the whole slate, not a difference of opinion about the "
+                "number: the handicap is attached to the wrong side, and every "
+                "cross-book position built on it is backing the same competitor twice"
+                if systematic
+                else " — within what books genuinely differ by, but worth a look"
+            ),
+            source=source,
+        )
+
+
+def _check_orientation(quotes: Sequence[Quote], report: ValidationReport) -> None:
+    """Which participant each source calls home, compared across sources.
+
+    Grouped on the **unordered** participant pair, not on ``event_key``, and that
+    is the whole point.  The key *is* ``away@home:date`` and reconciliation
+    rebuilds it from the participants each source reported, so a source with home
+    and away the wrong way round does not land in a group and disagree — it lands
+    in a group of its own, with nobody to disagree with.  The check ran on every
+    run and could never fire.
+
+    Measured on the live slate with one book's team-sport rows reversed: 103
+    ``home_away_disagreement`` errors before reconciliation, **zero** after it,
+    the run passing, and that book dropping from 133 shared fixtures to 30 — the
+    only trace being 110 warnings describing a completely reversed matchup as "a
+    per-source doubleheader ordinal" correction.
+
+    Kept separate from the other cross-source checks rather than replacing their
+    grouping, because the two need opposite things: this one must put both
+    orientations of a fixture together, while ``participant_pair_disagreement``
+    must put two *different* matchups that share a key together.  One grouping
+    cannot do both.
+
+    Only where "home" names a real property of the fixture.  In tennis there is
+    no home player: each book orders the two names however it likes and
+    :func:`src.events.orient` imposes its own ordering, so comparing the books'
+    orientations would report a disagreement that does not exist.
+    """
+    by_pair: dict[tuple[frozenset[str], str], dict[str, Quote]] = defaultdict(dict)
+    for quote in quotes:
+        competition = _competition(quote)
+        if competition is None or not competition.has_home_away:
+            continue
+        _, _, tail = quote.event_key.partition(":")
+        identity = (frozenset({quote.home_participant, quote.away_participant}), tail)
+        by_pair[identity].setdefault(quote.source, quote)
+
+    outliers: dict[str, list[tuple[str, tuple, tuple | None]]] = defaultdict(list)
+    shared: Counter[str] = Counter()
+    # ...and the same two counts split by sport.  Each adapter reads home and
+    # away by a different per-sport convention, so the realistic bug is a source
+    # reversed in *one* sport — and that is exactly what an overall rate hides:
+    # reversing one book's baseball rows alone scores 9% against a 60% bar,
+    # while being 100% wrong on every baseball fixture it shares.
+    by_sport_out: dict[tuple[str, str], list[tuple[str, tuple, tuple | None]]] = defaultdict(list)
+    by_sport_shared: Counter[tuple[str, str]] = Counter()
+    for (_, _), rows in by_pair.items():
+        if len(rows) < 2:
+            continue
+        shared.update(rows.keys())
+        sport = next(iter(rows.values())).sport.value
+        by_sport_shared.update((source, sport) for source in rows)
+        oriented = {
+            source: (row.home_participant, row.away_participant)
+            for source, row in rows.items()
+        }
+        if len(set(oriented.values())) < 2:
+            continue
+        # Aggregated by source rather than reported per fixture, because the two
+        # things that produce this differ in scale and not in kind.  One fixture
+        # oriented two ways is a neutral-venue judgement — the live slate has
+        # exactly one, a pre-season friendly where FanDuel writes "Fulham @ Al
+        # Ahli" and Pinnacle writes the reverse, and both price Fulham the
+        # favourite at 1.67/1.70, so neither is wrong.  A source reversed on
+        # *many* fixtures is an adapter reading a venue's own side labels as this
+        # pipeline's orientation, which is the defect that put two legs of a
+        # "guaranteed" position on the same competitor.
+        example = min(row.event_key for row in rows.values())
+        # With no majority — most often two sources, one each way — nobody is the
+        # outlier and the disagreement is recorded against both.  ``_outliers``
+        # cannot express that: ``_modal`` breaks the tie on the value, so at two
+        # sources "consensus" is whichever pair of participant keys sorts first
+        # and the *other* book is indicted.  Blame decided by team name is worse
+        # than no blame: with one book genuinely reversed it produced an
+        # ERROR-graded accusation against the correct one on a fifth of its
+        # fixtures.
+        counts = Counter(oriented.values())
+        top = max(counts.values())
+        undecided = sum(1 for value in counts.values() if value == top) > 1
+        if undecided:
+            for source, value in oriented.items():
+                outliers[source].append((example, value, None))
+                by_sport_out[(source, sport)].append((example, value, None))
+        else:
+            consensus_side, side_odd = _outliers(oriented)
+            for source, value in side_odd.items():
+                outliers[source].append((example, value, consensus_side))
+                by_sport_out[(source, sport)].append((example, value, consensus_side))
+
+    _report_orientation_outliers(
+        outliers, shared, report, by_sport=by_sport_out, by_sport_shared=by_sport_shared
+    )
 
 
 def _check_cross_source(quotes: Sequence[Quote], report: ValidationReport) -> None:
@@ -708,6 +1501,10 @@ def _check_cross_source(quotes: Sequence[Quote], report: ValidationReport) -> No
     by_event: dict[str, dict[str, list[Quote]]] = defaultdict(lambda: defaultdict(list))
     for quote in quotes:
         by_event[quote.event_key][quote.source].append(quote)
+
+    league_outliers: dict[tuple[str, str, str], list[str]] = defaultdict(list)
+    time_outliers: dict[str, list[tuple[str, timedelta, timedelta]]] = defaultdict(list)
+
 
     for event_key, by_source in by_event.items():
         if len(by_source) < 2:
@@ -752,41 +1549,22 @@ def _check_cross_source(quotes: Sequence[Quote], report: ValidationReport) -> No
         if not known:
             continue
 
-        # Home/away is only checked where "home" names a real property of the
-        # fixture.  In tennis there is no home player: each book orders the two
-        # names however it likes and src.events.orient imposes its own ordering,
-        # so comparing the books' orientations would report a disagreement that
-        # does not exist.  The pair check above is what carries the weight there.
-        if all(c.has_home_away for c in known):
-            oriented = {
-                source: (row.home_participant, row.away_participant)
-                for source, row in rows.items()
-            }
-            if len(set(oriented.values())) > 1:
-                report.add(
-                    Severity.ERROR,
-                    "home_away_disagreement",
-                    "sources disagree on which participant is home: "
-                    + "; ".join(
-                        f"{s}: {away} @ {home}" for s, (home, away) in sorted(oriented.items())
-                    ),
-                    event_key=event_key,
-                )
 
         # Books disagree about league classification constantly — the same tennis
         # match is "ATP Challenger Bonn - R1" at one book and "challenger" at
         # another — and league is deliberately not part of event identity, so this
         # is a warning about reporting, never an error about the join.
-        leagues = {row.league for row in rows.values()}
-        if len(leagues) > 1:
-            report.add(
-                Severity.WARNING,
-                "league_disagreement",
-                "sources classify this event under different leagues "
-                f"({sorted(leagues)}); league is not part of event identity, so the join "
-                "is unaffected, but coverage reporting will split",
-                event_key=event_key,
-            )
+        #
+        # Recorded per outlier and reported once at the end rather than once per
+        # event.  Phrased as "any two differ", this fired on essentially every
+        # shared event as soon as there were more than a handful of sources, and
+        # findings are stored one row per occurrence with the dashboard showing
+        # the first 500 — so the check drowned the errors it sits beside.
+        consensus_league, league_odd = _outliers(
+            {source: row.league for source, row in rows.items()}
+        )
+        for source, value in league_odd.items():
+            league_outliers[(source, value, consensus_league)].append(event_key)
 
         # Start-time agreement, at the league's own tolerance.  20 minutes was
         # right for baseball and wrong for tennis, where each book publishes its
@@ -794,30 +1572,234 @@ def _check_cross_source(quotes: Sequence[Quote], report: ValidationReport) -> No
         # apart.  The widest league present is used, matching what
         # src.events.reconcile_event_keys does when books classify one fixture
         # into two leagues.
+        #
         # The *reporting* threshold, not the clustering tolerance.  Clustering is
         # deliberately generous so a fixture two books time differently still
         # joins; reporting is strict so the disagreement is still visible once it
         # has.  Using the clustering width here would mean the wider a sport's
-        # window got, the less it could ever notice — and soccer's window is 12
-        # hours precisely because one book was three hours out on a kickoff.
+        # window got, the less it could ever notice — and soccer's window is 30
+        # hours precisely because books list a kickoff a day apart.
+        #
+        # Measured against the **median** start rather than against the widest
+        # pair.  max-minus-min grows with the number of sources by construction,
+        # so one book three hours out used to indict the whole event; the median
+        # names the book that is actually wrong and leaves the others alone.
         tolerance = max(c.time_disagreement_threshold for c in known)
         starts = {source: row.commence_time for source, row in rows.items()}
-        spread = max(starts.values()) - min(starts.values())
-        if spread > tolerance:
-            report.add(
-                # A warning, not an error: clustering has already decided these
-                # rows describe one fixture and joined them, so the data is usable.
-                # What is left to say is that one book's clock looks wrong — worth
-                # surfacing, but it does not make the run unclean, and grading it an
-                # error would fail every run containing a tennis match whose two
-                # books published different "not before" estimates.
-                Severity.WARNING,
-                "start_time_disagreement",
-                f"start times differ by {spread}, more than the {tolerance} that "
-                f"{'/'.join(sorted({c.key for c in known}))} treats as one fixture: "
-                + "; ".join(f"{s}: {t.isoformat()}" for s, t in sorted(starts.items())),
-                event_key=event_key,
-            )
+        if len(starts) == 2:
+            # Two sources have no consensus between them: their median is the
+            # midpoint, so each sits at half the gap and the tolerance is
+            # silently doubled.  ``_check_price_agreement`` documents exactly
+            # this and guards on three sources for it; this check guarded on
+            # two, so it could not see any gap under 2x its own threshold.
+            #
+            # 40% of shared events (44 of 111 on the captured slate) have
+            # exactly two sources, and the one event whose span exceeds its
+            # threshold — a 6h30m tennis disagreement between FanDuel and
+            # Matchbook — is also the top-ranked position the detector reports.
+            # The check that exists to say "one of these books may be describing
+            # a different fixture" was silent on the fixture the money was on.
+            #
+            # Both sources are named, because with two there is no way to say
+            # which one is wrong — and that is the finding.
+            (first, when_first), (second, when_second) = starts.items()
+            span = abs(when_first - when_second)
+            if span > tolerance:
+                for source in (first, second):
+                    time_outliers[source].append((event_key, span, tolerance))
+        elif len(starts) >= 3:
+            # Three or more: measured against the **median** rather than the
+            # widest pair, so one book three hours out is named and the others
+            # are left alone.
+            consensus_start = _median_time(list(starts.values()))
+            for source, moment in starts.items():
+                delta = abs(moment - consensus_start)
+                if delta > tolerance:
+                    time_outliers[source].append((event_key, delta, tolerance))
+
+    _report_league_outliers(league_outliers, report)
+    _report_time_outliers(time_outliers, report)
+    _check_orientation(quotes, report)
+
+
+def _median_time(moments: Sequence[datetime]) -> datetime:
+    """The middle start time, as the consensus about when a fixture begins.
+
+    Taken on offsets from the earliest moment because ``datetime`` has no
+    arithmetic mean; the median is what is wanted anyway, since one book three
+    hours out must not drag the consensus toward itself the way a mean would.
+    """
+    base = min(moments)
+    return base + timedelta(seconds=median((m - base).total_seconds() for m in moments))
+
+
+#: How many example fixtures an aggregated cross-source finding names.  Enough to
+#: go and look at, few enough that the message stays readable.
+_EXAMPLES = 3
+
+
+#: A source disagreeing about home and away on more than this share of the
+#: fixtures it shares is not making a judgement call about a neutral venue; it is
+#: reading its own side labels as this pipeline's orientation.
+#:
+#: Set high on purpose.  Where a fixture has only two sources there is no
+#: majority, so the disagreement is recorded against **both** — the alternative,
+#: picking a "consensus" by sorting the participant keys, decides blame by team
+#: name and indicts the correct book about half the time.  Recording both means
+#: an innocent source accumulates marks in proportion to how many two-source
+#: fixtures it shares with the broken one: reversing Matchbook on the live slate
+#: puts Matchbook at 88 of 88 and drags Pinnacle to 48 of 175.
+#:
+#: Only the reversed source approaches *every* shared fixture, so a rate this
+#: high separates the fault from its collateral: 100% against 27% and 55% in the
+#: two live reversals, and 0.6% for the worst honest source.
+MAX_ORIENTATION_DISAGREEMENT_RATE = 0.60
+
+#: ...and below this many fixtures no rate is meaningful, so it stays a warning
+#: however it divides.
+MIN_ORIENTATION_DISAGREEMENTS = 3
+
+#: A *sport* is only graded on its own once this many fixtures are shared in it.
+#: Per-sport denominators are thin — five shared hockey fixtures for one source
+#: on the live slate — and because a two-source fixture with no majority is
+#: charged to both, four legitimate neutral-venue disagreements out of five would
+#: otherwise read as 80% and fail the run for both books.
+#:
+#: Ten, not twenty.  At twenty the escalation was inert exactly where it was
+#: needed: 28 of the 36 (source, sport) pairs on a live slate fell below it, so
+#: reversing one source's baseball — the case the per-sport grade was added for,
+#: 16 of 16 fixtures wrong — still came out a warning.  Ten admits baseball (26
+#: shared) and football (17) and still excludes hockey and basketball (7 each),
+#: which are the thin ones a neutral venue could carry.
+#:
+#: The residual is real and is a limit of the data rather than of the rule: a
+#: source reversed *only* in a sport it shares seven fixtures in stays a warning,
+#: because seven-of-seven reversed and seven neutral venues are the same
+#: observation.  A source reversed in more than one sport, or in a sport with a
+#: real slate, is caught either per sport or on the overall rate.
+MIN_ORIENTATION_SPORT_FIXTURES = 10
+
+
+def _report_orientation_outliers(
+    outliers: Mapping[str, Sequence[tuple[str, tuple, tuple | None]]],
+    shared: Mapping[str, int],
+    report: ValidationReport,
+    *,
+    by_sport: Mapping[tuple[str, str], Sequence[tuple[str, tuple, tuple | None]]],
+    by_sport_shared: Mapping[tuple[str, str], int],
+) -> None:
+    """Who has home and away the wrong way round, and how badly.
+
+    Graded on the rate rather than on the occurrence, because both readings are
+    real.  Two books can legitimately disagree about which side is "home" for a
+    match on neutral ground, and the pipeline is safe when they do: the two
+    orientations produce different event keys, so the rows do not join and no
+    position is built across them.  What is lost is the comparison, which is
+    worth a warning and not a failed run.
+
+    A source that is reversed *systematically* is a different animal.  It stops
+    joining almost everything it prices, and the loss is invisible — reconciliation
+    rebuilds the key from the participants each source reported, so the reversed
+    rows quietly become their own fixtures and the disagreement never reaches the
+    check written for it.  Measured on the live slate with one book's team-sport
+    rows reversed: 103 errors before reconciliation, zero after, the run passing,
+    the book dropping from 133 shared fixtures to 30, and the only trace 110
+    warnings describing it as a doubleheader ordinal correction.
+    """
+    for source, entries in sorted(outliers.items()):
+        total = max(shared.get(source, 0), 1)
+        rate = len(entries) / total
+        # The worst *sport*, as well as the average.  Each adapter reads home and
+        # away by a different per-sport convention, so the realistic bug is a
+        # source reversed in one sport — which an overall rate hides behind the
+        # sports it gets right: one book reversed in baseball alone scores 9%
+        # against a 60% bar while being wrong on every baseball fixture.
+        worst_sport, worst_rate = "", 0.0
+        for (key, sport), sport_entries in by_sport.items():
+            if key != source:
+                continue
+            sport_total = max(by_sport_shared.get((key, sport), 0), 1)
+            if (
+                len(sport_entries) >= MIN_ORIENTATION_DISAGREEMENTS
+                and sport_total >= MIN_ORIENTATION_SPORT_FIXTURES
+                and len(sport_entries) / sport_total > worst_rate
+            ):
+                worst_sport, worst_rate = sport, len(sport_entries) / sport_total
+        systematic = (
+            len(entries) >= MIN_ORIENTATION_DISAGREEMENTS
+            and max(rate, worst_rate) > MAX_ORIENTATION_DISAGREEMENT_RATE
+        )
+        examples = ", ".join(sorted(key for key, _, _ in entries)[:_EXAMPLES])
+        report.add(
+            Severity.ERROR if systematic else Severity.WARNING,
+            "home_away_disagreement",
+            f"{source} disagrees with the other sources about which participant is "
+            f"home on {len(entries)} of {total} shared fixture(s) "
+            f"({rate * 100:.0f}%; e.g. {examples})"
+            + (
+                (
+                    f" — {worst_rate * 100:.0f}% of them in {worst_sport} alone;"
+                    if worst_sport and worst_rate > rate
+                    else " —"
+                )
+                + " that is systematic rather than a neutral-venue judgement, so its "
+                "orientation is wrong: reconciliation rebuilds the event key from the "
+                "participants each source reports, which means these rows silently "
+                "become their own fixtures and stop joining anything"
+                if systematic
+                else " — the two orientations produce different event keys, so nothing "
+                "is mispaired, but the fixture is not compared across these sources"
+            ),
+            source=source,
+        )
+
+
+def _report_league_outliers(
+    outliers: Mapping[tuple[str, str, str], Sequence[str]], report: ValidationReport
+) -> None:
+    for (source, claimed, consensus), events in sorted(outliers.items()):
+        report.add(
+            Severity.WARNING,
+            "league_disagreement",
+            f"{source} classifies {len(events)} shared fixture(s) as {claimed} where the "
+            f"other sources say {consensus} (e.g. {', '.join(sorted(events)[:_EXAMPLES])})"
+            " — league is not part of event identity, so the join is unaffected, but "
+            "coverage reporting will split",
+            source=source,
+        )
+
+
+def _report_time_outliers(
+    outliers: Mapping[str, Sequence[tuple[str, timedelta, timedelta]]],
+    report: ValidationReport,
+) -> None:
+    for source, entries in sorted(outliers.items()):
+        worst_event, worst_delta, tolerance = max(entries, key=lambda item: item[1])
+        report.add(
+            # A warning, not an error: clustering has already decided these rows
+            # describe one fixture and joined them, so the data is usable.  What
+            # is left to say is that one book's clock looks wrong — worth
+            # surfacing, but it does not make the run unclean, and grading it an
+            # error would fail every run containing a tennis match whose books
+            # published different "not before" estimates.
+            Severity.WARNING,
+            "start_time_disagreement",
+            # Worded for both readings.  Where three or more sources priced the
+            # fixture this is the distance from their median; where two did it
+            # is the gap between them, and neither can be called the outlier —
+            # saying "median start" there would have named a consensus that does
+            # not exist.
+            # The tolerance belongs to the worst entry, and entries for one
+            # source can come from leagues with different thresholds — a 7-hour
+            # tennis disagreement beside a 25-minute baseball one printed "2
+            # fixtures, by more than 6:00:00", which is false of the second.  So
+            # the threshold is quoted against the fixture it belongs to.
+            f"{source} disagrees with the other sources about when {len(entries)} "
+            f"fixture(s) start; worst is {worst_delta} on {worst_event}, against a "
+            f"{tolerance} tolerance for that competition",
+            source=source,
+            event_key=worst_event,
+        )
 
 
 #: Below this many events for one (source, sport), a per-event coverage gap
@@ -827,14 +1809,66 @@ def _check_cross_source(quotes: Sequence[Quote], report: ValidationReport) -> No
 MIN_EVENTS_TO_DIAGNOSE_A_RENAME = 8
 
 
-def _check_coverage(quotes: Sequence[Quote], report: ValidationReport) -> None:
+def _expected_markets(
+    quotes: Sequence[Quote],
+    capabilities: Mapping[tuple[str, str], frozenset[Market]],
+):
+    """``(source, sport) -> {(market, FULL_GAME)}`` a source should have produced.
+
+    A source's claim is taken as the union over the leagues it collects *of that
+    sport*, intersected with the sport's core set: a claim can narrow what is
+    expected, never widen it into markets the pipeline does not model.  A source
+    that claims nothing at all is held to the full core set, which is the older
+    and stricter reading and the safe direction to fail in.
+    """
+    leagues_by_source_sport: dict[tuple[str, Sport], set[str]] = defaultdict(set)
+    for quote in quotes:
+        leagues_by_source_sport[(quote.source, quote.sport)].add(quote.league)
+    claimed_leagues: dict[str, set[str]] = defaultdict(set)
+    for source, league in capabilities:
+        claimed_leagues[source].add(league)
+
+    def expected(source: str, sport: Sport) -> frozenset[tuple[Market, Period]]:
+        core = core_markets(sport)
+        if source not in claimed_leagues:
+            return core
+        relevant = leagues_by_source_sport[(source, sport)] & claimed_leagues[source]
+        if not relevant:
+            # The source claims leagues, but none of this sport's rows came from
+            # one of them — so there is no claim to narrow by and the sport's own
+            # core set stands.
+            return core
+        declared: set[Market] = set()
+        for league in relevant:
+            declared |= capabilities[(source, league)]
+        return frozenset((market, period) for market, period in core if market in declared)
+
+    return expected
+
+
+def _check_coverage(
+    quotes: Sequence[Quote],
+    report: ValidationReport,
+    capabilities: Mapping[tuple[str, str], frozenset[Market]],
+    order_book_sources: frozenset[str] = frozenset(),
+) -> None:
     """Catch an upstream rename that turns a real market into a silent skip.
 
     Scoped per (source, sport), because the expected market set differs by sport:
     tennis carries only the moneyline, so demanding totals of it would report
     every tennis book as broken, while a football book that stopped returning
     point spreads must still be an error.
+
+    Narrowed further by what each source *claimed*, when it publishes claims.
+    The distinction the claim buys is between "this market has disappeared" and
+    "this source never offered it": a prediction market that prices moneylines
+    and nothing else is not a broken sportsbook, and a ``--tier core`` run that
+    deliberately skipped FanDuel's per-event soccer pages has not lost its
+    handicaps.  Both used to be reported as *core_market_absent* — "a source
+    label has probably changed" — which sends someone looking for a parsing fault
+    that is not there.
     """
+    expected = _expected_markets(quotes, capabilities)
     by_source_sport: dict[tuple[str, Sport], set[tuple[Market, Period]]] = defaultdict(set)
     events_by_source_sport: dict[tuple[str, Sport], set[str]] = defaultdict(set)
     by_source_event: dict[tuple[str, Sport, str], set[tuple[Market, Period]]] = defaultdict(set)
@@ -850,8 +1884,49 @@ def _check_coverage(quotes: Sequence[Quote], report: ValidationReport) -> None:
         events_by_source[quote.source].add(quote.event_key)
         events_by_sport[quote.sport][quote.source].add(quote.event_key)
 
-    for (source, sport), present in sorted(by_source_sport.items(), key=lambda i: str(i[0])):
-        missing = core_markets(sport) - present
+    # Driven from the *declared* scopes as well as the arriving ones.
+    #
+    # Indexing only what arrived made the most important case unreachable: a
+    # ``(source, sport)`` with no rows is not a key, so the loop never ran for
+    # it and a whole sport disappearing was silent.  Ten such pairs sat in one
+    # live capture — Smarkets returning nothing for four of its six sports among
+    # them — and validation reported PASS with zero findings naming any of them.
+    # The docstring above says this check exists to catch "an upstream rename
+    # that turns a real market into a silent skip"; the rename that turns a whole
+    # sport into a silent skip is precisely the one it could not see.
+    declared_scopes = {
+        (source, get_league(league).sport)
+        for source, league in capabilities
+        if is_known(league)
+    }
+    scopes = set(by_source_sport) | declared_scopes
+    for source, sport in sorted(scopes, key=str):
+        present = by_source_sport.get((source, sport), set())
+        if not present and not events_by_source.get(source):
+            # This source produced nothing at all.  It is already named by
+            # ``source_unhealthy:<kind>`` and ``configured_sources_produced_nothing``
+            # with its actual cause; adding one warning per declared sport that
+            # offers "an off day, or a renamed scope" as the dichotomy buries the
+            # real diagnosis under six wrong ones — on the failure that most
+            # needs to read clearly.
+            continue
+        if not present:
+            # Nothing at all, where something was promised.  Graded a warning
+            # rather than an error because a single run cannot tell an offseason
+            # from a broken feed — NHL in July is legitimately empty for months,
+            # and a check that always says FAIL carries no signal.  What tells
+            # them apart is history, and that is `source_stopped_producing`'s
+            # job, one level coarser.
+            report.add(
+                Severity.WARNING,
+                "declared_sport_produced_nothing",
+                f"{source} declares {sport.value} and returned no rows for it at all "
+                "— an off day, or a feed whose scope has been renamed out from "
+                "under it; the two look identical in one run",
+                source=source,
+            )
+            continue
+        missing = expected(source, sport) - present
         if not missing:
             continue
         # A missing (market, period) has two very different causes, and only one of
@@ -878,8 +1953,12 @@ def _check_coverage(quotes: Sequence[Quote], report: ValidationReport) -> None:
         entirely_absent = sorted((m, p) for m, p in missing if not periods_by_market.get(m))
 
         if entirely_absent:
+            # An exchange lists a market and waits for somebody to offer on it.
+            # A whole sport's spreads with no resting order is a thin slate, not
+            # a renamed label, and grading it an error fails the run over the
+            # state of somebody else's order book.
             report.add(
-                Severity.ERROR,
+                Severity.WARNING if source in order_book_sources else Severity.ERROR,
                 "core_market_absent",
                 f"no {sport.value} rows at all for "
                 + ", ".join(f"{m.value}/{p.value}" for m, p in entirely_absent)
@@ -921,7 +2000,7 @@ def _check_coverage(quotes: Sequence[Quote], report: ValidationReport) -> None:
         by_source_sport.items(), key=lambda i: str(i[0])
     ):
         events = events_by_source_sport[(source, sport)]
-        for market, period in sorted(core_markets(sport) & present_markets):
+        for market, period in sorted(expected(source, sport) & present_markets):
             have = {
                 event_key
                 for event_key in events
@@ -1027,17 +2106,38 @@ def _check_availability(quotes: Sequence[Quote], report: ValidationReport) -> No
     if len(rates) < 2:
         return
 
-    worst_source, worst_rate = max(rates.items(), key=lambda item: item[1])
-    best_rate = min(rates.values())
-    if worst_rate >= MAX_SUSPENDED_FRACTION and worst_rate - best_rate >= MIN_SUSPENSION_GAP:
+    # Every source that clears the bar is named, and the reference is the
+    # **least** suspended source rather than the median.
+    #
+    # Both halves of that are corrections, in opposite directions, of forms this
+    # check has already had:
+    #
+    # * Naming only ``max(rates)`` reported one broken source when several shared
+    #   a fault — four of five invisible.  Hence the loop.
+    # * Comparing against the *median* then made it silent in exactly the case
+    #   that matters most: once the broken sources are the majority they define
+    #   the consensus, and nothing fires at all.  Measured: two of three sources
+    #   at 100% suspended produced zero findings, and six of ten produced zero.
+    #   A shared ``status`` bug across the five order-driven adapters would have
+    #   passed in silence with healthy-looking row counts.
+    #
+    # The minimum is the right reference because the claim being made is
+    # existential, not central: *some* source on this slate is finding it open,
+    # so a source finding it 80% closed is not describing the same slate.  It is
+    # not an order statistic that drifts with the source count either — the
+    # absolute 80% floor is what carries the weight, and the gap only rules out
+    # the case where every source agrees the slate really is shut.
+    reference = min(rates.values())
+    for source, rate in sorted(rates.items()):
+        if rate < MAX_SUSPENDED_FRACTION or rate - reference < MIN_SUSPENSION_GAP:
+            continue
         report.add(
             Severity.ERROR,
             "implausible_suspension_rate",
-            f"{worst_rate * 100:.0f}% of rows are suspended while another source on the "
-            f"same slate reports {best_rate * 100:.0f}% — only "
-            f"{totals[worst_source] - suspended[worst_source]} of "
-            f"{totals[worst_source]} rows are bettable, so this source cannot "
-            "contribute to cross-book comparison; suspect the status derivation "
-            "rather than the market",
-            source=worst_source,
+            f"{rate * 100:.0f}% of {source}'s rows are suspended while the most open "
+            f"source on the same slate reports {reference * 100:.0f}% — only "
+            f"{totals[source] - suspended[source]} of {totals[source]} rows are "
+            "bettable, so this source cannot contribute to cross-book comparison; "
+            "suspect the status derivation rather than the market",
+            source=source,
         )

@@ -1,0 +1,33 @@
+{
+ "envelope_version": 2,
+ "source": "smarkets",
+ "endpoint": "quotes:basketball:01",
+ "url": "https://api.smarkets.com/v3/markets/154036533,154038758,154046298,154048434,154048452,154200908,154235474,154251607,154261317,154267724/quotes/",
+ "status_code": 200,
+ "content_type": "application/json",
+ "fetched_at": "2026-07-28T12:13:00.797554+00:00",
+ "request_params": {
+  "ids": "154036533,154038758,154046298,154048434,154048452,154200908,154235474,154251607,154261317,154267724"
+ },
+ "headers": {
+  "date": "Tue, 28 Jul 2026 12:12:55 GMT",
+  "content-type": "application/json",
+  "transfer-encoding": "chunked",
+  "connection": "keep-alive",
+  "server": "cloudflare",
+  "cache-control": "no-cache, no-store",
+  "x-content-type-options": "nosniff",
+  "vary": "Origin, accept-encoding",
+  "x-ratelimit-limit": "20",
+  "x-ratelimit-remaining": "18",
+  "x-ratelimit-reset": "47",
+  "correlation-id": "a223cb7eceb26ad1-LHR",
+  "x-permitted-cross-domain-policies": "none",
+  "cf-cache-status": "BYPASS",
+  "content-encoding": "gzip",
+  "cf-ray": "a223cb7eceb26ad1-SJC"
+ },
+ "sha256": "5ca75b50147623b89ed0b4612c4b9b6270838b8b8082f651b45a9130a4a896be",
+ "byte_size": 3039,
+ "body": "{\"426890622\": {\"bids\": [{\"price\": 6757, \"quantity\": 865938}, {\"price\": 6711, \"quantity\": 708160}, {\"price\": 6494, \"quantity\": 59516}, {\"price\": 6289, \"quantity\": 40760}], \"offers\": [{\"price\": 6944, \"quantity\": 4815628}]}, \"426890623\": {\"bids\": [{\"price\": 3125, \"quantity\": 533280}, {\"price\": 3030, \"quantity\": 115511}, {\"price\": 2817, \"quantity\": 124245}], \"offers\": [{\"price\": 3226, \"quantity\": 2952465}]}, \"426895503\": {\"bids\": [{\"price\": 8929, \"quantity\": 1248738}, {\"price\": 8475, \"quantity\": 455869}, {\"price\": 8197, \"quantity\": 42698}], \"offers\": [{\"price\": 9259, \"quantity\": 47890472}]}, \"426895504\": {\"bids\": [{\"price\": 870, \"quantity\": 391377}], \"offers\": [{\"price\": 1087, \"quantity\": 9473408}]}, \"426918293\": {\"bids\": [{\"price\": 2128, \"quantity\": 1722037}, {\"price\": 1961, \"quantity\": 2464045}, {\"price\": 1786, \"quantity\": 1036951}], \"offers\": [{\"price\": 2439, \"quantity\": 2645152}]}, \"426918294\": {\"bids\": [{\"price\": 7576, \"quantity\": 791974}, {\"price\": 7353, \"quantity\": 47599}, {\"price\": 7092, \"quantity\": 123466}], \"offers\": [{\"price\": 7874, \"quantity\": 8550489}]}, \"426923074\": {\"bids\": [{\"price\": 3497, \"quantity\": 486129}], \"offers\": [{\"price\": 3731, \"quantity\": 561772}]}, \"426923075\": {\"bids\": [{\"price\": 6173, \"quantity\": 900291}, {\"price\": 6061, \"quantity\": 448193}, {\"price\": 5952, \"quantity\": 232442}], \"offers\": [{\"price\": 6536, \"quantity\": 2069367}]}, \"426923126\": {\"bids\": [{\"price\": 8065, \"quantity\": 743955}, {\"price\": 7692, \"quantity\": 39386}], \"offers\": [{\"price\": 8772, \"quantity\": 12076311}]}, \"426923127\": {\"bids\": [{\"price\": 1190, \"quantity\": 1974787}], \"offers\": [{\"price\": 1786, \"quantity\": 2434867}]}, \"427337283\": {\"bids\": [], \"offers\": []}, \"427337284\": {\"bids\": [], \"offers\": []}, \"427422350\": {\"bids\": [{\"price\": 4808, \"quantity\": 1871880}, {\"price\": 4717, \"quantity\": 303264}], \"offers\": [{\"price\": 5848, \"quantity\": 2167630}]}, \"427422351\": {\"bids\": [{\"price\": 4167, \"quantity\": 2159827}], \"offers\": [{\"price\": 5208, \"quantity\": 1878130}]}, \"427464045\": {\"bids\": [{\"price\": 2778, \"quantity\": 3239740}, {\"price\": 2597, \"quantity\": 356660}], \"offers\": [{\"price\": 3817, \"quantity\": 1455604}]}, \"427464046\": {\"bids\": [{\"price\": 6173, \"quantity\": 1457962}], \"offers\": [{\"price\": 7194, \"quantity\": 3207412}, {\"price\": 7519, \"quantity\": 376120}]}, \"427486073\": {\"bids\": [{\"price\": 5525, \"quantity\": 1628959}], \"offers\": [{\"price\": 6536, \"quantity\": 2598152}]}, \"427486074\": {\"bids\": [{\"price\": 3472, \"quantity\": 2592165}], \"offers\": [{\"price\": 4464, \"quantity\": 1625722}]}, \"427502368\": {\"bids\": [{\"price\": 5208, \"quantity\": 1728110}, {\"price\": 5076, \"quantity\": 1773049}, {\"price\": 4902, \"quantity\": 1529987}], \"offers\": [{\"price\": 6135, \"quantity\": 2328589}, {\"price\": 6173, \"quantity\": 2351711}, {\"price\": 6536, \"quantity\": 2165127}]}, \"427502369\": {\"bids\": [{\"price\": 3876, \"quantity\": 2321981}, {\"price\": 3817, \"quantity\": 2357872}, {\"price\": 3597, \"quantity\": 2085070}], \"offers\": [{\"price\": 4808, \"quantity\": 1733436}, {\"price\": 4902, \"quantity\": 1765398}, {\"price\": 5155, \"quantity\": 1547987}]}}"
+}

@@ -1,0 +1,650 @@
+"""What every adapter does identically, in one place.
+
+Three books grew three copies of the same fetch scaffolding, and the copies had
+already drifted: only one of them paced its requests, none of them retried, none
+sent a User-Agent, and each had its own spelling of "an empty league is an off
+day but an empty book is a failure".  Ten sources would have been ten copies.
+
+What is shared here is the *mechanics* — a session, pacing, retry, capture, and
+the empty-scope policy.  What is deliberately **not** shared is the vocabulary:
+the declarative market tables and ``_build_quote`` differ in kind between books
+(FanDuel states a line two incompatible ways, Pinnacle's periods are numbers
+whose meaning depends on the sport, Kambi scales odds *and* lines by 1000), and
+forcing those into one abstraction is how a per-book trap gets lost.
+
+Politeness is a design property here, not a courtesy.  Every source is somebody
+else's public endpoint: requests are paced per host, retried at most a couple of
+times with backoff, and identified by an honest User-Agent.  A refusal that says
+"slow down" is honoured; a refusal that says "not from there" is not retried at
+all.
+"""
+from __future__ import annotations
+
+import logging
+import time
+from collections import Counter
+from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
+from enum import Enum
+from typing import Any, Callable, Iterable, Mapping, Sequence
+from urllib.parse import urlsplit
+
+import httpx
+
+from src.raw_store import RawResponse
+from src.schema import Market
+from src.sources.guards import (
+    EmptyResponseError,
+    RateLimitedError,
+    SourceError,
+    TransportError,
+    check_http_response,
+)
+
+log = logging.getLogger(__name__)
+
+#: Sent on every request.  An honest identifier is the minimum a public endpoint
+#: is owed: it says who is asking and how to make them stop, which a blank
+#: default does not.  It is not a disguise — nothing here pretends to be a
+#: browser in order to get past a check that is there to exclude us.
+USER_AGENT = (
+    "SportArbitrage/1.0 (odds-comparison research; "
+    "https://github.com/JasonL1238/SportArbitrage)"
+)
+
+DEFAULT_HEADERS: Mapping[str, str] = {
+    "User-Agent": USER_AGENT,
+    "Accept": "application/json",
+}
+
+#: Minimum gap between two requests to the same host, seconds.  Pinnacle already
+#: used 0.1; the others used nothing at all, which is what produced Kalshi's 429
+#: during the source probe.
+DEFAULT_MIN_REQUEST_INTERVAL = 0.25
+
+
+@dataclass(frozen=True)
+class RetryPolicy:
+    """How hard to try again, and how long to wait before doing so.
+
+    Two attempts after the first is the whole budget.  More is not resilience:
+    a source that has failed three times in ten seconds is not going to succeed
+    on the fourth, and continuing to ask is a small denial of service aimed at
+    somebody's public endpoint.
+    """
+
+    attempts: int = 3
+    backoff_seconds: float = 1.0
+    max_backoff_seconds: float = 20.0
+
+    def delay_for(self, attempt: int, stated: float | None) -> float:
+        """Seconds to wait before *attempt* (1-based), honouring the server.
+
+        A ``Retry-After`` the source stated always wins over our own guess, and
+        is capped only by :attr:`max_backoff_seconds` so a hostile or mistaken
+        header cannot park a run for an hour.
+        """
+        if stated is not None:
+            return min(stated, self.max_backoff_seconds)
+        return min(self.backoff_seconds * (2 ** (attempt - 1)), self.max_backoff_seconds)
+
+
+class HostPacer:
+    """A minimum interval between requests to one host.
+
+    Keyed on host rather than on source because the constraint belongs to the
+    server: two Kambi instances pointed at the same CDN are one host's worth of
+    load, however many adapters are involved.
+    """
+
+    def __init__(
+        self, min_interval: float = DEFAULT_MIN_REQUEST_INTERVAL, *, sleep: Callable[[float], None] = time.sleep
+    ) -> None:
+        self.min_interval = max(min_interval, 0.0)
+        self._sleep = sleep
+        self._last: dict[str, float] = {}
+
+    def wait(
+        self,
+        url: str,
+        *,
+        minimum: float = 0.0,
+        now: Callable[[], float] = time.monotonic,
+    ) -> None:
+        """Hold off until this host may be asked again.
+
+        *minimum* raises the gap for one caller without lowering it for anyone
+        else, which is what lets a source that has actually been rate-limited ask
+        for more room while still sharing the host's budget.  Kalshi is the live
+        case: it answered ``429 too_many_requests`` to a probe running at the
+        default pace.
+        """
+        interval = max(self.min_interval, minimum)
+        if interval <= 0:
+            return
+        host = urlsplit(url).netloc or url
+        previous = self._last.get(host)
+        current = now()
+        if previous is not None:
+            gap = interval - (current - previous)
+            if gap > 0:
+                self._sleep(gap)
+                current = now()
+        self._last[host] = current
+
+
+#: One pacer for the whole process.  Instances of the same adapter pointed at one
+#: CDN — the Kambi tenants are the live case — otherwise pace independently and
+#: hit the host at N times the intended rate.
+_SHARED_PACER = HostPacer()
+
+
+class SourceClient:
+    """One book's HTTP session: paced, retried, identified, and captured.
+
+    Every response becomes a :class:`~src.raw_store.RawResponse` *before* it is
+    interpreted, including the ones that turn out to be refusals: the failure
+    carries its own capture on :attr:`SourceError.raw`, so the collector can
+    store the bytes that *explain* the failure rather than only the sentence
+    describing it.  A block page whose markers changed is unreadable from a log
+    line and obvious from the payload.
+    """
+
+    def __init__(
+        self,
+        source_key: str,
+        *,
+        timeout: float = 20.0,
+        client: httpx.Client | None = None,
+        headers: Mapping[str, str] | None = None,
+        retry: RetryPolicy | None = None,
+        pacer: HostPacer | None = None,
+        min_request_interval: float | None = None,
+        host_interval: float = 0.0,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
+        self.source_key = source_key
+        self.retry = retry or RetryPolicy()
+        self.host_interval = host_interval
+        self._sleep = sleep
+        if pacer is not None:
+            self._pacer = pacer
+        elif min_request_interval is not None:
+            self._pacer = HostPacer(min_request_interval, sleep=sleep)
+        else:
+            self._pacer = _SHARED_PACER
+        self._headers = {**DEFAULT_HEADERS, **(headers or {})}
+        self._owns_client = client is None
+        self._client = client or httpx.Client(timeout=timeout, follow_redirects=True)
+
+    def get(
+        self,
+        url: str,
+        *,
+        endpoint: str,
+        params: Mapping[str, Any] | None = None,
+        record_params: Mapping[str, str] | None = None,
+        headers: Mapping[str, str] | None = None,
+    ) -> RawResponse:
+        """Fetch one URL, capture it, and validate it.
+
+        Returns the captured response.  Raises the most specific
+        :class:`~src.sources.guards.SourceError` that applies, after exhausting
+        the retry budget for the kinds of failure that are worth retrying.
+
+        *record_params* overrides what is stored in the envelope's
+        ``request_params``, which is how a static application key stays out of
+        the capture while still being sent.
+        """
+        last: SourceError | None = None
+        for attempt in range(1, self.retry.attempts + 1):
+            self._pacer.wait(url, minimum=self.host_interval)
+            try:
+                response = self._client.get(
+                    url,
+                    # ``None`` and ``{}`` are different requests.  httpx treats any
+                    # non-None ``params`` as a *replacement* of the URL's own query,
+                    # so collapsing None to {} strips the query off a URL that
+                    # already carries one — which is exactly the shape of a cursor
+                    # a venue hands back.  Smarkets' ``pagination.next_page`` arrived
+                    # complete with ``type``, ``state``, ``limit`` and ``offset``,
+                    # and every one of them was deleted before the request went out:
+                    # the cursor never advanced, and the unfiltered reply pulled in
+                    # other sports' events, which were then paid for in contracts
+                    # and quotes batches.
+                    params=None if params is None else dict(params),
+                    headers={**self._headers, **(headers or {})},
+                )
+            except httpx.HTTPError as exc:
+                last = TransportError(f"{self.source_key}:{endpoint}: {type(exc).__name__}: {exc}")
+                if attempt >= self.retry.attempts:
+                    raise last from exc
+                self._sleep(self.retry.delay_for(attempt, None))
+                continue
+
+            raw = RawResponse(
+                source=self.source_key,
+                endpoint=endpoint,
+                url=str(response.request.url),
+                status_code=response.status_code,
+                body=response.text,
+                fetched_at=datetime.now(UTC),
+                content_type=response.headers.get("content-type"),
+                headers=RawResponse.clean_headers(response.headers),
+                request_params=dict(record_params if record_params is not None else (params or {})),
+            )
+            try:
+                check_http_response(
+                    source=self.source_key,
+                    endpoint=endpoint,
+                    status_code=raw.status_code,
+                    body=raw.body,
+                    content_type=raw.content_type,
+                    url=raw.url,
+                    retry_after=response.headers.get("retry-after"),
+                )
+            except SourceError as exc:
+                exc.raw = raw
+                last = exc
+                if not getattr(exc, "retryable", False) or attempt >= self.retry.attempts:
+                    raise
+                stated = getattr(exc, "retry_after", None) if isinstance(exc, RateLimitedError) else None
+                delay = self.retry.delay_for(attempt, stated)
+                log.info(
+                    "%s: %s (%s); retrying in %.1fs (attempt %d/%d)",
+                    self.source_key,
+                    endpoint,
+                    exc.kind,
+                    delay,
+                    attempt,
+                    self.retry.attempts,
+                )
+                self._sleep(delay)
+                continue
+            return raw
+
+        # Unreachable: every path above either returns or raises on the last
+        # attempt.  Kept so a future edit to the loop cannot silently return None.
+        raise last or SourceError(f"{self.source_key}:{endpoint}: no attempt was made")
+
+    def close(self) -> None:
+        if self._owns_client:
+            self._client.close()
+
+
+# ── response selection ───────────────────────────────────────────────────────
+
+
+def latest_per_endpoint(
+    raws: Iterable[RawResponse], *, key: Callable[[RawResponse], str] | None = None
+) -> list[RawResponse]:
+    """One response per endpoint label: the most recently fetched.
+
+    Two runs of the same endpoint describe the *same* markets at two instants.
+    Parsing both emits every row twice, and since ``dedup_key`` is enforced by a
+    UNIQUE constraint that aborts the entire run's insert — so replaying a
+    directory holding yesterday and today used to produce nothing at all.
+
+    Ties on ``fetched_at`` (two captures inside the same clock reading) are broken
+    by body hash rather than by iteration order, so the choice is stable no matter
+    how the caller happened to list the files.  Ordering of the result is by the
+    grouping key, which is likewise independent of input order.
+
+    *key* exists because "one response per endpoint" is not always the right
+    grain: Kambi's batch labels are position counters that cover different events
+    from run to run, so it groups on something else and then resolves ownership
+    per event id.
+    """
+    grouping = key or (lambda raw: raw.endpoint)
+    best: dict[str, RawResponse] = {}
+    for raw in raws:
+        label = grouping(raw)
+        current = best.get(label)
+        if current is None or (raw.fetched_at, raw.sha256) > (current.fetched_at, current.sha256):
+            best[label] = raw
+    return [best[label] for label in sorted(best)]
+
+
+def response_order(raw: RawResponse) -> tuple[datetime, str, str]:
+    """Total order over responses: newest last, then stable on content."""
+    return (raw.fetched_at, raw.endpoint, raw.sha256)
+
+
+# ── time ─────────────────────────────────────────────────────────────────────
+
+
+def parse_iso_time(value: Any) -> datetime | None:
+    """An ISO-8601 instant, or ``None`` when the field cannot be one.
+
+    Returning ``None`` rather than raising is deliberate: a missing or malformed
+    time is a fact about one record, and the caller decides whether that record
+    is a rejection or a counted skip.  A naive timestamp is read as UTC, which is
+    what every source that omits the zone means.
+    """
+    if value is None or value == "":
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    # Some feeds spell the zone "Z", some " +00", some omit it entirely.
+    text = text.replace("Z", "+00:00")
+    if text.endswith("+00"):
+        text += ":00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+def parse_epoch_time(value: Any, *, unit: str = "s") -> datetime | None:
+    """An epoch timestamp in seconds or milliseconds, or ``None``.
+
+    The unit is stated by the caller rather than guessed from magnitude: a
+    heuristic that reads 1785260400 as seconds and 1785260400000 as milliseconds
+    works until a feed sends microseconds, and then it silently files a fixture
+    in the year 58000.
+    """
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    divisor = {"s": 1.0, "ms": 1000.0}.get(unit)
+    if divisor is None:
+        raise ValueError(f"unknown epoch unit {unit!r}")
+    try:
+        return datetime.fromtimestamp(number / divisor, tz=UTC)
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+# ── the empty-scope policy ───────────────────────────────────────────────────
+
+
+@dataclass
+class ScopeTally:
+    """How many of a book's configured scopes actually had a slate.
+
+    "This league has no games today" and "this book is broken" produce the same
+    zero, and the only thing that separates them is whether *every* scope came
+    back empty.  Three adapters had three spellings of that rule; this is one.
+    """
+
+    source_key: str
+    scopes_requested: int = 0
+    scopes_with_data: int = 0
+    empty_scopes: list[str] = field(default_factory=list)
+    failures: list[SourceError] = field(default_factory=list)
+    failed_scopes: list[str] = field(default_factory=list)
+    """``"scope: reason"`` per refusal, for the health row.
+
+    ``failures`` alone was write-only: its single reader is
+    :meth:`require_something`, which consults it **only when every scope came
+    back empty**.  One surviving scope therefore discarded every refusal — a
+    league answering 429 cost 14% of a book's rows and the run reported
+    ``OK (701 quotes, 12 requests)`` with no finding, no error and exit 0.  The
+    tally knew; nothing could ask it.
+    """
+
+    _requested: set[str] = field(default_factory=set, repr=False)
+    """Which scope names have been counted, so the count matches the names.
+
+    ``scopes_requested`` is the denominator the collector grades against and
+    ``failed_scopes`` is the numerator, and nothing tied them to the same unit:
+    Pinnacle counted requests in **sports** and refusals in **leagues**, so five
+    blocked soccer leagues out of six configured sports gave ``share_lost =
+    6/2 = 3.0`` and a message reading "refused 6 of the scopes it asked for" —
+    it asked for two.  It graded ERROR there by arithmetic accident, and graded
+    the reverse case (losing a whole sport) a WARNING for the same reason.
+
+    Registering on first mention makes the two agree whatever an adapter does:
+    a scope that produces or fails without having been requested is requested by
+    definition — it was asked for, or there would be nothing to report about it.
+    """
+
+    def requested(self, scope: str) -> None:
+        if scope in self._requested:
+            return
+        self._requested.add(scope)
+        self.scopes_requested += 1
+
+    def produced(self, scope: str, count: int) -> None:
+        self.requested(scope)
+        if count:
+            self.scopes_with_data += 1
+        else:
+            self.empty_scopes.append(scope)
+
+    def failed(self, scope: str, error: SourceError) -> None:
+        self.requested(scope)
+        self.failures.append(error)
+        self.failed_scopes.append(f"{scope}: {error}")
+
+    def require_something(self, *, what: str = "pregame event") -> None:
+        """Raise unless at least one scope produced data.
+
+        Re-raises the first real failure when there was one, because "every
+        league was empty" and "every league was refused" are different diagnoses
+        and only the second one names a cause.
+        """
+        if self.scopes_with_data:
+            return
+        if self.failures:
+            raise self.failures[0]
+        raise EmptyResponseError(
+            f"{self.source_key}: none of {self.scopes_requested} configured scope(s) "
+            f"returned a {what} ({', '.join(self.empty_scopes) or 'no scopes requested'})"
+        )
+
+
+# ── capability declaration ───────────────────────────────────────────────────
+
+#: What a source says it prices, per canonical league key.  Published so coverage
+#: reporting can say "this source has no totals for soccer" instead of inferring
+#: it from an absence, and so validation stops faulting a source for a market it
+#: never claimed.
+Capabilities = Mapping[str, frozenset[Market]]
+
+
+def capabilities_from(
+    league_markets: Mapping[str, Iterable[Market]], leagues: Sequence[str]
+) -> dict[str, frozenset[Market]]:
+    """Narrow a declared capability table to the leagues one instance collects."""
+    return {
+        key: frozenset(league_markets[key]) for key in leagues if key in league_markets
+    }
+
+
+def drop_duplicate_selections(source: str, outcome: Any) -> None:
+    """Keep one row per ``dedup_key``, rejecting the rest.
+
+    Storage enforces ``dedup_key`` with a UNIQUE constraint, so a single
+    collision aborts that source's insert.  Nothing in a payload guarantees two
+    markets cannot land on the same line, so the invariant is enforced here
+    rather than hoped for — and a collision is a parser failure worth surfacing,
+    not a silent drop.
+    """
+    seen: dict[tuple[str, ...], Any] = {}
+    kept = []
+    for quote in outcome.quotes:
+        first = seen.get(quote.dedup_key)
+        if first is not None:
+            outcome.reject(
+                source,
+                "duplicate_dedup_key",
+                f"{quote.dedup_key} priced twice: markets {first.source_market_id} and "
+                f"{quote.source_market_id} on event {quote.source_event_id}",
+                event_id=quote.source_event_id,
+            )
+            continue
+        seen[quote.dedup_key] = quote
+        kept.append(quote)
+    outcome.quotes = kept
+
+
+def within_schedule_horizon(commence_time, captured_at, competition) -> bool:
+    """Is this fixture near enough to be worth collecting a pregame price for?
+
+    A venue may list a real fixture months out — Polymarket prices a September
+    baseball game in July — and such a row is not a futures leak: it resolves to
+    two competitors and carries a real start time.  It is simply not *comparable*.
+    No other source here has listed it yet, so it can never join, and the league's
+    own ``max_schedule_horizon`` is the pipeline's existing statement of how far
+    ahead one of its fixtures is expected to be.
+
+    Collecting it anyway would fail validation's ``commence_time_too_far`` check
+    on every run, which grades a real fixture as corruption and buries the
+    findings that mean something.  So it is a counted omission instead, and the
+    horizon stays a tight guard for the books that genuinely do not schedule
+    that far ahead.
+    """
+    return commence_time <= captured_at + competition.max_schedule_horizon
+
+
+#: How far apart two captures must be before they are treated as different runs,
+#: **when the envelopes do not say which pass they belong to**.
+#:
+#: Generous on purpose: the slowest source here takes about 2½ minutes for one
+#: pass (Smarkets, paced to its own rate limit), so anything under that is one
+#: run's responses arriving over time rather than two runs.
+#:
+#: This threshold cannot be made to separate two passes of a watch loop, and
+#: nothing smaller can either: at the default five-minute cadence
+#: (:data:`src.settings.DEFAULT_INTERVAL_SECONDS`) consecutive passes are closer
+#: together than one slow pass takes to finish, so no single number splits them
+#: without also splitting a pass in half.  That is why
+#: :attr:`~src.raw_store.RawResponse.capture_id` exists and why this is only the
+#: fallback for envelopes written before it did.
+RUN_SEPARATION = timedelta(minutes=20)
+
+
+def latest_capture(
+    raws: Sequence[RawResponse], *, separation: timedelta = RUN_SEPARATION
+) -> list[RawResponse]:
+    """Only the responses belonging to the most recent collection pass.
+
+    Necessary wherever an endpoint label carries a **position counter** — page or
+    batch index — which is most of the newer sources.  ``latest_per_endpoint``
+    keeps the newest response *per label*, and that is only sound within one run:
+    across two, ``page 03`` covers different items each time, so a shorter newer
+    slate leaves the older run's trailing page standing as the "latest" for its
+    label and yesterday's markets are mixed into today's rows.  On an order-book
+    source that is not a stale row but a phantom price: ``_best_offers`` takes
+    the maximum across the merged set, so a resting order that has since been
+    filled outbids the live book.
+
+    Kambi solves this precisely, by resolving which response owns which event id.
+    That works because its payloads carry event ids; a page of markets from an
+    API that does not is not so easily attributed.  The collector therefore
+    stamps every response it persists with the pass that produced it, and this
+    function groups on that stamp — an exact answer rather than an inference.
+
+    Timestamps are the fallback, for envelopes captured before the stamp
+    existed.  They are a genuinely weaker answer: two passes of ``collect
+    --watch`` at the default cadence overlap any threshold wide enough to hold
+    one slow pass together.
+
+    A mixed batch — some stamped, some not — keeps **only** the stamped newest
+    pass and discards every unstamped response outright.  The time window is not
+    applied to the remainder; this said that it was, which overstated what the
+    code does in the one direction a reader would rely on.  Discarding is the
+    safe reading — an unstamped page cannot be shown to belong to the stamped
+    pass, and a page from an older capture must never smuggle itself into a new
+    one — but a mixed batch only arises while a stored run predates the stamp,
+    and what it costs there is coverage, not correctness.
+
+    Single-run input, which is what the collector and ``replay_run`` both hand
+    over, passes through unchanged either way.
+    """
+    if not raws:
+        return []
+    newest = max(raws, key=lambda raw: raw.fetched_at)
+    if newest.capture_id:
+        return [raw for raw in raws if raw.capture_id == newest.capture_id]
+    return [
+        raw
+        for raw in raws
+        if not raw.capture_id and newest.fetched_at - raw.fetched_at <= separation
+    ]
+
+
+def merge_skips(*tallies: Counter[str]) -> Counter[str]:
+    merged: Counter[str] = Counter()
+    for tally in tallies:
+        merged.update(tally)
+    return merged
+
+
+# ── which instance produced these bytes ──────────────────────────────────────
+
+
+def envelope_source(raws: Sequence[RawResponse], *, fallback: str) -> str:
+    """The source key the captured responses were fetched under.
+
+    This is what makes a *parse* independent of a *configuration*.  ``source`` is
+    the first element of ``dedup_key``, so two instances of one adapter — two
+    Kambi tenants, say — must emit different values for it or they collide on the
+    storage layer's UNIQUE constraint and abort the whole run's insert.  Reading
+    it off the envelope rather than off the instance means ``parse`` stays a pure
+    function of bytes, and replay reproduces the right key without knowing any
+    operator config: :func:`src.collector.replay_run` constructs an adapter with
+    no arguments at all.
+
+    A mixed batch is a caller error rather than a data fault — every code path
+    hands one source's responses at a time — so it raises instead of guessing.
+    """
+    keys = {raw.source for raw in raws if raw.source}
+    if not keys:
+        return fallback
+    if len(keys) > 1:
+        from src.sources.guards import FormatChangeError
+
+        raise FormatChangeError(
+            f"responses from several sources were handed to one parser: {sorted(keys)}"
+        )
+    return next(iter(keys))
+
+
+# ── fetch tiers ──────────────────────────────────────────────────────────────
+
+
+class Tier(str, Enum):
+    """How deep a collection pass goes.
+
+    ``core`` is the slate: every source's moneyline, spread and total for a
+    league, from the endpoints that return a whole league at once.  It is a few
+    requests per source, which is what makes a short polling interval defensible.
+
+    ``full`` adds the per-event follow-ups — FanDuel's soccer detail page is 126
+    of its 133 requests — which are worth an order of magnitude more requests and
+    belong on a longer interval.
+
+    The split is a **request budget**.  What a source may narrow under ``core``
+    is what it *asks for*; what it may not do is quietly change the meaning of
+    what it returns.  Concretely, three things are allowed and one is not:
+
+    * deferring a per-event follow-up (FanDuel's soccer detail page), which
+      removes whole *markets* — and the source must then narrow
+      :meth:`~src.sources.base.OddsSource.capabilities` to match, so the absence
+      is a declared scope rather than a market that appears to have vanished;
+    * asking only for main lines and deferring the alternate *ladder* (SX Bet,
+      where every alternate is a share of an order-book request: 47 requests
+      against 27).  The market set is unchanged, so ``capabilities`` is too — it
+      is the number of lines that differs, not what a line means;
+    * collecting identically in both tiers, which most sources do.
+
+    What is **not** allowed is a source that returns a different *kind* of row
+    under one tier — a different period, a different settlement rule — because
+    then the two tiers are not comparable and neither is a run against its own
+    history.  Each adapter says in its ``fetch_raw`` docstring which of these it
+    does, so the answer is written down rather than inferred from a row count.
+    """
+
+    CORE = "core"
+    FULL = "full"
+
+    @property
+    def includes_depth(self) -> bool:
+        return self is Tier.FULL

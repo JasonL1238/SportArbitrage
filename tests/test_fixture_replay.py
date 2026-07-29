@@ -55,12 +55,17 @@ class TestCoverage:
         missing = sorted(s.value for s in set(Sport) - found)
         assert not missing, f"no rows for {missing}"
 
-    def test_all_three_books_contributed(self, replayed) -> None:
-        assert {quote.source for quote in replayed} == {
-            "fanduel",
-            "pinnacle",
-            "betrivers_kambi",
-        }
+    def test_every_registered_source_contributed(self, replayed) -> None:
+        """Set equality against the **registry**, not against a list of names.
+
+        A literal here says "these three books" and goes stale the moment a
+        fourth is added — quietly, because a set of three still compares equal to
+        itself.  Derived from the registry, adding a source that produces nothing
+        fails here instead of looking like a source that was never asked for.
+        """
+        from src.sources import registry
+
+        assert {quote.source for quote in replayed} == set(registry.keys())
 
     def test_each_sport_has_its_core_markets_from_some_book(self, replayed) -> None:
         """No single book prices everything, but the slate as a whole must cover a
@@ -211,26 +216,52 @@ class TestDeterminism:
             assert first == second, cls.__name__
 
     def test_every_row_is_traceable_to_stored_bytes(
-        self, all_fixture_quotes, fanduel_raw, pinnacle_raw, kambi_raw
+        self, all_fixture_quotes, registered_raws
     ) -> None:
         """Both provenance refs must resolve by plain membership, so an orphaned
         row is a failure rather than something a reader has to go and check."""
-        stored = {raw.ref for raw in (*fanduel_raw, *pinnacle_raw, *kambi_raw)}
+        stored = {raw.ref for raws in registered_raws.values() for raw in raws}
         for quote in all_fixture_quotes:
             assert quote.raw_ref in stored, quote.raw_ref
             if quote.identity_raw_ref is not None:
                 assert quote.identity_raw_ref in stored, quote.identity_raw_ref
 
 
+@pytest.fixture(scope="module")
+def declared_markets() -> dict[tuple[str, str], frozenset]:
+    """What each registered source says it prices, as the collector supplies it.
+
+    Validation has to be given this or it holds every source to its sport's full
+    core market set — which is right for a sportsbook and wrong for a venue that
+    prices one market by design.  Smarkets is the live case: its published rate
+    limit will not support fetching the totals and handicaps, so it collects the
+    moneyline alone and *says so*, and without the claim its missing spreads are
+    reported as "a source label has probably changed".
+    """
+    from src.sources import registry
+
+    claims: dict[tuple[str, str], frozenset] = {}
+    for descriptor in registry.SOURCES:
+        adapter = descriptor.replay_instance()
+        try:
+            for league, markets in adapter.capabilities().items():
+                claims[(descriptor.key, league)] = markets
+        finally:
+            adapter.close()
+    return claims
+
+
 class TestValidationOnTheRealSlate:
-    def test_the_captured_slate_has_no_validation_errors(self, replayed) -> None:
+    def test_the_captured_slate_has_no_validation_errors(
+        self, replayed, declared_markets
+    ) -> None:
         """The end-to-end assertion this file exists for.
 
         An ERROR means the data is wrong or unusable, so a real capture producing
         one is a parser fault rather than something to tune away.  Warnings are
         allowed: a book legitimately prices markets another does not.
         """
-        report = validate(replayed)
+        report = validate(replayed, capabilities=declared_markets)
         errors = [f for f in report.findings if f.severity is Severity.ERROR]
         assert errors == [], "\n".join(str(f) for f in errors[:10])
 
@@ -273,7 +304,10 @@ class TestArbitrageOnTheRealSlate:
         print(
             f"comparable cross-book markets: {report.comparable_group_count}, "
             f"opportunities: {len(report.opportunities)}, "
-            f"refusals: {sum(report.refusals.values()) if hasattr(report, 'refusals') else 0}"
+            # ``ArbReport`` has no ``refusals``; this was guarded on
+            # ``hasattr`` and so printed a constant 0 forever.  The diagnostics
+            # are the thing that records why a market was turned down.
+            f"refused: {len(report.diagnostics)}"
         )
         assert report.comparable_group_count > 0, (
             "no market was comparable across books, so 'no arbitrage' means nothing"

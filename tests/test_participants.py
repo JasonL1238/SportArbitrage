@@ -17,6 +17,7 @@ import pytest
 from src.leagues import LEAGUES, league
 from src.participants import (
     canonical_participant,
+    is_pairing,
     resolve_open,
     resolve_roster,
     roster_members,
@@ -356,7 +357,6 @@ def test_every_registered_league_can_be_asked(competition) -> None:
         # Tennis doubles entries name two competitors, not one.
         "R Galloway / E King",
         "Galloway / King",
-        "Bolelli & Vavassori",
         "Purcell + Thompson",
     ],
 )
@@ -373,6 +373,31 @@ def test_a_pairing_of_two_competitors_is_unresolvable(raw: str) -> None:
     assert resolve_open(raw, Sport.SOCCER) is None
 
 
+def test_an_ampersand_pairs_players_and_names_clubs() -> None:
+    """``&`` cannot mean the same thing in both regimes, so it means each in one.
+
+    A doubles entry may be written "Bolelli & Vavassori"; a club is written
+    "Brighton & Hove Albion".  Reading the symbol as a separator everywhere threw
+    the club away — Bovada's copy of Brighton v Aston Villa was the single
+    ``doubles_or_team_pairing`` skip in a whole live run, and with it went the
+    only third source on that fixture.  Reading it as a name everywhere would
+    scramble a doubles pair into one meaningless token.
+
+    What separates the two cases is that pairs are a tennis regime: clubs do not
+    enter competitions two at a time.
+    """
+    assert resolve_open("Bolelli & Vavassori", Sport.TENNIS) is None
+    assert is_pairing("Bolelli & Vavassori", Sport.TENNIS)
+
+    club = resolve_open("Brighton & Hove Albion", Sport.SOCCER)
+    assert club is not None and club.abbr == "brightonhovealbion"
+    assert not is_pairing("Brighton & Hove Albion", Sport.SOCCER)
+
+    # With no sport stated the strict reading applies: skipping a row is
+    # recoverable, mis-slugging two competitors into one is not.
+    assert is_pairing("Brighton & Hove Albion")
+
+
 def test_singles_names_are_unaffected_by_the_pairing_guard() -> None:
     """The guard requires the separator to be surrounded by spaces, so hyphenated
     and apostrophed names still resolve."""
@@ -380,16 +405,49 @@ def test_singles_names_are_unaffected_by_the_pairing_guard() -> None:
         assert resolve_open(name, Sport.TENNIS) is not None
 
 
-def test_the_word_and_is_not_a_pairing_separator() -> None:
-    """Only symbol separators count.  "Brighton and Hove Albion" is one club, and
-    treating " and " as a pairing rejected a real Premier League fixture outright —
-    it was the single `unknown_participant` rejection in a whole live run.
+def test_every_spelling_of_one_club_is_one_key() -> None:
+    """Three sources, three spellings, and they have to be the same club.
 
-    The cost of the narrower rule is that a doubles pair written "X and Y" would
-    resolve; no book in this set writes them that way (they use "/" or "&").
+    Bovada writes "Brighton & Hove Albion", Pinnacle "Brighton and Hove Albion",
+    FanDuel "Brighton".  All three priced Brighton v Aston Villa on the captured
+    slate and the pipeline produced three non-comparable outcomes and zero
+    cross-book markets: the ampersand spelling was discarded as a doubles
+    pairing, and the two survivors disagreed on the key because the conjunction
+    was left in one of them and the alias pointed at a slug neither produced.
+
+    A conjunction is safe to drop where a club-type token is not: no two clubs
+    are told apart by the presence of "and".
     """
-    club = resolve_open("Brighton and Hove Albion", Sport.SOCCER)
-    assert club is not None and club.abbr == "brightonandhovealbion"
-    assert resolve_open("Brighton and Hove Albion", Sport.SOCCER) != resolve_open(
-        "Brighton", Sport.SOCCER
-    )
+    keys = {
+        resolve_open(name, Sport.SOCCER).key
+        for name in (
+            "Brighton & Hove Albion",
+            "Brighton and Hove Albion",
+            "Brighton",
+            "Brighton Hove Albion",
+        )
+    }
+    assert keys == {"SOCCER-brightonhovealbion"}
+
+
+def test_a_club_whose_short_form_is_another_club_keeps_its_own_key() -> None:
+    """Stripping club-type affixes is right because the affix carries no
+    identity — except where it does.  "Barcelona SC" is Barcelona Sporting Club
+    of Guayaquil and reduces onto FC Barcelona; "CD Nacional" is the Madeira club
+    and reduces onto Nacional of Montevideo.
+
+    Neither the token nor its position separates them from the cases that must
+    strip, so the exceptions are named.  This is the one error the module
+    promises not to make, and the general problem — short generic stems being
+    ambiguous across confederations — is not solved by it; see the table's own
+    note.
+    """
+    key = lambda name: resolve_open(name, Sport.SOCCER).key  # noqa: E731
+    assert key("Barcelona SC") != key("FC Barcelona")
+    assert key("CD Nacional") != key("Nacional")
+    # The rule it must not break: a genuine club-type affix still strips, at
+    # either end of the name.
+    assert key("SC Freiburg") == key("Freiburg")
+    assert key("CD Leganes") == key("Leganes")
+    assert key("FC Tulsa") == key("Tulsa")
+    assert key("Kapfenberger SV") == key("Kapfenberger")

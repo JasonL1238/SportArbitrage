@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pytest
 
+from src.collector import SOURCE_FACTORIES
 from src.report import (
     MIN_BOOKS_FOR_COMPARISON,
     QUOTE_COLUMNS,
@@ -676,31 +677,31 @@ def test_the_real_validation_report_still_fits_the_store(tmp_path) -> None:
         assert build_report(store)["runs"][0]["quote_count"] == report.quote_count
 
 
-@pytest.mark.parametrize("source", ["fanduel", "pinnacle", "betrivers_kambi"])
-def test_every_real_skip_reason_has_an_explanation(source: str, request) -> None:
-    """The page tells the reader why an offer was not collected.  A new skip reason
-    with no note would silently render as a generic shrug, so it fails here first.
+@pytest.mark.parametrize("source", sorted(SOURCE_FACTORIES))
+def test_every_real_skip_reason_has_an_explanation(source: str) -> None:
+    """The page tells the reader why an offer was not collected.  A new skip
+    reason with no note renders as a generic shrug, so it fails here first.
 
-    Skipped while the adapters are mid-rewrite; it asserts against their real output
-    and there is nothing honest to assert until they parse again.
+    Parametrised off the **registry**, as ``tests/conftest.py`` and
+    ``tests/test_source_contract.py`` both are and both say why.  It was a
+    hand-written list of three sources, so the five venues added after it was
+    written went unchecked — 2,540 of 8,479 skipped records on the captured
+    slate rendered as "Not one of the four kinds of game bet collected here",
+    including 1,896 of Smarkets' 1,896 and 38 of Kalshi's 38.  Several of those
+    were actively false: Smarkets' HANDICAP and OVER_UNDER skips *are* two of
+    the four kinds, and an already-started market is not a market type at all.
     """
-    pytest.importorskip(
-        f"src.sources.{ 'betrivers_kambi' if source == 'betrivers_kambi' else source }",
-        reason="the source adapters are being rewritten by another change",
-    )
-    from src.sources.betrivers_kambi import BetRiversKambiAdapter
-    from src.sources.fanduel import FanDuelAdapter
-    from src.sources.pinnacle import PinnacleAdapter
+    import glob
 
-    adapters = {
-        "fanduel": (FanDuelAdapter, "fanduel_raw"),
-        "pinnacle": (PinnacleAdapter, "pinnacle_raw"),
-        "betrivers_kambi": (BetRiversKambiAdapter, "kambi_raw"),
-    }
-    adapter_cls, fixture = adapters[source]
-    adapter = adapter_cls()
+    from src.raw_store import RawStore
+
+    paths = sorted(glob.glob(f"tests/fixtures/raw/{source}__*.json"))
+    if not paths:
+        pytest.skip(f"no captured responses for {source}")
+    store = RawStore("tests/fixtures/raw")
+    adapter = SOURCE_FACTORIES[source]()
     try:
-        skipped = adapter.parse(request.getfixturevalue(fixture)).skipped
+        skipped = adapter.parse([store.read(path) for path in paths]).skipped
     finally:
         adapter.close()
 
@@ -709,4 +710,4 @@ def test_every_real_skip_reason_has_an_explanation(source: str, request) -> None
         reason for reason in skipped
         if not any(reason.startswith(prefix) for prefix, _ in SKIP_NOTES)
     ]
-    assert unexplained == []
+    assert unexplained == [], unexplained

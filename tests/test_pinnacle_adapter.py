@@ -38,6 +38,7 @@ from src.schema import (
 )
 from src.sources.guards import BlockedError, EmptyResponseError, FormatChangeError
 from src.sources.pinnacle import (
+    TENNIS_CATCH_ALL,
     DEFAULT_LEAGUES,
     LEAGUE_ROUTES,
     MARKETS_BY_SPORT,
@@ -109,6 +110,10 @@ def _by_market(rows: Sequence[Quote]) -> dict[tuple[str, str, str], list[Quote]]
 # ── synthetic payload helpers ────────────────────────────────────────────────
 
 
+def _iso(moment: datetime) -> str:
+    return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def _raw(endpoint: str, payload: Any, *, at: datetime | None = None) -> RawResponse:
     return RawResponse(
         source="pinnacle",
@@ -121,6 +126,19 @@ def _raw(endpoint: str, payload: Any, *, at: datetime | None = None) -> RawRespo
     )
 
 
+def _upcoming(hours: int = 24) -> str:
+    """A kick-off *hours* from whenever the suite runs.
+
+    This defaulted to the literal ``"2026-07-28T23:00:00Z"`` until the wall
+    clock reached it, at which point every synthetic matchup was skipped as
+    ``event_already_started`` and the fallback test failed for good.  The guard
+    compares against ``raw.fetched_at``, and for a mock transport that is the
+    real clock — so a fixed future date in a synthetic payload is a timer, not a
+    fixture.  Tests that want a started game pass an explicit past ``start``.
+    """
+    return (datetime.now(UTC) + timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def _matchup(
     matchup_id: int,
     *,
@@ -129,7 +147,7 @@ def _matchup(
     sport_id: int,
     league_id: int,
     league_name: str,
-    start: str = "2026-07-28T23:00:00Z",
+    start: str | None = None,
     parent_id: int | None = None,
     units: str = "Regular",
     kind: str = "matchup",
@@ -141,7 +159,7 @@ def _matchup(
         "parentId": parent_id,
         "isLive": False,
         "status": "pending",
-        "startTime": start,
+        "startTime": start or _upcoming(),
         "league": {"id": league_id, "name": league_name, "sport": {"id": sport_id}},
         "participants": [
             {"alignment": "home", "name": home, "order": 0},
@@ -883,7 +901,16 @@ class TestEventIdentity:
         }
         for name, expected in cases.items():
             assert canonical_league_key(Sport.TENNIS, 999_999, name) == expected
-        assert canonical_league_key(Sport.TENNIS, 999_999, "Davis Cup") is None
+        # This asserted ``is None`` — that a tour the table does not name is
+        # *discarded*.  It is now the catch-all, as soccer already was and as
+        # Matchbook, SX Bet and Smarkets all read it: ``src.leagues`` says
+        # ``TENNIS_OTHER`` exists precisely so an adapter need not "either guess
+        # a tour or discard the match", and this adapter was discarding.
+        for unnamed in (
+            "Davis Cup", "United Cup", "Laver Cup", "Billie Jean King Cup",
+            "Mens UTR Pro Series, Argentina",
+        ):
+            assert canonical_league_key(Sport.TENNIS, 999_999, unnamed) == TENNIS_CATCH_ALL
 
     def test_soccer_falls_back_to_the_catch_all(self) -> None:
         assert canonical_league_key(Sport.SOCCER, 1980, "England - Premier League") == "EPL"
@@ -1014,14 +1041,73 @@ class TestResponsePairing:
             parse_pinnacle([_raw("something-else", [])])
 
     def test_an_unrecognised_response_is_counted(self, captures) -> None:
-        outcome = parse_pinnacle([*_scope(captures, MLB_SCOPE), _raw("garbage", [])])
+        # Stamped with the captures' own time: ``parse_pinnacle`` narrows to one
+        # collection pass first, so a response from another pass is dropped
+        # before anything looks at it — which is the point of that narrowing.
+        scoped = _scope(captures, MLB_SCOPE)
+        outcome = parse_pinnacle(
+            [*scoped, _raw("garbage", [], at=scoped[0].fetched_at)]
+        )
         assert outcome.skipped["unrecognised_response:garbage"] == 1
 
     def test_a_league_index_response_is_counted_not_parsed(self, captures) -> None:
-        index = _raw(f"leagues:{sport_scope(Sport.SOCCER, 29)}", [{"id": 1980}])
-        outcome = parse_pinnacle([*_scope(captures, MLB_SCOPE), index])
+        scoped = _scope(captures, MLB_SCOPE)
+        index = _raw(
+            f"leagues:{sport_scope(Sport.SOCCER, 29)}",
+            [{"id": 1980}],
+            at=scoped[0].fetched_at,
+        )
+        outcome = parse_pinnacle([*scoped, index])
         assert outcome.skipped["league_index_response"] == 1
-        assert outcome.quotes
+
+    def test_responses_from_another_pass_are_dropped_before_anything_reads_them(
+        self, captures
+    ) -> None:
+        """Pinnacle was the one paging source that did not narrow to a single
+        collection pass.
+
+        A directory holding yesterday's bytes beside today's contributes a stale
+        pair under a token absent from the newest pass, which
+        ``_pair_responses`` has no reason to supersede — and it then dragged the
+        started-game anchor backwards for *every* scope, re-admitting rows on
+        fixtures that had already kicked off and that the stale bytes had nothing
+        to do with.
+        """
+        scoped = _scope(captures, MLB_SCOPE)
+        started = min(raw.fetched_at for raw in scoped) + timedelta(hours=6)
+
+        # Yesterday's pair, under a token today's pass does not carry — so
+        # ``_pair_responses`` has no reason to supersede it — and describing a
+        # fixture that has since started.  Without the narrowing, its timestamp
+        # becomes the batch minimum and every started game is admitted as
+        # pregame; that is the failure, and it is invisible in the row count
+        # alone.
+        matchups = next(raw for raw in scoped if raw.endpoint.startswith("matchups"))
+        markets = next(raw for raw in scoped if raw.endpoint.startswith("markets"))
+        stale_matchups = [
+            dict(m, id=900000 + index, startTime=_iso(started))
+            for index, m in enumerate(matchups.json())
+            if isinstance(m, dict) and m.get("type") == "matchup"
+        ]
+        assert stale_matchups, "the capture must hold at least one matchup"
+        stale_markets = [
+            dict(row, matchupId=900000 + index)
+            for index, row in enumerate(markets.json())
+            if isinstance(row, dict)
+        ]
+        older = min(raw.fetched_at for raw in scoped) - timedelta(days=1)
+        yesterday = [
+            _raw("matchups:league:OLD:999", stale_matchups, at=older),
+            _raw("markets:league:OLD:999", stale_markets, at=older),
+        ]
+
+        with_stale = parse_pinnacle([*scoped, *yesterday])
+        assert with_stale.quotes == parse_pinnacle(scoped).quotes
+        # Nothing from a fixture that had already begun by capture time.
+        assert not [
+            q for q in with_stale.quotes
+            if q.commence_time <= min(raw.fetched_at for raw in scoped)
+        ]
 
 
 # ── configuration and fetch planning ────────────────────────────────────────
@@ -1405,7 +1491,7 @@ class TestPriceOrientationRegression:
 
         home_row = by_selection[Selection.HOME]
         away_row = by_selection[Selection.AWAY]
-        # Our orientation sorts "TENNIS-kamil.majchrzak" before "TENNIS-paul.tommy".
+        # Our orientation sorts "TENNIS-kamilmajchrzak" before "TENNIS-paultommy".
         assert home_row.home_team == "Tommy Paul"
         assert away_row.away_team == "Kamil Majchrzak"
         # Paul was the -400 favourite, so the home row must carry his short price.

@@ -48,7 +48,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime
 from enum import StrEnum
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -58,7 +58,12 @@ from src.events import build_event_key, orient, resolve_doubleheaders
 from src.leagues import League, is_known
 from src.leagues import league as get_league
 from src.normalize import MIN_DECIMAL_ODDS, decimal_to_american, implied_probability
-from src.participants import Participant, canonical_participant
+from src.participants import (
+    with_marker,
+    Participant,
+    canonical_participant,
+    competition_marker,
+)
 from src.raw_store import RawResponse
 from src.schema import (
     MARKETS_REQUIRING_LINE,
@@ -69,9 +74,18 @@ from src.schema import (
     Selection,
     Sport,
 )
+from src.sources._common import (
+    ScopeTally,
+    SourceClient,
+    Tier,
+    capabilities_from,
+    envelope_source,
+    latest_per_endpoint,
+    parse_iso_time,
+)
 from src.sources.base import ParseOutcome
 from src.sources.guards import (
-    check_http_response,
+    SourceError,
     require_keys,
     require_mapping,
     require_nonempty,
@@ -371,18 +385,29 @@ SOCCER_LEAGUE_BY_COMPETITION: Mapping[str, str] = {
 SOCCER_FALLBACK_LEAGUE = "SOCCER_OTHER"
 
 #: Ordered substring rules mapping a FanDuel tennis competition name onto a tour.
-#: Order is load-bearing twice over: "challenger" must win before "atp", because
-#: FanDuel writes challengers both as "Bonn Challenger 2026" and (elsewhere) as
-#: "ATP Challenger …"; and "women's" must win before "men's", because the string
-#: "men's" is a substring of "women's".
+#: The **tour** first; the tier only refines a men's answer.
+#:
+#: Order is load-bearing, and it was wrong in the one direction that matters:
+#: testing "challenger" first filed every *women's* Challenger as
+#: ``ATP_CHALLENGER``.  ``src/sources/matchbook.py`` and ``src/sources/sxbet.py``
+#: both record the live cost of exactly that — 252 markets on one capture — and
+#: were fixed; this table kept the original order and happened to dodge it only
+#: because FanDuel writes "WTA Vancouver 2026" and "West Vancouver Challenger
+#: 2026" rather than combining the two.
+#:
+#: "women's" must still win before "men's", because "men's" is a substring of
+#: it.
 TENNIS_LEAGUE_RULES: tuple[tuple[str, str], ...] = (
-    ("challenger", "ATP_CHALLENGER"),
     ("itf", "ITF"),
     ("wta", "WTA"),
     ("women", "WTA"),
     ("atp", "ATP"),
     ("men", "ATP"),
 )
+
+#: Refines a men's answer only, and is the answer on its own when no tour is
+#: named: the women's tour always names itself.
+TENNIS_SECOND_TIER = "challenger"
 
 #: Tennis competitions that match none of the rules above.  ITF is the safe
 #: default: it is the one tour registered for both genders, and because league is
@@ -401,7 +426,14 @@ def tennis_league_for(competition_name: str) -> str:
     lowered = competition_name.lower()
     for needle, league_key in TENNIS_LEAGUE_RULES:
         if needle in lowered:
+            # The tier refines a men's answer and never a women's one.
+            if league_key == "ATP" and TENNIS_SECOND_TIER in lowered:
+                return "ATP_CHALLENGER"
             return league_key
+    # A tier marker with no tour named at all is a men's Challenger by
+    # convention, exactly as the two sibling adapters read it.
+    if TENNIS_SECOND_TIER in lowered:
+        return "ATP_CHALLENGER"
     log.debug(
         "fanduel: tennis competition %r matched no tour rule; filing under %s",
         competition_name,
@@ -583,6 +615,8 @@ class FanDuelAdapter:
         client: httpx.Client | None = None,
         soccer_detail: bool = True,
         soccer_detail_limit: int | None = None,
+        *,
+        source_key: str = SOURCE_KEY,
     ) -> None:
         unknown = [key for key in leagues if key not in PAGE_BY_LEAGUE]
         if unknown:
@@ -593,19 +627,40 @@ class FanDuelAdapter:
         # Ordered by the registry, not by the caller, so two instances configured
         # with the same set request the same pages in the same order.
         self._leagues = tuple(key for key in PAGE_BY_LEAGUE if key in set(leagues))
+        self._source_key = source_key
         self.state = state
         self.app_key = app_key
         self.soccer_detail = soccer_detail
         self.soccer_detail_limit = soccer_detail_limit
-        self._client = client or httpx.Client(timeout=timeout, follow_redirects=True)
+        self._http = SourceClient(source_key, timeout=timeout, client=client)
 
     @property
     def source_key(self) -> str:
-        return SOURCE_KEY
+        return self._source_key
 
     @property
     def leagues(self) -> tuple[str, ...]:
         return self._leagues
+
+    def capabilities(self, *, tier: Tier = Tier.FULL) -> dict[str, frozenset[Market]]:
+        """Markets this instance claims, per league — and it depends on the tier.
+
+        FanDuel is the source that makes tiering visible in the data rather than
+        only in the request count.  Its soccer spreads and totals exist **only**
+        on the per-event page, which is 126 of its 133 requests, so a ``core``
+        pass genuinely collects soccer moneylines and nothing else.  Saying that
+        out loud is what stops validation reporting ``core_market_absent`` — "a
+        source label has probably changed" — for a market the run deliberately
+        did not ask for.
+        """
+        claims: dict[str, frozenset[Market]] = {}
+        for key in self._leagues:
+            page = PAGES[PAGE_BY_LEAGUE[key]]
+            markets = frozenset(spec.market for spec in page.markets.values())
+            if page.sport is Sport.SOCCER and tier.includes_depth and self.soccer_detail:
+                markets = markets | {Market.SPREAD, Market.TOTAL}
+            claims[key] = markets
+        return capabilities_from(claims, self._leagues)
 
     @property
     def page_keys(self) -> tuple[str, ...]:
@@ -619,29 +674,67 @@ class FanDuelAdapter:
 
     # ── fetch ────────────────────────────────────────────────────────────────
 
-    def fetch_raw(self) -> list[RawResponse]:
+    def fetch_raw(self, *, tier: Tier = Tier.FULL) -> list[RawResponse]:
+        """Slate pages always; the per-event soccer hop only in the depth tier.
+
+        This is the seam the request budget turns on.  A full pass measured 133
+        requests, of which 126 were soccer event pages; a core pass is seven.
+        The event page is the only place FanDuel exposes soccer totals and
+        handicaps, so deferring it is a real reduction in what is collected —
+        which is why :meth:`capabilities` reports the smaller claim under
+        ``core`` rather than letting the absence look like a broken parser.
+
+        **A failure part-way through does not discard what came before it.**  The
+        loops below tolerate one page failing, because they otherwise did the
+        opposite: a single refusal on soccer event page 100 propagated out of
+        ``fetch_raw``, and the collector's ``except SourceError`` branch returns
+        before anything is written to the raw store — so seven slate pages and
+        ninety-nine detail pages already fetched were thrown away, unparsed and
+        uncaptured, over one postponed fixture.  A detail page is worth even less
+        than that: it is an *addition* to a slate that has already succeeded, so
+        losing one is a counted skip rather than a failure at all.
+        """
         raws: list[RawResponse] = []
         soccer_raw: RawResponse | None = None
+        tally = self.last_fetch = ScopeTally(self._source_key)
         for page_key in self.page_keys:
             page = PAGES[page_key]
-            raw = self._get(
-                endpoint=SPORT_PAGE_ENDPOINTS[page_key], path=page.path, params=page.params
-            )
-            self._require_slate(raw)
+            tally.requested(page_key)
+            try:
+                raw = self._get(
+                    endpoint=SPORT_PAGE_ENDPOINTS[page_key], path=page.path, params=page.params
+                )
+                self._require_slate(raw)
+            except SourceError as exc:
+                log.warning("%s: %s page failed: %s", self._source_key, page_key, exc)
+                tally.failed(page_key, exc)
+                continue
             raws.append(raw)
+            tally.produced(page_key, 1)
             if page_key == "soccer":
                 soccer_raw = raw
+        tally.require_something(what="slate page")
 
-        if soccer_raw is not None and self.soccer_detail:
+        if soccer_raw is not None and self.soccer_detail and tier.includes_depth:
             for league_key, event_id in self._soccer_detail_targets(soccer_raw):
-                raws.append(
-                    self._get(
-                        endpoint=event_page_endpoint(league_key, event_id),
-                        path=EVENT_PAGE_PATH,
-                        params={"eventId": event_id, **SOCCER_EVENT_PAGE.params},
-                        require_markets=False,
+                try:
+                    raws.append(
+                        self._get(
+                            endpoint=event_page_endpoint(league_key, event_id),
+                            path=EVENT_PAGE_PATH,
+                            params={"eventId": event_id, **SOCCER_EVENT_PAGE.params},
+                            require_markets=False,
+                        )
                     )
-                )
+                except SourceError as exc:
+                    # A fixture postponed between the slate call and this one
+                    # answers without an ``events`` attachment.  Its detail is an
+                    # addition to a slate that already succeeded, so it costs
+                    # that fixture's handicaps and nothing else.
+                    log.info(
+                        "%s: soccer detail for event %s unavailable: %s",
+                        self._source_key, event_id, exc,
+                    )
         return raws
 
     def _get(
@@ -654,28 +747,18 @@ class FanDuelAdapter:
     ) -> RawResponse:
         url = f"https://sbapi.{self.state}.sportsbook.fanduel.com/api/{path}"
         query = {**params, "_ak": self.app_key}
-        response = self._client.get(url, params=query)
-        raw = RawResponse(
-            source=self.source_key,
+        # Raises on blocked / rate limited / geo-restricted / CAPTCHA / login /
+        # HTML / empty / non-JSON, after exhausting the retry budget for the
+        # kinds that are worth asking about again.  ``_ak`` is a static public
+        # application key, not a credential, but it is kept out of the stored
+        # envelope all the same: a capture is a document that gets shared.
+        raw = self._http.get(
+            url,
             endpoint=endpoint,
-            url=str(response.request.url),
-            status_code=response.status_code,
-            body=response.text,
-            fetched_at=datetime.now(UTC),
-            content_type=response.headers.get("content-type"),
-            headers=RawResponse.clean_headers(response.headers),
-            request_params={k: v for k, v in query.items() if k != "_ak"},
+            params=query,
+            record_params={k: v for k, v in query.items() if k != "_ak"},
         )
-        # Raises on blocked / CAPTCHA / login / HTML / empty / non-JSON.
-        payload = check_http_response(
-            source=self.source_key,
-            endpoint=raw.endpoint,
-            status_code=raw.status_code,
-            body=raw.body,
-            content_type=raw.content_type,
-            url=raw.url,
-        )
-        envelope = require_mapping(payload, source=self.source_key, endpoint=raw.endpoint)
+        envelope = require_mapping(raw.json(), source=self.source_key, endpoint=raw.endpoint)
         require_keys(envelope, ("attachments",), source=self.source_key, endpoint=raw.endpoint)
         attachments = require_mapping(
             envelope["attachments"], source=self.source_key, endpoint=raw.endpoint
@@ -738,10 +821,10 @@ class FanDuelAdapter:
     # ── parse ────────────────────────────────────────────────────────────────
 
     def parse(self, raws: Sequence[RawResponse]) -> ParseOutcome:
-        return parse_fanduel(raws, leagues=self._leagues)
+        return parse_fanduel(raws)
 
     def close(self) -> None:
-        self._client.close()
+        self._http.close()
 
 
 # ── parsing (pure) ───────────────────────────────────────────────────────────
@@ -757,46 +840,40 @@ class _Game:
     away: Participant
     commence_time: datetime
     base_key: str
+    marker: str | None = None
+    """The competition's identity marker, carried so the **priced side** is
+    resolved the same way the fixture was.
+
+    Applied to ``home``/``away`` when the fixture was built and nowhere else, it
+    broke exactly the case it exists for: where a venue marks the competition
+    and not the teams, the fixture keys became ``...w`` while every
+    competitor-named price still resolved to the unmarked slug, matched neither
+    side, and was **rejected** — one such fixture marks the whole source
+    unhealthy."""
 
 
-def latest_per_endpoint(raws: Iterable[RawResponse]) -> list[RawResponse]:
-    """One response per endpoint: the most recently fetched.
-
-    Two runs of the same endpoint describe the *same* markets at two instants.
-    Parsing both emits every row twice, and since ``dedup_key`` is enforced by a
-    UNIQUE constraint that aborts the entire run's insert — so replaying a
-    directory holding yesterday and today used to produce nothing at all.
-
-    Ties on ``fetched_at`` (two captures inside the same clock reading) are broken
-    by body hash rather than by iteration order, so the choice is stable no matter
-    how the caller happened to list the files.  Ordering of the result is by
-    endpoint label, which is likewise independent of input order.
-    """
-    best: dict[str, RawResponse] = {}
-    for raw in raws:
-        current = best.get(raw.endpoint)
-        if current is None or (raw.fetched_at, raw.sha256) > (
-            current.fetched_at,
-            current.sha256,
-        ):
-            best[raw.endpoint] = raw
-    return [best[endpoint] for endpoint in sorted(best)]
-
-
-def parse_fanduel(
-    raws: RawResponse | Sequence[RawResponse],
-    *,
-    leagues: Sequence[str] = DEFAULT_LEAGUES,
-) -> ParseOutcome:
+def parse_fanduel(raws: RawResponse | Sequence[RawResponse]) -> ParseOutcome:
     """Parse captured FanDuel responses into normalized quotes.
 
-    Pure: no network, no filesystem, no clock, no surviving state.  Everything
-    time-related comes from ``raw.fetched_at``.
+    Pure: no network, no filesystem, no clock, **no configuration**, no surviving
+    state.  Everything time-related comes from ``raw.fetched_at``, and the
+    ``source`` every row carries comes from the envelope rather than from this
+    module's constant — so a second FanDuel instance, if one is ever registered
+    for another state, keeps its own identity through replay.
+
+    It took a league list until recently, and that was a genuine violation of the
+    purity this docstring claims.  ``replay_run`` builds an adapter with no
+    arguments, so a run collected with ``--league EPL`` replayed against *every*
+    league: the same soccer page parsed to 30 rows on collection and 381 on
+    replay, reported as 351 "invented" rows.  Narrowing is the collector's job and
+    happens after reconciliation (:func:`src.collector.in_scope`), where it
+    applies identically to both sides of the comparison; here every fixture the
+    captured bytes describe is normalized, exactly as Pinnacle's parser does.
     """
     if isinstance(raws, RawResponse):
         raws = [raws]
     outcome = ParseOutcome()
-    configured = set(leagues)
+    source = envelope_source(raws, fallback=SOURCE_KEY)
 
     games: dict[str, _Game] = {}
     #: Event ids that will not become games, and why — so a market belonging to
@@ -809,7 +886,7 @@ def parse_fanduel(
         page = page_for_endpoint(raw.endpoint)
         if page is None:
             outcome.reject(
-                SOURCE_KEY,
+                source,
                 "unknown_endpoint",
                 f"no page spec reads endpoint {raw.endpoint!r}",
                 endpoint=raw.endpoint,
@@ -819,7 +896,7 @@ def parse_fanduel(
             attachments = raw.json().get("attachments") or {}
         except ValueError as exc:
             outcome.reject(
-                SOURCE_KEY,
+                source,
                 "unparseable_body",
                 f"{raw.endpoint}: {exc}",
                 endpoint=raw.endpoint,
@@ -831,10 +908,10 @@ def parse_fanduel(
             if event_id not in games and event_id not in unresolved:
                 game = _classify_event(
                     event_id=event_id,
+                    source=source,
                     event=event,
                     page=page,
                     competitions=competitions,
-                    configured=configured,
                     outcome=outcome,
                     unresolved=unresolved,
                     captured_at=raw.fetched_at,
@@ -851,6 +928,7 @@ def parse_fanduel(
     for raw, page, market_id, market in work:
         _parse_market(
             raw=raw,
+            source=source,
             page=page,
             market_id=market_id,
             market=market,
@@ -866,10 +944,10 @@ def parse_fanduel(
 def _classify_event(
     *,
     event_id: str,
+    source: str,
     event: Mapping[str, Any],
     page: PageSpec,
     competitions: Mapping[str, Any],
-    configured: set[str],
     outcome: ParseOutcome,
     unresolved: dict[str, str],
     captured_at: datetime,
@@ -883,14 +961,10 @@ def _classify_event(
     name = str(event.get("name") or "")
     league_key = page.fixed_league or _league_from_competition(page, event, competitions)
 
-    if league_key not in configured:
-        unresolved[event_id] = "unconfigured_league"
-        outcome.skipped[f"league_not_configured:{league_key}"] += 1
-        return None
     if not is_known(league_key):
         unresolved[event_id] = "unknown_league"
         outcome.reject(
-            SOURCE_KEY,
+            source,
             "unknown_league",
             f"event {event_id} ({name!r}) mapped to unregistered league {league_key!r}",
             event_id=event_id,
@@ -913,6 +987,26 @@ def _classify_event(
         outcome.skipped["tennis_doubles"] += 1
         return None
 
+    # A women's, reserve or youth competition whose *name* carries the marker
+    # while the team names do not.  This adapter maps every unrecognised soccer
+    # competition into one catch-all league, so the competition name is then
+    # read by nothing — and its own soccer page carries, by name, "English
+    # Women's Championship", "German Frauen-Bundesliga", "Mexican Liga MX
+    # Femenil", "Norwegian Toppserien Ladies", "Australian A-League - Women" and
+    # "Friendlies Women's International".  Without this a women's fixture here
+    # and the men's fixture of the same two clubs at another venue produce a
+    # byte-identical event key and are priced as one market.
+    #
+    # The guard existed and was wired into Pinnacle alone; the recorded cost of
+    # this exact shape there was an 11.2% "guaranteed" position ranked first in
+    # the whole run.
+    marker = competition_marker(
+        str((competitions.get(str(event.get("competitionId"))) or {}).get("name") or ""),
+        competition.sport,
+    )
+    first_raw = with_marker(first_raw, marker)
+    second_raw = with_marker(second_raw, marker)
+
     first = canonical_participant(first_raw, competition)
     second = canonical_participant(second_raw, competition)
     if first is None or second is None or first.key == second.key:
@@ -923,16 +1017,16 @@ def _classify_event(
             f"{second_raw!r} -> {second.key if second else None}"
         )
         if page.reject_unresolved_participants:
-            outcome.reject(SOURCE_KEY, "unresolved_participants", detail, event_id=event_id)
+            outcome.reject(source, "unresolved_participants", detail, event_id=event_id)
         else:
             outcome.skipped["unresolved_participants"] += 1
         return None
 
-    commence_time = _parse_time(event.get("openDate"))
+    commence_time = parse_iso_time(event.get("openDate"))
     if commence_time is None:
         unresolved[event_id] = "missing_commence_time"
         outcome.reject(
-            SOURCE_KEY,
+            source,
             "missing_commence_time",
             f"event {event_id} ({name!r}) has unparseable openDate "
             f"{event.get('openDate')!r}",
@@ -968,6 +1062,7 @@ def _classify_event(
         away=away,
         commence_time=commence_time,
         base_key=build_event_key(away.key, home.key, commence_time, competition),
+        marker=marker,
     )
 
 
@@ -986,6 +1081,7 @@ def _league_from_competition(
 def _parse_market(
     *,
     raw: RawResponse,
+    source: str,
     page: PageSpec,
     market_id: str,
     market: Mapping[str, Any],
@@ -1001,7 +1097,7 @@ def _parse_market(
         reason = unresolved.get(event_id)
         if reason is None:
             outcome.reject(
-                SOURCE_KEY,
+                source,
                 "market_without_event",
                 f"{market_type or 'unnamed market'} {market_id} references event "
                 f"{event_id!r}, which the payload does not describe",
@@ -1027,7 +1123,7 @@ def _parse_market(
             outcome.skipped[f"out_of_scope_market:{out_of_scope}"] += 1
             return
         outcome.reject(
-            SOURCE_KEY,
+            source,
             "unmapped_market_type",
             f"{market_type!r} on in-scope event {event_id} ({game.away.name} @ "
             f"{game.home.name}) is neither collected nor declared out of scope",
@@ -1040,7 +1136,7 @@ def _parse_market(
     runners = market.get("runners") or []
     if not runners:
         outcome.reject(
-            SOURCE_KEY,
+            source,
             "market_without_runners",
             f"{market_type} on event {event_id} has no runners",
             market_id=market_id,
@@ -1048,10 +1144,25 @@ def _parse_market(
         )
         return
 
+    # The feed's own liveness flag, which nothing read.
+    #
+    # Pregame scope was decided entirely by ``commence_time <= captured_at`` — a
+    # proxy for the question the payload answers directly.  On the captured
+    # tennis slate the proxy and the flag agree on 186 of 187 fixtures and
+    # disagree on one: market 717.178490412, *Pablo Perez Ramos v Markus
+    # Molder*, ``openDate`` 99 seconds after the fetch and ``"inPlay": true``.
+    # The proxy admits it, and once the row is written nothing else in the
+    # payload says it is a live price.  972 of the captured markets carry the
+    # flag and 46 of them are true, so it is neither rare nor optional.
+    if market.get("inPlay") is True:
+        outcome.skipped["market_in_play"] += 1
+        return
+
     market_open = str(market.get("marketStatus") or "OPEN").upper() == "OPEN"
     for runner in runners:
         quote = _build_quote(
             raw=raw,
+            source=source,
             page=page,
             runner=runner,
             market_id=market_id,
@@ -1090,6 +1201,7 @@ def resolve_market_type(
 def _build_quote(
     *,
     raw: RawResponse,
+    source: str,
     page: PageSpec,
     runner: Mapping[str, Any],
     market_id: str,
@@ -1105,7 +1217,7 @@ def _build_quote(
     selection, line, problem = _resolve_runner(runner=runner, spec=spec, game=game)
     if problem is not None:
         outcome.reject(
-            SOURCE_KEY,
+            source,
             problem,
             f"{market_type} runner {runner_name!r} on event {game.event_id} "
             f"({game.away.name} @ {game.home.name})",
@@ -1136,7 +1248,7 @@ def _build_quote(
             return None
     except (TypeError, ValueError):
         outcome.reject(
-            SOURCE_KEY,
+            source,
             "unreadable_price",
             f"{market_type} runner {runner_name!r} on event {game.event_id} "
             f"has an unparseable decimalOdds {decimal_raw!r}",
@@ -1159,7 +1271,7 @@ def _build_quote(
             else decimal_to_american(decimal_odds)
         )
         return Quote(
-            source=SOURCE_KEY,
+            source=source,
             observed_at=raw.fetched_at,
             raw_ref=raw.ref,
             sport=page.sport,
@@ -1185,7 +1297,7 @@ def _build_quote(
         )
     except (TypeError, ValueError) as exc:
         outcome.reject(
-            SOURCE_KEY,
+            source,
             "invalid_quote",
             f"{market_type}/{selection} on event {game.event_id}: {exc}",
             market_id=market_id,
@@ -1223,7 +1335,13 @@ def _resolve_runner(
                 return None, None, "unparseable_handicap_runner"
             name_part = match.group("name")
             line = float(match.group("line"))
-        participant = canonical_participant(name_part, game.competition)
+        # Through the fixture's own competition marker.  Applied when the
+        # fixture was built and not here, a women's or reserve competition —
+        # which this page carries by name — rejected every priced runner and
+        # marked the source unhealthy.
+        participant = canonical_participant(
+            with_marker(name_part, game.marker), game.competition
+        )
         if participant is None:
             return None, None, "unresolved_runner_participant"
         if participant.key == game.home.key:
@@ -1266,13 +1384,3 @@ def _resolve_runner(
 def _selection_id(runner: Mapping[str, Any]) -> str | None:
     value = runner.get("selectionId")
     return None if value is None else str(value)
-
-
-def _parse_time(value: Any) -> datetime | None:
-    if not value:
-        return None
-    try:
-        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)

@@ -20,29 +20,70 @@ that file passes — not when it returns rows.
 Implement `src.sources.base.OddsSource`:
 
 ```python
+__init__(..., *, source_key: str = SOURCE_KEY)       # the identity this instance's rows carry
 source_key: str                                      # stable, lowercase, e.g. "pinnacle"
 leagues: tuple[str, ...]                             # canonical league keys this instance collects
-fetch_raw() -> list[RawResponse]                     # network; raises SourceError on trouble
+capabilities(*, tier: Tier) -> Mapping[str, frozenset[Market]]   # what it claims to price
+fetch_raw(*, tier: Tier) -> list[RawResponse]        # network; raises SourceError on trouble
 parse(raws: Sequence[RawResponse]) -> ParseOutcome   # pure; no I/O, no clock, no network
 close() -> None
 ```
 
-One adapter per **book**, not per book-and-sport. The adapter owns the book's HTTP
-session, its raw-capture conventions and its parsing rules, and is parameterized
-by which leagues to collect. Splitting per sport would duplicate all of that six
-times over and open a session per sport for no benefit.
+One adapter per **venue shape**, not per book-and-sport and not per book. The
+adapter owns the HTTP session, the raw-capture conventions and the parsing rules,
+and is parameterized by which leagues to collect *and by which instance it is*.
+Splitting per sport would duplicate all of that six times over; splitting per
+*book* would duplicate it once per tenant of a platform, and Kambi alone fronts a
+dozen books from one API.
+
+**An instance is identified by `source_key`, and rows read it off the envelope.**
+`source` is the first element of `dedup_key`, so two instances of one class must
+emit different values for it or they collide on the storage layer's UNIQUE
+constraint and abort that source's insert. `parse` takes it from
+`RawResponse.source` (see `src.sources._common.envelope_source`) and **never**
+from a module constant or from `self` — because replay constructs the adapter
+with no arguments at all, and would otherwise file one tenant's prices under
+another.
+
+**A source must be *distinct*, not merely differently named.** Before registering
+one, screen it against every registered source with `src.distinctness`: a venue
+whose prices are ~100% identical to an existing one is the same counterparty, and
+an "arbitrage" between the two is a position nobody can hold. See
+[`SOURCE_FEASIBILITY.md`](SOURCE_FEASIBILITY.md).
 
 **`parse` must be a pure function of the bytes it is given.** No network, no
 filesystem, no `datetime.now()`, no randomness, no mutable adapter state that
-survives a call. Replay, regression testing, and reproducing a live failure
-offline all depend only on this. The contract test asserts that parsing the same
-input twice yields identical rows.
+survives a call. "Has this game started?" is judged against `raw.fetched_at` —
+data carried in the stored envelope — not against a clock, so replaying an old
+capture reproduces the same decision. Replay, regression testing, and reproducing
+a live failure offline all depend only on this, and the contract test asserts
+that parsing the same input twice yields identical rows.
+
+**`capabilities` must be honest, and must narrow with the tier.** It is what lets
+coverage reporting say "this venue has no totals for soccer" instead of inferring
+it from an absence, and it is what stops validation reporting a market the run
+deliberately did not ask for as a market that has disappeared. A source that
+collects less under `--tier core` claims less under `--tier core`.
+
+**`fetch_raw(tier=…)` is a request budget, not a market filter.** `core` asks only
+for endpoints that return a whole league at once; `full` adds the per-event
+follow-ups. A source with no such follow-up returns the same responses for both
+and says so in its docstring — a source that quietly returned less under `core`
+would make the two tiers incomparable.
 
 **`fetch_raw` must raise rather than return nothing.** A `SourceError` subclass
-(`BlockedError`, `CaptchaError`, `NotJsonError`, `FormatChangeError`,
-`EmptyResponseError`, …) distinguishes "blocked" from "format changed" from
-"genuinely no games". Returning an empty list makes a Cloudflare interstitial
-indistinguishable from an off day, and the collector records it as healthy.
+(`BlockedError`, `RateLimitedError`, `GeoRestrictedError`, `ServerError`,
+`CaptchaError`, `NotJsonError`, `FormatChangeError`, `EmptyResponseError`, …)
+distinguishes "blocked" from "slow down" from "not from where you are" from
+"format changed" from "genuinely no games". Returning an empty list makes a
+Cloudflare interstitial indistinguishable from an off day, and the collector
+records it as healthy.
+
+Use `src.sources._common.SourceClient` rather than calling `httpx` directly: it
+paces per host, retries only what is worth retrying (honouring the server's own
+`Retry-After`), sends an honest User-Agent, and captures every response — including
+the refusals — before anything interprets them. Where a venue states a rate limit,
+pass `host_interval` and pace to it; three of the ten do.
 
 **`parse` receives exactly one collection run's responses.** Handed two runs, an
 adapter that iterates every raw emits every row twice at different prices —
@@ -142,29 +183,46 @@ rule is about.
 2-way vs 3-way by grouping and counting, and that inference is only sound if
 adapters never drop a leg:
 
-> **An in-scope market must be emitted whole.** If a priced selection arrives
-> without a price, emit it as `SUSPENDED` or reject the whole market — do not
-> silently skip the leg.
+> **A leg dropped for want of a price must be counted, and the market it came
+> from must be reported as incomplete.** A selection that arrives with no usable
+> price is skipped under a stable reason; downstream, `incomplete_market` names
+> the market it left short.
 
-Skipping it makes a 3-way market byte-identical to a 2-way one. The two settle
+Dropping it makes a 3-way market byte-identical to a 2-way one. The two settle
 differently in the only outcome that distinguishes them: a tie **voids** both
 legs of a 2-way market and **loses** both against a 3-way one's draw. That is the
 difference between a floor of zero and a floor of minus the entire bankroll, and
 no field on the row can tell them apart.
+
+This clause used to read "*emit it as `SUSPENDED` or reject the whole market*",
+and it was followed by no adapter, enforced by no test, and unimplementable as
+written: `Quote` requires `decimal_odds > 1.0`, so there is no such thing as a
+`SUSPENDED` row carrying no price. The observed shape is a Kambi
+`{"status": "SUSPENDED"}` outcome with no `odds` field at all, 29 of them across
+five adapters in the captured slate. Rejecting the whole market for it would
+discard the side that *is* priced, which is real and useful for line shopping —
+so the honest rule is the one the code already implements, made explicit and
+given a downstream signal that fires.
 
 `src/vocab.py` records the two facts no book states on the row, per
 `(sport, period)`:
 
 | Window | Can end level? | Draw priced? | Consequence |
 |---|---|---|---|
+| baseball first 1 inning | **yes** | yes | complete 3-way |
+| baseball first 5 innings | **yes** | yes | complete 3-way |
 | baseball full game | no | no | complete 2-way, no push |
-| baseball first 5 innings / 1st inning | yes | yes | complete 3-way |
+| basketball first half | **yes** | yes | complete 3-way |
 | basketball full game | no | no | complete 2-way, no push |
-| hockey **full game** (incl. OT + shootout) | no | no | complete 2-way, no push |
-| hockey **regulation** (60 min) | yes | yes | complete 3-way |
+| basketball regulation | **yes** | yes | complete 3-way |
+| football first half | **yes** | yes | complete 3-way |
 | football full game | **yes** | **no** | 2-way that **voids** on a tie |
-| soccer full game (90 min + stoppage) | yes | yes | complete 3-way |
-| tennis match | no | no | complete 2-way, no push |
+| football regulation | **yes** | yes | complete 3-way |
+| hockey full game | no | no | complete 2-way, no push |
+| hockey regulation | **yes** | yes | complete 3-way |
+| soccer first half | **yes** | yes | complete 3-way |
+| soccer full game | **yes** | yes | complete 3-way |
+| tennis full game | no | no | complete 2-way, no push |
 
 Two entries deserve emphasis:
 
@@ -202,7 +260,12 @@ present and mutually consistent:
 - `american_odds` and `decimal_odds` must agree on **net payout** to within 1%,
   so the tolerance means the same thing for a −5000 favourite as for a +2400
   longshot.
-- `1.01 <= decimal_odds <= 1000.0`.
+- `1.001 <= decimal_odds <= 1000.0` (`src.normalize.MIN_DECIMAL_ODDS` /
+  `MAX_DECIMAL_ODDS`). The floor was `1.01` until live data falsified it:
+  Pinnacle prints −11540 (1.00867) and FanDuel 1.005, and both are real
+  prices. 1.001 is −100000, still unreachable by any scaling mistake — an
+  undivided Kambi thousandths value lands above the ceiling, not below the
+  floor.
 - `american_odds` must be `<= -100` or `>= +100`. Values in between are not
   prices. `-50` converts to a plausible-looking 3.00 and is undetectable
   downstream, so `src.normalize.american_to_decimal` refuses it.
@@ -312,8 +375,13 @@ python3 -m src.collector arb --verbose                 # what was comparable, an
 ```
 
 A source is integrated for a sport when `collect` reports it healthy, `replay`
-passes, and `arb` counts its markets in `comparable_group_count` — not merely
-when it returns rows.
+passes, `arb` counts its markets in `comparable_group_count`, **and it has cleared
+the distinctness gate** — not merely when it returns rows.
+
+The contract test derives its adapter list from `src.sources.registry`, and
+`tests/conftest.py` raises if a registered source has no captured payloads under
+`tests/fixtures/raw/`. So a source cannot be registered and quietly escape the
+contract: it fails loudly instead.
 
 **And a sport is only *supported* when two books repeatedly price the same
 events.** That is a property of the calendar as much as of the code: in late July

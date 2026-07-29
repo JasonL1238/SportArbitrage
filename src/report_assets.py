@@ -176,7 +176,7 @@ tbody tr.go:focus-visible { outline: 2px solid var(--accent); outline-offset: -2
 .headline span { font: 400 13px/1.5 var(--sans); color: var(--ink-2); }
 .headline code { font: 400 11.5px/1.5 var(--mono); color: var(--muted); }
 
-/* One card per sportsbook holding that book's price for one bet. */
+/* One card per venue holding that venue's price for one bet. */
 .quotes { display: grid; grid-template-columns: repeat(auto-fit, minmax(212px, 1fr)); gap: 1px; background: var(--line-soft); }
 .qcard { display: flex; flex-direction: column; gap: 8px; padding: 13px 14px; background: var(--surface); }
 .qcard .who { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
@@ -534,7 +534,7 @@ BODY = """
     <section id="run">
       <header>
         <h2>This collection</h2>
-        <p>One collection is one pass over all three sportsbooks. The sidebar switches
+        <p>One collection is one pass over every venue. The sidebar switches
         between every collection stored.</p>
       </header>
 
@@ -565,10 +565,10 @@ BODY = """
       </div>
 
       <div class="card">
-        <div class="card-head"><h3>What was collected, by kind of bet</h3><span class="eyebrow">prices per sportsbook</span></div>
+        <div class="card-head"><h3>What was collected, by kind of bet</h3><span class="eyebrow">prices per venue</span></div>
         <div class="brief">
           <p><b>how to read it</b> One row per kind of bet and part of the game; one column
-          per sportsbook. A dash means that book published nothing of that kind.</p>
+          per venue. A dash means that venue published nothing of that kind.</p>
         </div>
         <div class="card-body flush scroll"><table id="matrix"></table></div>
       </div>
@@ -590,14 +590,14 @@ BODY = """
           <p><b>the bar</b> Two books is the minimum for a sport to be usable: one book's
           price cannot be compared with anything, so a sport only one book covered is
           marked <em>not comparable</em> however many prices it has.</p>
-          <p><b>how to read it</b> One row per sport, one column per sportsbook, counting
+          <p><b>how to read it</b> One row per sport, one column per venue, counting
           the prices stored. A dash means that book published nothing for that sport.</p>
         </div>
         <div class="card-body flush scroll"><table id="sports-grid"></table></div>
       </div>
 
       <div class="card">
-        <div class="card-head"><h3>Leagues within each sport</h3><span class="eyebrow">prices per sportsbook</span></div>
+        <div class="card-head"><h3>Leagues within each sport</h3><span class="eyebrow">prices per venue</span></div>
         <div class="brief">
           <p><b>why league is shown but never joined on</b> The books disagree about
           classification constantly — the same tennis match is a tour event at one book and
@@ -620,14 +620,19 @@ BODY = """
 
     <section id="sources">
       <header>
-        <h2>Sportsbooks</h2>
-        <p>Three of them, each read straight from its own public website. No paid data
-        provider, no account, no login.</p>
+        <h2>Where the prices come from</h2>
+        <p>Sportsbooks, betting exchanges and prediction markets, each read straight from
+        its own public website. No paid data provider, no account, no login. They are not
+        the same kind of thing: a book takes the other side of your bet and its margin is
+        already in the price, while an exchange or a prediction market charges a
+        commission on top and does not always refund a game that is called off. Each card
+        says which it is.</p>
       </header>
       <div class="brief solo">
-        <p><b>what each card shows</b> How much that book returned this time, how long it
-        took, and whether the reply was byte-for-byte the same as last time.</p>
-        <p><b>click a card</b> to open that book on its own — what it published, what it
+        <p><b>what each card shows</b> What kind of venue it is, what it charges, how much
+        it returned this time, how long it took, and whether the reply was byte-for-byte
+        the same as last time.</p>
+        <p><b>click a card</b> to open that venue on its own — what it published, what it
         skipped, and every page saved from it.</p>
       </div>
       <div class="sources" id="source-cards"></div>
@@ -647,7 +652,7 @@ BODY = """
 
     <section id="book">
       <div class="headline">
-        <b id="book-title">Pick a sportsbook</b>
+        <b id="book-title">Pick a venue</b>
         <span id="book-what"></span>
         <code id="book-host"></code>
       </div>
@@ -689,7 +694,7 @@ BODY = """
           <div class="controls">
             <label class="eyebrow" for="cov-mode">Break down</label>
             <select id="cov-mode">
-              <option value="source">by sportsbook</option>
+              <option value="source">by venue</option>
               <option value="market">by kind of bet</option>
             </select>
           </div>
@@ -728,7 +733,7 @@ BODY = """
         <code id="bet-notation"></code>
       </div>
       <div class="card">
-        <div class="card-head"><h3>What each sportsbook pays</h3><span class="eyebrow" id="bet-spread"></span></div>
+        <div class="card-head"><h3>What each venue pays</h3><span class="eyebrow" id="bet-spread"></span></div>
         <div class="brief">
           <p><b>same bet, different books</b> One card per book, showing the price it is
           offering right now. The green one pays the most for the identical wager.</p>
@@ -757,14 +762,14 @@ BODY = """
     <section id="odds">
       <header>
         <h2>All prices</h2>
-        <p>Every price collected, in one table. Three sportsbooks, three different
-        formats, one set of columns.</p>
+        <p>Every price collected, in one table. Ten venues, ten different formats, one
+        set of columns. Prices from a venue that charges commission are shown after it.</p>
       </header>
       <div class="card">
         <div class="card-head">
           <div class="controls">
             <input type="search" id="q" placeholder="team, game, kind of bet&hellip;" aria-label="Filter prices" />
-            <select id="f-source"><option value="">every sportsbook</option></select>
+            <select id="f-source"><option value="">every venue</option></select>
             <select id="f-league"><option value="">every league</option></select>
             <select id="f-market"><option value="">every kind of bet</option></select>
             <select id="f-period"><option value="">any part of the game</option></select>
@@ -779,7 +784,7 @@ BODY = """
         <div class="brief">
           <p><b>three bands of columns</b> what the bet is, what it pays, and whether you
           could actually place it right now.</p>
-          <p><b>one row is one price</b> at one book. Hover a row for sportsbook shorthand;
+          <p><b>one row is one price</b> at one venue. Hover a row for sportsbook shorthand;
           click any heading to sort by it.</p>
         </div>
         <div class="card-body flush scroll tall"><table id="odds-table"></table></div>
@@ -807,7 +812,7 @@ BODY = """
         <div class="card-head">
           <h3>Bets whose price moved</h3>
           <div class="controls">
-            <select id="move-source"><option value="">every sportsbook</option></select>
+            <select id="move-source"><option value="">every venue</option></select>
             <span class="eyebrow" id="move-count"></span>
           </div>
         </div>
@@ -864,7 +869,7 @@ BODY = """
           but something about the row could not be read safely, so it was dropped and counted
           here instead of stored as a guess.</p>
         </div>
-        <div class="card-body flush scroll"><table id="rejections"></table></div>
+        <div class="card-body flush scroll"><div class="note dim" id="rejections-note" style="padding:8px 14px"></div><table id="rejections"></table></div>
       </div>
     </section>
 
@@ -927,6 +932,7 @@ const S = DATA.strings;
 const Q = DATA.quotes;              // { columns, rows } — rows across several runs
 const COL = {};
 Q.columns.forEach((name, i) => { COL[name] = i; });
+const NET_ODDS = 'net_decimal_odds';
 
 const el = (id) => document.getElementById(id);
 const txt = (v) => (v === null || v === undefined ? '' : String(v));
@@ -936,7 +942,52 @@ const str = (i) => (i === null || i === undefined || i < 0 ? null : S[i]);
 
 // Every enum the pipeline stores, paired with the words a person would use and the
 // phrase a sportsbook prints.  The technical value stays reachable as a tooltip.
-const BOOKS = { fanduel: 'FanDuel', pinnacle: 'Pinnacle', betrivers_kambi: 'BetRivers' };
+//
+// Venue names come from the payload rather than from a literal here.  A hard-coded
+// map of three keys was right when there were three sources and became wrong the
+// moment there were ten: the other seven rendered as raw slugs in every table on
+// the page, and nothing failed.
+const SOURCE_INFO = new Map((DATA.sources || []).map((s) => [s.key, s]));
+const book = (key) => (SOURCE_INFO.get(key) || {}).label || key;
+
+// What kind of counterparty each venue is.  Not decoration: it decides whether the
+// quoted price is the price you are paid, whether there is a real amount behind it,
+// and what happens to the stake if the game is called off.
+const venueKind = (key) => (SOURCE_INFO.get(key) || {}).kind || 'sportsbook';
+const commissionOf = (key) => (SOURCE_INFO.get(key) || {}).commission || '';
+const charges = (key) => Boolean(commissionOf(key));
+
+/*  The price after the venue's cut — what you are actually paid.
+ *
+ *  Computed in the pipeline and carried on the row, not recomputed here: the
+ *  arbitrage engine ranks and prices every comparison net, and a page that
+ *  showed gross contradicted it on exactly the rows the commission model exists
+ *  for. Falls back to the quoted number for a venue that charges nothing, which
+ *  is every sportsbook. */
+/*  American odds for the price actually paid.  The stored value is the venue's
+ *  quoted number, so on a commission venue it disagrees with the decimal column
+ *  beside it — and the two columns sorted differently for 3,754 of 4,693 such
+ *  rows. */
+function americanOf(r) {
+  const net = netOdds(r);
+  if (!charges(str(r[COL.source]))) return r[COL.american_odds];
+  return net >= 2 ? Math.round((net - 1) * 100) : -Math.round(100 / (net - 1));
+}
+
+/*  Which of two rows for one venue and one bet to show.  A price that is not
+ *  taking bets never displaces one that is, however good it looks; among equals
+ *  the better net price wins, matching the detector. */
+function _betterPrice(candidate, held) {
+  const liveNow = str(candidate[COL.status]) === 'active';
+  const heldLive = str(held[COL.status]) === 'active';
+  if (liveNow !== heldLive) return liveNow;
+  return netOdds(candidate) > netOdds(held);
+}
+
+function netOdds(r) {
+  const net = COL[NET_ODDS] === undefined ? null : r[COL[NET_ODDS]];
+  return net === null || net === undefined ? r[COL.decimal_odds] : net;
+}
 
 // The stored vocabulary is sport-neutral; a baseball-only database named the same
 // three markets run_line / total_runs / team_total_runs.  Normalising here means
@@ -958,6 +1009,34 @@ function unitFor(sport, period) {
   const window = facts.periods && facts.periods[period];
   return (window && window.unit) || facts.unit || 'points';
 }
+// How many priced outcomes a complete moneyline has in this window: three where
+// a draw is a real, backable outcome, two otherwise.  Read from the same
+// settlement table the pipeline settles on.
+function moneylineSides(sport, period) {
+  const facts = SPORT_FACTS[sport];
+  const window = facts && facts.periods && facts.periods[period];
+  return window && window.draw_is_priced ? 3 : 2;
+}
+
+// Whether a book's own version of one market is complete enough to sum.
+//
+// ``src/validation.py`` will only sum a market when nothing is missing and
+// every row is active — its comment says why: "two legs of a three-way market
+// sum to less than 1.0 on perfectly good prices, and reporting that as 'the
+// book prices itself to lose' blames the prices for a missing row."  The page
+// re-implemented the sum with only a >= 2 row count, so a suspended draw leg or
+// an exchange with no resting draw offer turned a healthy 3-way into a "2-way"
+// summing to 0.757 — rendered as "impossible prices: 1, a book pricing itself
+// to lose" in the same strip where "problems found" said 0, and as
+// "smarkets keeps -23.3%" on the bet panel.  The committed capture holds 221
+// three-way moneylines; one suspended leg on any of them flips the headline.
+function sumsToAMargin(rows) {
+  if (rows.length < 2) return false;
+  const first = rows[0];
+  if (str(first[COL.market]) !== 'moneyline') return rows.length >= 2;
+  return rows.length >= moneylineSides(str(first[COL.sport]), str(first[COL.period]));
+}
+
 // "a 2-run win", not "a 2-runs win".
 const one = (unit) => (unit.endsWith('s') ? unit.slice(0, -1) : unit);
 const sportLabel = (sport) => (SPORT_FACTS[sport] ? SPORT_FACTS[sport].label : label(sport));
@@ -970,7 +1049,6 @@ const MARKETS = {
   team_total: { plain: "One side's total",       term: 'team total' },
 };
 const PERIODS = DATA.period_labels || {};
-const book = (key) => BOOKS[key] || key;
 function marketOf(key, sport) {
   const base = MARKETS[mkt(key)];
   if (!base) return { plain: txt(key).replace(/_/g, ' '), term: key };
@@ -986,7 +1064,7 @@ const periodOf = (key) => PERIODS[key] || { plain: txt(key).replace(/_/g, ' '), 
 const label = (v) => txt(v).replace(/_/g, ' ');
 
 // Participants are addressed by the identity the pipeline resolved — "MLB-CIN",
-// "TENNIS-humbert.ugo" — not by the book's spelling, because two books spell the
+// "TENNIS-humbertugo" — not by the book's spelling, because two books spell the
 // same club three ways and the page must not turn that into two competitors.
 function participant(key) {
   return (DATA.participants && DATA.participants[key]) || null;
@@ -1005,6 +1083,23 @@ function fullName(key) {
 }
 
 const isHalf = (n) => Math.abs(Math.abs(n % 1) - 0.5) < 1e-9;
+
+// A quarter line (.25 / .75) is neither of the other two: the stake is split
+// across the two neighbouring half-lines, so one half can win while the other
+// pushes. Describing it as "whole" — which is what a two-way split did — asserts
+// a refund on an event that cannot occur ("a 0.25-goal win refunds") and, worse,
+// hides a payout: on away +0.25 a draw is a HALF_WIN, and the reader was told
+// the only outcomes were an away win and an impossible refund.
+// ``src/arb.py`` models this exactly (LINE_QUARTER, HALF_WIN, HALF_LOSE); the
+// page and the detector were describing the same stored row differently.
+const isQuarter = (n) => Math.abs(Math.abs(n % 1) - 0.25) < 1e-9
+  || Math.abs(Math.abs(n % 1) - 0.75) < 1e-9;
+
+// The two half-lines a quarter line is split between, lower first.
+const quarterHalves = (n) => {
+  const lower = Math.floor(n * 2) / 2;
+  return [lower, lower + 0.5];
+};
 
 /** One bet, as a sentence: "Reds win by 2 or more". */
 function describeBet(bet, homeRaw, awayRaw) {
@@ -1036,7 +1131,14 @@ function describeBet(bet, homeRaw, awayRaw) {
     // because "lose by fewer than 1" is not a thing that can happen.
     const size = Math.abs(bet.line);
     const margin = (n) => (n === 1 ? 'lose by 1' : `lose by ${n} or fewer`);
-    if (bet.line < 0) {
+    if (isQuarter(bet.line)) {
+      // Half the stake on each neighbouring line, so the middle outcome pays
+      // half and the stake is only ever half at risk there.
+      const [lo, hi] = quarterHalves(Math.abs(bet.line));
+      text = bet.line < 0
+        ? `${picked} win by ${Math.ceil(hi)} or more; a ${Math.ceil(lo)}-${unit} win pays half`
+        : `${picked} win, or lose by fewer than ${lo}; a ${lo}-${unit} loss pays half`;
+    } else if (bet.line < 0) {
       text = isHalf(size)
         ? `${picked} win by ${Math.ceil(size)} or more`
         : `${picked} win by ${size + 1} or more (a ${size}-${unit} win refunds)`;
@@ -1052,7 +1154,12 @@ function describeBet(bet, homeRaw, awayRaw) {
       ? (bet.side === 'home' ? home : away)
       : 'Both sides together';
     const n = bet.line;
-    if (bet.selection === 'over') {
+    if (isQuarter(n)) {
+      const [lo, hi] = quarterHalves(n);
+      text = bet.selection === 'over'
+        ? `${scorer} score ${Math.ceil(hi)} ${units} or more; exactly ${Math.ceil(lo)} pays half`
+        : `${scorer} score ${Math.floor(lo)} ${units} or fewer; exactly ${Math.ceil(lo)} pays half`;
+    } else if (bet.selection === 'over') {
       text = isHalf(n) ? `${scorer} score ${Math.ceil(n)} ${units} or more`
         : `${scorer} score ${n + 1} ${units} or more (exactly ${n} refunds)`;
     } else {
@@ -1070,7 +1177,10 @@ function notation(bet, homeRaw, awayRaw) {
   const side = bet.selection === 'home' ? abbr(homeRaw)
     : bet.selection === 'away' ? abbr(awayRaw) : bet.selection;
   const number = bet.line === null || bet.line === undefined ? ''
-    : ' ' + (mkt(bet.market) === 'spread' && bet.line > 0 ? '+' : '') + (+bet.line).toFixed(1);
+    // Two decimals where the line needs them: ``toFixed(1)`` printed -0.25 as
+    // "-0.3" and 3.25 as "3.3", naming a market no book offers.
+    : ' ' + (mkt(bet.market) === 'spread' && bet.line > 0 ? '+' : '')
+      + (isQuarter(bet.line) ? (+bet.line).toFixed(2) : (+bet.line).toFixed(1));
   const which = bet.side ? ` ${abbr(bet.side === 'home' ? homeRaw : awayRaw)}` : '';
   return `${marketOf(bet.market, bet.sport).term} · ${periodOf(bet.period).term}${which} · ${side}${number}`;
 }
@@ -1297,10 +1407,17 @@ const href = (panel, arg) => '#' + panel + (arg === undefined || arg === null ? 
  *  Deliberately not the source: the interesting question about a bet is what
  *  every book is charging for it, so the key is the contract and the books are
  *  what the panel compares. */
+/*  ``is_alternate`` is deliberately NOT part of this key, because it is not part
+ *  of the detector's either (see src/arb.py): a book may reach the same number
+ *  through its main market or an extra one, and that is the same bet.  The flag
+ *  is also not reliably set — five of the ten adapters never mark an alternate at
+ *  all, and the two Kambi tenants tag *different* offers as the main line for one
+ *  betOffer id.  Including it split 693 selections the detector compares into
+ *  "1 venue offering it — nothing to compare". */
 const betKeyOf = (r) => [
   str(r[COL.event_key]), str(r[COL.market]), str(r[COL.period]), str(r[COL.side]) || '',
   r[COL.line] === null || r[COL.line] === undefined ? '' : r[COL.line],
-  str(r[COL.selection]), r[COL.is_alternate] ? '1' : '0',
+  str(r[COL.selection]), '0',
 ].join('~');
 
 function parseBetKey(key) {
@@ -1426,7 +1543,7 @@ function renderOverview() {
   const singleSports = (run.sports || []).filter((entry) => !entry.comparable);
   el('masthead-pills').innerHTML = [
     `<span class="pill ${run.ok ? 'ok' : 'bad'}"><i></i>${run.ok ? 'all checks passed' : 'checks found problems'}</span>`,
-    `<span class="pill ${producing.length >= 2 ? 'flat' : 'bad'}">${producing.length} of ${health.length} sportsbooks responded</span>`,
+    `<span class="pill ${producing.length >= 2 ? 'flat' : 'bad'}">${producing.length} of ${health.length} venues responded</span>`,
     `<span class="pill ${usableSports.length ? 'ok' : 'bad'}"><i></i>${usableSports.length} sport${
       usableSports.length === 1 ? '' : 's'} comparable across books</span>`,
     singleSports.length
@@ -1457,7 +1574,7 @@ function renderOverview() {
         ? `${usableSports.length} comparable: ${usableSports.map((e) => sportLabel(e.sport)).join(', ')}`
         : 'none comparable across books',
       usableSports.length ? '' : 'is-warn'],
-    ['sportsbooks', producing.length, producing.map((h) => book(h.key)).join(', ')],
+    ['venues', producing.length, producing.map((h) => book(h.key)).join(', ')],
     ['problems', run.error_count, run.error_count ? 'see Checks' : 'nothing flagged', run.error_count ? 'is-bad' : 'is-good'],
     ['worth a look', run.warning_count, run.warning_count ? 'see Checks' : 'nothing flagged', run.warning_count ? 'is-warn' : 'is-good'],
   ];
@@ -1470,12 +1587,21 @@ function renderOverview() {
   const skipped = health.reduce((a, h) => a + h.skipped_count, 0);
   const rejected = health.reduce((a, h) => a + h.rejection_count, 0);
   const parsed = health.reduce((a, h) => a + h.quote_count, 0);
+  // On a scoped run the --sport/--league filter sits between "read" and
+  // "checked": validation runs on what the filter kept, so "checked" must count
+  // the kept rows, and the dropped ones need their own box — without it 2,953
+  // rows vanished between adjacent numbers and "checked" claimed a count the
+  // checks never saw.
+  const excluded = run.excluded_count || 0;
   const steps = [
-    ['1. asked', requests, `${health.length} sportsbooks, ${fmtBytes(bytes)} downloaded`],
+    ['1. asked', requests, `${health.length} venues, ${fmtBytes(bytes)} downloaded`],
     ['2. saved', run.raw_count, 'originals kept on disk'],
     ['3. read', parsed + rejected, `${skipped.toLocaleString()} other bets seen and skipped`],
-    ['4. checked', parsed, `${run.error_count} problem${run.error_count === 1 ? '' : 's'}, ${run.warning_count} worth a look`],
-    ['5. stored', run.quote_count, 'no bet stored twice'],
+    ...(excluded ? [['4. in scope', parsed - excluded,
+      `${excluded.toLocaleString()} dropped by the run's --sport/--league scope`]] : []),
+    [`${excluded ? 5 : 4}. checked`, parsed - excluded,
+      `${run.error_count} problem${run.error_count === 1 ? '' : 's'}, ${run.warning_count} worth a look`],
+    [`${excluded ? 6 : 5}. stored`, run.quote_count, 'no bet stored twice'],
   ];
   el('flow').innerHTML = steps.map((s, i) =>
     (i ? '<div class="flow-arrow">&rarr;</div>' : '') +
@@ -1595,7 +1721,7 @@ function renderSports() {
   });
 }
 
-/* ── sportsbooks ─────────────────────────────────────────────────────────── */
+/* ── venues ──────────────────────────────────────────────────────────────── */
 
 function renderSources() {
   const run = runById.get(currentRunId);
@@ -1603,9 +1729,9 @@ function renderSources() {
   el('nav-sources').textContent = run.sources.filter((h) => h.ok).length + '/' + run.sources.length;
 
   if (!run.sources.length) {
-    // A silently blank section reads as "no sportsbooks", which is a different claim.
+    // A silently blank section reads as "no venues", which is a different claim.
     el('source-cards').innerHTML =
-      `<div class="empty">No per-sportsbook detail was recorded for this collection. Its
+      `<div class="empty">No per-venue detail was recorded for this collection. Its
        ${run.quote_count.toLocaleString()} prices are still stored — see Games and All prices.</div>`;
     el('skips').innerHTML = '';
     return;
@@ -1614,22 +1740,44 @@ function renderSources() {
   el('source-cards').innerHTML = DATA.sources.map((src) => {
     const h = byKey.get(src.key);
     if (!h) return '';
-    const pill = h.ok
-      ? '<span class="pill ok"><i></i>responded normally</span>'
-      : `<span class="pill bad"><i></i>${escapeHtml(label(h.error_kind) || 'failed')}</span>`;
+    // A source that answered but was refused part of what it was asked for is
+    // not "responded normally", and said so nowhere on this page: the columns
+    // reached the stored payload and stopped there, so a book that had lost
+    // most of its leagues rendered byte-identically to a clean one.
+    const refused = (h.scopes_refused || []).length;
+    const pill = !h.ok
+      ? `<span class="pill bad"><i></i>${escapeHtml(label(h.error_kind) || 'failed')}</span>`
+      : refused
+        ? `<span class="pill warn"><i></i>refused ${refused} of ${
+            h.scopes_requested || refused} scopes</span>`
+        : '<span class="pill ok"><i></i>responded normally</span>';
     const cells = [
-      ['prices', h.quote_count.toLocaleString()],
+      ['prices published', h.quote_count.toLocaleString()],
+      ...(h.stored_count === undefined || h.stored_count === h.quote_count ? []
+        : [['reached the database', h.stored_count.toLocaleString()]]),
       ['games', h.event_count],
       ['pages read', h.request_count],
       ['downloaded', fmtBytes(h.raw_bytes)],
       ['took', h.latency_ms === null ? '—' : (h.latency_ms / 1000).toFixed(2) + 's'],
       ['same as last time', `${h.unchanged_payloads} of ${h.request_count}`],
     ];
+    if (refused) {
+      cells.push(['refused', `${refused} of ${h.scopes_requested || refused} scopes`]);
+    }
     // A link rather than a click handler, so the whole card is keyboard-reachable
     // and the browser's own back button returns here.
+    // What kind of venue it is, and what it charges, sit next to the name: an
+    // exchange price and a book price are not the same number even when they
+    // read the same, and the page compared them as though they were.
+    const kindPill = `<span class="pill flat">${escapeHtml(src.kind || 'sportsbook')}</span>`;
+    const cut = src.commission
+      ? `<p class="dim" style="font-size:11.5px">Commission ${escapeHtml(src.commission)}. ${
+          escapeHtml(src.settles || '')}</p>`
+      : '';
     return `<a class="src" href="${escapeHtml(href('book', src.key))}">
-      <div class="src-top"><div><b>${escapeHtml(src.label)}</b><code>${escapeHtml(src.host)}</code></div>${pill}</div>
+      <div class="src-top"><div><b>${escapeHtml(src.label)}</b><code>${escapeHtml(src.host)}</code></div>${kindPill}${pill}</div>
       <p>${escapeHtml(src.what)}</p>
+      ${cut}
       <div class="src-grid">${cells.map(([k, v]) =>
         `<div><span>${escapeHtml(k)}</span><b>${escapeHtml(String(v))}</b></div>`).join('')}</div>
       ${h.error_message ? `<p class="dim" style="font-size:11.5px">${escapeHtml(h.error_message)}</p>` : ''}
@@ -1639,11 +1787,13 @@ function renderSources() {
   const skips = DATA.skipped.filter((s) => s.run_id === currentRunId)
     .sort((a, b) => b.count - a.count);
   table(el('skips'), [
-    { label: 'Sportsbook', cell: (r) => cell(book(r.source)) },
+    { label: 'Venue', cell: (r) => cell(book(r.source)) },
     { label: 'What it was', cell: (r) => cell(r.reason.replace(/^criterion:/, '').replace(/^matchup_type:/, '').replace(/_/g, ' ')) },
     { label: 'How many', num: true, cell: (r) => cell(r.count.toLocaleString()) },
     { label: 'Why it was left alone', cell: (r) => cell(skipNote(r.reason), 'dim wrap') },
-  ], skips, { empty: 'Everything this collection saw was in scope.',
+  ], skips, { empty: detailLoaded(currentRunId)
+                ? 'Everything this collection saw was in scope.'
+                : "This collection's skipped bets are not in this page — only the newest few collections carry them. Rebuild with more --quote-runs to include it.",
               go: (r) => href('book', r.source) });
 }
 
@@ -1740,7 +1890,7 @@ function selectEvent(key) {
   el('event-title').textContent = `${fullName(event.awayRaw)} at ${fullName(event.homeRaw)}`;
   el('event-sub').textContent = `${sportLabel(event.sport)} · ${leagueLabel(event.league)} · ${
     fmtClock(event.commence)} · ${event.rows.length} prices from ${
-    event.bySource.size} sportsbook${event.bySource.size === 1 ? '' : 's'}`;
+    event.bySource.size} venue${event.bySource.size === 1 ? '' : 's'}`;
   el('event-count').textContent = event.key;
 
   const sources = [...event.bySource.keys()].sort();
@@ -1777,26 +1927,38 @@ function selectEvent(key) {
     { band: 'what the bet is', label: 'Part of game',
       hint: 'Never compared across windows: overtime included and excluded are different bets',
       cell: (r) => cell(periodOf(r.period).plain, 'dim', periodOf(r.period).term) },
+    // Marked and ranked on the price after commission, like everywhere else that
+    // compares two venues.  On the captured slate 165 of 1,353 cross-book
+    // selections — 12% — have a different best venue gross and net, so ranking
+    // here on the quoted number put this table in direct disagreement with the
+    // bet panel one click away and with the detector.
     ...sources.map((s) => ({
-      band: 'what each book pays per $1', label: book(s), num: true,
-      hint: `${book(s)}'s price, as a decimal payout per $1`,
+      band: 'what each venue pays per $1', label: book(s), num: true,
+      hint: `${book(s)}'s price after its commission, as a decimal payout per $1`,
       cell: (r) => {
         const q = r.prices.get(s);
         if (!q) return html('<span class="dim">—</span>');
-        const best = Math.max(...[...r.prices.values()].map((p) => p[COL.decimal_odds]));
-        const isBest = r.prices.size > 1 && q[COL.decimal_odds] === best;
+        const net = netOdds(q);
+        // "Best" means best *takeable*, as the detector means it: a suspended
+        // price is showing, not offering.  37 cross-book selections on the live
+        // slate had their green marker on a row not accepting bets.
+        const live = [...r.prices.values()].filter((p) => str(p[COL.status]) === 'active');
+        const best = live.length ? Math.max(...live.map(netOdds)) : null;
         const suspended = str(q[COL.status]) !== 'active';
-        const note = `${fmtAmerican(q[COL.american_odds])} · $100 returns ${fmtReturn(q[COL.decimal_odds])}${
+        const isBest = !suspended && live.length > 1 && net === best;
+        const note = `${fmtAmerican(q[COL.american_odds])} · $100 returns ${fmtReturn(net)}${
+          charges(s) ? ` · quoted ${fmtOdds(q[COL.decimal_odds])} before commission` : ''}${
           suspended ? ' · not taking bets right now' : ''}`;
         return html(`<span class="${isBest ? 'best' : ''}${suspended ? ' dim' : ''}">${
-          fmtOdds(q[COL.decimal_odds])}</span>`, '', note);
+          fmtOdds(net)}</span>`, '', note);
       },
     })),
     {
-      band: 'what each book pays per $1',
+      band: 'what each venue pays per $1',
       label: 'Best vs worst', num: true, hint: 'How much more the best price pays than the worst',
       cell: (r) => {
-        const vals = [...r.prices.values()].map((p) => p[COL.decimal_odds]);
+        const vals = [...r.prices.values()]
+          .filter((p) => str(p[COL.status]) === 'active').map(netOdds);
         if (vals.length < 2) return html('<span class="dim">—</span>');
         const pct = (Math.max(...vals) / Math.min(...vals) - 1) * 100;
         return cell(pct.toFixed(1) + '%', pct >= 2 ? 'up' : 'dim');
@@ -1813,11 +1975,83 @@ function selectEvent(key) {
 const SELECTION_ORDER = ['home', 'away', 'draw', 'over', 'under'];
 
 /** Every stored row for one bet, newest run first, tagged with its run. */
-function betRows(key) {
+/*  How far apart two venues' clocks may be and still mean one fixture — the same
+ *  per-league number the pipeline clustered with, carried in the payload.
+ *
+ *  A flat two-hour window was wrong in both directions to guess at.  Tennis
+ *  clusters at 14 hours and soccer at 12, so a window of two dropped a venue
+ *  from three real cross-source tennis fixtures on the captured slate; MLB
+ *  clusters at 90 minutes, where two hours would reach past a doubleheader's
+ *  three-hour gap.  The tolerance is only wide in the sports where two
+ *  competitors never meet twice in a day, so there is nothing for it to reach. */
+const LEAGUE_TOLERANCES = DATA.league_tolerances || {};
+const DEFAULT_FIXTURE_MS = 90 * 60 * 1000;
+const fixtureWindowMs = (league) => {
+  const seconds = LEAGUE_TOLERANCES[txt(league)];
+  return seconds === undefined ? DEFAULT_FIXTURE_MS : seconds * 1000;
+};
+
+/*  Every row of one bet, oldest run first — but only the rows that are the same
+ *  physical fixture as the one being looked at.
+ *
+ *  The event key alone is not enough for that across runs.  Its doubleheader
+ *  ordinal is assigned by rank among the fixtures a *single collection* can see,
+ *  and started games are dropped before the run is reconciled, so once game one
+ *  is under way game two is the only cluster left and is numbered one — taking
+ *  over the bare key that game one carried an hour earlier.  Joining on the key
+ *  alone therefore splices game one's early prices onto game two's later ones
+ *  and draws them as one bet drifting.
+ *
+ *  Scheduled start settles it: it is on every row, it is stable for a fixture
+ *  across collections, and the two games of a doubleheader are hours apart. */
+/*  Which fixture a row belongs to, at the resolution its league clusters at.
+ *  Two rows of one fixture land in the same bucket; the two halves of a
+ *  doubleheader do not. */
+/*  Rounding to a grid splits a fixture whose two listed starts straddle a
+ *  boundary — Matchbook revised one tennis start by 15 minutes inside a 14-hour
+ *  window and its price change vanished from the panel.  Bucketing against the
+ *  *earliest* start seen for that key measures distance instead.
+ *
+ *  The anchors are gathered in a full pass first and handed in, rather than
+ *  accumulated in a module-level map as rows arrive.  A running minimum can drop
+ *  mid-loop, so the same start bucketed differently before and after; and a map
+ *  that survives between renders made the second render of the same rows
+ *  disagree with the first, which the reader triggers just by switching sport. */
+function fixtureAnchorsFor(rows) {
+  const anchors = new Map();
+  for (const r of rows) {
+    const when = +new Date(str(r[COL.commence_time]));
+    if (!isFinite(when)) continue;
+    const key = str(r[COL.event_key]) + '|' + str(r[COL.league]);
+    const seen = anchors.get(key);
+    if (seen === undefined || when < seen) anchors.set(key, when);
+  }
+  return anchors;
+}
+
+function fixtureBucket(r, anchors) {
+  const when = +new Date(str(r[COL.commence_time]));
+  if (!isFinite(when)) return 0;
+  const key = str(r[COL.event_key]) + '|' + str(r[COL.league]);
+  const window = fixtureWindowMs(str(r[COL.league]));
+  const base = anchors.get(key);
+  return window > 0 && base !== undefined ? Math.floor((when - base) / window) : 0;
+}
+
+function betRows(key, reference) {
   const out = [];
+  const anchor = reference === undefined || reference === null ? null : +new Date(reference);
   for (const run of runs) {
     for (const row of (rowsByRun.get(run.id) || [])) {
-      if (betKeyOf(row) === key) out.push({ run, row });
+      if (betKeyOf(row) !== key) continue;
+      if (anchor !== null) {
+        const when = +new Date(str(row[COL.commence_time]));
+        const window = fixtureWindowMs(str(row[COL.league]));
+        if (isFinite(when) && isFinite(anchor) && Math.abs(when - anchor) > window) {
+          continue;
+        }
+      }
+      out.push({ run, row });
     }
   }
   return out;
@@ -1825,7 +2059,11 @@ function betRows(key) {
 
 function renderBet(key) {
   const spec = parseBetKey(key || '');
-  const all = betRows(key || '');
+  // The fixture is pinned by whichever collection is being viewed; every other
+  // run contributes only rows scheduled for the same start.
+  const here = betRows(key || '').filter((m) => m.run.id === currentRunId);
+  const anchor = (here[0] || betRows(key || '')[0] || { row: null }).row;
+  const all = betRows(key || '', anchor ? str(anchor[COL.commence_time]) : null);
   const current = all.filter((m) => m.run.id === currentRunId);
   // Fall back to the newest collection holding it, so a bet reached from an older
   // run still shows prices rather than an empty panel.
@@ -1854,52 +2092,84 @@ function renderBet(key) {
     spec.is_alternate ? ' · an extra line, not the book’s main number' : ''}`;
   el('bet-notation').textContent = `stored as ${notation(bet, home, away)}`;
 
-  // One card per book, best price first: the whole point of collecting three books
-  // is that the same wager pays differently at each.
-  const byBook = new Map(shown.map((m) => [str(m.row[COL.source]), m.row]));
-  const prices = [...byBook.values()].map((r) => r[COL.decimal_odds]);
+  // One card per venue, best price first: the whole point of collecting many of
+  // them is that the same wager pays differently at each.  Ranked and compared on
+  // the price *after commission*, because that is the one you are paid and the one
+  // the arbitrage engine acts on — ranking on the quoted number would name an
+  // exchange at 2.10 as better than a book at 2.08 when the exchange pays 2.045.
+  // Not last-write-wins.  Dropping ``is_alternate`` from the bet key — right,
+  // because the detector ignores it too — means a book's main and alternate row
+  // at one number now land here together, and the panel must show the one the
+  // reported margin was built on.  Takeable first, then better price.
+  const byBook = new Map();
+  for (const m of shown) {
+    const source = str(m.row[COL.source]);
+    const held = byBook.get(source);
+    if (!held || _betterPrice(m.row, held)) byBook.set(source, m.row);
+  }
+  // Best *takeable*, matching the fixture table and the detector: a suspended
+  // price is showing, not offering.
+  const live = [...byBook.values()].filter((r) => str(r[COL.status]) === 'active');
+  const prices = live.map(netOdds);
   const best = prices.length ? Math.max(...prices) : null;
   const worst = prices.length ? Math.min(...prices) : null;
 
   el('bet-spread').textContent = prices.length > 1
-    ? `${((best / worst - 1) * 100).toFixed(1)}% more at the best book than the worst`
-    : `${prices.length} book${prices.length === 1 ? '' : 's'} offering it — nothing to compare`;
+    ? `${((best / worst - 1) * 100).toFixed(1)}% more at the best venue than the worst`
+    : `${prices.length} venue${prices.length === 1 ? '' : 's'} offering it — nothing to compare`;
 
   el('bet-books').innerHTML = [...byBook.entries()]
-    .sort((a, b) => b[1][COL.decimal_odds] - a[1][COL.decimal_odds])
+    .sort((a, b) => netOdds(b[1]) - netOdds(a[1]))
     .map(([source, r]) => {
       const open = str(r[COL.status]) === 'active';
-      const isBest = byBook.size > 1 && r[COL.decimal_odds] === best;
+      const net = netOdds(r);
+      const cut = charges(source);
+      const isBest = open && prices.length > 1 && net === best;
       const facts = [
-        ['US odds', fmtAmerican(r[COL.american_odds])],
-        ['$100 returns', fmtReturn(r[COL.decimal_odds])],
-        ["book's chance", (r[COL.implied_probability] * 100).toFixed(1) + '%'],
+        ['US odds', fmtAmerican(americanOf(r))],
+        ['$100 returns', fmtReturn(net)],
+        [cut ? 'implied chance' : "book's chance", ((1 / netOdds(r)) * 100).toFixed(1) + '%'],
         ['max bet', r[COL.limit_amount] === null ? '—' : '$' + Math.round(r[COL.limit_amount]).toLocaleString()],
-        ['book last moved it', str(r[COL.last_change_at]) ? fmtClock(str(r[COL.last_change_at])) : '—'],
+        ['last moved', str(r[COL.last_change_at]) ? fmtClock(str(r[COL.last_change_at])) : '—'],
       ];
+      if (cut) {
+        facts.splice(1, 0, ['quoted', fmtOdds(r[COL.decimal_odds]) + ' before commission']);
+        facts.push(['commission', commissionOf(source)]);
+      }
       return `<div class="qcard ${isBest ? 'top' : ''}${open ? '' : ' off'}">
         <div class="who"><b>${escapeHtml(book(source))}</b>${
           isBest ? '<span class="pill ok"><i></i>best</span>' : ''}${
           open ? '' : '<span class="pill warn">paused</span>'}</div>
-        <span class="price">${fmtOdds(r[COL.decimal_odds])}</span>
+        <span class="price">${fmtOdds(net)}</span>
         <dl>${facts.map(([k, v]) =>
           `<dt>${escapeHtml(k)}</dt><dd>${escapeHtml(String(v))}</dd>`).join('')}</dl>
       </div>`;
-    }).join('') || '<div class="empty">No book offered this bet in this collection.</div>';
+    }).join('') || '<div class="empty">No venue offered this bet in this collection.</div>';
 
   // The rest of the same market: without the other sides, a price says nothing about
   // whether it is generous, and the book's cut cannot be worked out at all.
+  // ``is_alternate`` is not in the bet key and must not be in this lookup
+  // either: comparing the row's real flag against a key that no longer carries
+  // it made 21,232 bets print "only one side of this bet was stored" with both
+  // sides sitting in the same file.
   const groupOf = (r) => [str(r[COL.market]), str(r[COL.period]), str(r[COL.side]) || '',
-    r[COL.line] === null ? '' : r[COL.line], r[COL.is_alternate] ? '1' : '0'].join('~');
+    r[COL.line] === null ? '' : r[COL.line]].join('~');
   const wanted = [spec.market, spec.period, spec.side || '',
-    spec.line === null ? '' : spec.line, spec.is_alternate ? '1' : '0'].join('~');
+    spec.line === null ? '' : spec.line].join('~');
   const runRowsNow = rowsByRun.get(sample.run.id) || [];
   const siblings = new Map();
   for (const r of runRowsNow) {
     if (str(r[COL.event_key]) !== spec.event || groupOf(r) !== wanted) continue;
     const sel = str(r[COL.selection]);
     if (!siblings.has(sel)) siblings.set(sel, { selection: sel, prices: new Map() });
-    siblings.get(sel).prices.set(str(r[COL.source]), r);
+    // A book may reach the same number through its main market and an extra
+    // one.  The detector takes the better of the two (src/arb.py), so this must
+    // not be last-write-wins — the panel would show the worse price for the leg
+    // the reported margin was built on.
+    const held = siblings.get(sel).prices.get(str(r[COL.source]));
+    if (!held || _betterPrice(r, held)) {
+      siblings.get(sel).prices.set(str(r[COL.source]), r);
+    }
   }
   const sideSources = [...new Set(runRowsNow.filter((r) => str(r[COL.event_key]) === spec.event
     && groupOf(r) === wanted).map((r) => str(r[COL.source])))].sort();
@@ -1915,7 +2185,12 @@ function renderBet(key) {
       cell: (s) => {
         const r = s.prices.get(source);
         if (!r) return html('<span class="dim">—</span>');
-        return cell(`${fmtOdds(r[COL.decimal_odds])}  (${(r[COL.implied_probability] * 100).toFixed(1)}%)`);
+        // The chance implied by the price *shown*.  Printing the stored
+        // probability beside a net price rendered two venues at an identical
+        // 42.0% on prices 0.11 apart, and the card asks the reader to sum these
+        // to get the venue's cut — which then disagreed with the cut printed
+        // above it.
+        return cell(`${fmtOdds(netOdds(r))}  (${(100 / netOdds(r)).toFixed(1)}%)`);
       },
     })),
   ], [...siblings.values()].sort((a, b) =>
@@ -1927,8 +2202,11 @@ function renderBet(key) {
 
   const totals = sideSources.map((source) => {
     const sides = [...siblings.values()].map((s) => s.prices.get(source)).filter(Boolean);
-    if (sides.length < 2) return null;
-    const sum = sides.reduce((a, r) => a + 1 / r[COL.decimal_odds], 0);
+    // Same rule as the quality strip: a venue's cut can only be read off a
+    // market it priced completely.  On two legs of a three-way this printed
+    // "keeps -23.3%" — a 23% edge to the bettor — for a missing draw offer.
+    if (!sumsToAMargin(sides)) return null;
+    const sum = sides.reduce((a, r) => a + 1 / netOdds(r), 0);
     return `${book(source)} keeps ${((sum - 1) * 100).toFixed(1)}%`;
   }).filter(Boolean);
 
@@ -1939,7 +2217,7 @@ function renderBet(key) {
     const byRun = new Map(all.filter((m) => str(m.row[COL.source]) === source)
       .map((m) => [m.run.id, m.row]));
     const series = embedded.map((r) => byRun.get(r.id)).filter(Boolean)
-      .map((r) => r[COL.decimal_odds]);
+      .map(netOdds);
     return { source, byRun, series };
   });
 
@@ -1957,7 +2235,7 @@ function renderBet(key) {
         const r = h.byRun.get(run.id);
         if (!r) return html('<span class="dim">—</span>');
         const cls = run.id === currentRunId ? '' : 'dim';
-        return cell(fmtOdds(r[COL.decimal_odds]), cls);
+        return cell(fmtOdds(netOdds(r)), cls);
       },
     })),
     { band: 'over the whole period', label: 'Shape', cell: (h) => (h.series.length > 1
@@ -1979,7 +2257,7 @@ function renderBet(key) {
   });
 }
 
-/* ── one sportsbook ──────────────────────────────────────────────────────── */
+/* ── one venue ───────────────────────────────────────────────────────────── */
 
 function renderBook(key) {
   const run = runById.get(currentRunId);
@@ -1987,20 +2265,24 @@ function renderBook(key) {
   const health = (run.sources || []).find((h) => h.key === key);
 
   if (!note && !health) {
-    el('book-title').textContent = 'Pick a sportsbook';
-    el('book-what').textContent = 'Open Sportsbooks and click a card.';
+    el('book-title').textContent = 'Pick a venue';
+    el('book-what').textContent = 'Open “Where the prices come from” and click a card.';
     el('book-host').textContent = '';
     el('book-state').textContent = '';
-    el('book-stats').innerHTML = '<div class="empty">No sportsbook selected.</div>';
+    el('book-stats').innerHTML = '<div class="empty">No venue selected.</div>';
     el('book-skip-count').textContent = '';
-    table(el('book-mix'), [{ label: '', cell: () => cell('') }], [], { empty: 'No sportsbook selected.' });
-    table(el('book-skips'), [{ label: '', cell: () => cell('') }], [], { empty: 'No sportsbook selected.' });
-    table(el('book-raws'), [{ label: '', cell: () => cell('') }], [], { empty: 'No sportsbook selected.' });
+    table(el('book-mix'), [{ label: '', cell: () => cell('') }], [], { empty: 'No venue selected.' });
+    table(el('book-skips'), [{ label: '', cell: () => cell('') }], [], { empty: 'No venue selected.' });
+    table(el('book-raws'), [{ label: '', cell: () => cell('') }], [], { empty: 'No venue selected.' });
     return;
   }
 
   el('book-title').textContent = (note && note.label) || book(key);
-  el('book-what').textContent = (note && note.what) || '';
+  el('book-what').textContent = [
+    (note && note.what) || '',
+    note && note.commission ? `Commission: ${note.commission}.` : '',
+    (note && note.settles) || '',
+  ].filter(Boolean).join(' ');
   el('book-host').textContent = (note && note.host) || '';
   el('book-state').innerHTML = health
     ? (health.ok
@@ -2010,17 +2292,32 @@ function renderBook(key) {
 
   const mine = currentRows().filter((r) => str(r[COL.source]) === key);
   const stats = health ? [
-    ['prices stored', health.quote_count.toLocaleString(), 'in this collection'],
+    // "published", not "stored": these are two numbers whenever an insert
+    // fails, and the row below says so rather than letting one stand for both.
+    ['prices published', health.quote_count.toLocaleString(), 'by this book in this collection'],
+    ...(health.stored_count === undefined || health.stored_count === health.quote_count ? []
+      : [['reached the database', health.stored_count.toLocaleString(),
+          'the rest were not stored — see Checks']]),
     ['fixtures', health.event_count, 'it published prices for'],
     ['pages read', health.request_count, fmtBytes(health.raw_bytes) + ' downloaded'],
     ['time spent', health.latency_ms === null ? '—' : (health.latency_ms / 1000).toFixed(2) + 's', 'fetching'],
     ['same as last time', `${health.unchanged_payloads}/${health.request_count}`,
       'byte-for-byte identical replies'],
     ['left alone', (health.skipped_count || 0).toLocaleString(), 'seen but out of scope'],
+    ['refused', (health.scopes_refused || []).length + ' of ' +
+      (health.scopes_requested || (health.scopes_refused || []).length || 0),
+      'scopes it was asked for'],
   ] : [['prices stored', mine.length.toLocaleString(), 'no health record for this collection']];
   el('book-stats').innerHTML = stats.map(([name, value, sub]) =>
     `<div class="stat"><span>${escapeHtml(name)}</span><b>${escapeHtml(String(value))}</b><small>${
       escapeHtml(sub)}</small></div>`).join('');
+  if (health && (health.scopes_refused || []).length) {
+    // Named, not counted. Which league was refused is the whole content of the
+    // signal — "5 refused" says a book had a bad day, "EPL, La Liga, Serie A,
+    // Bundesliga, Ligue 1" says which prices are missing from the run.
+    el('book-stats').innerHTML += `<div class="stat"><span>what it refused</span><small>${
+      health.scopes_refused.map(escapeHtml).join('<br>')}</small></div>`;
+  }
   if (health && health.error_message) {
     el('book-stats').innerHTML += `<div class="stat"><span>what it said</span><small>${
       escapeHtml(health.error_message)}</small></div>`;
@@ -2041,18 +2338,36 @@ function renderBook(key) {
     { label: 'Prices', num: true, cell: (c) => cell(c.count.toLocaleString()) },
     { label: 'Fixtures', num: true, cell: (c) => cell(c.events.size) },
   ], [...combos.values()].sort((a, b) => b.count - a.count),
-     { empty: 'This book stored no prices in this collection.' });
+     { empty: detailLoaded(currentRunId)
+        ? 'This book stored no prices in this collection.'
+        : `This book's ${(health ? health.quote_count : 0).toLocaleString()} prices are not in this page — only the newest few collections carry them. Rebuild with more --quote-runs to include it.` });
 
   const skips = DATA.skipped.filter((s) => s.run_id === currentRunId && s.source === key)
     .sort((a, b) => b.count - a.count);
   el('book-skip-count').textContent = skips.length
     ? `${skips.reduce((a, s) => a + s.count, 0).toLocaleString()} offers across ${skips.length} kinds`
-    : 'nothing skipped';
+    : detailLoaded(currentRunId) ? 'nothing skipped'
+    : `${((health && health.skipped_count) || 0).toLocaleString()} recorded — breakdown not in this page`;
   table(el('book-skips'), [
     { label: 'What it was', cell: (r) => cell(r.reason.replace(/^criterion:/, '').replace(/^matchup_type:/, '').replace(/_/g, ' ')) },
     { label: 'How many', num: true, cell: (r) => cell(r.count.toLocaleString()) },
     { label: 'Why it was left alone', cell: (r) => cell(skipNote(r.reason), 'dim wrap') },
-  ], skips, { empty: 'Everything this book offered was in scope.' });
+  ], skips, { empty: detailLoaded(currentRunId)
+      ? 'Everything this book offered was in scope.'
+      : `This book's ${((health && health.skipped_count) || 0).toLocaleString()} skipped offers are not in this page — only the newest few collections carry the breakdown. Rebuild with more --quote-runs to include it.` });
+
+  // Rows that were *kept* after a field was rebuilt — shown apart from the
+  // skips, because they are in the data.  Filed among the skips they read as
+  // discarded; left out of the payload they read as nothing at all.
+  const repaired = (DATA.repaired || [])
+    .filter((r) => r.run_id === currentRunId && r.source === key)
+    .sort((a, b) => b.count - a.count);
+  if (repaired.length) {
+    el('book-stats').innerHTML += `<div class="stat"><span>rebuilt and kept</span><b>${
+      repaired.reduce((a, r) => a + r.count, 0).toLocaleString()}</b><small>${
+      repaired.map((r) => escapeHtml(r.reason.replace(/_/g, ' '))).join('<br>')
+      }</small></div>`;
+  }
 
   const raws = DATA.raws.filter((r) => r.run_id === currentRunId && r.source === key);
   table(el('book-raws'), [
@@ -2065,7 +2380,9 @@ function renderBook(key) {
       cell: (r) => cell(r.sha256.slice(0, 12), 'mono dim') },
     { label: 'Since last time', cell: (r) => html(r.unchanged
         ? '<span class="pill flat">identical</span>' : '<span class="pill accent">new content</span>') },
-  ], raws, { empty: 'No pages were saved from this book in this collection.' });
+  ], raws, { empty: detailLoaded(currentRunId)
+      ? 'No pages were saved from this book in this collection.'
+      : `This book's ${((health && health.request_count) || 0).toLocaleString()} fetched pages are not listed in this page — only the newest few collections carry them. Rebuild with more --quote-runs to include it.` });
 }
 
 /* ── all prices ──────────────────────────────────────────────────────────── */
@@ -2078,6 +2395,31 @@ function fillSelect(node, values, keepAll, naming) {
   node.innerHTML = `<option value="">${keepAll}</option>` +
     values.map((v) => `<option value="${escapeHtml(v)}">${escapeHtml(naming(v))}</option>`).join('');
   if (values.includes(current)) node.value = current;
+}
+
+// Search text per row, computed once and remembered.
+//
+// The search box re-filters on every keystroke, and building this string means
+// fourteen lookups, three label translations and a join. At 3,000 rows that is
+// invisible; at 300,000 it is 300,000 of them per character typed, and the box
+// stops responding. A WeakMap rather than an array index so it stays correct
+// whichever subset of rows is being shown, and empties itself when the rows do.
+const HAYSTACKS = new WeakMap();
+
+function haystack(r) {
+  let found = HAYSTACKS.get(r);
+  if (found === undefined) {
+    const [home, away] = sidesOf(r);
+    const sport = str(r[COL.sport]);
+    found = [str(r[COL.event_key]), str(r[COL.home_team]), str(r[COL.away_team]),
+      nick(home), nick(away), sport, sportLabel(sport), str(r[COL.league]),
+      leagueLabel(str(r[COL.league])),
+      marketOf(str(r[COL.market]), sport).plain, marketOf(str(r[COL.market]), sport).term,
+      periodOf(str(r[COL.period])).plain, str(r[COL.selection]), book(str(r[COL.source]))]
+      .join(' ').toLowerCase();
+    HAYSTACKS.set(r, found);
+  }
+  return found;
 }
 
 function renderOdds() {
@@ -2098,17 +2440,7 @@ function renderOdds() {
     if (fPeriod && str(r[COL.period]) !== fPeriod) return false;
     if (fLeague && str(r[COL.league]) !== fLeague) return false;
     if (fAlt !== '' && String(r[COL.is_alternate]) !== fAlt) return false;
-    if (query) {
-      const [home, away] = sidesOf(r);
-      const sport = str(r[COL.sport]);
-      const hay = [str(r[COL.event_key]), str(r[COL.home_team]), str(r[COL.away_team]),
-        nick(home), nick(away), sport, sportLabel(sport), str(r[COL.league]),
-        leagueLabel(str(r[COL.league])),
-        marketOf(str(r[COL.market]), sport).plain, marketOf(str(r[COL.market]), sport).term,
-        periodOf(str(r[COL.period])).plain, str(r[COL.selection]), book(str(r[COL.source]))]
-        .join(' ').toLowerCase();
-      if (!hay.includes(query)) return false;
-    }
+    if (query && !haystack(r).includes(query)) return false;
     return true;
   });
 
@@ -2136,14 +2468,14 @@ function renderOdds() {
     { band: WHAT, key: 'period', label: 'Part of game', cell: (r) => cell(periodOf(str(r[COL.period])).plain, 'dim'),
       sort: (r) => str(r[COL.period]) },
     { band: PAYS, key: 'dec', label: 'Price', hint: 'Decimal odds: total returned per $1 staked', num: true,
-      cell: (r) => cell(fmtOdds(r[COL.decimal_odds])), sort: (r) => r[COL.decimal_odds] },
-    { band: PAYS, key: 'us', label: 'US odds', hint: 'The same price in American format', num: true,
-      cell: (r) => cell(fmtAmerican(r[COL.american_odds]), 'dim'), sort: (r) => r[COL.american_odds] },
+      cell: (r) => cell(fmtOdds(netOdds(r))), sort: netOdds },
+    { band: PAYS, key: 'us', label: 'US odds', hint: 'The same price in American format, after commission', num: true,
+      cell: (r) => cell(fmtAmerican(americanOf(r)), 'dim'), sort: americanOf },
     { band: PAYS, key: 'ret', label: '$100 returns', hint: 'What a winning $100 bet pays back in total', num: true,
-      cell: (r) => cell(fmtReturn(r[COL.decimal_odds])), sort: (r) => r[COL.decimal_odds] },
-    { band: PAYS, key: 'prob', label: "Book's chance", hint: 'How likely the sportsbook is treating this outcome', num: true,
-      cell: (r) => cell((r[COL.implied_probability] * 100).toFixed(1) + '%', 'dim'),
-      sort: (r) => r[COL.implied_probability] },
+      cell: (r) => cell(fmtReturn(netOdds(r))), sort: netOdds },
+    { band: PAYS, key: 'prob', label: 'Implied chance', hint: 'How likely the price shown is treating this outcome', num: true,
+      cell: (r) => cell((100 / netOdds(r)).toFixed(1) + '%', 'dim'),
+      sort: (r) => 1 / netOdds(r) },
     { band: CAN, key: 'limit', label: 'Max bet', hint: 'Largest stake the book will accept, where it says', num: true,
       cell: (r) => cell(r[COL.limit_amount] === null ? '—' : '$' + Math.round(r[COL.limit_amount]).toLocaleString(), 'dim'),
       sort: (r) => r[COL.limit_amount] ?? -1 },
@@ -2170,11 +2502,29 @@ function renderOdds() {
   const shown = filtered.slice(0, cap);
   el('odds-count').textContent = `${shown.length.toLocaleString()} of ${filtered.length.toLocaleString()} matching prices`;
   el('nav-odds').textContent = rows.length.toLocaleString();
-  el('odds-note').innerHTML = filtered.length > cap
+  // Two different caps, and conflating them would be a lie in one direction or
+  // the other. The table cap below is cosmetic — every row is still in the page,
+  // narrowing the filters reveals it. The *embed* cap above is not: those rows
+  // are in the database and not in this file at all.
+  //
+  // Which numbers it affects is stated precisely rather than sweepingly. The
+  // coverage grid, the run list and each run's own totals are queried against
+  // the whole run and are unaffected; only this table and its filters see the
+  // embedded subset. Saying "every count on this page" was itself untrue.
+  const embedNote = DATA.meta.quote_rows_capped
+    ? `<b>&#9432;</b> This table holds the ${DATA.meta.quote_rows_embedded.toLocaleString()}
+       soonest-starting of ${DATA.meta.quote_rows_available.toLocaleString()} price rows from
+       these collections — the rest are in the database but were left out to keep the file
+       openable. The coverage grid and the run totals above are counted over the whole
+       collection and are unaffected; the counts in <i>this table</i> are counts of what is
+       embedded. Rebuild with
+       <code>--max-quote-rows ${DATA.meta.quote_rows_available}</code> to include every row. `
+    : '';
+  el('odds-note').innerHTML = embedNote + (filtered.length > cap
     ? `Showing the first ${cap} of ${filtered.length.toLocaleString()} matching prices — narrow the
-       filters or search to see the rest. All of them are in the database; the table is capped only
+       filters or search to see the rest. All of them are in this page; the table is capped only
        so your browser stays quick. Click any column heading to sort.`
-    : 'Click any column heading to sort. Hover a row to see the same bet in sportsbook shorthand.';
+    : 'Click any column heading to sort. Hover a row to see the same bet in sportsbook shorthand.');
 
   const node = table(el('odds-table'), columns, shown,
     { empty: 'No prices match those filters.', go: (r) => href('bet', betKeyOf(r)) });
@@ -2276,20 +2626,46 @@ function sparkline(values) {
   </svg>`;
 }
 
+// Only a bet seen **more than once** can be said to have held its price.
+//
+// This was `series.size - moved.length`, which counted every bet observed in
+// exactly one collection as having "held exactly the same price across all N
+// collections" — and that sentence is the one the page offers as its staleness
+// signal, continuing "a book quietly serving a stale copy would show no movement
+// at all here". The count grew by precisely the rows of any venue that went
+// missing: across two passes with seven of ten sources blocked on the second,
+// the page claimed 7,374 bets held their price when 4,452 had been seen twice
+// and 2,922 had been seen once. It needs no outage either — started fixtures
+// drop out and new ones appear on every pass.
+function movementCounts(series, movedCount) {
+  let comparable = 0;
+  for (const s of series.values()) if (s.values.length > 1) comparable += 1;
+  return { comparable, once: series.size - comparable, stable: comparable - movedCount };
+}
+
 function renderMovement() {
   svgRunsChart();
 
   const ordered = runs.slice().reverse().filter((r) => rowsByRun.has(r.id));
+  const anchors = fixtureAnchorsFor(
+    ordered.flatMap((run) => rowsByRun.get(run.id) || [])
+  );
   const series = new Map();
   for (const run of ordered) {
     for (const r of rowsByRun.get(run.id)) {
       if (currentSport && str(r[COL.sport]) !== currentSport) continue;
       const bet = betOf(r);
+      // Keyed on the scheduled start as well, for the reason ``betRows`` is: the
+      // doubleheader ordinal is a within-run rank, so once game one has started
+      // and been dropped, game two inherits the bare key.  Without this, 97
+      // series on the live slate spliced game one's price onto game two's and
+      // drew the join as a price movement — one of them a "+29.63% change" with
+      // a sparkline, between two different games.
       const key = [str(r[COL.source]), str(r[COL.event_key]), bet.market, bet.period,
-        bet.side || '', bet.selection, bet.line, bet.is_alternate].join('\x1f');
+        bet.side || '', bet.selection, bet.line, fixtureBucket(r, anchors)].join('\x1f');
       if (!series.has(key)) series.set(key, { row: r, values: [] });
       const s = series.get(key);
-      s.values.push(r[COL.decimal_odds]);
+      s.values.push(netOdds(r));
       s.row = r;
     }
   }
@@ -2311,8 +2687,8 @@ function renderMovement() {
   const pickSource = el('move-source').value;
   const rows = moved.filter((s) => !pickSource || str(s.row[COL.source]) === pickSource);
 
-  const stable = series.size - moved.length;
-  el('move-count').textContent = `${moved.length.toLocaleString()} of ${series.size.toLocaleString()} bets changed price`;
+  const { comparable, once, stable } = movementCounts(series, moved.length);
+  el('move-count').textContent = `${moved.length.toLocaleString()} of ${comparable.toLocaleString()} bets changed price`;
   el('nav-move').textContent = moved.length.toLocaleString();
 
   table(el('move-table'), [
@@ -2339,12 +2715,18 @@ function renderMovement() {
     go: (s) => href('bet', betKeyOf(s.row)),
     empty: ordered.length < 2
       ? 'Only one collection has prices in this page — collect again to watch them move.'
-      : 'No price changed between these collections.',
+      // `comparable` is a count, not an array — `.length` on it was undefined,
+      // so this branch never rendered and a page with nothing in common still
+      // claimed "No price changed between these collections."
+      : comparable === 0
+        ? 'No bet appears in more than one of these collections, so there is nothing to compare.'
+        : 'No price changed between these collections.',
   });
 
   el('move-note').textContent = ordered.length < 2
     ? 'Comparing prices needs at least two collections in this page. Collect again, then rebuild it.'
-    : `${stable.toLocaleString()} bets held exactly the same price across all ${ordered.length} collections` +
+    : `${stable.toLocaleString()} bets held exactly the same price everywhere they were seen` +
+      (once ? `; ${once.toLocaleString()} appeared in only one of the ${ordered.length} collections and cannot be compared` : '') +
       (rows.length > 300 ? `; the 300 biggest movers of ${rows.length.toLocaleString()} are shown` : '') +
       '. A book quietly serving a stale copy would show no movement at all here, and its saved pages ' +
       'below would be identical every time — which is why both are on this page.';
@@ -2352,34 +2734,134 @@ function renderMovement() {
 
 /* ── checks ──────────────────────────────────────────────────────────────── */
 
+// Skips, rejections, raw responses and findings are fetched only for the runs
+// whose prices are embedded, while the picker lists every run.  For the rest the
+// page has *no rows*, which is not the same as *no such rows* — and it was saying
+// the second: "This collection saved nothing" for a run holding 71 saved
+// responses, with the true count printed in the flow diagram on the same screen.
+function detailLoaded(runId) {
+  return (DATA.detail_runs || []).indexOf(runId) !== -1;
+}
+
 function renderQuality() {
   const run = runById.get(currentRunId);
   const rows = currentRows();
   const findings = DATA.findings.filter((f) => f.run_id === currentRunId);
-  el('nav-quality').textContent = findings.length ? String(findings.length) : 'clear';
+  // Findings and prices are both embedded only for the newest few runs, while the
+  // picker lists many more.  For the rest, "0 problems / 0 impossible prices /
+  // nothing flagged" is not a clean bill of health — it is four positive claims
+  // about data the page never loaded, on runs the collector may have marked
+  // failed. Say what is actually known instead.
+  // Judged on the run's *unfiltered* embedded rows — ``currentRows()`` is
+  // sport-filtered, so a sport the row cap happened to cut blanked this whole
+  // panel and pointed at the wrong remedy while the run's findings sat embedded
+  // in the payload.  And a run can be listed with no prices for two different
+  // reasons that need two different sentences: its prices were not embedded
+  // (rebuild with a larger --quote-runs), or it genuinely stored none (no
+  // rebuild will ever add any — its findings are already here, so show them).
+  const loaded = runRows().length > 0;
+  const detail = detailLoaded(currentRunId);
+  el('nav-quality').textContent = !loaded && !detail
+    ? '—' : (findings.length ? String(findings.length) : 'clear');
+  // ``run.ok`` is serialized as a JSON boolean; comparing it with 0 left the
+  // "recorded this run as failed" branch unreachable, and there is no third
+  // verdict for a finished run, so "unknown" never happens either.
+  const verdict = !run ? ''
+    : run.ok === false ? 'The collector recorded this run as <b>failed</b>.'
+    : 'The collector recorded it as passing.';
+  if (!loaded && !detail) {
+    const stored = run ? (run.error_count || 0) + (run.warning_count || 0) : 0;
+    el('quality-strip').innerHTML =
+      `<div class="empty">This collection's prices are not embedded in this file — only the
+       newest ${DATA.meta.runs_with_rows} of ${DATA.meta.runs_recorded} are, to keep the file
+       openable. ${verdict}
+       It stored ${stored} finding(s). Re-run the report with a larger
+       <code>--quote-runs</code> to see them here.</div>`;
+    ['findings', 'overround', 'rejections', 'skips'].forEach((id) => {
+      const node = el(id);
+      if (node) node.innerHTML = '';
+    });
+    return;
+  }
+
+  // Loaded in full, or only partly?
+  //
+  // The guard above covers the all-or-nothing case; truncation is the *partial*
+  // one, and it is what the row cap actually produces — the fill is ordered by
+  // run then kickoff, so the newest run is whole and older ones are cut to
+  // their soonest fixtures.  On a cut run "impossible prices: none — the
+  // pricing adds up" is a positive claim about rows the page never loaded: a
+  // genuinely crossed market on a far-out fixture is simply absent, and the
+  // same stored run reports a fault at a larger cap and a clean bill at a
+  // smaller one.
+  // Measured against the run's *unfiltered* embedded rows.  Comparing the whole
+  // run's stored count with ``currentRows()``, which the sport picker filters,
+  // made every sport look like a truncation: selecting Hockey on a run embedded
+  // in full read "none in the 5% of this collection embedded here", where 5% is
+  // the hockey share and nothing had been left out at all — and the remedy it
+  // implies, a bigger cap, would change nothing.
+  const stored = run ? (run.quote_count || 0) : 0;
+  const embedded = runRows().length;
+  const partial = stored > embedded;
+  const seenShare = stored ? Math.round((embedded / stored) * 100) : 100;
 
   const groups = marketGroups(rows.filter((r) => str(r[COL.status]) === 'active'));
   const overrounds = [];
   for (const group of groups.values()) {
     // Only a bet with every side priced says anything about the book's margin.
     const bySelection = new Map(group.map((r) => [str(r[COL.selection]) + (str(r[COL.side]) || ''), r]));
-    if (bySelection.size < 2) continue;
-    const sum = [...bySelection.values()].reduce((a, r) => a + 1 / r[COL.decimal_odds], 0);
+    const priced = [...bySelection.values()];
+    // Every side present, judged against what this window actually settles on —
+    // not against a bare count of the rows that happen to be here.
+    if (!sumsToAMargin(priced)) continue;
+    const sum = priced.reduce((a, r) => a + 1 / netOdds(r), 0);
     overrounds.push({ sum, source: str(group[0][COL.source]) });
   }
   const sums = overrounds.map((o) => o.sum).sort((a, b) => a - b);
   const median = sums.length ? sums[Math.floor(sums.length / 2)] : null;
-  const impossible = overrounds.filter((o) => o.sum < 1).length;
+  // Only a venue that quotes both sides itself can be said to price itself to
+  // lose.  An exchange or prediction market publishes two independent books that
+  // nobody quoted against each other, so a briefly crossed pair there is a real
+  // (tiny) arbitrage, not a mispairing — counting it as "impossible" reports a
+  // true observation as a fault.
+  const impossible = overrounds.filter(
+    (o) => o.sum < 1 && venueKind(o.source) === 'sportsbook').length;
+  const crossed = overrounds.filter(
+    (o) => o.sum < 1 && venueKind(o.source) !== 'sportsbook').length;
 
+  // The findings cap is shared across every embedded run, so a run can have its
+  // prices on the page and its notes cut from it.  "0 problems / nothing flagged"
+  // then contradicts the stat strip above, which counts from the run's own row.
+  const recordedFindings = run ? (run.error_count || 0) + (run.warning_count || 0) : 0;
+  const findingsShort = findings.length < recordedFindings;
   const items = [
-    ['problems found', findings.length, findings.length ? 'listed below' : 'nothing flagged',
-      findings.length ? 'is-warn' : 'is-good'],
+    ['problems found', findingsShort ? recordedFindings : findings.length,
+      findingsShort ? 'recorded — not embedded in this page'
+        : findings.length ? 'listed below' : 'nothing flagged',
+      findingsShort || findings.length ? 'is-warn' : 'is-good'],
     ['prices tested', rows.length.toLocaleString(), 'teams, times, numbers, duplicates'],
     ['bets fully priced', overrounds.length.toLocaleString(), 'every side present'],
-    ["book's usual cut", median === null ? '—' : ((median - 1) * 100).toFixed(1) + '%', 'built into the price'],
-    ['impossible prices', impossible, impossible ? 'prices are mispaired' : 'none — the pricing adds up',
+    ["venue's usual cut", median === null ? '—' : ((median - 1) * 100).toFixed(1) + '%', 'after commission where there is one'],
+    ['impossible prices', impossible,
+      impossible ? 'a book pricing itself to lose — mispaired'
+        : !runRows().length ? 'no prices stored to test'
+        : partial ? `none in the ${seenShare}% of this collection embedded here`
+        : 'none — the pricing adds up',
       impossible ? 'is-bad' : 'is-good'],
-    ['re-read from disk', DATA.meta.replay_note, 'same answer as when stored'],
+    ['crossed order books', crossed,
+      crossed ? 'two sides of an exchange briefly overlapping — real, not a fault'
+        : !runRows().length ? 'no prices stored to test'
+        : partial ? `none in the ${seenShare}% of this collection embedded here`
+        : 'none on the exchanges or prediction markets'],
+    // The replay check runs once, against the newest collection's captures —
+    // rendering its PASS beside an older selected run claimed bytes the check
+    // never re-read (measured: PASS shown for a run whose captures were pruned
+    // and whose own ``replay --run`` says FAIL).
+    ['re-read from disk',
+      currentRunId === DATA.meta.replay_run_id ? DATA.meta.replay_note : '—',
+      currentRunId === DATA.meta.replay_run_id
+        ? 'same answer as when stored'
+        : `checked for collection ${DATA.meta.replay_run_id} only — run \`replay --run ${run ? run.id : ''}\` to check this one`],
   ];
   el('quality-strip').innerHTML = items.map(([name, value, sub, cls]) =>
     `<div class="stat ${cls || ''}"><span>${escapeHtml(name)}</span><b>${escapeHtml(String(value))}</b><small>${escapeHtml(sub)}</small></div>`
@@ -2392,7 +2874,9 @@ function renderQuality() {
     { label: 'Sportsbook', cell: (f) => cell(f.source ? book(f.source) : '—', 'dim') },
     { label: 'Fixture', cell: (f) => cell(f.event_key || '—', 'mono dim') },
     { label: 'What it says', cell: (f) => cell(f.message, 'wrap') },
-  ], findings, { empty: 'Nothing was flagged in this collection — no problems, nothing worth a look.',
+  ], findings, { empty: findingsShort
+                   ? `This collection's ${recordedFindings.toLocaleString()} notes are not in this page — the 500 embedded here were used up by other collections. Rebuild with fewer --quote-runs to include them.`
+                   : 'Nothing was flagged in this collection — no problems, nothing worth a look.',
                  go: (f) => (f.event_key ? href('fixture', f.event_key) : null) });
 
   const perSource = new Map();
@@ -2422,18 +2906,35 @@ function renderQuality() {
   that range. Most sit in one or two buckets — a book prices its whole slate to a house style.</p>`;
 
   const rejections = DATA.rejections.filter((r) => r.run_id === currentRunId);
+  // The 500-row cap is shared across every embedded run and the health rows
+  // carry each source's true rejection count, so the page can always tell a
+  // clean run from one whose rejections were cut — the findings table above
+  // makes exactly this check, and this table said "nothing had to be thrown
+  // away" about 60 rejections the cap had squeezed out.  (``run`` is the
+  // function-level binding from the top of renderQuality.)
+  const recordedRejections = run
+    ? run.sources.reduce((total, h) => total + (h.rejection_count || 0), 0) : 0;
+  const rejectionsShort = rejections.length < recordedRejections;
+  el('rejections-note').textContent = rejectionsShort && rejections.length
+    ? `${rejections.length.toLocaleString()} of ${recordedRejections.toLocaleString()} rejected rows shown — the rest did not fit this page's 500-row cap. Rebuild with fewer --quote-runs to include them.`
+    : '';
   table(el('rejections'), [
-    { label: 'Sportsbook', cell: (r) => cell(book(r.source)) },
+    { label: 'Venue', cell: (r) => cell(book(r.source)) },
     { label: 'Why', cell: (r) => cell(label(r.reason)) },
     { label: 'Detail', cell: (r) => cell(r.detail, 'wrap') },
-  ], rejections, { empty: 'Nothing had to be thrown away in this collection.' });
+  ], rejections, { empty: rejectionsShort
+      ? `This collection's ${recordedRejections.toLocaleString()} rejected rows are not in this page — the 500 embedded here were used up by other collections. Rebuild with fewer --quote-runs to include them.`
+      : 'Nothing had to be thrown away in this collection.',
+  });
 }
 
 /* ── saved pages ─────────────────────────────────────────────────────────── */
 
 function renderRaw() {
+  const run = runById.get(currentRunId);
   const raws = DATA.raws.filter((r) => r.run_id === currentRunId);
-  el('nav-raw').textContent = raws.length;
+  el('nav-raw').textContent = detailLoaded(currentRunId)
+    ? raws.length : ((run && run.raw_count) || 0);
   table(el('raws'), [
     { band: 'what was asked for', label: 'Sportsbook', cell: (r) => cell(book(r.source)) },
     { band: 'what was asked for', label: 'Which page', cell: (r) => cell(label(r.endpoint)) },
@@ -2447,7 +2948,10 @@ function renderRaw() {
     { band: 'the file on disk', label: 'Since last time', cell: (r) => html(r.unchanged
         ? '<span class="pill flat">identical</span>' : '<span class="pill accent">new content</span>') },
     { band: 'the file on disk', label: 'Address', cell: (r) => cell(r.url, 'dim') },
-  ], raws, { empty: 'This collection saved nothing.', go: (r) => href('book', r.source) });
+  ], raws, { empty: detailLoaded(currentRunId)
+               ? 'This collection saved nothing.'
+               : `This collection's ${(run && run.raw_count || 0).toLocaleString()} saved replies are not in this page — only the newest few collections carry them. Rebuild with more --quote-runs to include it.`,
+             go: (r) => href('book', r.source) });
 }
 
 /* ── reference ───────────────────────────────────────────────────────────── */

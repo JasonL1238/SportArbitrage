@@ -126,9 +126,9 @@ def tennis_quote(**overrides) -> Quote:
         # Tennis has no home player, so src.events.orient imposes its own order by
         # participant key.  A fixture that ignored that would be rejected by
         # validation for exactly the right reason, so it follows it.
-        event_key="TENNIS-alcaraz.carlos@TENNIS-humbert.ugo:2026-07-28",
-        home_participant="TENNIS-humbert.ugo",
-        away_participant="TENNIS-alcaraz.carlos",
+        event_key="TENNIS-alcarazcarlos@TENNIS-humbertugo:2026-07-28",
+        home_participant="TENNIS-humbertugo",
+        away_participant="TENNIS-alcarazcarlos",
         home_team="Ugo Humbert",
         away_team="Carlos Alcaraz",
     )
@@ -1114,11 +1114,18 @@ def test_unchanged_payload_is_detected_across_runs(tmp_path: Path, collector) ->
         assert flagged[0]["n"] == 2
 
 
-def test_a_duplicate_row_is_recorded_as_a_failed_insert_not_a_crash(
+def test_a_duplicate_row_costs_its_own_source_and_no_other(
     tmp_path: Path, collector
 ) -> None:
-    """The storage constraint aborts the run's insert.  That must surface as an
-    error on the run rather than as an exception that ends a watch loop."""
+    """The storage constraint aborts an insert.  Whose insert is the question.
+
+    One ``executemany`` over the whole run means one colliding row from one
+    adapter discards *every* source's prices — thirty-four thousand good rows
+    lost to one duplicate.  With three books that was a bad day; with ten it is
+    the expected consequence of adding the tenth.  So each source is inserted in
+    its own transaction: the offender loses its rows, everybody else keeps
+    theirs, and the run still reports the fault loudly and by name.
+    """
     duplicate = make_quote(source="bookA", source_market_id="m")
     raw_store = RawStore(tmp_path / "raw")
     sources = [
@@ -1127,8 +1134,10 @@ def test_a_duplicate_row_is_recorded_as_a_failed_insert_not_a_crash(
     ]
     with Store(tmp_path / "db.sqlite3") as store:
         result = collector.collect_once(sources, raw_store=raw_store, store=store)
-        assert store.load_quotes(result.run_id) == []
-    assert "quotes_not_persisted" in {f.code for f in result.report.errors}
+        stored = store.load_quotes(result.run_id)
+    assert {quote.source for quote in stored} == {"bookB"}
+    failures = [f for f in result.report.errors if f.code == "quotes_not_persisted"]
+    assert [f.source for f in failures] == ["bookA"]
 
 
 def test_response_headers_are_stored_for_freshness_auditing(tmp_path: Path) -> None:

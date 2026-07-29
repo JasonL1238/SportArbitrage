@@ -22,14 +22,23 @@ from pathlib import Path
 from typing import Any, Iterator
 
 #: Version written by this build.
-ENVELOPE_VERSION = 2
+ENVELOPE_VERSION = 3
 
 #: Versions this build can still read.  Old captures stay replayable: a parser
 #: upgrade must not orphan last month's raw data.  Version 1 predates response
-#: header capture, so those envelopes replay with no headers.
-SUPPORTED_ENVELOPE_VERSIONS = (1, 2)
+#: header capture, so those envelopes replay with no headers; version 2 predates
+#: :attr:`RawResponse.capture_id`, so those replay with an empty one and fall
+#: back to the timestamp heuristic in :func:`src.sources._common.latest_capture`.
+SUPPORTED_ENVELOPE_VERSIONS = (1, 2, 3)
 
 _SLUG = re.compile(r"[^a-z0-9]+")
+
+
+def _refuse_constant(name: str) -> float:
+    raise ValueError(
+        f"response contains the bare literal {name}, which is not valid JSON and "
+        "decodes to a float that no downstream bound can catch"
+    )
 
 #: Headers worth keeping for auditing freshness and CDN behaviour.  Anything
 #: resembling a credential is deliberately not stored.
@@ -65,6 +74,21 @@ class RawResponse:
     headers: dict[str, str] = field(default_factory=dict)
     """Response headers, minus anything credential-like.  Kept so that
     ``age``/``x-cache`` can be audited when a payload comes back unchanged."""
+    capture_id: str = ""
+    """Which collection pass produced this response — identical across every
+    response of one pass, different across two.
+
+    Several sources label their endpoints with a **position counter** (page or
+    batch index), and such a label only identifies a response within one pass:
+    across two, ``page 03`` covers different items each time.
+    :func:`src.sources._common.latest_capture` exists to keep the passes apart,
+    and clustering by timestamp cannot do it reliably — a watch loop at the
+    default five-minute cadence puts two passes closer together than the slowest
+    single pass takes to complete, so no threshold separates them.  Recording
+    which pass a response belongs to removes the guess.
+
+    Empty on captures written before this field existed, and on any response
+    that was never persisted; both fall back to the timestamp heuristic."""
 
     def __post_init__(self) -> None:
         if self.fetched_at.tzinfo is None:
@@ -113,6 +137,7 @@ class RawResponse:
             "fetched_at": self.fetched_at.astimezone(UTC).isoformat(),
             "request_params": self.request_params,
             "headers": self.headers,
+            "capture_id": self.capture_id,
             "sha256": self.sha256,
             "byte_size": self.byte_size,
             "body": self.body,
@@ -136,6 +161,7 @@ class RawResponse:
             content_type=envelope.get("content_type"),
             request_params=envelope.get("request_params") or {},
             headers=envelope.get("headers") or {},
+            capture_id=envelope.get("capture_id") or "",
         )
         recorded = envelope.get("sha256")
         if recorded and recorded != raw.sha256:
@@ -146,8 +172,18 @@ class RawResponse:
         return raw
 
     def json(self) -> Any:
-        """Decode the body, or raise ``ValueError``."""
-        return json.loads(self.body)
+        """Decode the body, or raise ``ValueError``.
+
+        ``NaN``, ``Infinity`` and ``-Infinity`` are refused rather than decoded.
+        They are not JSON — no specification permits them — but Python's decoder
+        accepts the bare words by default, so a feed emitting one produces a
+        float that behaves like a number everywhere it is checked and detonates
+        somewhere else entirely: ``inf`` passes a ``> 0`` liquidity test and
+        overflows the stake arithmetic; ``nan`` compares false against every
+        bound it is tested against and is stored by SQLite as NULL.  Refusing at
+        the decode is the only place the offending bytes are still in hand.
+        """
+        return json.loads(self.body, parse_constant=_refuse_constant)
 
 
 class RawStore:

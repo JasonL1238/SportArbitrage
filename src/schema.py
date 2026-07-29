@@ -175,6 +175,48 @@ class Quote(BaseModel):
             raise ValueError(f"decimal_odds out of range: {value}")
         return value
 
+    @field_validator("implied_probability")
+    @classmethod
+    def _check_implied_probability(cls, value: float) -> float:
+        if not 0.0 < value < 1.0:
+            raise ValueError(f"implied_probability must be a probability, got {value}")
+        return value
+
+    @field_validator("line", "limit_amount")
+    @classmethod
+    def _require_finite(cls, value: float | None) -> float | None:
+        """Refuse ``nan`` and ``±inf``, which are reachable and destructive.
+
+        JSON has no such literals, but :func:`json.loads` accepts the bare words
+        ``NaN``, ``Infinity`` and ``-Infinity`` by default, so a feed emitting
+        one decodes silently.  From there:
+
+        * ``inf`` passes an adapter's ``available > 0`` liquidity test and
+          becomes a ``limit_amount``, which reaches the stake-capping arithmetic
+          in :mod:`src.arb` and raises ``OverflowError`` — the run dies inside
+          the detector rather than at the row that caused it.
+        * ``nan`` is stored by SQLite as **NULL**, so a total's line round-trips
+          to ``None`` and the row that loaded cleanly on the way in raises
+          "market total requires a line" on the way out, from inside
+          ``load_quotes`` where there is no row to point at.
+
+        Both are caught here instead, where the offending row can be named.
+        """
+        if value is None:
+            return None
+        if value != value or value in (float("inf"), float("-inf")):
+            raise ValueError(f"must be a finite number, got {value}")
+        return value
+
+    @field_validator("limit_amount")
+    @classmethod
+    def _check_limit_amount(cls, value: float | None) -> float | None:
+        # ``None`` means "the venue did not say", which is not the same claim as
+        # "you may stake nothing" and must stay distinguishable from it.
+        if value is not None and value <= 0.0:
+            raise ValueError(f"limit_amount must be positive when stated, got {value}")
+        return value
+
     @model_validator(mode="after")
     def _check_market_shape(self) -> Quote:
         if not is_collectable(self.sport, self.period):

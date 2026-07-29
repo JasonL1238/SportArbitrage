@@ -119,7 +119,7 @@ def test_a_window_without_recorded_settlement_rules_is_refused() -> None:
     whether a tie voids the bet, and that guess is worth the whole stake."""
     with pytest.raises(ValidationError, match="settlement rules"):
         make_quote(sport=Sport.TENNIS, league="ATP", period=Period.FIRST_5_INNINGS,
-                   home_participant="TENNIS-a.x", away_participant="TENNIS-b.y",
+                   home_participant="TENNIS-ax", away_participant="TENNIS-by",
                    home_team="A X", away_team="B Y")
 
 

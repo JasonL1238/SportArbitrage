@@ -26,8 +26,29 @@ def _load(source: str) -> list[RawResponse]:
     store = RawStore(FIXTURE_RAW_DIR)
     paths = sorted(FIXTURE_RAW_DIR.glob(f"{source}__*.json"))
     if not paths:
-        raise AssertionError(f"no fixtures for {source} in {FIXTURE_RAW_DIR}")
+        raise AssertionError(
+            f"no captured payloads for {source} in {FIXTURE_RAW_DIR}.\n"
+            "Every registered source needs a fixture: without one it escapes the "
+            "contract test entirely, which is the check that says an adapter is "
+            "finished.  Capture one with a short live run and commit the envelopes."
+        )
     return [store.read(path) for path in paths]
+
+
+@pytest.fixture(scope="session")
+def registered_raws() -> dict[str, list[RawResponse]]:
+    """Captured payloads for **every** registered source, keyed by source key.
+
+    Derived from :data:`src.sources.registry.SOURCES` rather than from a list
+    kept alongside it.  A hand-maintained list is a list that drifts: the file
+    that used to hold one said, in its own docstring, that an adapter is finished
+    when the contract test passes with it added — and the only thing that made
+    that true was somebody remembering to add it.  A registered source with no
+    fixture now fails loudly here instead of being quietly skipped.
+    """
+    from src.sources import registry
+
+    return {key: _load(key) for key in registry.keys()}
 
 
 @pytest.fixture(scope="session")
@@ -46,23 +67,13 @@ def kambi_raw() -> list[RawResponse]:
 
 
 @pytest.fixture(scope="session")
-def all_fixture_quotes(
-    fanduel_raw: list[RawResponse],
-    pinnacle_raw: list[RawResponse],
-    kambi_raw: list[RawResponse],
-) -> list[Quote]:
-    """Every normalized row the three fixtures produce."""
-    from src.sources.betrivers_kambi import BetRiversKambiAdapter
-    from src.sources.fanduel import FanDuelAdapter
-    from src.sources.pinnacle import PinnacleAdapter
+def all_fixture_quotes(registered_raws: dict[str, list[RawResponse]]) -> list[Quote]:
+    """Every normalized row the registered sources' fixtures produce."""
+    from src.sources import registry
 
     quotes: list[Quote] = []
-    for adapter_cls, raws in (
-        (FanDuelAdapter, fanduel_raw),
-        (PinnacleAdapter, pinnacle_raw),
-        (BetRiversKambiAdapter, kambi_raw),
-    ):
-        adapter = adapter_cls()
+    for key, raws in registered_raws.items():
+        adapter = registry.descriptor(key).replay_instance()
         try:
             quotes.extend(adapter.parse(raws).quotes)
         finally:

@@ -14,7 +14,7 @@ Three things are deliberately *not* in it.
 *League* is absent because books disagree about classification and that
 disagreement must not be able to break a join — see :mod:`src.leagues`.
 *Sport* is absent because it is already implied: participant keys are namespaced
-(``MLB-CIN``, ``SOCCER-arsenal``, ``TENNIS-humbert.ugo``), so no two sports can
+(``MLB-CIN``, ``SOCCER-arsenal``, ``TENNIS-humbertugo``), so no two sports can
 collide.  And the *time of day* is absent because books round start times
 differently; the date bucket plus the doubleheader pass below carries that load.
 """
@@ -110,19 +110,35 @@ def cluster_start_times(
 ) -> list[list[datetime]]:
     """Group start times that describe the same fixture.
 
-    Single-linkage on the sorted times: a gap wider than *tolerance* starts a new
-    fixture.  Two books a minute apart land together; the two halves of an MLB
-    doubleheader do not.  *tolerance* is the league's
+    A moment joins the current fixture when it is within *tolerance* of the
+    previous member **and** within *tolerance* of the cluster's first member.
+    Two books a minute apart land together; the two halves of an MLB doubleheader
+    do not.  *tolerance* is the league's
     :attr:`~src.leagues.League.same_event_tolerance`, because the right width
     differs by an order of magnitude between baseball and tennis.
+
+    The second condition is what stops a **chain**.  Pure single-linkage bounds
+    each *gap* and not the total span, so N sources stepping along one at a time
+    fuse into one fixture spanning up to ``(N-1) × tolerance``: three books
+    listing kickoffs 29 hours apart in sequence became one event under soccer's
+    30-hour width, and the resulting "position" had its three legs on three
+    different days — reported as a 16.67% guarantee, with nothing downstream to
+    catch it, because :func:`src.arb._fixture_outliers` deliberately does not
+    compare ``commence_time``.
+
+    Bounding the span makes the width mean what it says: at 30 hours a fixture
+    can be listed anywhere inside a 30-hour window and no further, whatever the
+    source count.  It costs nothing on real data — the widest cluster the live
+    slate forms spans 26 hours, inside the same bound that permits it.
     """
     ordered = sorted(times)
     if not ordered:
         return []
     clusters: list[list[datetime]] = [[ordered[0]]]
     for moment in ordered[1:]:
-        if moment - clusters[-1][-1] <= tolerance:
-            clusters[-1].append(moment)
+        current = clusters[-1]
+        if moment - current[-1] <= tolerance and moment - current[0] <= tolerance:
+            current.append(moment)
         else:
             clusters.append([moment])
     return clusters
@@ -184,6 +200,17 @@ def reconcile_event_keys(quotes: Sequence[Quote]) -> tuple[list[Quote], list[Rek
         # Number the fixtures of each scheduling date in start-time order.  The
         # date comes from the cluster's earliest time so a cluster straddling
         # midnight is not split in half.
+        #
+        # The ordinal is a **within-run** identity, and deliberately so: it is a
+        # rank among the fixtures this collection can see, which is the only
+        # thing available that does not depend on one source's numbering.  It is
+        # therefore not stable across collections.  Adapters drop started games,
+        # so once game one of a doubleheader is under way game two is the only
+        # cluster left and is numbered one — inheriting the bare key game one
+        # carried an hour before.  Nothing within a run is mispaired by that;
+        # what it means is that a consumer joining rows *across* runs must pin
+        # the fixture by scheduled start as well as by key, which is what
+        # ``betRows`` in the dashboard does.
         key_for_cluster: dict[int, str] = {}
         seen_per_date: dict[date, int] = defaultdict(int)
         for index, cluster in enumerate(clusters):

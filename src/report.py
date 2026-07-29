@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from src import settings
+from src.commission import commission_for, net_decimal_odds
 from src.leagues import is_known
 from src.leagues import league as get_league
 from src.report_assets import BODY, CSS, JS
@@ -46,12 +47,27 @@ from src.schema import (
     period_rules,
     scoring_unit,
 )
+from src.settlement import SettlementRegime, regime_for
 from src.store import IncompatibleDatabase, Store
 
 #: How many recent runs to embed quote rows for.  Bounded because the page holds
 #: every row in memory; the run list itself always covers more runs than this.
 DEFAULT_QUOTE_RUNS = 6
 DEFAULT_RUN_LIMIT = 40
+
+#: Hard ceiling on the rows embedded in the page, whatever ``--quote-runs`` asks
+#: for.  ``--quote-runs`` bounds the number of *collections*, which is the wrong
+#: unit once the source list grows: six runs of three books is 200,000 rows and
+#: six runs of thirty books is two million.  Measured behaviour of the page at
+#: various sizes — 34,000 rows embeds as roughly 20 MB of JSON, 340,000 as 200 MB
+#: with the builder's memory in gigabytes, and 3.4 million exceeds V8's maximum
+#: string length and renders blank.  Interactivity goes first, somewhere around
+#: 50-100k rows, because each keystroke in the search box re-filters every row.
+#:
+#: 150,000 sits above a realistic multi-run slate and well below where the page
+#: stops working.  Exceeding it truncates to the newest rows and says so on the
+#: page, rather than producing a file nobody can open.
+DEFAULT_MAX_QUOTE_ROWS = 150_000
 
 #: Two books is the bar for a sport being comparable at all.  Mirrors
 #: ``src.collector.MIN_HEALTHY_SOURCES``; kept as its own constant rather than
@@ -63,6 +79,7 @@ SOURCE_NOTES: dict[str, dict[str, str]] = {
     "fanduel": {
         "label": "FanDuel",
         "host": "sbapi.il.sportsbook.fanduel.com",
+        "kind": "sportsbook",
         "what": "Read from the feeds behind FanDuel's own sport pages. Whole-game bets only "
                 "— who wins, the handicap, and the combined total — but it does publish "
                 "extra numbers beyond its main line.",
@@ -70,16 +87,88 @@ SOURCE_NOTES: dict[str, dict[str, str]] = {
     "pinnacle": {
         "label": "Pinnacle",
         "host": "guest.api.arcadia.pinnacle.com",
-        "what": "The most detailed of the three: parts of a game as well as the whole, and "
-                "the only one that tells you the largest bet it will accept.",
+        "kind": "sportsbook",
+        "what": "The most detailed of the sportsbooks: parts of a game as well as the "
+                "whole, and the one that publishes the largest bet it will accept.",
     },
     "betrivers_kambi": {
         "label": "BetRivers",
         "host": "eu-offering-api.kambicdn.com",
+        "kind": "sportsbook",
         "what": "Lists the most fixtures, and says in words which part of the game each bet "
                 "covers — including whether overtime counts. That is what let Pinnacle's "
                 "unlabelled period numbering be verified.",
     },
+    "leovegas_kambi": {
+        "label": "LeoVegas",
+        "host": "eu-offering-api.kambicdn.com",
+        "kind": "sportsbook",
+        "what": "A second book on the same platform as BetRivers, run by a different "
+                "company. Whether that makes it a second opinion or the same one twice is "
+                "measured on every run rather than assumed — see the sources page.",
+    },
+    "bovada": {
+        "label": "Bovada",
+        "host": "www.bovada.lv",
+        "kind": "sportsbook",
+        "what": "Reads the coupon feed behind its own sport pages, and is the only source "
+                "that states outright which side it counts as home — which is how the "
+                "others' orderings were checked.",
+    },
+    "matchbook": {
+        "label": "Matchbook",
+        "host": "www.matchbook.com",
+        "kind": "exchange",
+        "what": "Not a bookmaker: you are matched against another customer. Only prices "
+                "somebody is actually offering are collected, each with the amount behind "
+                "it, and Matchbook takes a share of your winnings on top.",
+    },
+    "smarkets": {
+        "label": "Smarkets",
+        "host": "api.smarkets.com",
+        "kind": "exchange",
+        "what": "A second exchange. Its rate limit is tight enough that only the "
+                "who-wins market is collected — asking for handicaps and totals as well "
+                "costs more requests than it will answer.",
+    },
+    "sxbet": {
+        "label": "SX Bet",
+        "host": "api.sx.bet",
+        "kind": "exchange",
+        "what": "An exchange whose order book is public. Prices are what a taker can hit, "
+                "converted from the maker's side, and its own fee is charged on winnings.",
+    },
+    "kalshi": {
+        "label": "Kalshi",
+        "host": "api.elections.kalshi.com",
+        "kind": "prediction market",
+        "what": "A regulated exchange in contracts rather than bets: each side is its own "
+                "order book, there is a fee per contract, and a cancelled game is not "
+                "refunded the way a book refunds it.",
+    },
+    "polymarket": {
+        "label": "Polymarket",
+        "host": "gamma-api.polymarket.com",
+        "kind": "prediction market",
+        "what": "Contracts again, priced between 0 and 1. A cancelled game resolves every "
+                "contract at 0.50 whatever you paid, which is not what a book does with "
+                "the same fixture.",
+    },
+}
+
+#: What each kind of venue is, in the reader's terms.  The distinction is not
+#: decoration: it decides whether the number on the screen is the number you are
+#: paid, whether there is a stated amount behind it, and what happens to your
+#: stake if the game is called off.
+VENUE_KINDS: dict[str, str] = {
+    "sportsbook": "Takes the other side of your bet itself. Its margin is already inside "
+                  "the price shown, and it refunds a cancelled game.",
+    "exchange": "Matches you against another customer. The price is somebody's actual "
+                "offer, with an amount behind it, and the venue charges a commission on "
+                "your winnings — so the price shown is not the price you are paid.",
+    "prediction market": "Trades contracts that pay 1 if the thing happens. There is a "
+                         "fee per contract, each side is its own order book, and a "
+                         "cancelled game is resolved rather than refunded.",
 }
 
 #: Why an offer the books do publish is deliberately not collected.  Matched by
@@ -117,8 +206,68 @@ SKIP_NOTES: list[tuple[str, str]] = [
     ("event_already_started",
      "The fixture is under way. Only pre-match prices are collected, because an in-play "
      "price and a pre-match price are not the same market."),
+    ("orders_response_truncated",
+     "The venue returned a full page of orders and this market was not in it, so whether "
+     "anyone is offering this side is unknown rather than no."),
+    ("orders_page_cap_reached",
+     "One market has more than a page of resting orders, so the best price shown may not "
+     "be the best price offered."),
+    ("whole_number_strike",
+     "A contract whose line is a whole number. It settles on a strict inequality, so an "
+     "exact landing is a loss for one side rather than the push a whole line means "
+     "everywhere else — a different contract, not a version of this one."),
+    # ── the venues added after this table was first written ─────────────────
+    #
+    # Every one of these rendered as "Not one of the four kinds of game bet
+    # collected here", because the test guarding the table was a hand-written
+    # list of three sources.  2,540 of 8,479 skipped records on the captured
+    # slate carried that answer, and several contradicted it outright.
+    ("market_in_scope_but_not_fetched",
+     "One of the four kinds collected here, which this venue does publish and this "
+     "collector does not ask it for — its published rate limit does not leave room for "
+     "the whole ladder. A coverage choice, not a fact about the market."),
+    ("market_type_out_of_scope",
+     "A market this venue offers that is not one of the four kinds collected here — "
+     "the venue's own type code is on the end of the reason."),
+    ("market_on_out_of_scope_event",
+     "Belongs to a fixture that was not collected, so there is nothing to attach it to."),
+    ("market_on_out_of_scope_game",
+     "Belongs to a fixture that was not collected, so there is nothing to attach it to."),
+    ("game_already_started",
+     "The fixture is under way. Only pre-match prices are collected, because an in-play "
+     "price and a pre-match price are not the same market."),
+    ("event_in_running",
+     "The venue flags this fixture as in-running, so its prices are live ones."),
+    ("event_live",
+     "The venue flags this fixture as live, so its prices are in-play ones."),
+    ("no_resting_order_for_outcome",
+     "Nobody is offering this side on the exchange. Ordinary on a thin order book, and "
+     "the reason an exchange row is not the same thing as a book's posted price."),
+    ("runner_without_a_back_price",
+     "Nobody is offering this side on the exchange. Ordinary on a thin order book, and "
+     "the reason an exchange row is not the same thing as a book's posted price."),
+    ("contract_without_a_takeable_offer",
+     "The contract exists but nothing is currently offered on it at any price."),
+    ("league_unmapped",
+     "A competition this venue prices that the league registry does not carry, so the "
+     "rows cannot be filed under a competition and are captured rather than guessed at."),
+    ("competition_unmapped",
+     "A competition this venue prices that the league registry does not carry."),
+    ("event_beyond_the_leagues_schedule_horizon",
+     "Further ahead than this competition schedules, so it is a placeholder rather than "
+     "a fixture with a real date."),
+    ("duplicate_event",
+     "The same fixture appeared twice in one response; kept once and counted here."),
+    ("navigation_response",
+     "A menu listing rather than prices — it maps competition ids to names and carries "
+     "no odds."),
+
     ("market_on_started_event",
      "Belongs to a fixture already under way, so it is not a pre-match price."),
+    ("market_in_play",
+     "The book itself flags this market as in-play. Read from the feed rather than "
+     "inferred from the kick-off time, which admits a market that has gone live in the "
+     "minute before it."),
     ("already_collected_from_sport_page",
      "The same market was already read from another of this book's pages. Kept once, "
      "counted here, so the duplicate is visible rather than silently dropped."),
@@ -198,9 +347,6 @@ SKIP_NOTES: list[tuple[str, str]] = [
      "A selection the book listed without a price. There is nothing to record."),
     ("outcome_without_odds",
      "A selection the book listed without a price. There is nothing to record."),
-    ("feed_american_odds_disagreed_with_decimal",
-     "The book sent two forms of the same price that do not agree with each other. "
-     "Neither can be trusted over the other, so the row is not kept."),
 ]
 
 #: Field-by-field reference, shown so "one consistent schema" is inspectable.
@@ -262,8 +408,33 @@ SCHEMA_FIELDS: list[tuple[str, str, bool, str]] = [
 GLOSSARY: list[dict[str, str]] = [
     {
         "term": "Sportsbook",
-        "plain": "A company that takes bets. This tool reads three of them: FanDuel, "
-                 "Pinnacle and BetRivers.",
+        "plain": "A company that takes bets, and takes the other side of yours. This "
+                 "tool reads five: FanDuel, Pinnacle, BetRivers, LeoVegas and Bovada. "
+                 "It also reads five venues that are not sportsbooks — see "
+                 "\u201cExchange\u201d and \u201cPrediction market\u201d.",
+    },
+    {
+        "term": "Exchange",
+        "plain": "Not a bookmaker. It matches you against another customer, shows the "
+                 "amount actually behind each price, and takes a commission out of your "
+                 "winnings — so the price on the screen is better than the price you are "
+                 "paid. Matchbook, Smarkets and SX Bet.",
+    },
+    {
+        "term": "Prediction market",
+        "plain": "Trades contracts that pay 1 if the thing happens, at a price between 0 "
+                 "and 1, with a fee per contract. Each side is a separate order book, so "
+                 "the two need not add up the way a book's do. Kalshi and Polymarket.",
+    },
+    {
+        "term": "Commission",
+        "plain": "What an exchange or prediction market charges. An exchange takes a "
+                 "share of a winning bet; a prediction market charges a fee per contract "
+                 "when you enter, whether or not it settles your way — so on a hedge the "
+                 "losing leg is not free. It is "
+                 "not in the quoted price, so every comparison on this page uses the "
+                 "price after commission — otherwise the venues that charge would look "
+                 "like the best ones on every fixture.",
     },
     {
         "term": "A price (decimal)",
@@ -298,8 +469,11 @@ GLOSSARY: list[dict[str, str]] = [
     {
         "term": "Who wins",
         "plain": "The simplest bet: pick the winner, no adjustments. Books call it the "
-                 "moneyline. In soccer — and in hockey over regulation time only — a draw "
-                 "is a third thing you can back, because the game really can end level.",
+                 "moneyline. Where the window being priced can end level — soccer, and "
+                 "any part-game window such as hockey regulation time, a baseball "
+                 "half-inning stretch or a first half — a draw is a third thing you can "
+                 "back. The Settlement panel lists exactly which windows those are; this "
+                 "sentence used to name two of them and the slate held more.",
     },
     {
         "term": "Winner with a handicap",
@@ -339,8 +513,11 @@ GLOSSARY: list[dict[str, str]] = [
     },
     {
         "term": "Max bet",
-        "plain": "The largest stake the book will accept on that selection, where it "
-                 "publishes one. Pinnacle does; the others mostly do not.",
+        "plain": "The largest stake available on that selection, where the venue "
+                 "publishes one. Pinnacle states a limit; the exchanges and prediction "
+                 "markets state the amount actually behind the price, which is a harder "
+                 "cap; the other books mostly state nothing, which means unknown rather "
+                 "than unlimited.",
     },
     {
         "term": "Suspended",
@@ -400,13 +577,31 @@ class _Interner:
         return found
 
 
-QUOTE_COLUMNS = [
+#: Columns read straight out of the ``quote`` table.
+STORED_QUOTE_COLUMNS = [
     "run_id", "source", "sport", "league", "event_key", "source_event_id",
     "home_participant", "away_participant", "home_team", "away_team", "commence_time",
     "market", "period", "selection", "side", "line", "is_alternate",
     "decimal_odds", "american_odds", "implied_probability", "source_market_id",
     "limit_amount", "status", "last_change_at",
 ]
+
+#: What the venue actually pays after its commission, computed here rather than
+#: in the page.
+#:
+#: An exchange or prediction market quotes a price and then takes a cut, so the
+#: stored number is not the number you receive — and the gap is the same size as
+#: the edge this whole tool looks for.  Every comparison in :mod:`src.arb` is
+#: made net; a page that showed gross would disagree with the detector on exactly
+#: the rows the commission model exists for, which is how an operator concludes
+#: the detector is broken.
+#:
+#: Computed in Python, from the same table :mod:`src.arb` prices with, rather
+#: than reimplemented in JavaScript: two implementations of a fee schedule drift,
+#: and the one on the page is the one nobody tests.
+NET_ODDS_COLUMN = "net_decimal_odds"
+
+QUOTE_COLUMNS = [*STORED_QUOTE_COLUMNS, NET_ODDS_COLUMN]
 
 _INTERNED = frozenset({
     "source", "sport", "league", "event_key", "source_event_id", "home_participant",
@@ -420,7 +615,9 @@ def build_report(
     *,
     run_limit: int = DEFAULT_RUN_LIMIT,
     quote_runs: int = DEFAULT_QUOTE_RUNS,
+    max_quote_rows: int = DEFAULT_MAX_QUOTE_ROWS,
     replay_note: str = "not checked",
+    replay_run_id: int | None = None,
     generated_at: datetime | None = None,
 ) -> dict[str, Any]:
     """Assemble everything the page shows, as plain JSON-ready data."""
@@ -428,22 +625,52 @@ def build_report(
 
     run_rows = store.query(
         """SELECT r.id, r.started_at, r.finished_at, r.ok, r.quote_count, r.event_count,
-                  r.error_count, r.warning_count, r.note,
+                  r.error_count, r.warning_count, r.note, r.excluded_count,
                   (SELECT COUNT(*) FROM raw_response w WHERE w.run_id = r.id) AS raw_count
              FROM collection_run r
+            WHERE r.finished_at IS NOT NULL
             ORDER BY r.id DESC LIMIT ?""",
         (run_limit,),
     )
+    # Unfinished runs are excluded, as every other read command excludes them —
+    # ``runs`` says in words that "arb, lines, report and mirrors skip it", and
+    # this was the one that did not.  An interrupted pass has health rows and no
+    # quotes, so it became "the latest run" for the page alone and the headline
+    # reported a total coverage collapse: six sports to zero, on a database whose
+    # newest *finished* run was healthy.
     if not run_rows:
-        raise LookupError(f"no collection runs recorded in {store.path}")
+        raise LookupError(f"no finished collection runs recorded in {store.path}")
 
     runs: list[dict[str, Any]] = []
     for row in run_rows:
+        # What each source *published* and what actually reached the table are
+        # two numbers, and they differ exactly when that source's insert failed.
+        # The page labelled the published one "prices stored" and rendered it
+        # beside a panel reading "This book stored no prices in this collection"
+        # — two contradicting numbers under one heading, on the surface most
+        # likely to be read.
+        #
+        # ``stored_count`` is only attached to sources the run's own
+        # ``quotes_not_persisted`` finding names — the same gate the ``runs``
+        # listing uses — because "produced more than it stored" is *not* on its
+        # own a storage fault.  Health is written before the ``--sport``/
+        # ``--league`` filter drops what is out of scope, so a scoped collection
+        # legitimately stores fewer rows than every source produced, and reading
+        # the difference as a lost write had the page saying "the rest were not
+        # stored — see Checks" about rows the operator asked it to drop, above a
+        # Checks panel with no storage finding in it.
+        stored_by_source = store.stored_quote_counts(row["id"])
+        lost_sources = store.sources_that_failed_to_persist(row["id"])
         health = [
             {
                 "key": h["source_key"],
                 "ok": bool(h["ok"]),
                 "quote_count": h["quote_count"],
+                **(
+                    {"stored_count": stored_by_source.get(h["source_key"], 0)}
+                    if lost_sources is None or h["source_key"] in lost_sources
+                    else {}
+                ),
                 "event_count": h["event_count"],
                 "request_count": h["request_count"],
                 "raw_bytes": h["raw_bytes"],
@@ -451,6 +678,17 @@ def build_report(
                 "rejection_count": h["rejection_count"],
                 "skipped_count": h["skipped_count"],
                 "unchanged_payloads": h["unchanged_payloads"],
+                # What the source was asked for and what it refused.  The
+                # columns were added to the store and read by the CLI summary
+                # and nothing else, so the dashboard's per-source card showed
+                # ``ok: true`` for a book that had lost most of its leagues —
+                # which is the state the whole instrumentation exists to make
+                # visible, hidden again by the surface most likely to be read.
+                "repaired_count": h["repaired_count"],
+                "scopes_requested": h["scopes_requested"],
+                "scopes_refused": [
+                    entry for entry in (h["scopes_refused"] or "").split("\n") if entry
+                ],
                 "error_kind": h["error_kind"],
                 "error_message": h["error_message"],
             }
@@ -470,6 +708,13 @@ def build_report(
                 "warning_count": row["warning_count"],
                 "raw_count": row["raw_count"],
                 "note": row["note"],
+                # Rows the --sport/--league filter dropped on purpose.  The flow
+                # strip rendered "read 5,429 -> checked 5,429 -> stored 2,476"
+                # for a scoped run: 2,953 rows vanish between adjacent boxes,
+                # "checked 5,429" is false (validation runs after the filter),
+                # and the sentence explaining it — the run's note — was in the
+                # payload with nothing rendering it.
+                "excluded_count": row["excluded_count"],
                 "total_latency_ms": sum(h["latency_ms"] or 0 for h in health),
                 "sources": sorted(health, key=lambda h: h["key"]),
                 "sports": sports,
@@ -478,8 +723,9 @@ def build_report(
         )
 
     quote_run_ids = [run["id"] for run in runs[:quote_runs]]
-    quotes = _quote_payload(store, quote_run_ids)
+    quotes = _quote_payload(store, quote_run_ids, max_rows=max_quote_rows)
     strings: list[str] = quotes.pop("_strings")
+    rows_available: int = quotes.pop("_available")
     latest_run_id = runs[0]["id"]
 
     detail_ids = tuple(quote_run_ids)
@@ -494,21 +740,36 @@ def build_report(
             "lede": _lede(runs[0]),
             "slate_dates": _slate_dates(quotes, strings),
             "replay_note": replay_note,
+            # The run whose captures the note describes.  The verdict was
+            # rendered inside the run-scoped Checks strip, so selecting an older
+            # run showed the newest run's PASS as if this run's bytes had been
+            # re-read — for a run whose captures were pruned and whose own
+            # ``replay --run`` says FAIL.
+            "replay_run_id": replay_run_id,
             "vocab_note": VOCAB_NOTE,
             "runs_recorded": len(runs),
-            "runs_with_rows": len(quote_run_ids),
+            # Runs whose rows actually made the page, not runs *asked* for —
+            # ``len(quote_run_ids)`` read 2 on a database whose second run
+            # stored nothing.
+            "runs_with_rows": len({row[0] for row in quotes["rows"]}) if quotes["rows"] else 0,
+            "quote_rows_embedded": len(quotes["rows"]),
+            "quote_rows_available": rows_available,
+            "quote_rows_capped": rows_available > len(quotes["rows"]),
+            "max_quote_rows": max_quote_rows,
             "min_books": MIN_BOOKS_FOR_COMPARISON,
         },
         "sources": [
-            dict(key=key, **SOURCE_NOTES.get(key, _unknown_source(key)))
+            _source_entry(key)
             for key in sorted({h["key"] for run in runs for h in run["sources"]})
         ],
+        "venue_kinds": VENUE_KINDS,
         "runs": runs,
         "quotes": quotes,
         "participants": _participants(quotes, strings),
         "sport_facts": _sport_facts(),
         "period_labels": _period_labels(),
         "league_names": _league_names(store),
+        "league_tolerances": _fixture_tolerances(store),
         "skipped": [
             {"run_id": r["run_id"], "source": r["source"], "reason": r["reason"], "count": r["count"]}
             for r in store.query(
@@ -517,11 +778,28 @@ def build_report(
             )
         ],
         "skip_notes": [list(pair) for pair in SKIP_NOTES],
+        # Rows that were **published** after a field was reconstructed.  Shipped
+        # beside the skips and rendered apart from them: the counter existed,
+        # was persisted, and reached no view at all, so the 118 Kambi rows it
+        # describes appeared on this page *less* than before it was introduced —
+        # they had at least been in the skipped breakdown, mislabelled.
+        "repaired": [
+            {"run_id": r["run_id"], "source": r["source"], "reason": r["reason"],
+             "count": r["count"]}
+            for r in store.query(
+                f"SELECT run_id, source, reason, count FROM repaired "
+                f"WHERE run_id IN ({placeholders})",
+                detail_ids,
+            )
+        ],
         "rejections": [
             {"run_id": r["run_id"], "source": r["source"], "reason": r["reason"], "detail": r["detail"]}
             for r in store.query(
+                # Newest run first.  Ordering by ``id`` alone meant the *oldest*
+                # runs filled the cap and the newest lost — the run the page
+                # opens on, and the only one anybody is reading.
                 f"SELECT run_id, source, reason, detail FROM rejection "
-                f"WHERE run_id IN ({placeholders}) ORDER BY id LIMIT 500",
+                f"WHERE run_id IN ({placeholders}) ORDER BY run_id DESC, id LIMIT 500",
                 detail_ids,
             )
         ],
@@ -531,9 +809,15 @@ def build_report(
                 "message": r["message"], "source": r["source"], "event_key": r["event_key"],
             }
             for r in store.query(
+                # Newest run first, then errors before warnings.  Ordered by
+                # severity and ``id`` alone, ten runs of 60 warnings filled the
+                # 500 from the oldest seven and left the newest run with none —
+                # and the page then said "Nothing was flagged in this collection"
+                # while its own stat strip pointed at Checks.
                 f"SELECT run_id, severity, code, message, source, event_key FROM finding "
                 f"WHERE run_id IN ({placeholders}) "
-                f"ORDER BY CASE severity WHEN 'error' THEN 0 ELSE 1 END, id LIMIT 500",
+                f"ORDER BY run_id DESC, CASE severity WHEN 'error' THEN 0 ELSE 1 END, "
+                f"id LIMIT 500",
                 detail_ids,
             )
         ],
@@ -548,6 +832,13 @@ def build_report(
                 detail_ids,
             )
         ],
+        # Which runs the detail tables above were queried for at all.  Every run
+        # in the picker is selectable, but skips, rejections, raw responses and
+        # findings are only fetched for the embedded few — so for the others the
+        # page was rendering "This collection saved nothing" and "Everything this
+        # collection saw was in scope" about tables it had never loaded, with the
+        # true numbers printed a few lines up in the same flow diagram.
+        "detail_runs": list(detail_ids),
         "glossary": GLOSSARY,
         "schema_fields": [
             {"name": name, "type": kind, "required": required, "note": note}
@@ -619,8 +910,27 @@ def _coverage_for_run(
     # count is shown next to the book count rather than instead of it.
     cross_book = store.cross_book_event_counts(run_id, min_books=MIN_BOOKS_FOR_COMPARISON)
 
+    # The run's own scope, honoured before anything is blamed.  League coverage
+    # is recorded before the ``--sport``/``--league`` filter — correct for "what
+    # was asked for" — but a sport the operator *excluded* is not a coverage
+    # failure, and blank-filling it here had the lede of a ``--sport tennis``
+    # run claiming "Baseball did not clear that bar — one book only, or no
+    # fixture that two of them both priced … listed rather than hidden": three
+    # false claims (both books priced it, the operator dropped it, and none of
+    # it is listed), contradicted by the run's own note in the same payload.
+    scope_sports, scope_leagues, _ = store.run_scope(run_id)
+
+    def _in_run_scope(sport: str, league: str) -> bool:
+        if scope_sports and sport not in scope_sports:
+            return False
+        if scope_leagues and league not in scope_leagues:
+            return False
+        return True
+
     gaps: list[dict[str, str]] = []
     for row in store.league_coverage(run_id):
+        if not _in_run_scope(row["sport"], row["league"]):
+            continue  # excluded by the operator's own flag, not missing
         # A sport that was configured and returned nothing at all still gets a
         # row, reported as priced by zero books.  Leaving it out would make the
         # page silent about exactly the case it exists to surface.
@@ -663,24 +973,84 @@ def _coverage_for_run(
     return result, sorted(gaps, key=lambda gap: (gap["sport"], gap["league"], gap["source"]))
 
 
-def _quote_payload(store: Store, run_ids: Sequence[int]) -> dict[str, Any]:
-    """Quote rows for the given runs, columnar and string-interned."""
+def _quote_payload(
+    store: Store, run_ids: Sequence[int], *, max_rows: int = DEFAULT_MAX_QUOTE_ROWS
+) -> dict[str, Any]:
+    """Quote rows for the given runs, columnar, string-interned, and **bounded**.
+
+    The bound is the point.  This page embeds its rows as JSON inside a single
+    HTML file, and the only lever on that used to be ``--quote-runs``: at 34,000
+    rows per run the payload is already ~20 MB, at 340,000 it is ~200 MB and the
+    builder's memory runs to gigabytes, and at 3.4 million it exceeds V8's
+    maximum string length and the page renders blank.  A source list ten times
+    longer walks straight into that.
+
+    Truncation keeps the newest run's **soonest fixtures**, across every source.
+    Both halves of that are deliberate.
+
+    Newest run, because the dashboard is a report on the most recent collections
+    and dropping those to keep older ones would invert its purpose.
+
+    Soonest fixtures rather than "newest rows", because within one run every row
+    shares an instant: ordering by insert order therefore orders by *source*
+    (rows are inserted one source at a time, alphabetically), and a cap applied
+    to that dropped whole sportsbooks — a 10-source run capped at 300 embedded
+    only ``polymarket``, ``smarkets`` and ``sxbet``, and the other seven vanished
+    from the price table while the coverage grid, which queries the run directly,
+    still showed all ten with their real counts.  Ordering by kickoff keeps every
+    source's imminent fixtures, which is both balanced and the part anyone
+    actually looks at.
+
+    What was left out is returned alongside, so the page can say so.
+    """
     intern = _Interner()
     rows: list[list[Any]] = []
+    available = 0
     if run_ids:
         placeholders = ",".join("?" * len(run_ids))
-        selected = ", ".join(QUOTE_COLUMNS)
-        for row in store.query(
-            f"SELECT {selected} FROM quote WHERE run_id IN ({placeholders}) ORDER BY run_id, id",
-            tuple(run_ids),
-        ):
-            rows.append(
-                [
-                    intern(row[name]) if name in _INTERNED else row[name]
-                    for name in QUOTE_COLUMNS
-                ]
-            )
-    return {"columns": QUOTE_COLUMNS, "rows": rows, "_strings": intern.values}
+        available = int(
+            store.query(
+                f"SELECT COUNT(*) AS n FROM quote WHERE run_id IN ({placeholders})",
+                tuple(run_ids),
+            )[0]["n"]
+        )
+        selected = ", ".join(STORED_QUOTE_COLUMNS)
+        # Selected newest-run-first and soonest-kickoff-first so the cap drops
+        # the most distant fixtures rather than the last few sportsbooks in the
+        # alphabet; re-sorted afterwards into the (run, insert) order every
+        # consumer of this payload assumes.
+        picked = store.query(
+            f"SELECT id AS _row_id, {selected} FROM quote "
+            f"WHERE run_id IN ({placeholders}) "
+            "ORDER BY run_id DESC, commence_time ASC, id DESC LIMIT ?",
+            (*run_ids, max(max_rows, 0)),
+        )
+        for row in sorted(picked, key=lambda entry: (entry["run_id"], entry["_row_id"])):
+            values = [
+                intern(row[name]) if name in _INTERNED else row[name]
+                for name in STORED_QUOTE_COLUMNS
+            ]
+            values.append(_net_odds(row["source"], row["decimal_odds"]))
+            rows.append(values)
+    return {
+        "columns": QUOTE_COLUMNS,
+        "rows": rows,
+        "_strings": intern.values,
+        "_available": available,
+    }
+
+
+def _net_odds(source: str, decimal_odds: Any) -> float | None:
+    """Decimal odds after the venue's charge, or ``None`` if unpriceable.
+
+    A stored price at or below 1.0 is not something the commission models accept
+    — it pays nothing — and this is a display path, so it reports "unknown"
+    rather than raising and taking the whole report down.
+    """
+    try:
+        return round(net_decimal_odds(source, float(decimal_odds)), 6)
+    except (TypeError, ValueError):
+        return None
 
 
 def _participants(quotes: dict[str, Any], strings: Sequence[str]) -> dict[str, dict[str, str]]:
@@ -706,7 +1076,7 @@ def _participants(quotes: dict[str, Any], strings: Sequence[str]) -> dict[str, d
             if participant in names:
                 continue
             display = strings[row[name_index]] if row[name_index] is not None else participant
-            # Keys are namespaced — "MLB-CIN", "TENNIS-humbert.ugo" — and the part
+            # Keys are namespaced — "MLB-CIN", "TENNIS-humbertugo" — and the part
             # after the namespace is the shortest honest label available.
             _, _, short = participant.partition("-")
             names[participant] = {
@@ -777,8 +1147,70 @@ def _league_names(store: Store) -> dict[str, str]:
     return names
 
 
+def _fixture_tolerances(store: Store) -> dict[str, int]:
+    """How far apart two venues' clocks may be and still mean one fixture, in
+    seconds, per league key present in the database.
+
+    The dashboard needs this to tell one fixture's prices from another's across
+    collections, and it has to be the *same* number the pipeline clustered with.
+    A flat two-hour window looked safe and was not: tennis clusters at 14 hours
+    and soccer at 12, so three cross-source tennis fixtures on the captured slate
+    — FanDuel against Matchbook, 3½ to 6½ hours apart — had one of their two
+    venues dropped from the panel, which then reported "1 venue offering it —
+    nothing to compare" for a bet the detector does compare.
+
+    Safe as a window precisely where it is widest: the sports with a wide
+    tolerance are the ones where two competitors never meet twice in a day, so
+    there is no second fixture for it to reach.
+    """
+    seconds: dict[str, int] = {}
+    for table in ("quote", "source_league"):
+        for row in store.query(f"SELECT DISTINCT league FROM {table}"):
+            key = row["league"]
+            if key not in seconds and is_known(key):
+                seconds[key] = int(get_league(key).same_event_tolerance.total_seconds())
+    return seconds
+
+
 def _unknown_source(key: str) -> dict[str, str]:
-    return {"label": key, "host": "—", "what": "No description recorded for this source."}
+    return {
+        "label": key,
+        "host": "—",
+        "kind": "sportsbook",
+        "what": "No description recorded for this source.",
+    }
+
+
+def _source_entry(key: str) -> dict[str, Any]:
+    """One venue, as the page describes it.
+
+    Carries what it charges and how it settles a game that is not played, and not
+    only what it is called.  Both change the number a reader should act on: an
+    exchange's quoted price is better than the price it pays, and a prediction
+    market does not refund a cancelled fixture the way a book does — which is the
+    difference between a hedge and a one-sided bet.  Reading it out of the same
+    tables the arbitrage engine uses means the page cannot describe a venue in
+    terms the pipeline does not price it in.
+    """
+    entry = dict(key=key, **SOURCE_NOTES.get(key, _unknown_source(key)))
+    charge = commission_for(key)
+    entry["commission"] = "" if charge.is_free else charge.describe()
+    entry["settles"] = _SETTLEMENT_WORDS[regime_for(key)]
+    return entry
+
+
+#: How each settlement regime reads on the page.
+_SETTLEMENT_WORDS: dict[SettlementRegime, str] = {
+    SettlementRegime.VOID_AND_REFUND: "Refunds a cancelled game.",
+    SettlementRegime.SETTLE_MAKE_UP_GAME: (
+        "Does not refund a cancelled game: it stays open through a postponement and "
+        "settles from the rescheduled one, or resolves at a price the venue chooses."
+    ),
+    SettlementRegime.RESOLVE_FIFTY_FIFTY: (
+        "Does not refund a cancelled game: every contract resolves at 0.50, whatever "
+        "you paid."
+    ),
+}
 
 
 def _duration_ms(started_at: str, finished_at: str | None) -> float | None:
@@ -804,8 +1236,15 @@ def _slate_dates(quotes: dict[str, Any], strings: Sequence[str]) -> str:
 
 
 def _lede(latest: dict[str, Any]) -> str:
-    names = {"betrivers_kambi": "BetRivers", "fanduel": "FanDuel", "pinnacle": "Pinnacle"}
-    books = [names.get(h["key"], h["key"]) for h in latest["sources"] if h["quote_count"] > 0]
+    # Labels come from ``SOURCE_NOTES``, which names all ten sources.  A private
+    # three-entry dict here predated the expansion and printed raw registry keys
+    # for everything added since: "…from BetRivers, FanDuel, leovegas_kambi and
+    # Pinnacle."
+    books = [
+        SOURCE_NOTES.get(h["key"], {}).get("label", h["key"])
+        for h in latest["sources"]
+        if h["quote_count"] > 0
+    ]
     listed = (
         " and ".join(books) if len(books) < 3 else f"{', '.join(books[:-1])} and {books[-1]}"
     )
@@ -825,8 +1264,9 @@ def _lede(latest: dict[str, Any]) -> str:
         )
     count = len(latest["sports"])
     return (
-        f"Sportsbooks publish prices for today's fixtures on their own websites. This tool "
-        f"reads them, converts three different formats into one, checks the result and "
+        f"Sportsbooks, betting exchanges and prediction markets all publish prices for "
+        f"today's fixtures on their own websites. This tool "
+        f"reads them, converts every one of those formats into one, checks the result and "
         f"saves it. On its most recent pass it collected {latest['quote_count']:,} prices "
         f"across {latest['event_count']} fixtures in {count} sport"
         f"{'' if count == 1 else 's'} from {listed or 'no books'}. {verdict} Nothing on "
@@ -892,27 +1332,69 @@ def _replay_note(store: Store, run_id: int) -> str:
         from src.raw_store import RawStore
 
         ok, problems = replay_run(run_id, store=store, raw_store=RawStore(settings.RAW_DIR))
-        return "PASS" if ok else f"FAIL ({len(problems)})"
+        if ok:
+            return "PASS"
+        # A migrated run's differences can be parser evolution rather than
+        # corruption, and ``replay_run`` says so in an explanatory first line —
+        # which this count was including, so the masthead read "FAIL (2)" with
+        # one real difference and the explanation reached no surface at all.
+        if problems and "can be parser evolution" in problems[0]:
+            return (
+                f"DIFFERS ({len(problems) - 1}) — run predates the current "
+                "parser; can be evolution rather than corruption"
+            )
+        return f"FAIL ({len(problems)})"
     except Exception as exc:  # noqa: BLE001 - a view must never be the thing that breaks
         return f"unavailable: {type(exc).__name__}"
 
 
+def _a_count(name: str):
+    """An argparse type for a strictly positive whole number.
+
+    These flags were bare ``int``.  ``--runs 0`` produced "no finished
+    collection runs recorded" on a database holding four, ``--serve 0`` was
+    falsy so the flag silently did not serve, and a negative reached SQLite as
+    ``LIMIT -1`` — which means *unlimited*, the opposite of what a negative
+    could possibly have meant.
+    """
+
+    def parse(text: str):
+        try:
+            value = int(text)
+        except ValueError:
+            raise argparse.ArgumentTypeError(f"{text!r} is not a whole number") from None
+        if value <= 0:
+            raise argparse.ArgumentTypeError(f"must be at least 1, got {text}")
+        return value
+
+    return parse
+
+
 def main(argv: Sequence[str] | None = None) -> int:
+    refusal = settings.refuse_bad_settings()
+    if refusal is not None:
+        return refusal
     parser = argparse.ArgumentParser(
         prog="python -m src.report",
         description="Write a self-contained dashboard for what the collector has stored.",
     )
     parser.add_argument("--out", type=Path, default=settings.DATA_DIR / "dashboard.html")
-    parser.add_argument("--runs", type=int, default=DEFAULT_RUN_LIMIT,
+    parser.add_argument("--runs", type=_a_count("runs"), default=DEFAULT_RUN_LIMIT,
                         help="how many runs to list")
-    parser.add_argument("--quote-runs", type=int, default=DEFAULT_QUOTE_RUNS,
+    parser.add_argument("--quote-runs", type=_a_count("quote-runs"), default=DEFAULT_QUOTE_RUNS,
                         help="how many recent runs to embed price rows for")
+    parser.add_argument("--max-quote-rows", type=_a_count("max-quote-rows"), default=DEFAULT_MAX_QUOTE_ROWS,
+                        help=(
+                            "ceiling on embedded price rows, whatever --quote-runs asks "
+                            "for; the newest rows are kept and the page says how many "
+                            "were left out"
+                        ))
     parser.add_argument("--fragment", action="store_true",
                         help="write body-only markup instead of a whole document")
     parser.add_argument("--no-replay-check", action="store_true",
                         help="skip re-parsing the latest run's stored bytes")
     parser.add_argument("--open", action="store_true", help="open the file when it is written")
-    parser.add_argument("--serve", type=int, metavar="PORT",
+    parser.add_argument("--serve", type=_a_count("serve"), metavar="PORT",
                         help="serve the report on localhost instead of only writing it")
     args = parser.parse_args(argv)
 
@@ -932,7 +1414,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             note = _replay_note(store, latest)
         try:
             data = build_report(
-                store, run_limit=args.runs, quote_runs=args.quote_runs, replay_note=note
+                store,
+                run_limit=args.runs,
+                quote_runs=args.quote_runs,
+                max_quote_rows=args.max_quote_rows,
+                replay_note=note,
+                replay_run_id=latest,
             )
         except LookupError as exc:
             print(f"{exc}\nrun `python -m src.collector collect` first", file=sys.stderr)

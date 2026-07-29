@@ -29,7 +29,9 @@ from __future__ import annotations
 
 import json
 import shutil
+import logging
 import sqlite3
+from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -56,10 +58,20 @@ if TYPE_CHECKING:  # pragma: no cover - imported for typing only
 #: keys are stored, market names are sport-neutral (``spread``/``total``/
 #: ``team_total``), event keys are built from participant keys, and ``dedup_key``
 #: includes ``is_alternate``.
+log = logging.getLogger("store")
+
+
 SCHEMA_VERSION = 4
 
 #: The oldest version :func:`migrate_database` knows how to upgrade from.
 OLDEST_MIGRATABLE_VERSION = 3
+
+#: Rows bound per ``executemany``.  A ``Quote`` measures about 3.4 KB resident,
+#: so a 300,000-row slate is roughly a gigabyte held at once by validation, the
+#: arbitrage pass and the store together.  Chunking the *insert* does not fix
+#: that on its own, but it keeps the statement binding bounded and it is the part
+#: of the problem this layer owns.
+QUOTE_CHUNK_SIZE = 5_000
 
 #: Market renames between v3 and v4.  These are pure renames of the same
 #: contract — a baseball "run line" *is* a spread — so applying them to stored
@@ -115,7 +127,31 @@ CREATE TABLE IF NOT EXISTS collection_run (
     event_count   INTEGER NOT NULL DEFAULT 0,
     error_count   INTEGER NOT NULL DEFAULT 0,
     warning_count INTEGER NOT NULL DEFAULT 0,
-    note          TEXT
+    note          TEXT,
+    -- The scope the run was collected under, structurally.  It was recoverable
+    -- only as prose inside ``note``, which no code could safely read back — so
+    -- ``replay`` compared a scope-collected run's stored rows against an
+    -- unscoped re-parse and reported the filter's own drops as corruption:
+    -- "row count differs: stored 2476, replayed 5429 / replay invented row"
+    -- on a run whose note says "2953 rows excluded by filter", and the
+    -- dashboard masthead read "replay FAIL".  The README's own quick start
+    -- (collect --sport hockey, then replay) walks into it.
+    scope_sports  TEXT NOT NULL DEFAULT '',
+    scope_leagues TEXT NOT NULL DEFAULT '',
+    excluded_count INTEGER NOT NULL DEFAULT 0,
+    -- Schema version this run was originally collected under, when it predates
+    -- a migration.  NULL for runs collected natively.  Replay differences on a
+    -- migrated run can be the parser having legitimately changed since — the
+    -- surface has to be able to say that instead of "corruption".
+    migrated_from INTEGER,
+    -- The counterparty groups the collector measured on the FULL slate, as
+    -- JSON {league: [[source, source], ...]}.  A scoped run stores only the
+    -- kept rows, so re-measuring the mirror gate from the store alone reopened
+    -- it: two licences of one operator, established as one counterparty on 22
+    -- shared MLB selections the filter then dropped, were re-judged
+    -- independent and ``arb --run N`` published +3.00 with both legs at one
+    -- book — the exact defect the gate exists to prevent.
+    counterparty_groups TEXT
 );
 
 CREATE TABLE IF NOT EXISTS raw_response (
@@ -211,7 +247,10 @@ CREATE TABLE IF NOT EXISTS source_health (
     event_count     INTEGER NOT NULL DEFAULT 0,
     rejection_count INTEGER NOT NULL DEFAULT 0,
     skipped_count   INTEGER NOT NULL DEFAULT 0,
+    repaired_count  INTEGER NOT NULL DEFAULT 0,
     unchanged_payloads INTEGER NOT NULL DEFAULT 0,
+    scopes_requested   INTEGER NOT NULL DEFAULT 0,
+    scopes_refused     TEXT,
     error_kind      TEXT,
     error_message   TEXT,
     PRIMARY KEY (run_id, source_key)
@@ -249,6 +288,18 @@ CREATE TABLE IF NOT EXISTS skipped (
     PRIMARY KEY (run_id, source, reason)
 );
 
+-- Rows that were **published** after a field was reconstructed. Kept apart from
+-- ``skipped`` because they are in the output: filing them together said they
+-- were not collected, and then dropping them from the payload entirely said
+-- nothing at all.
+CREATE TABLE IF NOT EXISTS repaired (
+    run_id   INTEGER NOT NULL REFERENCES collection_run(id),
+    source   TEXT NOT NULL,
+    reason   TEXT NOT NULL,
+    count    INTEGER NOT NULL,
+    PRIMARY KEY (run_id, source, reason)
+);
+
 CREATE TABLE IF NOT EXISTS finding (
     id        INTEGER PRIMARY KEY AUTOINCREMENT,
     run_id    INTEGER NOT NULL REFERENCES collection_run(id),
@@ -258,6 +309,13 @@ CREATE TABLE IF NOT EXISTS finding (
     source    TEXT,
     event_key TEXT
 );
+-- The v3->v4 migration rewrites finding.event_key one distinct key at a time,
+-- and without this index each of those UPDATEs scans the whole table: quadratic
+-- in the number of events, on the one operation an operator runs against their
+-- entire history.  Also what makes "show me every finding about this fixture" a
+-- lookup rather than a scan.
+CREATE INDEX IF NOT EXISTS idx_finding_event ON finding(event_key);
+CREATE INDEX IF NOT EXISTS idx_finding_run ON finding(run_id, severity);
 """
 
 _SCHEMA = _SCHEMA_HEAD + QUOTE_DDL + _SCHEMA_TAIL
@@ -356,7 +414,12 @@ class Migration:
     backup_path: Path | None = None
 
     def summary(self) -> str:
-        renamed = ", ".join(f"{old}->{new}" for old, new in sorted(self.markets_renamed.items()))
+        # ``markets_renamed`` maps old name -> **row count**, and formatting it
+        # as ``old->new`` told the operator their markets were renamed to
+        # numbers: "markets renamed: run_line->3348, total_runs->4272".
+        renamed = ", ".join(
+            f"{old} ({count:,} rows)" for old, count in sorted(self.markets_renamed.items())
+        )
         parts = [
             f"{self.path}: v{self.from_version} -> v{self.to_version}",
             f"{self.quotes_migrated:,} quotes rewritten",
@@ -441,6 +504,12 @@ def migrate_database(path: str | Path, *, backup: bool = True) -> Migration:
         conn.execute("DROP TABLE quote")
         conn.execute("ALTER TABLE quote_v4_migration RENAME TO quote")
 
+        # Created *before* the rewrite, not with the rest of the schema
+        # afterwards: the loop below issues one UPDATE per distinct event key
+        # against `finding.event_key`, and unindexed that is a full table scan
+        # each time — quadratic in the number of events, on the one operation an
+        # operator runs against their whole history.
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_finding_event ON finding(event_key)")
         rekeyed = 0
         for was, now in key_map.items():
             if was == now:
@@ -450,23 +519,86 @@ def migrate_database(path: str | Path, *, backup: bool = True) -> Migration:
             )
             rekeyed += cursor.rowcount or 0
 
-        conn.execute("UPDATE schema_meta SET version = ?", (SCHEMA_VERSION,))
-        conn.execute("COMMIT")
+        # A finding can outlive the rows it was about — it is written for events
+        # that were *rejected*, which by definition produced no quote — so the
+        # map built from the quote table does not cover every key in `finding`.
+        # Left alone, those keep their v3 spelling forever and the index created
+        # just above, whose whole purpose is "show me every finding about this
+        # fixture", silently misses them.
+        #
+        # v3 was baseball-only, which is what makes the leftovers recoverable
+        # rather than a guess: `PHI@MIA:2026-07-20` resolves through the MLB
+        # roster exactly as a quote row would have. Anything that still does not
+        # resolve is counted and reported rather than rewritten.
+        stranded = 0
+        for row in conn.execute(
+            "SELECT DISTINCT event_key FROM finding WHERE event_key IS NOT NULL"
+        ).fetchall():
+            old_key = row["event_key"]
+            if not old_key or "-" in old_key.split("@")[0]:
+                continue  # already a v4 key
+            recovered = _v3_event_key(old_key)
+            if recovered is None:
+                stranded += 1
+                continue
+            cursor = conn.execute(
+                "UPDATE finding SET event_key = ? WHERE event_key = ?",
+                (recovered, old_key),
+            )
+            rekeyed += cursor.rowcount or 0
+        if stranded:
+            log.warning(
+                "%d finding event key(s) could not be rebuilt and keep their v3 "
+                "spelling; queries by fixture will not find them",
+                stranded,
+            )
 
-        # Rebuilt from the v4 DDL, so the indexes have to be recreated; and the
-        # foreign key onto collection_run is re-checked before anyone trusts it.
-        conn.executescript(_SCHEMA)
+        # Every check that can refuse the migration runs **before** the commit.
+        #
+        # They used to run after it, where `_rollback` is a no-op: a database
+        # with one orphaned `quote.run_id` was rebuilt, re-keyed, marked version
+        # 4, and *then* refused — leaving a half-migrated file behind an error
+        # message that said "the database is unchanged", and, with --no-backup,
+        # the remedy "restore None".
         broken = conn.execute("PRAGMA foreign_key_check").fetchall()
         if broken:
             raise MigrationError(
-                f"{path}: foreign keys are inconsistent after migration ({len(broken)} row(s)); "
-                f"restore {backup_path}"
+                f"{path}: {len(broken)} row(s) have foreign keys that would be "
+                "inconsistent after migration; nothing was changed"
             )
         stored = conn.execute("SELECT COUNT(*) FROM quote").fetchone()[0]
         if stored != len(rows):
             raise MigrationError(
-                f"{path}: migrated {stored} quotes but read {len(rows)}; restore {backup_path}"
+                f"{path}: rebuilt {stored} quotes from {len(rows)} read; nothing was "
+                "changed"
             )
+        conn.execute("UPDATE schema_meta SET version = ?", (SCHEMA_VERSION,))
+        conn.execute("COMMIT")
+
+        # After the commit, and only things that cannot fail the migration: the
+        # table was rebuilt from the v4 DDL, so its indexes have to be recreated.
+        # `IF NOT EXISTS` throughout, so this is idempotent and safe to re-run.
+        conn.executescript(_SCHEMA)
+        # Stamp every pre-existing run with the version it was collected under.
+        # The current parser has legitimately changed since those runs — a
+        # replayed v3 capture can differ from its stored rows without any byte
+        # being corrupt — and without the stamp no surface could say so:
+        # ``replay`` on a freshly migrated history reported FormatChangeError
+        # and field drifts as corruption, and the dashboard masthead read
+        # "replay FAIL (21)" immediately after a successful migrate.
+        #
+        # The additive columns first: ``_SCHEMA``'s CREATE TABLE IF NOT EXISTS
+        # is a no-op on the pre-existing ``collection_run``, and the additive
+        # pass otherwise only runs when a :class:`Store` next opens the file —
+        # which has not happened yet.
+        existing = {row["name"] for row in conn.execute("PRAGMA table_info(collection_run)")}
+        for table, column, decl in Store._ADDED_COLUMNS:
+            if table == "collection_run" and column not in existing:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+        conn.execute(
+            "UPDATE collection_run SET migrated_from = ? WHERE migrated_from IS NULL",
+            (found,),
+        )
     except MigrationError:
         _rollback(conn)
         conn.close()
@@ -474,9 +606,15 @@ def migrate_database(path: str | Path, *, backup: bool = True) -> Migration:
     except Exception as exc:  # noqa: BLE001 - every failure must leave v3 intact
         _rollback(conn)
         conn.close()
+        version = database_version(path)
+        state = (
+            f"the database is unchanged and still version {found}"
+            if version == found
+            else f"the database is now at version {version!r} and may be half-migrated; "
+            + (f"restore {backup_path}" if backup_path else "no backup was taken")
+        )
         raise MigrationError(
-            f"{path}: migration aborted, the database is unchanged and still version "
-            f"{found} ({type(exc).__name__}: {exc})"
+            f"{path}: migration aborted, {state} ({type(exc).__name__}: {exc})"
         ) from exc
     else:
         conn.close()
@@ -507,13 +645,47 @@ def _backup(path: Path) -> Path:
     try:
         # Without the checkpoint the copy can be missing committed pages that
         # still live only in the -wal file.
-        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        busy, wal_frames, checkpointed = conn.execute(
+            "PRAGMA wal_checkpoint(TRUNCATE)"
+        ).fetchone()
+        if busy or checkpointed < wal_frames:
+            # The one signal that says whether the guarantee above actually held.
+            # A reader holding a transaction can block the checkpoint, and the
+            # copy then silently omits committed pages — which is exactly the
+            # failure the checkpoint was added to prevent, so discarding its
+            # result made the safeguard unverifiable.
+            raise MigrationError(
+                f"could not flush the write-ahead log before copying {path.name}: "
+                f"{checkpointed} of {wal_frames} frames checkpointed"
+                + (" (another connection is holding it open)" if busy else "")
+                + " — the backup would be missing committed data, so no backup "
+                "was made and nothing was migrated"
+            )
     finally:
         conn.close()
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     target = path.with_name(f"{path.name}.v{database_version(path)}.{stamp}.bak")
     shutil.copy2(path, target)
     return target
+
+
+def _v3_event_key(old_key: str) -> str | None:
+    """Rebuild a v3 ``AWAY@HOME:date`` key as a v4 participant-key one.
+
+    ``None`` when either abbreviation does not resolve, which is the honest
+    answer: v3 stored bare abbreviations with no league beside them, and the only
+    reason this is recoverable at all is that v3 was baseball-only.
+    """
+    head, _, tail = old_key.partition(":")
+    away_abbr, _, home_abbr = head.partition("@")
+    if not tail or not away_abbr or not home_abbr:
+        return None
+    mlb = get_league("MLB")
+    away = canonical_participant(away_abbr, mlb)
+    home = canonical_participant(home_abbr, mlb)
+    if away is None or home is None:
+        return None
+    return f"{away.key}@{home.key}:{tail}"
 
 
 def _v3_to_v4_rows(
@@ -691,6 +863,11 @@ class Store:
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON")
         self._conn.execute("PRAGMA journal_mode = WAL")
+        # A second writer waits instead of dying: without a busy timeout, two
+        # commands racing on one database handed the loser a raw
+        # ``sqlite3.OperationalError: database is locked`` traceback.  WAL
+        # readers never blocked; this is purely writer-vs-writer.
+        self._conn.execute("PRAGMA busy_timeout = 5000")
         self._init_schema()
 
     def _require_compatible(self) -> None:
@@ -711,9 +888,40 @@ class Store:
                 return  # an empty file is ours to initialize
         raise IncompatibleDatabase(self.path, found)
 
+    #: Columns added to an existing table after it was first created.
+    #:
+    #: Purely additive and nullable or defaulted, so a row written before them
+    #: means the same thing after: they record something the pipeline did not
+    #: used to observe, not a different reading of something it did.  That is
+    #: what separates them from the v3→v4 change, which re-keyed every row and
+    #: therefore had to refuse to mix.  ``CREATE TABLE IF NOT EXISTS`` leaves an
+    #: existing table alone, so without this an upgraded build fails its first
+    #: insert against yesterday's database.
+    _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
+        ("source_health", "scopes_requested", "INTEGER NOT NULL DEFAULT 0"),
+        ("source_health", "scopes_refused", "TEXT"),
+        ("source_health", "repaired_count", "INTEGER NOT NULL DEFAULT 0"),
+        ("collection_run", "scope_sports", "TEXT NOT NULL DEFAULT ''"),
+        ("collection_run", "scope_leagues", "TEXT NOT NULL DEFAULT ''"),
+        ("collection_run", "excluded_count", "INTEGER NOT NULL DEFAULT 0"),
+        ("collection_run", "migrated_from", "INTEGER"),
+        ("collection_run", "counterparty_groups", "TEXT"),
+    )
+
+    def _add_missing_columns(self) -> None:
+        for table, column, decl in self._ADDED_COLUMNS:
+            existing = {
+                row["name"]
+                for row in self._conn.execute(f"PRAGMA table_info({table})")
+            }
+            if not existing or column in existing:
+                continue
+            self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+
     def _init_schema(self) -> None:
         with self._conn:
             self._conn.executescript(_SCHEMA)
+            self._add_missing_columns()
             row = self._conn.execute("SELECT version FROM schema_meta").fetchone()
             if row is None:
                 self._conn.execute(
@@ -735,12 +943,85 @@ class Store:
 
     # ── runs ─────────────────────────────────────────────────────────────────
 
-    def start_run(self, started_at: datetime) -> int:
+    def start_run(
+        self,
+        started_at: datetime,
+        *,
+        sports: Sequence[str] | None = None,
+        leagues: Sequence[str] | None = None,
+    ) -> int:
+        """Open a run, recording the scope it is being collected under.
+
+        Recorded at the start rather than the finish so even an interrupted
+        run's rows can be judged against the scope that produced them.
+        """
         with self._conn:
             cursor = self._conn.execute(
-                "INSERT INTO collection_run (started_at) VALUES (?)", (_iso(started_at),)
+                "INSERT INTO collection_run (started_at, scope_sports, scope_leagues) "
+                "VALUES (?, ?, ?)",
+                (_iso(started_at), ",".join(sports or ()), ",".join(leagues or ())),
             )
         return int(cursor.lastrowid)
+
+    def recorded_counterparty_groups(self, run_id: int) -> dict[str, list[frozenset[str]]]:
+        """The counterparty groups the collector measured on this run's full
+        slate, before any scope filter — empty for runs that predate the column
+        or recorded nothing."""
+        row = self._conn.execute(
+            "SELECT counterparty_groups FROM collection_run WHERE id = ?", (run_id,)
+        ).fetchone()
+        if row is None or not row["counterparty_groups"]:
+            return {}
+        decoded = json.loads(row["counterparty_groups"])
+        return {
+            league: [frozenset(group) for group in groups]
+            for league, groups in decoded.items()
+        }
+
+    def run_scope(self, run_id: int) -> tuple[list[str], list[str], int]:
+        """The scope a run was collected under: (sports, leagues, excluded).
+
+        Falls back to the run's note when the structural columns are blank.  The
+        columns arrived by additive upgrade, which backfills ``''`` — read as
+        *unscoped* — so every scoped run collected before the upgrade replayed
+        against an unscoped re-parse and was reported corrupt all over again:
+        ``row count differs: stored 217, replayed 4454`` on a run whose own note
+        says ``--sport hockey``.  The note's scope tokens are machine-written by
+        ``_run_note`` (never free text), which is what makes parsing them back
+        safe as a fallback and only as a fallback.
+        """
+        row = self._conn.execute(
+            "SELECT scope_sports, scope_leagues, excluded_count, note "
+            "FROM collection_run WHERE id = ?",
+            (run_id,),
+        ).fetchone()
+        if row is None:
+            return [], [], 0
+        sports = [part for part in (row["scope_sports"] or "").split(",") if part]
+        leagues = [part for part in (row["scope_leagues"] or "").split(",") if part]
+        if not sports and not leagues and row["note"]:
+            for segment in row["note"].split("; "):
+                if segment.startswith("--sport "):
+                    sports = [
+                        part
+                        for part in segment[len("--sport "):].split(",")
+                        if part
+                    ]
+                elif segment.startswith("--league "):
+                    leagues = [
+                        part
+                        for part in segment[len("--league "):].split(",")
+                        if part
+                    ]
+            excluded = int(row["excluded_count"] or 0)
+            if not excluded:
+                for segment in row["note"].split("; "):
+                    if segment.endswith(" rows excluded by filter"):
+                        head = segment.split(" ", 1)[0]
+                        if head.isdigit():
+                            excluded = int(head)
+            return sports, leagues, excluded
+        return sports, leagues, int(row["excluded_count"] or 0)
 
     def finish_run(
         self,
@@ -749,21 +1030,54 @@ class Store:
         finished_at: datetime,
         report: ValidationReport,
         note: str | None = None,
+        excluded: int = 0,
+        counterparties: dict[str, list[frozenset[str]]] | None = None,
     ) -> None:
+        """Close the run, recording the rows that are **in the table**.
+
+        ``report.quote_count`` is the count that survived validation, and every
+        consumer of ``collection_run.quote_count`` reads it as the count that was
+        stored: :func:`_resolve_run` refuses a finished run with no rows, the
+        ``runs`` listing prints it, and the report's flow step labels it
+        "5. stored".  Those are two different numbers whenever an insert fails —
+        which is the whole reason :meth:`save_quotes_by_source` isolates sources.
+
+        Recorded with every source's insert failing, the run read ``quotes 7372
+        events 414`` against an empty table, and ``arb``, ``show`` and ``lines``
+        each printed their zero-row sentence and exited 0 — verbatim the wording
+        :func:`_resolve_run`'s guard exists to stop being mistaken for a thin
+        slate.  So the number is read back from the table rather than passed in:
+        a count that has to be plumbed through a caller is a count that can drift
+        from the rows again.
+        """
+        stored, events = self._conn.execute(
+            "SELECT COUNT(*), COUNT(DISTINCT event_key) FROM quote WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
         with self._conn:
             self._conn.execute(
                 """UPDATE collection_run
                       SET finished_at = ?, ok = ?, quote_count = ?, event_count = ?,
-                          error_count = ?, warning_count = ?, note = ?
+                          error_count = ?, warning_count = ?, note = ?,
+                          excluded_count = ?, counterparty_groups = ?
                     WHERE id = ?""",
                 (
                     _iso(finished_at),
                     int(report.ok),
-                    report.quote_count,
-                    report.event_count,
+                    stored,
+                    events,
                     len(report.errors),
                     len(report.warnings),
                     note,
+                    excluded,
+                    json.dumps(
+                        {
+                            league: sorted(sorted(group) for group in groups)
+                            for league, groups in counterparties.items()
+                        }
+                    )
+                    if counterparties
+                    else None,
                     run_id,
                 ),
             )
@@ -807,6 +1121,13 @@ class Store:
             )
 
     def save_quotes(self, run_id: int, quotes: Iterable[Quote]) -> int:
+        """Insert every row, or none of them.
+
+        All-or-nothing on purpose: this is the check that a run's rows really do
+        satisfy ``dedup_key``, and a caller that wants the guarantee wants it
+        whole.  :meth:`save_quotes_by_source` is the variant for a live run,
+        where one broken feed must not take the other nine down with it.
+        """
         rows = [_quote_values(run_id, quote) for quote in quotes]
         if not rows:
             return 0
@@ -818,14 +1139,58 @@ class Store:
             )
         return len(rows)
 
+    def save_quotes_by_source(
+        self, run_id: int, quotes: Iterable[Quote], *, chunk_size: int = QUOTE_CHUNK_SIZE
+    ) -> tuple[int, dict[str, str]]:
+        """Insert each source's rows in its own transaction.
+
+        Returns ``(rows_stored, {source: reason})``.
+
+        The failure this exists for is specific and total.  ``dedup_key`` is
+        enforced by a UNIQUE constraint over one ``executemany``, so a *single*
+        colliding row from *one* source rolls back the insert of **every** source
+        in the run: thirty-four thousand good prices discarded because one
+        adapter emitted a duplicate.  With ten sources that stops being a tail
+        risk and becomes the expected failure mode of adding the tenth.
+
+        Isolating per source keeps the blast radius at the source that caused it,
+        and returns the reason so the run still reports the fault loudly rather
+        than quietly storing nine tenths of the data.  Rows are inserted in
+        chunks inside each source's transaction so a very large slate does not
+        have to be bound as one statement.
+        """
+        by_source: dict[str, list[tuple[Any, ...]]] = defaultdict(list)
+        for quote in quotes:
+            by_source[quote.source].append(_quote_values(run_id, quote))
+
+        statement = (
+            f"INSERT INTO quote ({', '.join(_QUOTE_INSERT_COLUMNS)}) "
+            f"VALUES ({','.join('?' * len(_QUOTE_INSERT_COLUMNS))})"
+        )
+        stored = 0
+        failures: dict[str, str] = {}
+        for source in sorted(by_source):
+            rows = by_source[source]
+            try:
+                with self._conn:
+                    for start in range(0, len(rows), max(chunk_size, 1)):
+                        self._conn.executemany(statement, rows[start : start + max(chunk_size, 1)])
+            except sqlite3.Error as exc:
+                failures[source] = f"{type(exc).__name__}: {exc}"
+            else:
+                stored += len(rows)
+        return stored, failures
+
     def save_health(self, run_id: int, health: SourceHealth) -> None:
         with self._conn:
             self._conn.execute(
                 """INSERT OR REPLACE INTO source_health
                    (run_id, source_key, ok, checked_at, request_count, raw_bytes, latency_ms,
                     quote_count, event_count, rejection_count, skipped_count,
-                    unchanged_payloads, error_kind, error_message)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    repaired_count,
+                    unchanged_payloads, scopes_requested, scopes_refused,
+                    error_kind, error_message)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     run_id,
                     health.source_key,
@@ -838,7 +1203,14 @@ class Store:
                     health.event_count,
                     health.rejection_count,
                     health.skipped_count,
+                    health.repaired_count,
                     health.unchanged_payloads,
+                    health.scopes_requested,
+                    # Stored, because a refusal that lives only in a finding's
+                    # message text cannot be compared across runs — and "this
+                    # league was refused yesterday too" is the fact that turns a
+                    # bad afternoon into a dead feed.
+                    "\n".join(health.failed_scopes) or None,
                     health.error_kind,
                     health.error_message,
                 ),
@@ -877,6 +1249,21 @@ class Store:
                     (run_id, r.source, r.reason, r.detail, json.dumps(r.context, default=str))
                     for r in rejections
                 ],
+            )
+
+    def save_repaired(self, run_id: int, source: str, repaired: dict[str, int]) -> None:
+        """Rows published after a field was reconstructed, per reason.
+
+        Its own table for the same reason it has its own counter: these rows are
+        in the output, and filing them beside the skips said they were not.
+        """
+        if not repaired:
+            return
+        with self._conn:
+            self._conn.executemany(
+                "INSERT OR REPLACE INTO repaired (run_id, source, reason, count) "
+                "VALUES (?,?,?,?)",
+                [(run_id, source, reason, count) for reason, count in repaired.items()],
             )
 
     def save_skipped(self, run_id: int, source: str, skipped: dict[str, int]) -> None:
@@ -1003,12 +1390,54 @@ class Store:
         sql += " ORDER BY id"
         return [(row["source"], Path(row["path"])) for row in self._conn.execute(sql, params)]
 
-    def latest_run_id(self, *, only_ok: bool = False) -> int | None:
-        sql = "SELECT id FROM collection_run WHERE finished_at IS NOT NULL"
+    def run_row(self, run_id: int) -> sqlite3.Row | None:
+        """One run's own record, or ``None`` if there is no such run.
+
+        The distinction a read command needs in order to tell "you named a run
+        that does not exist" from "that run found nothing" — two answers that
+        used to print the same sentence and exit 0.
+        """
+        rows = self.query(
+            "SELECT id, started_at, finished_at, ok, quote_count, error_count, "
+            "migrated_from FROM collection_run WHERE id = ?",
+            (run_id,),
+        )
+        return rows[0] if rows else None
+
+    def latest_run_id(
+        self,
+        *,
+        only_ok: bool = False,
+        sports: Sequence[str] | str | None = None,
+        leagues: Sequence[str] | str | None = None,
+    ) -> int | None:
+        """Newest finished run — holding a row in scope, when a scope is given.
+
+        Scope-blind resolution made ``arb --sport baseball`` resolve a run
+        collected under ``--sport tennis`` (which kept no baseball by the
+        operator's own flag), print the quiet-slate sentence and exit 0 — while
+        the previous run's real baseball edge sat one ``--run`` away, and
+        ``health --sport baseball`` on the same database described that earlier
+        run.  Two commands, seconds apart, describing different collections.
+        """
+        sql = "SELECT id FROM collection_run r WHERE finished_at IS NOT NULL"
+        clause, params = _scope(sports, leagues, prefix="q.")
+        if clause:
+            # ``status = 'active'``: a suspended price is a row, not a price
+            # anybody can act on, so a run whose only in-scope rows are
+            # suspended does not "hold prices in scope".  Without it,
+            # ``arb --league MLB`` resolved such a run and printed "0
+            # opportunities from 0 cross-book markets" — the quiet-slate
+            # sentence ``_resolve_run`` exists to prevent — while a takeable
+            # edge sat one ``--run`` away.
+            sql += (
+                " AND EXISTS (SELECT 1 FROM quote q WHERE q.run_id = r.id"
+                f"{clause} AND q.status = 'active')"
+            )
         if only_ok:
             sql += " AND ok = 1"
         sql += " ORDER BY id DESC LIMIT 1"
-        row = self._conn.execute(sql).fetchone()
+        row = self._conn.execute(sql, params).fetchone()
         return int(row["id"]) if row else None
 
     def run_summaries(
@@ -1038,10 +1467,77 @@ class Store:
             (*params, limit),
         ).fetchall()
 
+    def sources_that_have_produced(self, before_run_id: int) -> set[str]:
+        """Every source that has *ever* produced a row before this run.
+
+        The comparison set for "this feed worked and has stopped".
+
+        Unbounded on purpose.  A bounded lookback — "the last ten runs" — makes
+        the alarm expire while the fault persists: after ten more runs the dead
+        source drops out of the window, the ERROR disappears, and with two other
+        sources still producing the run goes green again.  An unattended watch
+        loop would then report success indefinitely with a permanently broken
+        book.  Silence is the wrong default for "this used to work".
+
+        Read from ``source_health.quote_count`` rather than by scanning ``quote``:
+        that table holds one small row per source per run and is keyed
+        ``(run_id, source_key)``, so this stays a cheap lookup as the quote table
+        grows into millions of rows.  ``quote_count`` is a *fact* about what was
+        produced, not the ``ok`` judgement beside it — a source marked unhealthy
+        for a rejection still produced prices, and losing them is still a
+        regression.
+        """
+        rows = self._conn.execute(
+            "SELECT DISTINCT source_key FROM source_health "
+            "WHERE run_id < ? AND quote_count > 0",
+            (before_run_id,),
+        ).fetchall()
+        return {row["source_key"] for row in rows}
+
     def health_for_run(self, run_id: int) -> list[sqlite3.Row]:
         return self._conn.execute(
             "SELECT * FROM source_health WHERE run_id = ? ORDER BY source_key", (run_id,)
         ).fetchall()
+
+    def sources_that_failed_to_persist(self, run_id: int) -> set[str] | None:
+        """Sources whose rows raised ``quotes_not_persisted`` on this run.
+
+        ``None`` means the insert failed for the run as a whole rather than per
+        source, which is how :meth:`save_quotes_by_source` reports an exception it
+        could not attribute — every source lost its rows.
+
+        Needed because "produced more than it stored" is *not* on its own a
+        storage fault: the ``--sport``/``--league`` filter runs after a source has
+        already been counted, so a scoped collection legitimately keeps fewer rows
+        than it fetched.  Reading the difference as a lost write accused the
+        database of dropping rows the operator asked it to drop.
+        """
+        rows = self._conn.execute(
+            "SELECT source FROM finding WHERE run_id = ? AND code = 'quotes_not_persisted'",
+            (run_id,),
+        ).fetchall()
+        if any(row["source"] is None for row in rows):
+            return None
+        return {row["source"] for row in rows}
+
+    def stored_quote_counts(self, run_id: int) -> dict[str, int]:
+        """Rows actually in the table for this run, per source.
+
+        ``source_health.quote_count`` is what the adapter produced and validated,
+        which is the right number for judging the adapter and the wrong one for
+        judging the database.  They differ exactly when that source's insert
+        failed — the case :meth:`save_quotes_by_source` isolates — and the
+        ``runs`` listing was printing the produced count beside ``ok`` for a
+        source with no rows stored at all.
+        """
+        return {
+            row["source"]: row["stored"]
+            for row in self._conn.execute(
+                "SELECT source, COUNT(*) AS stored FROM quote WHERE run_id = ? "
+                "GROUP BY source",
+                (run_id,),
+            )
+        }
 
     def health_by_sport(
         self, run_id: int, *, sports: Sequence[str] | str | None = None

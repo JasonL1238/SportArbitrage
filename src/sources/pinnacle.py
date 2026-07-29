@@ -41,9 +41,9 @@ nonsense price.
 from __future__ import annotations
 
 import logging
-import time
+import re
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any, Iterable, Sequence
 
 import httpx
@@ -52,7 +52,14 @@ from src import leagues as league_registry
 from src.events import build_event_key, orient, resolve_doubleheaders
 from src.leagues import League
 from src.normalize import american_to_decimal, implied_probability
-from src.participants import Participant, canonical_participant, is_pairing
+from src.participants import (
+    with_marker,
+    Participant,
+    canonical_participant,
+    competition_marker,
+    is_pairing,
+    is_statistic,
+)
 from src.raw_store import RawResponse
 from src.schema import (
     MARKETS_REQUIRING_LINE,
@@ -66,12 +73,21 @@ from src.schema import (
     Sport,
     draw_is_priced,
 )
+from src.sources._common import (
+    ScopeTally,
+    latest_capture,
+    SourceClient,
+    Tier,
+    capabilities_from,
+    envelope_source,
+    parse_iso_time,
+)
 from src.sources.base import ParseOutcome
 from src.sources.guards import (
+    CoverageCappedError,
     EmptyResponseError,
     FormatChangeError,
     SourceError,
-    check_http_response,
     require_list,
 )
 
@@ -160,6 +176,9 @@ ROUTE_BY_PINNACLE_ID: dict[int, PinnacleLeague] = {
 #: unrecognised.  Identity does not depend on the league, so the catch-all costs
 #: nothing but coverage legibility.
 SOCCER_CATCH_ALL = "SOCCER_OTHER"
+
+#: The same, for a tennis tour the prefix table does not name.
+TENNIS_CATCH_ALL = "TENNIS_OTHER"
 
 #: Tennis tour classification, by league-name prefix, longest marker first.
 #: Pinnacle names a tennis league after the tournament *and round* ("ATP
@@ -306,7 +325,16 @@ def canonical_league_key(
         for prefix, key in TENNIS_TOUR_PREFIXES:
             if name.startswith(prefix):
                 return key
-        return None
+        # A tour this table does not name falls to the catch-all rather than
+        # being discarded.  ``src.leagues`` records why ``TENNIS_OTHER`` exists
+        # — "an adapter … has to either guess a tour or discard the match" —
+        # and Matchbook, SX Bet and Smarkets all take the catch-all while this
+        # adapter alone discarded.  Davis Cup, United Cup, Billie Jean King Cup,
+        # Laver Cup and the UTR Pro Series all land here, so on those weeks the
+        # sharpest book in the set contributed nothing and the loss was one
+        # bucket among hundreds.  League is not part of event identity, so the
+        # catch-all cannot mis-join anything; it only stops the discard.
+        return TENNIS_CATCH_ALL
     if sport is Sport.SOCCER:
         return SOCCER_CATCH_ALL
     return None
@@ -338,6 +366,7 @@ class PinnacleAdapter:
         self,
         leagues: Sequence[str] = DEFAULT_LEAGUES,
         *,
+        source_key: str = SOURCE_KEY,
         base_url: str = DEFAULT_BASE_URL,
         timeout: float = 20.0,
         client: httpx.Client | None = None,
@@ -354,18 +383,54 @@ class PinnacleAdapter:
         if not keys:
             raise ValueError("PinnacleAdapter needs at least one league to collect")
         self._leagues: tuple[str, ...] = tuple(keys)
+        self._source_key = source_key
         self.base_url = base_url.rstrip("/")
         self.max_fallback_leagues = max_fallback_leagues
         self.request_pause = request_pause
-        self._client = client or httpx.Client(timeout=timeout, follow_redirects=True)
+        self._http = SourceClient(
+            source_key,
+            timeout=timeout,
+            client=client,
+            # ``host_interval``, not ``min_request_interval``: the latter builds a
+            # *private* pacer, which opts this adapter out of the shared host
+            # budget entirely.  Harmless while Pinnacle is alone on its hostname,
+            # and precisely the wrong structure — the shared pacer exists so that
+            # two adapters pointed at one CDN do not double the rate against it,
+            # and an adapter that cannot participate in that cannot be given a
+            # sibling safely.  ``host_interval`` raises the gap for this caller
+            # without lowering it for anyone else.
+            host_interval=request_pause,
+        )
 
     @property
     def source_key(self) -> str:
-        return SOURCE_KEY
+        return self._source_key
 
     @property
     def leagues(self) -> tuple[str, ...]:
         return self._leagues
+
+    def capabilities(self, *, tier: Tier = Tier.FULL) -> dict[str, frozenset[Market]]:
+        """Which markets this instance claims to price, per league.
+
+        Published rather than inferred so that "Pinnacle has no tennis totals" is
+        a stated fact instead of an absence someone has to interpret.  Tennis is
+        the entry that earns it: a Pinnacle tennis root matchup is scored in
+        *sets*, so its ``total`` is total sets and its ``spread`` a set handicap —
+        neither is the games market the other books quote, so only the match
+        winner is collected and validation must not fault the book for the rest.
+
+        *tier* is accepted and ignored: every Pinnacle market arrives in the
+        slate response, so a core pass claims exactly what a full one does.
+        """
+        del tier
+        return capabilities_from(
+            {
+                key: MARKETS_BY_SPORT[league_registry.league(key).sport]
+                for key in self._leagues
+            },
+            self._leagues,
+        )
 
     @property
     def sports(self) -> tuple[Sport, ...]:
@@ -375,26 +440,57 @@ class PinnacleAdapter:
 
     # ── fetch ────────────────────────────────────────────────────────────────
 
-    def fetch_raw(self) -> list[RawResponse]:
+    def fetch_raw(self, *, tier: Tier = Tier.FULL) -> list[RawResponse]:
+        """Every configured scope's matchups/markets pair.
+
+        *tier* changes nothing here and says so: Pinnacle publishes a whole
+        league's markets in one ``markets/straight`` response, so there is no
+        per-event follow-up to defer.  Accepting the argument and ignoring it is
+        the honest shape — a source that silently collected less under
+        ``--tier core`` would make the two tiers incomparable.
+        """
         raws: list[RawResponse] = []
-        failures: list[SourceError] = []
+        # The shared tally, like every other adapter — Pinnacle kept its own
+        # private failure list, which nothing outside this function could read.
+        # So the one instrumented path in the collector, which reads
+        # ``source.last_fetch``, skipped it silently: a blocked soccer endpoint
+        # cost **24,464 quotes and 586 events, 91% of this source's rows**, and
+        # the run still printed ``OK``, emitted no finding and exited 0.  It is
+        # the sharpest book in the set and was the last one uninstrumented.
+        tally = self.last_fetch = ScopeTally(self._source_key)
         for sport in self.sports:
+            marked = len(tally.failed_scopes)
             try:
-                raws.extend(self._fetch_sport(sport))
+                # ``into=raws``: a sport that fails part-way keeps the scopes it
+                # already fetched, as the other adapters do.
+                #
+                # Each path below records its **own** scopes, at the granularity
+                # it actually asks in — leagues where it asks per league, the
+                # sport where it asks per sport.  Doing it here instead meant
+                # counting requests in sports and refusals in leagues; see
+                # :class:`src.sources._common.ScopeTally`.
+                self._fetch_sport(sport, into=raws, tally=tally)
             except SourceError as exc:
                 # One sport's endpoint being blocked must not silently truncate
                 # the other five, but it must not vanish either.
-                log.warning("%s: %s fetch failed: %s", SOURCE_KEY, sport.value, exc)
-                failures.append(exc)
-        if not raws:
-            if failures:
-                raise failures[0]
-            raise EmptyResponseError(
-                f"{SOURCE_KEY}: no matchups returned for any of {list(self.sports)}"
-            )
+                log.warning("%s: %s fetch failed: %s", self._source_key, sport.value, exc)
+                if len(tally.failed_scopes) == marked:
+                    # Nothing below attributed this to a narrower scope — the
+                    # sport itself is the only honest name for it.  Recording it
+                    # unconditionally double-counted: five refused leagues came
+                    # back as six refusals, the sixth repeating the first one's
+                    # error under the sport's name.
+                    tally.failed(sport.value, exc)
+        tally.require_something(what="matchup")
         return raws
 
-    def _fetch_sport(self, sport: Sport) -> list[RawResponse]:
+    def _fetch_sport(
+        self,
+        sport: Sport,
+        *,
+        into: list[RawResponse] | None = None,
+        tally: ScopeTally | None = None,
+    ) -> list[RawResponse]:
         if sport in SPORT_ENDPOINT_SPORTS and self._prefers_sport_endpoint(sport):
             sport_id = PINNACLE_ID_BY_SPORT[sport]
             scope = _Scope(
@@ -403,16 +499,27 @@ class PinnacleAdapter:
                 markets_path=f"/sports/{sport_id}/markets/straight",
             )
             try:
-                return self._fetch_scope(scope)
+                pages = self._fetch_scope(scope)
             except SourceError as exc:
                 log.warning(
                     "%s: per-sport endpoint for %s failed (%s); falling back to leagues",
-                    SOURCE_KEY,
+                    self._source_key,
                     sport.value,
                     exc,
                 )
-                return self._fetch_sport_by_league_index(sport)
-        return self._fetch_routed_leagues(sport)
+                # Not recorded as a refusal: the fallback below asks for the same
+                # coverage league by league and records what it gets, so naming
+                # the sport too would count one loss twice.  If the fallback
+                # itself raises, the caller names the sport.
+                pages = self._fetch_sport_by_league_index(sport, tally=tally)
+            else:
+                if tally is not None:
+                    tally.produced(sport.value, _matchup_count(pages))
+        else:
+            pages = self._fetch_routed_leagues(sport, tally=tally)
+        if into is not None:
+            into.extend(pages)
+        return pages
 
     def _prefers_sport_endpoint(self, sport: Sport) -> bool:
         """Is the whole-sport endpoint the right call for this sport?
@@ -445,7 +552,21 @@ class PinnacleAdapter:
             )
         )
 
-    def _fetch_routed_leagues(self, sport: Sport) -> list[RawResponse]:
+    def _fetch_routed_leagues(
+        self, sport: Sport, *, tally: ScopeTally | None = None
+    ) -> list[RawResponse]:
+        """Every routed league of one sport, each tallied on its own.
+
+        Tallying per *sport* was not enough, because this is where Pinnacle's
+        refusals actually happen.  Five of six soccer leagues answering 403 while
+        MLS answered left ``failed_scopes`` empty and the health line reading
+        ``OK (3 quotes, 2 requests)`` — the exact shape the instrumentation was
+        added to eliminate, one level below where it was added.
+
+        The league is the unit for *all* of it — requested, produced and failed
+        — because it is the unit this method asks in.  Requesting per sport and
+        refusing per league made the two incomparable.
+        """
         raws: list[RawResponse] = []
         failures: list[SourceError] = []
         for route in self._routes_for(sport):
@@ -454,28 +575,47 @@ class PinnacleAdapter:
                 matchups_path=f"/leagues/{route.pinnacle_id}/matchups",
                 markets_path=f"/leagues/{route.pinnacle_id}/markets/straight",
             )
+            if tally is not None:
+                tally.requested(route.league_key)
+            before = len(raws)
             try:
                 raws.extend(self._fetch_scope(scope))
             except SourceError as exc:
-                log.warning("%s: league %s failed: %s", SOURCE_KEY, route.pinnacle_id, exc)
+                log.warning("%s: league %s failed: %s", self._source_key, route.pinnacle_id, exc)
                 failures.append(exc)
+                if tally is not None:
+                    tally.failed(route.league_key, exc)
+                continue
+            if tally is not None:
+                tally.produced(route.league_key, _matchup_count(raws[before:]))
         if not raws and failures:
             raise failures[0]
         return raws
 
-    def _fetch_sport_by_league_index(self, sport: Sport) -> list[RawResponse]:
+    def _fetch_sport_by_league_index(
+        self, sport: Sport, *, tally: ScopeTally | None = None
+    ) -> list[RawResponse]:
         """Degraded path: enumerate the sport's leagues and fetch the busiest.
 
         Bounded on purpose.  Soccer has 98 leagues with fixtures on one day, and
         196 requests to work around one failed call is not politeness, it is a
         small scrape.  What is left out is logged rather than implied.
+
+        Every league it reaches is tallied, and so are the ones the cap leaves
+        out.  This path recorded **nothing** — not the leagues it deliberately
+        omitted, not the ones that answered 403 inside it — so a sport that
+        entered here after its own endpoint was blocked and then lost 18 of its
+        20 remaining leagues reported ``OK`` with an empty ``failed_scopes``.
+        It is not a rare path: it is the only one tennis ever uses, and the one
+        soccer uses whenever the catch-all league is configured, which is the
+        default.
         """
         sport_id = PINNACLE_ID_BY_SPORT[sport]
         index = self._get(
             f"/sports/{sport_id}/leagues",
             f"{_KIND_LEAGUE_INDEX}:{sport_scope(sport, sport_id)}",
         )
-        listed = require_list(index.json(), source=SOURCE_KEY, endpoint=index.endpoint)
+        listed = require_list(index.json(), source=self._source_key, endpoint=index.endpoint)
         entries = [
             entry
             for entry in listed
@@ -485,15 +625,29 @@ class PinnacleAdapter:
         ]
         ordered = sorted(entries, key=lambda entry: (-int(entry["matchupCount"]), int(entry["id"])))
         chosen = ordered[: self.max_fallback_leagues]
-        if len(ordered) > len(chosen):
+        omitted = len(ordered) - len(chosen)
+        if omitted:
             log.warning(
                 "%s: %s fallback covers %d of %d leagues with fixtures; %d omitted",
-                SOURCE_KEY,
+                self._source_key,
                 sport.value,
                 len(chosen),
                 len(ordered),
-                len(ordered) - len(chosen),
+                omitted,
             )
+            if tally is not None:
+                # Counted as refused, because that is what it is from the
+                # operator's side: fixtures this venue has and this run does not.
+                # Logging it and calling the source healthy is the difference
+                # between a bounded fallback and a silent one.
+                tally.failed(
+                    f"{sport.value}: {omitted} league(s) beyond the fallback cap",
+                    CoverageCappedError(
+                        f"{self._source_key}: the league-index fallback fetched the "
+                        f"{len(chosen)} busiest of {len(ordered)} {sport.value} leagues "
+                        f"with fixtures; the other {omitted} were not collected"
+                    ),
+                )
         raws: list[RawResponse] = [index]
         for entry in chosen:
             pinnacle_id = int(entry["id"])
@@ -503,10 +657,24 @@ class PinnacleAdapter:
                 matchups_path=f"/leagues/{pinnacle_id}/matchups",
                 markets_path=f"/leagues/{pinnacle_id}/markets/straight",
             )
+            # Named by the venue's own league id, not by the canonical key.
+            # Tennis "leagues" are tournament-rounds and dozens of them map onto
+            # one canonical ``ATP``, so keying the tally by the canonical name
+            # collapsed 30 requested scopes into 1 and put the denominator back
+            # below the numerator by a different route.
+            scope_name = f"{key}:{pinnacle_id}"
+            if tally is not None:
+                tally.requested(scope_name)
+            before = len(raws)
             try:
                 raws.extend(self._fetch_scope(scope))
             except SourceError as exc:
-                log.warning("%s: fallback league %s failed: %s", SOURCE_KEY, pinnacle_id, exc)
+                log.warning("%s: fallback league %s failed: %s", self._source_key, pinnacle_id, exc)
+                if tally is not None:
+                    tally.failed(scope_name, exc)
+                continue
+            if tally is not None:
+                tally.produced(scope_name, _matchup_count(raws[before:]))
         return raws
 
     def _fetch_scope(self, scope: _Scope) -> list[RawResponse]:
@@ -520,37 +688,16 @@ class PinnacleAdapter:
         scope came back idle.
         """
         matchups = self._get(scope.matchups_path, f"{_KIND_MATCHUPS}:{scope.token}")
-        listed = require_list(matchups.json(), source=SOURCE_KEY, endpoint=matchups.endpoint)
+        listed = require_list(matchups.json(), source=self._source_key, endpoint=matchups.endpoint)
         if not listed:
-            log.info("%s: %s returned no matchups", SOURCE_KEY, scope.token)
+            log.info("%s: %s returned no matchups", self._source_key, scope.token)
             return []
         markets = self._get(scope.markets_path, f"{_KIND_MARKETS}:{scope.token}")
-        require_list(markets.json(), source=SOURCE_KEY, endpoint=markets.endpoint)
+        require_list(markets.json(), source=self._source_key, endpoint=markets.endpoint)
         return [matchups, markets]
 
     def _get(self, path: str, endpoint: str) -> RawResponse:
-        if self.request_pause:
-            time.sleep(self.request_pause)
-        response = self._client.get(f"{self.base_url}{path}")
-        raw = RawResponse(
-            source=SOURCE_KEY,
-            endpoint=endpoint,
-            url=str(response.request.url),
-            status_code=response.status_code,
-            body=response.text,
-            fetched_at=datetime.now(UTC),
-            content_type=response.headers.get("content-type"),
-            headers=RawResponse.clean_headers(response.headers),
-        )
-        check_http_response(
-            source=SOURCE_KEY,
-            endpoint=endpoint,
-            status_code=raw.status_code,
-            body=raw.body,
-            content_type=raw.content_type,
-            url=raw.url,
-        )
-        return raw
+        return self._http.get(f"{self.base_url}{path}", endpoint=endpoint)
 
     # ── parse ────────────────────────────────────────────────────────────────
 
@@ -558,7 +705,7 @@ class PinnacleAdapter:
         return parse_pinnacle(raws)
 
     def close(self) -> None:
-        self._client.close()
+        self._http.close()
 
 
 # ── parsing (pure) ───────────────────────────────────────────────────────────
@@ -592,9 +739,35 @@ def parse_pinnacle(raws: Sequence[RawResponse]) -> ParseOutcome:
     Pure: a function of the bytes handed in.  No network, no clock, no
     filesystem, no configuration — parsing the same responses twice yields
     identical rows.
+
+    That last clause is what lets the same adapter class serve more than one
+    instance.  The ``source`` every row carries is read off the **envelope**, not
+    off the object doing the parsing, so a replay that constructs the adapter
+    with no arguments still reproduces the key the collector stored.
     """
     outcome = ParseOutcome()
-    pairs = _pair_responses(raws, outcome)
+    source = envelope_source(raws, fallback=SOURCE_KEY)
+    # Narrowed to one collection pass before anything else looks at it.  Every
+    # other paging source does this; Pinnacle did not, so a directory holding
+    # yesterday's bytes alongside today's contributed a stale pair under a token
+    # absent from the newest pass — which ``_pair_responses`` has no reason to
+    # supersede, and which then dragged the started-game anchor backwards for
+    # every scope.  Measured: one six-hour-old pair re-admitted 320 rows across
+    # 13 fixtures that had already kicked off.
+    raws = latest_capture(raws)
+    pairs = _pair_responses(raws, source, outcome)
+    # The moment these bytes were captured, so "has it started?" is answered
+    # against the capture and not against a clock — the same decision on a
+    # replay as on the live run.
+    #
+    # Taken over the responses ``_pair_responses`` actually **kept**.  Over the
+    # raw list it included the ones it had just discarded as superseded, so a
+    # single stale envelope dragged the anchor backwards for every scope: adding
+    # two six-hour-old copies of one league's pair to a real capture re-admitted
+    # **248 rows on games that had already started**, on fixtures the stale bytes
+    # had nothing to do with.  Every other adapter anchors on what it parses.
+    kept = [raw for _, matchups, markets in pairs for raw in (matchups, markets) if raw]
+    captured_at = min((raw.fetched_at for raw in kept), default=None)
 
     # Pass 1: event identity, across every pair at once, so a matchup that two
     # scopes both returned is accepted once and doubleheader ordinals are
@@ -602,13 +775,13 @@ def parse_pinnacle(raws: Sequence[RawResponse]) -> ParseOutcome:
     games: dict[str, _Game] = {}
     listed_ids: set[str] = set()
     for _, matchups_raw, _ in pairs:
-        for matchup in _iter_records(matchups_raw, outcome):
+        for matchup in _iter_records(matchups_raw, source, outcome):
             matchup_id = str(matchup.get("id") or "")
             listed_ids.add(matchup_id)
             if matchup_id in games:
                 outcome.skipped["duplicate_matchup"] += 1
                 continue
-            game = _accept_matchup(matchup, outcome)
+            game = _accept_matchup(matchup, source, outcome, captured_at=captured_at)
             if game is None:
                 continue  # already counted as a skip or a rejection
             games[game.matchup_id] = game
@@ -621,9 +794,10 @@ def parse_pinnacle(raws: Sequence[RawResponse]) -> ParseOutcome:
     priced: set[tuple[str, str]] = set()
     for _, matchups_raw, markets_raw in pairs:
         price_ref, identity_ref = provenance(markets_raw, matchups_raw)
-        for market in _iter_records(markets_raw, outcome):
+        for market in _iter_records(markets_raw, source, outcome):
             _parse_market(
                 market=market,
+                source=source,
                 games=games,
                 listed_ids=listed_ids,
                 event_keys=event_keys,
@@ -656,7 +830,7 @@ def provenance(markets_raw: RawResponse, matchups_raw: RawResponse) -> tuple[str
 
 
 def _pair_responses(
-    raws: Sequence[RawResponse], outcome: ParseOutcome
+    raws: Sequence[RawResponse], source: str, outcome: ParseOutcome
 ) -> list[tuple[str, RawResponse, RawResponse]]:
     """Group captured responses into ``(scope, matchups, markets)`` triples."""
     grouped: dict[str, dict[str, RawResponse]] = {}
@@ -686,7 +860,7 @@ def _pair_responses(
             # In scope but unusable: half a pair cannot be joined, and silence
             # here would look exactly like a league with no fixtures.
             outcome.reject(
-                SOURCE_KEY,
+                source,
                 "unpaired_response",
                 f"scope {token!r} has no {missing[0]} response to join against",
                 scope=token,
@@ -696,14 +870,16 @@ def _pair_responses(
 
     if not pairs:
         raise FormatChangeError(
-            f"{SOURCE_KEY}: no matchups/markets pair among "
+            f"{source}: no matchups/markets pair among "
             f"{[raw.endpoint for raw in raws]}"
         )
     return pairs
 
 
-def _iter_records(raw: RawResponse, outcome: ParseOutcome) -> Iterable[dict[str, Any]]:
-    payload = require_list(raw.json(), source=SOURCE_KEY, endpoint=raw.endpoint)
+def _iter_records(
+    raw: RawResponse, source: str, outcome: ParseOutcome
+) -> Iterable[dict[str, Any]]:
+    payload = require_list(raw.json(), source=source, endpoint=raw.endpoint)
     for entry in payload:
         if isinstance(entry, dict):
             yield entry
@@ -714,12 +890,41 @@ def _iter_records(raw: RawResponse, outcome: ParseOutcome) -> Iterable[dict[str,
 # ── event identity ───────────────────────────────────────────────────────────
 
 
-def _accept_matchup(matchup: dict[str, Any], outcome: ParseOutcome) -> _Game | None:
+
+def _matchup_count(raws: Sequence[RawResponse]) -> int:
+    """How many matchup records these responses carry.
+
+    The league-index response is deliberately not one: it lists leagues, and the
+    parser skips it as ``league_index_response``.
+    """
+    total = 0
+    for raw in raws:
+        if not raw.endpoint.startswith(_KIND_MATCHUPS):
+            continue
+        try:
+            payload = raw.json()
+        except ValueError:
+            continue
+        if isinstance(payload, list):
+            total += sum(
+                1 for row in payload
+                if isinstance(row, dict) and row.get("type") == "matchup"
+            )
+    return total
+
+
+def _accept_matchup(
+    matchup: dict[str, Any],
+    source: str,
+    outcome: ParseOutcome,
+    *,
+    captured_at: datetime | None = None,
+) -> _Game | None:
     """Turn one matchup into a :class:`_Game`, or count why it was dropped."""
     matchup_id = str(matchup.get("id") or "")
     if not matchup_id:
         outcome.reject(
-            SOURCE_KEY, "missing_matchup_id", f"matchup without an id: {sorted(matchup)[:10]}"
+            source, "missing_matchup_id", f"matchup without an id: {sorted(matchup)[:10]}"
         )
         return None
 
@@ -769,7 +974,7 @@ def _accept_matchup(matchup: dict[str, Any], outcome: ParseOutcome) -> _Game | N
     sides = _aligned_participants(matchup)
     if sides is None:
         outcome.reject(
-            SOURCE_KEY,
+            source,
             "unaligned_participants",
             f"matchup {matchup_id} does not have exactly one home and one away participant: "
             f"{[(p.get('alignment'), p.get('name')) for p in matchup.get('participants') or []]}",
@@ -783,14 +988,34 @@ def _accept_matchup(matchup: dict[str, Any], outcome: ParseOutcome) -> _Game | N
     # not a participant it failed to recognise.  Grading it a rejection failed the
     # entire Pinnacle run over one doubles match in the tennis slate, discarding
     # 2300 good rows across five other sports.
-    if any(is_pairing(name) for name in (home_name, away_name)):
+    if any(is_pairing(name, competition.sport) for name in (home_name, away_name)):
         outcome.skipped["doubles_or_team_pairing"] += 1
         return None
 
-    resolved = [canonical_participant(name, competition) for name in (home_name, away_name)]
+    # A statistic dressed as a fixture — "Home Runs (16 Games)" against "Away
+    # Runs (16 Games)", aggregated across the whole day's slate — is a market
+    # this collector does not cover rather than a participant it failed to
+    # recognise.  Grading it a rejection marks the whole source unhealthy: one of
+    # these on the live MLB slate put 29,711 good rows behind ok=0.
+    if any(is_statistic(name) for name in (home_name, away_name)):
+        outcome.skipped["statistic_not_a_fixture"] += 1
+        return None
+
+    # A women's, reserve or youth competition whose *name* carries the marker
+    # while the team names do not.  Pinnacle routes every unrecognised soccer
+    # competition into one catch-all league and the competition name is then read
+    # by nothing, so "Club Friendlies Women" Utrecht v De Graafschap produced an
+    # event key byte-identical to the men's fixture — 24 matchups across 14
+    # competitions on one live slate.  Appending the marker gives the same key
+    # the venue would have produced had it put the marker on the team.
+    marker = competition_marker(
+        (matchup.get("league") or {}).get("name"), competition.sport
+    )
+    named = [with_marker(name, marker) for name in (home_name, away_name)]
+    resolved = [canonical_participant(name, competition) for name in named]
     if any(participant is None for participant in resolved):
         outcome.reject(
-            SOURCE_KEY,
+            source,
             "unknown_participant",
             f"matchup {matchup_id} in {competition.key} has a participant that did not "
             f"resolve: {[home_name, away_name]}",
@@ -802,7 +1027,7 @@ def _accept_matchup(matchup: dict[str, Any], outcome: ParseOutcome) -> _Game | N
     assert first is not None and second is not None  # narrowed above
     if first.key == second.key:
         outcome.reject(
-            SOURCE_KEY,
+            source,
             "duplicate_participant",
             f"matchup {matchup_id} resolved both sides to {first.key}: {[home_name, away_name]}",
             matchup_id=matchup_id,
@@ -817,14 +1042,32 @@ def _accept_matchup(matchup: dict[str, Any], outcome: ParseOutcome) -> _Game | N
     else:
         away, home = orient(first, second, competition)
 
-    commence_time = _parse_time(matchup.get("startTime"))
+    commence_time = parse_iso_time(matchup.get("startTime"))
     if commence_time is None:
         outcome.reject(
-            SOURCE_KEY,
+            source,
             "missing_commence_time",
             f"matchup {matchup_id} has unparseable startTime {matchup.get('startTime')!r}",
             matchup_id=matchup_id,
         )
+        return None
+
+    # Pinnacle was the only source in this pipeline with no started-game guard.
+    #
+    # ``isLive`` above is the venue's *product* flag — whether the matchup has
+    # moved to its in-play book — and it is not the same question as whether the
+    # game has begun.  On one live capture, **248 rows across 18 fixtures** had a
+    # ``startTime`` in the past, every one of them ``isLive: false`` and emitted
+    # as ``ACTIVE``: a tennis match two hours old published at 1.01/32.47 and
+    # joined to another book's genuine pregame market.  No other source produced
+    # a single such row.
+    #
+    # ``src.arb`` has a started-game gate of its own, but it runs on the earliest
+    # ``commence_time`` in a group and is applied at detection, so it cannot stop
+    # these rows being stored, compared, counted as coverage, or shown as prices
+    # anyone could take.
+    if captured_at is not None and commence_time <= captured_at:
+        outcome.skipped["event_already_started"] += 1
         return None
 
     return _Game(
@@ -881,6 +1124,7 @@ def _is_participant_priced(market: dict[str, Any]) -> bool:
 def _parse_market(
     *,
     market: dict[str, Any],
+    source: str,
     games: dict[str, _Game],
     listed_ids: set[str],
     event_keys: dict[str, str],
@@ -928,7 +1172,7 @@ def _parse_market(
     period_raw = market.get("period")
     if not isinstance(period_raw, int) or isinstance(period_raw, bool):
         outcome.reject(
-            SOURCE_KEY,
+            source,
             "unparseable_period",
             f"period {period_raw!r} on {market_type.value} for matchup {matchup_id}",
             matchup_id=matchup_id,
@@ -945,7 +1189,7 @@ def _parse_market(
         side_raw = str(market.get("side") or "")
         if side_raw not in ("home", "away"):
             outcome.reject(
-                SOURCE_KEY,
+                source,
                 "missing_side",
                 f"{market_type.value} without a home/away side on matchup {matchup_id}",
                 matchup_id=matchup_id,
@@ -973,6 +1217,7 @@ def _parse_market(
             continue
         quote = _build_quote(
             price=price,
+            source=source,
             game=game,
             event_key=event_keys[matchup_id],
             market_type=market_type,
@@ -1028,6 +1273,7 @@ def _fallback_market_id(matchup_id: str, market: dict[str, Any]) -> str:
 def _build_quote(
     *,
     price: dict[str, Any],
+    source: str,
     game: _Game,
     event_key: str,
     market_type: Market,
@@ -1069,7 +1315,7 @@ def _build_quote(
 
     if selection is None:
         outcome.reject(
-            SOURCE_KEY,
+            source,
             "unknown_selection",
             f"designation {designation!r} on {market_type.value} for matchup "
             f"{game.matchup_id}",
@@ -1083,7 +1329,7 @@ def _build_quote(
         # two readings differ by the whole stake.  Hockey period 6 prices a draw;
         # hockey period 0, decided by the shootout, does not.
         outcome.reject(
-            SOURCE_KEY,
+            source,
             "draw_not_priced",
             f"draw priced on {game.sport.value}/{period.value} for matchup "
             f"{game.matchup_id}",
@@ -1100,7 +1346,7 @@ def _build_quote(
     points = price.get("points")
     if market_type in MARKETS_REQUIRING_LINE and points is None:
         outcome.reject(
-            SOURCE_KEY,
+            source,
             "missing_line",
             f"{market_type.value} price without points on matchup {game.matchup_id}",
             matchup_id=game.matchup_id,
@@ -1115,7 +1361,7 @@ def _build_quote(
         # comparing and serializing identically.
         line = None if market_type not in MARKETS_REQUIRING_LINE else float(points) + 0.0
         return Quote(
-            source=SOURCE_KEY,
+            source=source,
             observed_at=observed_at,
             raw_ref=raw_ref,
             identity_raw_ref=identity_raw_ref,
@@ -1144,7 +1390,7 @@ def _build_quote(
         )
     except (TypeError, ValueError) as exc:
         outcome.reject(
-            SOURCE_KEY,
+            source,
             "invalid_quote",
             f"{market_type.value}/{selection.value} on matchup {game.matchup_id}: {exc}",
             matchup_id=game.matchup_id,
@@ -1170,13 +1416,3 @@ def _max_risk(limits: Any) -> float | None:
             except (KeyError, TypeError, ValueError):
                 return None
     return None
-
-
-def _parse_time(value: Any) -> datetime | None:
-    if not value:
-        return None
-    try:
-        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)

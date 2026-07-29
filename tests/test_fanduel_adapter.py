@@ -420,6 +420,11 @@ def test_every_skip_reason_is_a_declared_decision(parsed) -> None:
                 # product as a pregame line even though nothing on the row says so.
                 "event_already_started",
                 "market_on_started_event",
+                # The feed's own liveness flag, which is exact where the
+                # kick-off-time proxy is not: on the captured tennis slate they
+                # agree on 186 of 187 fixtures and the proxy admits the one
+                # market FanDuel had already taken in-play.
+                "market_in_play",
                 # A decimal price under 1.01 is "risk two hundred to win one" —
                 # a placeholder, not a quote.  Observed at 1.005 on a suspended
                 # runner.
@@ -813,13 +818,34 @@ def test_observed_at_and_raw_ref_come_from_the_response_the_price_came_from(
 # ── league filtering ─────────────────────────────────────────────────────────
 
 
-def test_configured_leagues_bound_what_is_parsed(fanduel_raw: list[RawResponse]) -> None:
-    outcome = parse_fanduel(fanduel_raw, leagues=("MLB", "EPL"))
-    assert {q.league for q in outcome.quotes} == {"MLB", "EPL"}
-    # Everything filtered out is counted, per league, rather than vanishing.
-    assert outcome.skipped["league_not_configured:ITF"] > 0
-    assert outcome.skipped["league_not_configured:SOCCER_OTHER"] > 0
-    assert sum(v for k, v in outcome.skipped.items() if k.startswith("league_not_configured:")) > 100
+def test_parsing_does_not_depend_on_how_the_instance_was_configured(
+    fanduel_raw: list[RawResponse],
+) -> None:
+    """The purity clause, tested where it can actually fail.
+
+    This used to assert the opposite — that a league list narrowed what ``parse``
+    produced — and that was a real defect rather than a feature.  ``replay_run``
+    builds an adapter with **no arguments**, so a run collected with
+    ``--league EPL`` replayed against every league: the same soccer bytes parsed
+    to 30 rows on collection and 381 on replay, reported as 351 rows the parser
+    had "invented".
+
+    Narrowing is the collector's job and happens after reconciliation, where it
+    applies identically to both sides of the comparison.  Here, every fixture the
+    bytes describe is normalized.
+    """
+    narrow = FanDuelAdapter(leagues=("EPL",))
+    wide = FanDuelAdapter()
+    try:
+        scoped = [q.model_dump() for q in narrow.parse(fanduel_raw).quotes]
+        replayed = [q.model_dump() for q in wide.parse(fanduel_raw).quotes]
+    finally:
+        narrow.close()
+        wide.close()
+    assert scoped == replayed
+    assert {row["league"] for row in scoped} > {"EPL"}, (
+        "the capture holds more than one league, or this proves nothing"
+    )
 
 
 def test_a_configured_offseason_league_is_a_visible_gap_not_a_silent_one() -> None:

@@ -82,11 +82,14 @@ the two through one interface is how a middle gets bet as if it were riskless.
 from __future__ import annotations
 
 import itertools
-from collections import defaultdict
-from dataclasses import dataclass
+import math
+from collections import Counter, defaultdict
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
-from typing import Iterable, Sequence
+from typing import Callable, Collection, Iterable, Mapping, Sequence
 
+from src.commission import Commission, commission_for
+from src.settlement import mismatch as settlement_mismatch
 from src.schema import (
     Market,
     Period,
@@ -113,7 +116,34 @@ STAKE_INCREMENT = 1.0
 
 #: Two legs must have been observed close enough together to have plausibly
 #: been available at the same moment.
+#:
+#: This bound is **relative** — it compares the legs to each other — and that is
+#: the whole of what it checks.  Two prices captured six weeks ago have a spread
+#: of seconds and clear it perfectly.
 MAX_OBSERVATION_SPREAD = timedelta(seconds=180)
+
+#: And how old the newest leg may be, measured against *now*.
+#:
+#: The relative bound above cannot catch a stale run, and neither can the
+#: started-game gate: a fixture six weeks out is still in the future, so a run
+#: collected six weeks ago reports every one of its positions as takeable. That
+#: is not a hypothetical failure mode but the *expected* one — it is what
+#: ``arb`` does the morning after collection silently stops, because
+#: ``latest_run_id`` returns the newest finished run however old it is.  A page
+#: of "guaranteed" positions priced weeks ago is the exact shape this pipeline
+#: exists not to produce.
+#:
+#: Fifteen minutes: three times the default collection interval, so a command
+#: run against a healthy pipeline can never trip it, and small enough that
+#: nothing survives an outage.
+#:
+#: Enforced by the commands that read a *stored* run rather than inside the
+#: detector, because that is the only place it can happen.  A live pass has just
+#: collected its prices, and the detector is a pure function of the rows it is
+#: given — it has no way to tell "these are six weeks old" from "the caller is
+#: deliberately studying history", which is a legitimate thing to do.  The
+#: command knows which of the two it is.
+MAX_PRICE_AGE = timedelta(minutes=15)
 
 #: Floating-point dust: 1e-9 of implied probability is not an edge.
 _EPSILON = 1e-9
@@ -162,6 +192,24 @@ _VOID_RISK_DEFAULT = (
 # ── the trivial part: the arithmetic ─────────────────────────────────────────
 
 
+def net_decimal(quote: Quote, commissions: Mapping[str, Commission] | None = None) -> float:
+    """The price this quote actually pays, after its venue's charge.
+
+    A sportsbook's margin is already inside the number it publishes, so this is
+    the identity for one.  An exchange's is not: Matchbook quotes 3.00 and pays
+    2.96 after 2% of winnings, and Kalshi adds a per-contract fee to the price
+    you pay.  Every comparison and every payout below uses this rather than
+    :attr:`Quote.decimal_odds`, because on the venues that charge, the quoted
+    number is not the one you get — and the gap is the same size as the edge
+    being looked for.
+    """
+    return commission_for(quote.source, commissions).net_decimal(quote.decimal_odds)
+
+
+def _net_implied(quote: Quote, commissions: Mapping[str, Commission] | None = None) -> float:
+    return 1.0 / net_decimal(quote, commissions)
+
+
 def arb_margin(decimal_odds: Sequence[float]) -> float:
     """Edge on a complete set of mutually exclusive outcomes.
 
@@ -203,41 +251,145 @@ def stake_split(decimal_odds: Sequence[float], total_stake: float) -> list[float
     return [total_stake * (1.0 / odds) / total_implied for odds in decimal_odds]
 
 
+def floor_maximising_split(
+    multipliers: Sequence[Sequence[float]], total_stake: float
+) -> list[float] | None:
+    """The two-leg split that maximises the *worst* outcome, exactly.
+
+    :func:`stake_split` equalises the two full-win returns, which maximises the
+    floor only when every outcome pays one leg its full price and the other
+    nothing.  A quarter (Asian split) line does not: half the stake rides each
+    neighbouring line, so the middle outcome pays half of the surviving side's
+    profit, and the floor is ``min(full_win_a, full_win_b, half)`` — a different
+    function with a different maximum.  Measured: soccer total 2.75 priced 2.10
+    against 2.10 reported ``+2.50 on 100`` at 50/50 where 51/49 guarantees
+    **+2.90**.  200 of the captured slate's lines are quarter lines.
+
+    *multipliers* is one row per outcome giving what each leg returns per unit
+    staked.  With two legs and ``s`` on the first, each outcome's profit is a
+    straight line in ``s``, so the floor is a concave piecewise-linear function
+    and its maximum is at an endpoint or where two of those lines cross.  Both
+    sets are small and exact, so there is nothing to search and nothing to tune.
+
+    Returns ``None`` when there is nothing to choose between — no outcomes, or a
+    market that is not two-legged.
+    """
+    if total_stake <= 0 or any(len(row) != 2 for row in multipliers):
+        return None
+    # profit(s) = s * first + (total - s) * second - total
+    lines = [
+        (first - second, total_stake * (second - 1.0)) for first, second in multipliers
+    ]
+    if not lines:
+        return None
+    marks = {0.0, total_stake}
+    for index, (slope_a, intercept_a) in enumerate(lines):
+        for slope_b, intercept_b in lines[index + 1 :]:
+            if abs(slope_a - slope_b) < _EPSILON:
+                continue
+            crossing = (intercept_b - intercept_a) / (slope_a - slope_b)
+            if 0.0 <= crossing <= total_stake:
+                marks.add(crossing)
+    best = max(
+        marks, key=lambda s: min(slope * s + intercept for slope, intercept in lines)
+    )
+    return [best, total_stake - best]
+
+
 def stake_candidates(
     ideal: Sequence[float], total_stake: float, increment: float
 ) -> list[list[float]]:
-    """Every sensible way to round *ideal* onto whole betting units.
+    """Every whole-unit allocation that could be the best one.
 
-    Floor each leg to the increment, then hand out the leftover units — at most
-    one per leg, since the floors can only lose a fraction of a unit each.  The
-    caller picks between the candidates by the profit floor they produce, which
-    is the objective that decides whether a position is risk-free at all.
+    The caller picks between them by the profit floor they produce, which is the
+    objective that decides whether a position is risk-free at all — and which
+    only the caller can compute, because it depends on the settlement model, the
+    commissions and whether the line can land on itself.  This function's job is
+    to make sure the best allocation is *in the list*.
 
-    Largest-remainder apportionment on its own minimises *rounding error*, which
-    is a different objective and not always the same choice: a thin edge can be
-    driven negative by the split with the smallest rounding error while another
-    whole-unit split of the same bankroll stays profitable.
+    At the optimum some leg is **binding**: it is the one whose return sets the
+    guarantee.  Fix that leg at *k* units and the guarantee follows from it; every
+    other leg then needs the fewest units whose own return clears that guarantee,
+    which is a ceiling.  So sweeping (binding leg, k) enumerates the shape the
+    optimum has to have, and no allocation outside that sweep can beat one inside
+    it.  ``ideal`` is enough to do this without the odds: ``ideal_i * d_i`` is the
+    same number for every leg, so "leg *i* returns at least *R*" is exactly
+    "``s_i / ideal_i`` is at least *t*" for one common *t*.
+
+    **Spending the whole bankroll is not the objective**, and requiring it cost
+    real money.  Leftover units used to be handed out one per leg, which made the
+    pure-floors allocation unreachable whenever anything was left over — so a
+    spare unit was forced onto some leg, and it lands on the leg that is *not*
+    setting the floor, where it buys nothing and is subtracted from every outcome.
+    On an ordinary two-book moneyline (1.88 against 2.35) the engine staked 56/44
+    and reported ``+3.40 on 100`` where 55/44 — one unit left unstaked —
+    guarantees **+4.40**.  Measured over randomised realistic pairs: 69% of
+    positions understated, and in the thin band where cross-book edges actually
+    live, 257 of 593 genuinely risk-free positions were *refused outright* as
+    ``rounding_destroys_edge``.  ``total_stake`` is the bankroll a position may
+    use, not a quota it has to spend.
+
+    The sweep replaced a rounding box around ``ideal``.  A box cannot reach the
+    optimum because the optimum is often at a different *total*, not a different
+    split of the same total — and a box widened until it usually did would be a
+    tuned constant standing where an exact argument fits.
 
     ``units_total`` floors rather than rounds, so the position never exceeds the
-    bankroll it was given.  Rounding up here lets the allocation *overspend*
-    when the increment does not divide the bankroll — 50/50 of 100 in units of 6
-    becomes 54/48, which is 102.
+    bankroll it was given.  Rounding up lets the allocation *overspend* when the
+    increment does not divide the bankroll — 50/50 of 100 in units of 6 becomes
+    54/48, which is 102.
+
+    An allocation that leaves a leg at zero is not a position, so those are
+    dropped — unless every one of them does, which is the sub-unit bankroll the
+    caller's own guards refuse with a reason.
     """
     if increment <= 0:
         return [list(ideal)]
     units_total = int(total_stake / increment + 1e-9)
-    floors = [int(value / increment + 1e-9) for value in ideal]
-    remainder = max(units_total - sum(floors), 0)
-    if remainder == 0:
-        return [[count * increment for count in floors]]
-
-    candidates: list[list[float]] = []
-    for extra in itertools.combinations(range(len(ideal)), min(remainder, len(ideal))):
-        counts = list(floors)
-        for index in extra:
-            counts[index] += 1
-        candidates.append([count * increment for count in counts])
-    return candidates
+    seen: set[tuple[int, ...]] = set()
+    corners: list[tuple[int, ...]] = []
+    for leg, share in enumerate(ideal):
+        if share <= 0:
+            continue
+        for units in range(1, int(share / increment + 1e-9) + 2):
+            # ``units`` on the binding leg fixes the guarantee; every other leg
+            # takes the fewest units that clear it.
+            scale = units * increment / share
+            counts = tuple(
+                units
+                if other == leg
+                else math.ceil(scale * value / increment - 1e-9)
+                for other, value in enumerate(ideal)
+            )
+            if sum(counts) > units_total or counts in seen:
+                continue
+            seen.add(counts)
+            corners.append(counts)
+    playable = [counts for counts in corners if all(count >= 1 for count in counts)]
+    if not corners:
+        # The bankroll is too small for any leg to clear a whole unit on its own
+        # share, so the sweep has nothing to offer.  Hand back the floors plus the
+        # leftover units one per leg, which is what this function used to do
+        # always: a bankroll of exactly one increment still has to reach the
+        # caller as a position it can refuse *with a reason* rather than as a
+        # zero-stake nothing.
+        floors = [int(value / increment + 1e-9) for value in ideal]
+        remainder = max(units_total - sum(floors), 0)
+        if remainder == 0:
+            corners = [tuple(floors)]
+        else:
+            corners = [
+                tuple(
+                    floor + (1 if index in extra else 0)
+                    for index, floor in enumerate(floors)
+                )
+                for extra in itertools.combinations(
+                    range(len(ideal)), min(remainder, len(ideal))
+                )
+            ]
+    return [
+        [count * increment for count in counts] for counts in (playable or corners)
+    ]
 
 
 # ── settlement model ─────────────────────────────────────────────────────────
@@ -478,6 +630,14 @@ class ArbLeg:
 
     quote: Quote
     stake: float
+    net_decimal_odds: float | None = None
+    """What this leg actually pays, after the venue's commission.
+
+    Carried alongside the quoted price rather than replacing it, because the two
+    are both true and are needed for different things: you place the bet at the
+    *quoted* price and you are paid at the *net* one.  ``None`` means "the same
+    as quoted", which is every sportsbook.
+    """
 
     @property
     def source(self) -> str:
@@ -489,18 +649,29 @@ class ArbLeg:
 
     @property
     def decimal_odds(self) -> float:
+        """The price the venue publishes — what you place the bet at."""
         return self.quote.decimal_odds
 
     @property
+    def net_odds(self) -> float:
+        """The price you are actually paid — what the arithmetic uses."""
+        return self.net_decimal_odds if self.net_decimal_odds is not None else self.quote.decimal_odds
+
+    @property
+    def pays_commission(self) -> bool:
+        return abs(self.net_odds - self.quote.decimal_odds) > 1e-12
+
+    @property
     def payout(self) -> float:
-        """Total returned if this leg wins, stake included."""
-        return self.stake * self.quote.decimal_odds
+        """Total returned if this leg wins, stake included and commission taken."""
+        return self.stake * self.net_odds
 
     def describe(self) -> str:
         line = "" if self.quote.line is None else f" {self.quote.line:+g}"
+        net = f" (net {self.net_odds:.4f})" if self.pays_commission else ""
         return (
             f"{self.quote.source} {self.selection.value}{line} "
-            f"@ {self.quote.decimal_odds:.4f} ({self.quote.american_odds:+d}) "
+            f"@ {self.quote.decimal_odds:.4f} ({self.quote.american_odds:+d}){net} "
             f"stake {self.stake:.2f}"
         )
 
@@ -534,7 +705,15 @@ class Opportunity:
 
     @property
     def sum_implied(self) -> float:
-        return sum(1.0 / leg.decimal_odds for leg in self.legs)
+        """Total implied probability at the prices actually paid.
+
+        Net of commission, which is the only reading that can be trusted once
+        exchanges are in the mix: they quote tighter than sportsbooks, so an
+        exchange leg is exactly what drags a cross-book sum below 1.0, and a
+        margin measured on the quoted price would report a stream of edges that
+        the venue's own charge has already eaten.
+        """
+        return sum(1.0 / leg.net_odds for leg in self.legs)
 
     @property
     def margin(self) -> float:
@@ -640,6 +819,107 @@ class ArbReport:
 # ── detection ────────────────────────────────────────────────────────────────
 
 
+#: Key under which a counterparty group applies to every competition rather
+#: than one named one.  No league key can collide with it.
+EVERY_LEAGUE = "*"
+
+
+def merge_counterparty_groups(
+    *tables: Mapping[str, list[frozenset[str]]] | None,
+) -> dict[str, list[frozenset[str]]]:
+    """Union several ``league -> groups`` tables into one gate.
+
+    Evidence only ever accumulates: a pair recorded as one counterparty by one
+    measurement stays one counterparty when another measurement, taken from
+    narrower rows, could not see it.  The narrow case is real — a run collected
+    under ``--sport tennis`` stores none of the MLB rows the mirror was measured
+    on, so re-measuring from the stored rows alone reopened the gate and
+    published a "guaranteed" position with both legs at one operator.
+    """
+    merged: dict[str, list[frozenset[str]]] = {}
+    for table in tables:
+        for league, groups in (table or {}).items():
+            bucket = merged.setdefault(league, [])
+            for group in groups:
+                if group not in bucket:
+                    bucket.append(group)
+    return merged
+
+
+def counterparty_groups(
+    quotes: Sequence[Quote],
+) -> dict[str, list[frozenset[str]]]:
+    """``league -> source groups that are one book``, measured from the rows.
+
+    Kept here rather than in :mod:`src.distinctness` so that every entry point
+    into detection shares one answer: the collector reports the same pairs as
+    findings, and a re-analysis of the stored rows reaches the same verdict
+    without the caller doing anything.
+
+    A mirrored pair is filed under :data:`EVERY_LEAGUE`, **not** under the
+    leagues the mirror was measured in.  Those are two different questions, and
+    conflating them was the most expensive defect this gate has had:
+
+    :data:`src.distinctness.MIN_SHARED_SELECTIONS` says how much overlap it
+    takes to *establish* that two sources are one counterparty — 20 shared
+    selections, because a handful agreeing perfectly is what a one-fixture
+    overlap looks like.  It says nothing about *where* that fact then applies.
+    Two licences of one operator are one counterparty in every market they
+    both quote; they do not become independent in a competition where this
+    pipeline happens to hold fewer than 20 shared prices.
+
+    Filing per measured league meant exactly that.  Two Kambi tenants
+    byte-identical across 25 ITF fixtures were gated in ITF and joined as
+    independent books in WTA, where they shared 18 selections and one tenant's
+    cache was stale — reported as ``margin 3.26%, guaranteed +3.35``, both legs
+    at the same book, on a run with no errors and no diagnostic. Worse, a pair
+    that is a mirror by its **overall** rate but has no single league above the
+    floor contributed nothing at all: 139 of 140 prices identical, verdict
+    MIRROR, gate empty.  On the committed slate every WNBA pairing shares 2-14
+    selections, so no pair could ever have been gated there however identical.
+
+    This is what :attr:`src.distinctness.Agreement.verdict` already says — "a
+    mirror found anywhere stands, because the evidence for it does not stop
+    being evidence when other markets disagree".  The verdict implemented it;
+    the gate did not.
+    """
+    from src.distinctness import find_mirrors
+
+    groups: dict[str, list[frozenset[str]]] = defaultdict(list)
+    for pair in find_mirrors(quotes):
+        groups[EVERY_LEAGUE].append(frozenset({pair.source_a, pair.source_b}))
+    return dict(groups)
+
+
+def _order_driven_sources() -> frozenset[str]:
+    """Venues whose rows exist only because somebody left liquidity resting.
+
+    Read off the registry, which is where that fact lives, rather than guessed
+    from the data — and imported here rather than at module scope because
+    :mod:`src.validation` imports this module.
+    """
+    from src.sources import registry
+
+    return frozenset(
+        key for key, entry in registry.BY_KEY.items() if entry.kind.has_stated_liquidity
+    )
+
+
+def describe_age(age: timedelta) -> str:
+    """A duration in the largest unit that keeps it readable."""
+    seconds = int(age.total_seconds())
+    if seconds < 90:
+        return f"{seconds} second{'' if seconds == 1 else 's'}"
+    minutes = seconds // 60
+    if minutes < 90:
+        return f"{minutes} minute{'' if minutes == 1 else 's'}"
+    hours = minutes // 60
+    if hours < 48:
+        return f"{hours} hour{'' if hours == 1 else 's'}"
+    days = hours // 24
+    return f"{days} day{'' if days == 1 else 's'}"
+
+
 def find_opportunities(
     quotes: Sequence[Quote],
     *,
@@ -649,6 +929,9 @@ def find_opportunities(
     max_observation_spread: timedelta = MAX_OBSERVATION_SPREAD,
     require_distinct_sources: bool = True,
     as_of: datetime | None = None,
+    commissions: Mapping[str, Commission] | None = None,
+    one_counterparty: Mapping[str, Sequence[frozenset[str]]] | None = None,
+    order_book_sources: Collection[str] | None = None,
 ) -> ArbReport:
     """Find every risk-free position in one run's worth of quotes.
 
@@ -659,7 +942,49 @@ def find_opportunities(
     played.  Passing *as_of* excludes those instead of reporting settled games as
     free money.  Left as ``None``, no such gate is applied, which is what a
     historical study of the stored data wants.
+
+    *commissions* maps a source key to what that venue charges; left ``None`` it
+    is :data:`src.commission.COMMISSIONS`, the real table.  Pass ``{}`` to price
+    every venue as charging nothing, which is what a test of the pure arithmetic
+    wants and what a live run must never do.
+
+    *one_counterparty* names groups of source keys that are the same
+    counterparty, per league — what :mod:`src.distinctness` measures.  Distinct
+    *sources* is not the same test as distinct *counterparties*, and the live
+    slate shows why the distinction has to be per league rather than per source:
+    BetRivers and LeoVegas disagree about baseball, hockey and most soccer, and
+    are byte-identical across all of tennis and the Bundesliga.  Banning the pair
+    outright would throw away real coverage; ignoring it would report an
+    arbitrage between one book and itself in the competitions where it is one
+    feed.  Sources named together here count as one book for
+    *require_distinct_sources* in the leagues they are named for, and nowhere
+    else.
+
+    Left ``None`` it is **measured from the quotes**, so every caller gets the
+    gate without having to remember it.  That default is the point: the first
+    version took the map as a required argument, the live path passed it and the
+    re-analysis path did not, and the same rows produced two different answers
+    depending on which command asked.  Pass ``{}`` to compare source keys alone,
+    which is what a test of the pure arithmetic wants.
     """
+    if total_stake < stake_increment:
+        # A bankroll under one betting unit cannot hold a position at all.
+        #
+        # ``stake_candidates`` floors every leg to zero, every settlement
+        # outcome then returns exactly zero, ``is_risk_free`` (floor >= 0)
+        # passes, and ``rounding_destroys_edge`` never fires — so ``--stake
+        # 0.5`` printed "margin 9.09%, guaranteed +0.00 on 0" with both legs at
+        # stake 0.00.  The argument parser only refuses values at or below zero,
+        # and it is not its business to know the increment.
+        raise ValueError(
+            f"total_stake {total_stake:g} is below one {stake_increment:g}-unit stake, "
+            "so every leg would round to zero and no position could be placed"
+        )
+    if one_counterparty is None:
+        one_counterparty = counterparty_groups(quotes)
+    if order_book_sources is None:
+        order_book_sources = _order_driven_sources()
+    order_driven = frozenset(order_book_sources)
     report = ArbReport(opportunities=[], diagnostics=[])
 
     grouped: dict[MarketGroup, list[Quote]] = defaultdict(list)
@@ -683,6 +1008,9 @@ def find_opportunities(
             max_observation_spread=max_observation_spread,
             require_distinct_sources=require_distinct_sources,
             as_of=as_of,
+            commissions=commissions,
+            counterparties=_counterparties(rows, one_counterparty),
+            order_driven=order_driven,
         )
 
     # Ranked by the money actually guaranteed, not by the headline margin. A
@@ -692,8 +1020,90 @@ def find_opportunities(
     return report
 
 
+def _largest_regime(sources: Sequence[str]) -> list[str]:
+    """The biggest group of sources that settle a non-event the same way.
+
+    Ties break on the regime name so the answer does not depend on row order.
+    """
+    from src.settlement import regime_for
+
+    grouped: dict[str, list[str]] = defaultdict(list)
+    for source in sources:
+        grouped[regime_for(source).value].append(source)
+    if not grouped:
+        return []
+    best_regime = min(grouped, key=lambda name: (-len(grouped[name]), name))
+    return grouped[best_regime]
+
+
+def _counterparties(
+    rows: Sequence[Quote],
+    one_counterparty: Mapping[str, Sequence[frozenset[str]]] | None,
+) -> dict[str, str]:
+    """``source key -> counterparty id`` for the sources in one market group.
+
+    A source not named in any group is its own counterparty, which is the case
+    for every venue on an ordinary slate.  Where a group applies, its members
+    share one id — the alphabetically first key in the *connected component*, so
+    the id is stable across runs and does not depend on which member happened to
+    price this market.
+
+    The component, not the group.  The measurement is pairwise, so one operator
+    running three names arrives here as three overlapping pairs — ``{a, b}``,
+    ``{a, c}``, ``{b, c}`` — and assigning each pair its own minimum in turn
+    lets the last one processed overwrite the first: ``a`` keeps id ``a`` while
+    ``b`` is rewritten to ``b`` by the ``{b, c}`` pair, and the gate between
+    ``a`` and ``b`` reopens.  Being one counterparty is transitive; the ids have
+    to be too.
+
+    Groups filed under :data:`EVERY_LEAGUE` apply here whatever this market's
+    competition is; groups filed under a league name apply only to that one.
+    The measured gate uses the first — see :func:`counterparty_groups` — and the
+    second exists for a caller passing a mapping of its own.
+
+    The league is read off the rows rather than passed in: every row of a market
+    group is the same fixture, and where two sources disagree about its league
+    that disagreement is its own finding, so taking the modal spelling here
+    cannot mask anything that is not already reported.
+    """
+    if not one_counterparty:
+        return {}
+    leagues = Counter(row.league for row in rows)
+    # Ties broken by name, matching ``src.distinctness._leagues`` exactly.
+    # ``most_common`` breaks them by insertion order, so the same rows in a
+    # different order filed the gate under one league and read it back under
+    # another — and the mirror gate reopened on whichever way the rows arrived.
+    league = (
+        min(leagues.items(), key=lambda item: (-item[1], item[0]))[0] if leagues else ""
+    )
+    parent: dict[str, str] = {}
+
+    def find(source: str) -> str:
+        parent.setdefault(source, source)
+        while parent[source] != source:
+            parent[source] = parent[parent[source]]
+            source = parent[source]
+        return source
+
+    for group in (*one_counterparty.get(EVERY_LEAGUE, ()), *one_counterparty.get(league, ())):
+        if len(group) < 2:
+            continue
+        members = iter(sorted(group))
+        first = find(next(members))
+        for source in members:
+            other = find(source)
+            if other != first:
+                # Union onto the lexicographically smaller root, so the id of a
+                # component is its smallest member however the pairs arrived.
+                low, high = sorted((first, other))
+                parent[high] = low
+                first = low
+    return {source: find(source) for source in parent}
+
+
 def _examine_group(
     *,
+    order_driven: frozenset[str] = frozenset(),
     event_key: str,
     market: Market,
     period: Period,
@@ -707,8 +1117,14 @@ def _examine_group(
     max_observation_spread: timedelta,
     require_distinct_sources: bool,
     as_of: datetime | None = None,
+    commissions: Mapping[str, Commission] | None = None,
+    counterparties: Mapping[str, str] | None = None,
 ) -> None:
     sport = rows[0].sport
+    # Who is really behind each source key here.  Two keys belonging to one
+    # counterparty are one book for every distinctness test below.
+    behind = counterparties or {}
+    who = lambda source: behind.get(source, source)  # noqa: E731
 
     def reject(code: str, detail: str) -> None:
         report.diagnostics.append(
@@ -726,17 +1142,37 @@ def _examine_group(
     # sports is a group whose rules are unknowable. It cannot arise from
     # legitimate data — event keys are built from namespaced participant keys —
     # so if it happens, a row's sport is mislabelled and the fix is upstream.
-    # Counted rather than silently split, because a silent split hides it.
+    #
+    # The mislabelled *source* is dropped and the rest of the group carries on,
+    # rather than the group being abandoned.  Refusing everything punishes the
+    # books that were right, and with ten sources one bad label would silently
+    # remove a market from comparison entirely.  A genuine tie — no sport with
+    # more rows than another — is still refused outright, because then there is
+    # no consensus to be an outlier from.
     if len({row.sport for row in rows}) > 1:
+        by_sport = Counter(row.sport for row in rows)
+        ranked = by_sport.most_common()
+        if len(ranked) > 1 and ranked[0][1] == ranked[1][1]:
+            reject(
+                "mixed_sport",
+                "rows under one event key disagree about the sport with no majority: "
+                + "; ".join(sorted({f"{row.source}: {row.sport.value}" for row in rows}))
+                + " — the settlement rules differ by sport, so no position is reported",
+            )
+            return
+        sport = ranked[0][0]
+        odd_sources = sorted({row.source for row in rows if row.sport is not sport})
         reject(
             "mixed_sport",
-            "rows under one event key disagree about the sport: "
-            + "; ".join(
-                sorted({f"{row.source}: {row.sport.value}" for row in rows})
-            )
-            + " — the settlement rules differ by sport, so no position is reported",
+            f"{', '.join(odd_sources)} label this event as "
+            + "/".join(sorted({row.sport.value for row in rows if row.sport is not sport}))
+            + f" where the other sources say {sport.value}; the settlement rules differ "
+            "by sport, so those rows are left out and the rest of the market is still "
+            "compared",
         )
-        return
+        rows = [row for row in rows if row.sport is sport]
+        if len(rows) < 2:
+            return
 
     # A line at a granularity the settlement model does not cover would be
     # settled as though it could never land on its own number, which is exactly
@@ -762,7 +1198,14 @@ def _examine_group(
 
     # A game that has already started cannot be backed on both sides, however
     # well the prices agree with each other.
-    if as_of is not None and rows and rows[0].commence_time <= as_of:
+    #
+    # Judged on the **earliest** time any source gives the fixture, not on row
+    # zero's.  Books disagree about a start by minutes as a matter of course and
+    # by hours in tennis, so reading one arbitrary row made the answer depend on
+    # the order the rows arrived in: the same group, the same clock, and a
+    # position reported or not according to which book happened to be first.
+    # Earliest is also the safe reading — if any source says it has begun, it has.
+    if as_of is not None and rows and min(row.commence_time for row in rows) <= as_of:
         return
 
     # Only prices you could actually take.
@@ -777,11 +1220,11 @@ def _examine_group(
     # of them would be betting on the fault.
     best: dict[str, dict[Selection, Quote]] = defaultdict(dict)
     seen: set[tuple[str, Selection, bool]] = set()
-    duplicated = False
+    duplicated: set[str] = set()
     for row in active:
         offer = (row.source, row.selection, row.is_alternate)
         if offer in seen:
-            duplicated = True
+            duplicated.add(row.source)
         seen.add(offer)
         existing = best[row.source].get(row.selection)
         if existing is None or row.decimal_odds > existing.decimal_odds:
@@ -791,35 +1234,112 @@ def _examine_group(
         # the same alternate status, means the parse put something in this group
         # that does not belong to it — so at least one of the two is not the bet
         # it claims to be. Taking the better of them is betting on the fault.
+        #
+        # **That book** is excluded and the others carry on, and the message
+        # names it.  This was a group-wide boolean that abandoned the market: one
+        # adapter's parser fault destroyed every other book's comparison, and the
+        # message did not even say whose fault it was.  It is the identical flaw
+        # already fixed for ``source_prices_itself_to_lose`` below, whose comment
+        # reads "with ten it costs nine books' worth of comparison every time one
+        # adapter has a bad day, which is the opposite of what adding sources is
+        # for."
         reject(
             "duplicate_selection",
-            "a book published more than one price for the same selection at the same "
-            "alternate status, so at least one of them is mis-grouped; no position "
-            "is reported from this market",
+            f"{', '.join(sorted(duplicated))} published more than one price for the "
+            "same selection at the same alternate status, so at least one of them is "
+            "mis-grouped; those books are excluded from this market and the rest are "
+            "unaffected",
         )
-        return
+        for source in duplicated:
+            best.pop(source, None)
+        if len(best) < (2 if require_distinct_sources else 1):
+            return
 
     # A book whose own complete market prices below 1.0 has been mispaired by the
     # parser — validation reports it as an error. Any leg drawn from such a book
     # is not the bet it appears to be, even when the rest of the position is
-    # sound, so the whole group is refused rather than half-trusted.
-    for source, selections in best.items():
+    # sound, so **that book** is excluded and the others carry on.
+    #
+    # This used to refuse the whole group.  The code and its own message already
+    # disagreed about that: the message said its prices "are mispaired, so none of
+    # them are used" — that source's — while the return discarded every source's.
+    # With three books it cost a market; with ten it costs nine books' worth of
+    # comparison every time one adapter has a bad day, which is the opposite of
+    # what adding sources is for.  Judged on the **quoted** prices, not net ones,
+    # because the question here is whether the parser paired them correctly and
+    # commission is not part of that.
+    for source in sorted(best):
+        selections = best[source]
         shape = shapes[source]
         if not set(selections) >= set(shape):
             continue
         own_margin = arb_margin([selections[selection].decimal_odds for selection in shape])
-        if own_margin > _EPSILON:
+        # A sportsbook holds an edge on every market it posts, so a sum below
+        # 1.0 there is evidence about the parser.  An order book is not that: it
+        # shows what two strangers happened to leave resting, and "crossed" only
+        # means anything if somebody could take both sides at a profit — which
+        # is a question about prices **after the venue's own commission**.  A
+        # Kalshi market resting at 49¢/49¢ sums to 0.98 gross and ~1.015 net of
+        # its contract fee, so makers legitimately sit there; the flat one-cent
+        # tolerance this used to import deleted the venue from the market for
+        # exactly that shape.  ``src.validation`` judges the same boundary the
+        # same way — the same *rule* rather than the same constant, which is a
+        # stronger form of the agreement the old import bought: two copies of a
+        # rule cannot drift apart on a market neither has seen.
+        if source in order_driven:
+            # Function-level import: ``src.validation`` imports this module at
+            # module level, so the constant has to come in here — the same
+            # cycle-shaped reason the retired flat floor was imported here too.
+            from src.validation import ORDER_BOOK_CROSSING_TOLERANCE
+
+            net_sum = sum(
+                _net_implied(selections[selection], commissions) for selection in shape
+            )
+            crossed_after_fees = net_sum < 1.0 - ORDER_BOOK_CROSSING_TOLERANCE
+        else:
+            crossed_after_fees = own_margin > _EPSILON
+        if crossed_after_fees:
             reject(
                 "source_prices_itself_to_lose",
                 f"{source} prices every outcome of this market at a "
                 f"{own_margin * 100:.2f}% edge against itself, which does not happen — "
-                "its prices or lines are mispaired, so none of them are used",
+                "its prices or lines are mispaired, so none of them are used; the "
+                "other books in this market are unaffected",
             )
-            return
+            del best[source]
+            del shapes[source]
+
+    # Every leg must describe the same fixture, the same way round.  Cheap to
+    # check and catastrophic to miss: two legs that both back the same team lose
+    # the entire bankroll together.
+    #
+    # Excluded per source against the group's own consensus, rather than the
+    # market being abandoned once a candidate position happens to include the odd
+    # one out.  Two reasons.  A market abandoned costs every *other* book its
+    # comparison, which gets worse the more books there are.  And judging a
+    # two-leg position on its own gives a one-against-one tie with no consensus
+    # to appeal to, while the group as a whole usually has a clear majority.
+    #
+    # Compared on the resolved participant keys, never on display names: for an
+    # open-roster competition the display name is the book's own spelling, and
+    # "Wolves" against "Wolverhampton" would refuse every legitimate soccer and
+    # tennis position.
+    for source in _fixture_outliers(rows):
+        if source not in best:
+            continue
+        odd = rows_by_source[source][0]
+        reject(
+            "legs_disagree_on_the_game",
+            f"{source} describes this event as {odd.away_participant} @ "
+            f"{odd.home_participant} where the other sources disagree — its rows are "
+            "left out and the market is still compared without them",
+        )
+        del best[source]
+        del shapes[source]
 
     # A single book cannot be arbitraged against itself: the check above has
     # already refused the only case where its own prices would allow it.
-    if require_distinct_sources and len(best) < 2:
+    if require_distinct_sources and len({who(source) for source in best}) < 2:
         return
 
     # Group books by contract; only books offering the same contract may be
@@ -872,9 +1392,17 @@ def _examine_group(
         # A book only has to offer the one selection being taken from it: the
         # normal shape of an arbitrage is the best home price at one book against
         # the best away price at another.
-        eligible = [
+        # **Sorted**, so the answer does not depend on the order the rows arrived
+        # in.  ``_best_assignment`` and ``_pick_switch`` break ties on the index
+        # into this list, and the enumeration below inherits it, so two venues
+        # quoting the same net price — which mirrored tenants do by construction
+        # — made the reported position a function of row order: 107 of 4,000
+        # tie-heavy trials changed, one of them reporting the same +0.70 as
+        # ``fanduel/smarkets`` capped at 100 in one order and ``bovada/smarkets``
+        # with no cap at all in the other.
+        eligible = sorted(
             source for source in sources if any(selection in best[source] for selection in needed)
-        ]
+        )
         covered = {
             selection for selection in needed for source in eligible if selection in best[source]
         }
@@ -883,7 +1411,7 @@ def _examine_group(
         # Two books are enough for a three-way position: two legs go on at one
         # book and the third at the other. What is forbidden is *every* leg at
         # one book, which is checked once the legs are chosen.
-        if require_distinct_sources and len(eligible) < 2:
+        if require_distinct_sources and len({who(source) for source in eligible}) < 2:
             continue
 
         # Counted here, before the edge is known: this is the denominator that
@@ -897,10 +1425,13 @@ def _examine_group(
             eligible=eligible,
             best=best,
             require_distinct_sources=require_distinct_sources,
+            commissions=commissions,
+            counterparties=behind,
         )
         if candidates is None:
             continue
         chosen, sum_implied = candidates
+        legs_quotes = [chosen[selection] for selection in sorted(needed, key=lambda s: s.value)]
 
         margin = 1.0 - sum_implied
         if margin <= min_margin + _EPSILON:
@@ -911,86 +1442,557 @@ def _examine_group(
         # on a reported "opportunity" — puts a 54% phantom at the top of the
         # report, ranked above every real position.
         if margin >= REFUSE_MARGIN:
-            reject(
-                "margin_implausibly_large",
-                f"a {margin * 100:.1f}% edge on "
-                + " vs ".join(
-                    f"{chosen[selection].source} {selection.value} "
-                    f"@ {chosen[selection].decimal_odds:.3f}"
-                    for selection in sorted(needed, key=lambda s: s.value)
+            # Retried without the book holding the extreme price, as the
+            # settlement path below already does for its own narrowing.
+            #
+            # The rejection's own text says "suspect a selection mapped to the
+            # wrong participant", so it already knows the fault belongs to one
+            # leg — and then abandoned the whole contract shape.  A real
+            # position between two innocent books disappeared because a third
+            # book had an inverted mapping, and an inverted mapping does not
+            # trip ``source_prices_itself_to_lose``: a book with home 1.10 and
+            # away 9.00 has a perfectly healthy overround of its own.
+            # **Each** chosen leg's source tried in turn, best survivor kept —
+            # as the freshness retry below does, and as this one did not.
+            #
+            # Excluding only the book holding the longest price is arbitrary and
+            # throws away the leg a real position needs.  Measured: fanduel
+            # home 2.846 / bovada away 3.579 hits the bar at 36.9%, the longest
+            # price is bovada's, and dropping it leaves fanduel/betrivers at
+            # -0.33% — while dropping *fanduel* leaves pinnacle 1.545 + bovada
+            # 3.579, a 7.33% position between two distinct books in one
+            # settlement regime, observed together.
+            best_retry = None
+            for excluded in sorted({q.source for q in legs_quotes}):
+                narrowed = [source for source in eligible if source != excluded]
+                if len({who(source) for source in narrowed}) < (
+                    2 if require_distinct_sources else 1
+                ):
+                    continue
+                candidate = _best_assignment(
+                    needed=needed,
+                    eligible=narrowed,
+                    best=best,
+                    require_distinct_sources=require_distinct_sources,
+                    commissions=commissions,
+                    counterparties=behind,
                 )
-                + " is not a price two books both published for the same contract: suspect a "
-                "selection mapped to the wrong participant (which leaves both legs backing the "
-                "same competitor), a market that is not the one it claims to be, or a stale "
-                "quote — no position is reported",
-            )
-            continue
+                if candidate is None:
+                    continue
+                candidate_margin = 1.0 - candidate[1]
+                if candidate_margin >= REFUSE_MARGIN:
+                    continue  # this exclusion kept the fault
+                if candidate_margin <= min_margin + _EPSILON:
+                    continue  # nothing worth reporting under it
+                # The **smallest** surviving margin, not the largest.
+                #
+                # Taking the largest re-selects the fault: with an inverted book
+                # in the group, the exclusion that keeps its long price is the
+                # one that looks most profitable.  Measured: dropping pinnacle
+                # left fanduel's inverted 9.00 in a 12.0% "position", while
+                # dropping fanduel left a plausible 3.6% one.  Among candidate
+                # explanations for an impossible edge, the conservative one is
+                # the answer — a genuine cross-book edge is small.
+                if best_retry is None or candidate[1] > best_retry[0][1]:
+                    best_retry = (candidate, narrowed)
+            retry, narrowed = best_retry if best_retry else (None, eligible)
+            if retry is not None:
+                # The exclusion is **persisted**, not just applied to this
+                # assignment.  Narrowing ``chosen`` alone left ``eligible``
+                # untouched, and the two retries below re-enumerate it — so a
+                # settlement or freshness narrowing rebuilt the very assignment
+                # this refused.  Measured: fanduel with an inverted mapping
+                # (home 1.10 / away 9.00) against pinnacle and kalshi published
+                # ``margin 41.27%, guaranteed +70.10 on 100`` with **zero
+                # diagnostics**, while the same two rows without kalshi were
+                # correctly refused.  Adding a venue that never appears in the
+                # reported position reversed the refusal.
+                eligible = narrowed
+                chosen, sum_implied = retry
+                legs_quotes = [
+                    chosen[selection] for selection in sorted(needed, key=lambda s: s.value)
+                ]
+                margin = 1.0 - sum_implied
+                # No floor check here: the search above already discards any
+                # narrowing at or under ``min_margin``, so a candidate reaching
+                # this line has cleared it.  A check was briefly added and was
+                # unreachable — the pattern this module keeps having to
+                # unlearn — and what it was standing in for belongs in the
+                # refusal below, which always runs when nothing survives.
+            else:
+                reject(
+                    "margin_implausibly_large",
+                    f"a {margin * 100:.1f}% edge on "
+                    + " vs ".join(
+                        f"{chosen[selection].source} {selection.value} "
+                        f"@ {chosen[selection].decimal_odds:.3f}"
+                        for selection in sorted(needed, key=lambda s: s.value)
+                    )
+                    + " is not a price two books both published for the same contract: "
+                    "suspect a selection mapped to the wrong participant (which leaves "
+                    "both legs backing the same competitor), a market that is not the one "
+                    "it claims to be, or a stale quote — no position is reported: "
+                    "excluding each book in turn leaves nothing that is both plausible "
+                    "and above the margin asked for",
+                )
+                continue
 
-        legs_quotes = [chosen[selection] for selection in sorted(needed, key=lambda s: s.value)]
-
-        spread = max(q.observed_at for q in legs_quotes) - min(
-            q.observed_at for q in legs_quotes
-        )
-        if spread > max_observation_spread:
-            reject(
-                "stale_leg",
-                f"legs observed {spread} apart (limit {max_observation_spread}); "
-                f"margin would have been {margin * 100:.2f}%",
-            )
-            continue
-
-        # Legs must agree on who is playing and which way round. Cheap to check
-        # and catastrophic to miss: two legs that both back the same team lose the
-        # entire bankroll together. Reconciliation makes a mislabelled orientation
-        # land in a different group, and validation reports it — but this is the
-        # one guard that costs nothing, so it is not left to them.
+        # Freshness, settlement and stated size, searched **together** — by
+        # scoring **every** assignment rather than searching over source subsets.
         #
-        # Compared on the resolved participant keys rather than on display names,
-        # because for an open-roster competition the display name is the book's
-        # own spelling: "Wolves" and "Wolverhampton" are one club, and comparing
-        # the strings would refuse every legitimate soccer and tennis position.
-        identities = {
-            (q.home_participant, q.away_participant, q.commence_time) for q in legs_quotes
-        }
-        if len(identities) > 1:
-            reject(
-                "legs_disagree_on_the_game",
-                "the chosen legs do not describe the same fixture: "
-                + "; ".join(
-                    f"{q.source}: {q.away_participant} @ {q.home_participant} "
-                    f"{q.commence_time.isoformat()}"
-                    for q in legs_quotes
-                ),
-            )
-            continue
+        # These were narrowings in a row, each irreversible, and they composed
+        # badly in every direction.  A window chosen on pre-settlement margin was
+        # persisted, so the settlement narrowing could only look inside it and a
+        # real same-regime position in an *earlier* window became unreachable;
+        # the settlement narrowing had no freshness retry of its own, so it could
+        # hand back stale legs and the market was refused as ``stale_leg`` while a
+        # simultaneous same-regime position sat underneath.  Measured on
+        # randomised realistic slates, one or other fired on 1,046 of 40,000
+        # trials, costing up to 5.66% margin; on the captured slate 710 of 724
+        # cross-source groups span more than the window, so this is the geometry
+        # the data actually has.
+        #
+        # Sequencing them was replaced by a search over (window x regime) subsets,
+        # then by that plus a walk that blocked chosen legs to reach a placeable
+        # assignment — each fix reaching further and none of them exhaustive.  The
+        # walk carried a depth bound, and the bound truncated: on limit-heavy
+        # slates, raising it from 3 to 4 changed the published profit on 1 trial
+        # in 8,000 (13 in 8,000 from 2 to 4).  A bound that changes the answer is
+        # not a safety margin, it is a silent understatement — the market still
+        # published, just for less money, with nothing to say it had stopped
+        # looking.
+        #
+        # So there is no search over subsets any more.  Every constraint the
+        # subsets encoded — one settlement regime, legs priced close enough
+        # together, at least two counterparties, stated sizes — is checked on the
+        # assignment itself, here or in the limit step below, which is why the
+        # subsets could only ever remove assignments those checks would have
+        # judged anyway.  Enumerating instead is exact by construction: no depth,
+        # no ordering, nothing to tune.
+        #
+        # The cost is ``sources ** selections`` and both are small: the registry
+        # holds ten sources and a contract has at most three selections, so 1,000
+        # bounds it — and almost nothing gets near the bound, because a group
+        # only reaches this loop after the cheaper gates above have kept it.
+        #
+        # Counted by instrumenting ``itertools.product`` here: a live
+        # 41,683-row slate enumerates **198 assignments across 4 groups**
+        # (median 49, max 64) out of 1,920 comparable groups; the committed
+        # fixtures, 7,372 rows, enumerate **24 across 3** (median 4, max 16).
+        #
+        # An earlier version of this comment claimed "27,215 assignments across
+        # 2,664 cross-source groups". That number was the *theoretical*
+        # cross-product summed over every comparable group — what this loop
+        # would cost if every group reached it — not what runs. It overstated
+        # the work by about a thousandfold, in the direction that would make a
+        # maintainer think this loop is the expensive thing to optimise. It is
+        # not.
+        ordered = sorted(needed, key=lambda s: s.value)
+        options = [
+            [source for source in eligible if selection in best[source]]
+            for selection in ordered
+        ]
+        implied = [
+            {
+                source: _net_implied(best[source][selection], commissions)
+                for source in sources
+            }
+            for selection, sources in zip(ordered, options)
+        ]
 
-        opportunity = _build_opportunity(
-            event_key=event_key,
-            sport=sport,
-            market=market,
-            period=period,
-            side=side,
-            line=line,
-            shape=shape,
-            legs_quotes=legs_quotes,
-            total_stake=total_stake,
-            stake_increment=stake_increment,
+        ranked: list[tuple[tuple[dict[Selection, Quote], float], list[Quote]]] = []
+        # Whether any assignment was ever priced inside the window, whatever
+        # else was wrong with it — so a refusal cannot blame collection timing
+        # for a market that simply has no edge.
+        priced_together = False
+        # ...and whether one of those had a real edge and failed *only* because
+        # its books do not void together.  Without this the ``stale_leg`` refusal
+        # said "the books that were priced together have no edge between them"
+        # about two simultaneous books carrying 3.6%, sending the operator after
+        # collection timing instead of the settlement regime that actually
+        # blocked it.
+        clashed_in_window = False
+
+        for combination in itertools.product(*options):
+            if len({who(source) for source in combination}) < (
+                2 if require_distinct_sources else 1
+            ):
+                continue  # one counterparty on both sides is not a position
+            attempt_legs = [
+                best[source][selection]
+                for source, selection in zip(combination, ordered)
+            ]
+            stamps = [quote.observed_at for quote in attempt_legs]
+            attempt_spread = max(stamps) - min(stamps)
+            if attempt_spread <= max_observation_spread:
+                priced_together = True
+            attempt_implied = sum(
+                implied[index][source] for index, source in enumerate(combination)
+            )
+            # ``>= REFUSE_MARGIN`` is not re-tested: the implausible-margin gate
+            # above already ran on the best-priced assignment, and no other
+            # assignment can beat it, so nothing here can be more implausible
+            # than what already passed.
+            if 1.0 - attempt_implied <= min_margin + _EPSILON:
+                continue  # no edge worth reporting
+            if attempt_spread > max_observation_spread:
+                continue  # these legs were not priced close enough together
+            if settlement_mismatch(list(combination)) is not None:
+                clashed_in_window = True
+                continue  # these books do not void together
+            ranked.append(
+                ((dict(zip(ordered, attempt_legs)), attempt_implied), attempt_legs)
+            )
+
+        # Best margin first, and **every** survivor kept rather than only the
+        # best.  The limit gate below is the one refusal with no retry of its
+        # own: a thin stated limit on the best-priced leg — a matchbook
+        # top-of-book with 0.60 resting behind it — took the whole market down,
+        # while the same market without that venue paid 2.44%.  Keeping the
+        # ranked list lets the tail fall through to the next candidate instead.
+        # Margin first, then the legs themselves — a stable sort would otherwise
+        # leave ties to enumeration order, which is one more thing to keep
+        # accidentally deterministic rather than deliberately so.
+        ranked.sort(
+            key=lambda entry: (
+                entry[0][1],
+                tuple((quote.source, quote.selection.value) for quote in entry[1]),
+            )
         )
-
-        # A thin edge can be smaller than one betting unit, in which case
-        # rounding the stakes to whole units turns the guarantee negative. The
-        # headline margin still reads positive, so this has to be caught here
-        # rather than left for a caller to notice.
-        if not opportunity.is_risk_free:
-            reject(
-                "rounding_destroys_edge",
-                f"margin {margin * 100:.2f}% is too thin for a {stake_increment:g}-unit "
-                f"stake increment at a bankroll of {total_stake:g}: the worst outcome "
-                f"loses {opportunity.guaranteed_profit:.2f}",
+        if not ranked:
+            # Nothing satisfies both gates.  The reason named is the one the
+            # *unnarrowed* legs failed, because that is what the operator was
+            # looking at.
+            spread = max(q.observed_at for q in legs_quotes) - min(
+                q.observed_at for q in legs_quotes
             )
+            settlement = settlement_mismatch([q.source for q in legs_quotes])
+            if settlement is not None:
+                # Named against the largest same-regime set, because "these
+                # books do not void together" on its own does not say whether
+                # there was a same-regime position underneath and what was wrong
+                # with it.
+                narrowed = _largest_regime(eligible)
+                retry = (
+                    _best_assignment(
+                        needed=needed,
+                        eligible=narrowed,
+                        best=best,
+                        require_distinct_sources=require_distinct_sources,
+                        commissions=commissions,
+                        counterparties=behind,
+                    )
+                    if len({who(source) for source in narrowed})
+                    >= (2 if require_distinct_sources else 1)
+                    else None
+                )
+                if retry is None:
+                    reject("legs_do_not_void_together", settlement.note)
+                    continue
+                retry_legs = [
+                    retry[0][selection]
+                    for selection in sorted(needed, key=lambda s: s.value)
+                ]
+                retry_margin = 1.0 - retry[1]
+                if retry_margin <= min_margin + _EPSILON:
+                    reject(
+                        "legs_do_not_void_together",
+                        f"{settlement.note}; the same market priced within one "
+                        f"settlement regime has a margin of {retry_margin * 100:.2f}%, "
+                        f"which does not clear the {min_margin * 100:.2f}% asked for",
+                    )
+                    continue
+                retry_spread = max(q.observed_at for q in retry_legs) - min(
+                    q.observed_at for q in retry_legs
+                )
+                if retry_spread > max_observation_spread:
+                    reject(
+                        "stale_leg",
+                        f"legs observed {retry_spread} apart (limit "
+                        f"{max_observation_spread}) once narrowed to one settlement "
+                        f"regime; margin would have been {retry_margin * 100:.2f}%",
+                    )
+                    continue
+                reject("legs_do_not_void_together", settlement.note)
+            else:
+                # The window is the only thing left it can be, so the condition
+                # that used to guard this is dropped rather than the branch.
+                #
+                # ``ranked`` is empty and the assignment named here settles
+                # consistently.  That assignment is one of the combinations the
+                # enumeration scored — both are built from the same ``eligible``
+                # and ``best`` — and it has already cleared the margin bar above
+                # and the counterparty rule by construction.  So the only gate it
+                # can have failed is the observation window.
+                #
+                # Guarding on ``spread`` left an ``else`` naming a third reason
+                # that cannot arise: 23,000 fuzzed slates never reached it, and
+                # replacing its body with a raise left the whole suite green.  An
+                # unreachable branch reads as coverage and is worse than none.
+                reject(
+                    "stale_leg",
+                    f"legs observed {spread} apart (limit {max_observation_spread}); "
+                    f"margin would have been {margin * 100:.2f}%, and "
+                    + (
+                        "the books that were priced together carry an edge but do "
+                        "not settle the same way"
+                        if clashed_in_window
+                        else "the books that were priced together have no edge between them"
+                        if priced_together
+                        else "no set of these books priced this market close enough "
+                        "together to replace them"
+                    ),
+                )
             continue
 
+        # Each survivor in turn, best margin first, until one is reportable.
+        #
+        # The limit gate below refuses without a retry of its own, so a thin
+        # stated size on the best-priced leg cost the whole market its position.
+        reported: Opportunity | None = None
+        refusals: list[tuple[str, str]] = []
+
+        def _refuse(code: str, detail: str) -> None:
+            refusals.append((code, detail))
+
+        for (chosen, sum_implied), legs_quotes in ranked:
+            margin = 1.0 - sum_implied
+            reject_here = _refuse
+
+            opportunity = _build_opportunity(
+                event_key=event_key,
+                sport=sport,
+                market=market,
+                period=period,
+                side=side,
+                line=line,
+                shape=shape,
+                legs_quotes=legs_quotes,
+                total_stake=total_stake,
+                stake_increment=stake_increment,
+                commissions=commissions,
+            )
+
+            # A thin edge can be smaller than one betting unit, in which case
+            # rounding the stakes to whole units turns the guarantee negative. The
+            # headline margin still reads positive, so this has to be caught here
+            # rather than left for a caller to notice.
+            if not opportunity.is_risk_free:
+                reject_here(
+                    "rounding_destroys_edge",
+                    f"margin {margin * 100:.2f}% is too thin for a {stake_increment:g}-unit "
+                    f"stake increment at a bankroll of {total_stake:g}: the worst outcome "
+                    f"loses {abs(opportunity.guaranteed_profit):.2f}",
+                )
+                continue
+
+            # And again at the bankroll this position says it can actually be placed
+            # at, which is the only size anybody can take it in.
+            #
+            # The test above ran solely against *total_stake* — the notional 100 the
+            # report is denominated in — while the books' own stated limits capped
+            # the position far below it.  Rounding bites harder the smaller the
+            # bankroll, so the two answers are different questions: a FanDuel leg
+            # limited to 6.80 against a 3.05 at Pinnacle reported ``margin 0.55%,
+            # guaranteed +0.50 on 100`` and staked that leg 67.00 against its stated
+            # 6.80.  Re-run at the 10.00 the position itself publishes, the same
+            # market loses 0.85 in the worst outcome.  The only placeable version of
+            # it was a guaranteed loss, and nothing said so.
+            # Any stated limit at all, not only one that binds below *total_stake*.
+            #
+            # Gating on ``cap < total_stake`` skipped the whole placeable rebuild
+            # whenever the floored cap landed at or above the bankroll — and the
+            # per-leg rounding still overflows there.  A matchbook leg sized 51.80
+            # caps the position at 100.06, floors to exactly 100.00, so the guard
+            # did not run and the split staked that leg **52.00 against its stated
+            # 51.80**.  Every limit in [51.77, 52.00) does it; it is a band, not a
+            # knife edge.
+            # Verified up to the reported bankroll, and no further.
+            #
+            # ``min(cap, total_stake)`` on its own threw information away: where the
+            # stated limits permit more than the notional bankroll, the true cap is
+            # the useful number — an operator sizing up wants to know the position
+            # holds to 150, and clamping printed "limit-capped bankroll: 100.00",
+            # which reads as a constraint where there is none.  So the *ceiling* is
+            # clamped, because that is as far as the per-leg split has been checked,
+            # and the *published* cap keeps the venues' own answer whenever the
+            # step-down did not have to reduce anything.
+            stated_cap = opportunity.max_total_stake
+            cap = None if stated_cap is None else min(stated_cap, total_stake)
+            if cap is not None:
+                if cap <= 0:
+                    reject_here(
+                        "cannot_be_placed_at_the_stated_limits",
+                        f"margin {margin * 100:.2f}%, but the books' stated limits do not "
+                        f"cover one {stake_increment:g}-unit stake",
+                    )
+                    continue
+                # The largest bankroll at or below the venues' cap where **every
+                # leg** is inside the size its own venue stated **and** the position
+                # still cannot lose.
+                #
+                # Both conditions, and stepping past a size that fails either.
+                # Flooring the *total* to whole units does not bound the *per-leg*
+                # rounding that follows it — a leg sized 6.80 caps the position at
+                # 13, and the split of 13 stakes it 7.00 — and stopping at the first
+                # size whose legs fit threw away positions that pay at a smaller
+                # one: ``home 1.50 / away 3.05 / limit 31.50`` was refused outright
+                # while a bankroll of 64 fits both limits and guarantees +0.05.
+                #
+                # Searched from ``stated_cap``, not from the clamped ceiling, so the
+                # number published as the cap is one this loop actually verified.
+                # Republishing the venues' floored cap unchecked told an operator a
+                # position held to 101 when re-running it there both overstakes the
+                # binding leg and loses 0.35 — the very failure this loop exists to
+                # prevent, in the branch that skipped it.  A parameter sweep found
+                # 628 such (odds, limit) pairs in the ordinary band.
+                def _fits(candidate: Opportunity) -> bool:
+                    # ``total_stake > 0``: a zero-stake build has a floor of
+                    # exactly 0 and passes ``is_risk_free``, and it is not a
+                    # position — it is the refusal wearing a headline.
+                    return candidate.total_stake > 0 and candidate.is_risk_free and all(
+                        leg.quote.limit_amount is None
+                        or leg.stake <= leg.quote.limit_amount + _EPSILON
+                        for leg in candidate.legs
+                    )
+
+                def _at(size: float) -> Opportunity:
+                    return _build_opportunity(
+                        event_key=event_key,
+                        sport=sport,
+                        market=market,
+                        period=period,
+                        side=side,
+                        line=line,
+                        shape=shape,
+                        legs_quotes=legs_quotes,
+                        total_stake=size,
+                        stake_increment=stake_increment,
+                        commissions=commissions,
+                    )
+
+                largest = None
+                step = stake_increment if stake_increment > 0 else stated_cap
+                # Walked on **unit counts**, not by repeated float subtraction.
+                # ``trial -= step`` accumulated error for any step that is not a
+                # dyadic fraction — at 0.2 the walk ended on ``2.78e-17 > 0``,
+                # which reached the allocator as a zero-unit bankroll, whose
+                # fallback returned an all-zero split, whose floor of exactly 0
+                # passed ``is_risk_free`` — and the engine published ``guaranteed
+                # +0.00 on 0`` with both legs at stake 0.00 *instead of* the
+                # refusal, on ~60% of the slates the refusal was for.  A count
+                # times the step is computed once and cannot drift.
+                for count in range(int(stated_cap / step + 1e-9), 0, -1):
+                    candidate = _at(count * step)
+                    if _fits(candidate):
+                        largest = candidate
+                        break
+                if largest is None:
+                    reject_here(
+                        "cannot_be_placed_at_the_stated_limits",
+                        f"margin {margin * 100:.2f}%, but no whole-unit split at or below "
+                        f"{stated_cap:g} — the largest total the stated sizes could ever "
+                        "pay for — both keeps every leg inside its stated size and stays "
+                        "risk-free",
+                    )
+                    continue
+                # Reported at the smaller of that and the bankroll asked for.
+                placeable = (
+                    largest
+                    if largest.total_stake <= total_stake
+                    else _at(min(total_stake, largest.total_stake))
+                )
+                # No second refusal here.  ``largest.total_stake > total_stake``
+                # implies every limited leg clears ``total_stake`` with a whole
+                # increment to spare, and ``is_risk_free`` at ``total_stake`` was
+                # asserted above — so ``_fits(placeable)`` cannot fail.  Verified by
+                # replaying the step-down over 32,038 two-leg and 10,651 three-way
+                # configurations across the arb band: zero hits.  A branch that
+                # cannot run reads as coverage and is worse than none, which is the
+                # rule this module states and had stopped following.
+                assert _fits(placeable), "the placeable rebuild must fit by construction"
+                placeable = replace(placeable, max_total_stake=largest.total_stake)
+                # Reported *as* the placeable version, not merely checked against it.
+                #
+                # Refusing the ones that lose at their cap was half the fix.  The
+                # ones that survive were still being reported, and **ranked**, at the
+                # notional bankroll: ``report.opportunities.sort`` orders by
+                # ``guaranteed_profit`` and ``describe()`` prints it as the headline,
+                # both computed at *total_stake*.  A pinnacle 2.20 against a
+                # matchbook 2.20 sized 6.80 printed ``guaranteed +10.00 on 100`` with
+                # both legs staked 50.00, and ranked above a genuinely unlimited
+                # two-book position paying +2.50 — while the only version of it
+                # anybody could place pays +0.20.  A number nobody can act on has no
+                # business being the sort key.
+                opportunity = placeable
+
+            # Kept if it pays more than anything found so far, rather than
+            # taken on sight.
+            #
+            # Compared at the bankroll each candidate can actually be placed
+            # at — which for an uncapped one is the bankroll the operator asked
+            # for.  A differential fuzz against an exhaustive search finds a
+            # residual handful of markets (5 in 1,400 arb-bearing, worst 0.29 on
+            # 100) where a *capped* assignment rounds to a few pence more at its
+            # smaller size than an uncapped one does at the full stake.  Those
+            # are stake-rounding artefacts and are deliberately not chased:
+            # taking them would mean electively staking below what was asked for
+            # to win a rounding remainder, and ``total_stake`` is an input, not
+            # a variable to optimise.  A cap that *forces* a smaller size is a
+            # different thing and is honoured above.
+            #
+            # The candidates are ranked by *margin*, and margin is not money: a
+            # 3.60% edge capped at a bankroll of 12 by one venue's stated size
+            # pays +0.30, while the 2.44% edge underneath it pays +2.50 on the
+            # full 100.  ``report.opportunities.sort`` already orders the
+            # published positions by ``guaranteed_profit`` for exactly this
+            # reason; choosing between candidates *within* one market has to use
+            # the same measure.
+            if reported is None or opportunity.guaranteed_profit > (
+                reported.guaranteed_profit
+            ):
+                reported = opportunity
+
+        if reported is None:
+            for code, detail in refusals[:1]:
+                reject(code, detail)
+            continue
+        opportunity = reported
         report.opportunities.append(opportunity)
+
+
+def _fixture_outliers(rows: Sequence[Quote]) -> set[str]:
+    """Sources whose rows describe a different fixture from the consensus.
+
+    Compared on the resolved participant keys rather than on display names,
+    because for an open-roster competition the display name is the book's own
+    spelling: "Wolves" and "Wolverhampton" are one club, and comparing the
+    strings would refuse every legitimate soccer and tennis position.
+
+    ``commence_time`` is deliberately **not** part of the comparison, though it
+    used to be.  Books disagree about a kickoff by minutes as a matter of course
+    — that is why clustering exists and why the start-time check downstream is a
+    warning — so requiring exact equality here refused ordinary cross-book
+    positions for a difference that carries no information.  What separates two
+    genuinely different fixtures is already carried by ``event_key``, which
+    clustering assigns before any of this runs.
+
+    A source is counted once, on the identity most of its own rows carry, so a
+    book that is internally inconsistent is one outlier rather than several.
+    """
+    per_source: dict[str, Counter[tuple[str, str]]] = defaultdict(Counter)
+    for row in rows:
+        per_source[row.source][(row.home_participant, row.away_participant)] += 1
+    identities = {
+        source: max(sorted(counts.items()), key=lambda item: item[1])[0]
+        for source, counts in per_source.items()
+    }
+    if len(set(identities.values())) < 2:
+        return set()
+    counts = Counter(identities.values())
+    top = max(counts.values())
+    consensus = sorted((value for value, n in counts.items() if n == top), key=str)[0]
+    return {source for source, value in identities.items() if value != consensus}
 
 
 def _best_assignment(
@@ -999,35 +2001,145 @@ def _best_assignment(
     eligible: Sequence[str],
     best: dict[str, dict[Selection, Quote]],
     require_distinct_sources: bool,
+    commissions: Mapping[str, Commission] | None = None,
+    counterparties: Mapping[str, str] | None = None,
 ) -> tuple[dict[Selection, Quote], float] | None:
     """Pick the book for each selection that minimises total implied probability.
 
-    Searched rather than chosen greedily, because the best price per selection
-    taken independently can put every leg at one book — which is a mispricing to
-    reject, not a position to take.  Two legs *sharing* a book is fine, so the
-    only constraint is that the position spans at least two books.  The space is
-    a handful of books raised to at most three selections.
-    """
-    selections = sorted(needed, key=lambda s: s.value)
-    winner: tuple[dict[Selection, Quote], float] | None = None
+    The constraint is that the position spans at least two **counterparties**.
+    Two legs *sharing* a book is fine; every leg at one book is not, because that
+    is a book mispricing itself rather than a position anyone can take — and two
+    source keys that are one price feed are one book however different the keys
+    look.  *counterparties* maps the keys that are known to be one, for this
+    league; anything unnamed is its own counterparty.
 
-    source_options = [
-        [source for source in eligible if selection in best[source]] for selection in selections
+    This used to enumerate ``itertools.product`` over the eligible books, which
+    is ``sources ** selections`` — 27 combinations per three-way market at three
+    sources and 27,000 at thirty.  Measured on 700 three-way soccer fixtures, the
+    live case: 0.01 s at three sources, 8.43 s at thirty.  840× the time for 10×
+    the rows, and the exponent is the source count, which is the number this
+    whole exercise is trying to raise.
+
+    The constraint is satisfiable exactly in linear time, and the argument is
+    short enough to state:
+
+    1. Take the best price for each selection independently.  If those already
+       span two books, no legal assignment can beat them, because each leg is
+       individually optimal.
+    2. If they all land on one book *B*, every legal assignment differs from that
+       one on at least one leg, and moving a second leg can only cost more.  So
+       the optimum switches **exactly one** leg away from *B* — the one whose
+       next-best price outside *B* is closest to *B*'s.
+
+    Both steps are ``O(sources × selections)``.  Ties are resolved to the same
+    assignment the exhaustive search would have returned, which is the
+    lexicographically first one in its enumeration order; see
+    :func:`_pick_switch`.  ``tests/test_arb.py`` checks that equivalence against
+    a brute-force reference over randomised markets, because "provably the same"
+    is worth exactly as much as the proof and the proof is worth checking.
+
+    Prices are compared **net of commission**.  An exchange leg quoted at 3.00
+    with 2% of winnings taken pays 2.96, and picking between books on the quoted
+    number would prefer a venue that pays less.
+    """
+    behind = counterparties or {}
+    who = lambda source: behind.get(source, source)  # noqa: E731
+    selections = sorted(needed, key=lambda s: s.value)
+    options = [
+        [source for source in eligible if selection in best[source]]
+        for selection in selections
     ]
-    if any(not options for options in source_options):
+    if any(not sources for sources in options):
         return None
 
-    for combination in itertools.product(*source_options):
-        if require_distinct_sources and len(set(combination)) < 2:
-            continue
+    implied = [
+        [_net_implied(best[source][selection], commissions) for source in sources]
+        for selection, sources in zip(selections, options)
+    ]
+
+    # Step 1: the unconstrained optimum, earliest option on a tie.
+    picked = [min(range(len(row)), key=lambda i: (row[i], i)) for row in implied]
+
+    def assemble(indices: Sequence[int]) -> tuple[dict[Selection, Quote], float]:
         assignment = {
-            selection: best[source][selection]
-            for selection, source in zip(selections, combination)
+            selection: best[options[k][index]][selection]
+            for k, (selection, index) in enumerate(zip(selections, indices))
         }
-        total_implied = sum(1.0 / quote.decimal_odds for quote in assignment.values())
-        if winner is None or total_implied < winner[1]:
-            winner = (assignment, total_implied)
-    return winner
+        return assignment, sum(implied[k][index] for k, index in enumerate(indices))
+
+    if not require_distinct_sources:
+        return assemble(picked)
+    if len({who(options[k][index]) for k, index in enumerate(picked)}) >= 2:
+        return assemble(picked)
+
+    # Step 2: every leg is at one counterparty, so exactly one leg has to move.
+    monopolist = who(options[0][picked[0]])
+    switch = _pick_switch(options, implied, picked, monopolist, who)
+    if switch is None:
+        # Only one book offers anything here, so no legal position exists.
+        return None
+    leg, alternative = switch
+    indices = list(picked)
+    indices[leg] = alternative
+    return assemble(indices)
+
+
+def _pick_switch(
+    options: Sequence[Sequence[str]],
+    implied: Sequence[Sequence[float]],
+    picked: Sequence[int],
+    monopolist: str,
+    who: Callable[[str], str] = lambda source: source,
+) -> tuple[int, int] | None:
+    """Which leg to move off *monopolist*, and to which counterparty.
+
+    *monopolist* is a counterparty id and *who* maps a source key to one, so a
+    leg cannot be "moved" onto a second key belonging to the same book.
+
+    Returns ``(leg, option index)``, or ``None`` when no other book offers any of
+    the selections.
+
+    The cheapest switch wins.  What decides a **tie** is chosen to match what an
+    exhaustive ``itertools.product`` search would have returned, so that replacing
+    the search cannot silently change a single reported position: that search
+    keeps the first assignment with a strictly lower total, and enumerates in
+    lexicographic order of option indices, so it ends on the lexicographically
+    smallest optimal tuple.
+
+    Since step 1 picked the *earliest* index among equally-best prices, the
+    monopolist sits at the smallest index that achieves each leg's best price.
+    A switch therefore moves that leg's index either up or down:
+
+    * moving it **down** makes the tuple lexicographically smaller, and the
+      earliest leg that can do so wins;
+    * when every switch moves its index up, the smallest tuple is the one that
+      leaves the earlier legs alone — so the **last** leg wins.
+    """
+    best_switch: tuple[int, int] | None = None
+    best_cost: float | None = None
+    for leg, (sources, row) in enumerate(zip(options, implied)):
+        alternative: int | None = None
+        for index, source in enumerate(sources):
+            if who(source) == monopolist:
+                continue
+            if alternative is None or (row[index], index) < (row[alternative], alternative):
+                alternative = index
+        if alternative is None:
+            continue
+        cost = row[alternative] - row[picked[leg]]
+        if best_cost is None or cost < best_cost:
+            best_cost, best_switch = cost, (leg, alternative)
+        elif cost == best_cost and best_switch is not None:
+            incumbent_leg, incumbent_alt = best_switch
+            moves_down = alternative < picked[leg]
+            incumbent_moves_down = incumbent_alt < picked[incumbent_leg]
+            if moves_down and not incumbent_moves_down:
+                best_switch = (leg, alternative)
+            elif moves_down == incumbent_moves_down and not moves_down:
+                # Both move up: prefer the later leg, which leaves the earlier
+                # positions at their smaller indices.
+                best_switch = (leg, alternative)
+    return best_switch
 
 
 def _build_opportunity(
@@ -1042,10 +2154,34 @@ def _build_opportunity(
     legs_quotes: Sequence[Quote],
     total_stake: float,
     stake_increment: float,
+    commissions: Mapping[str, Commission] | None = None,
 ) -> Opportunity:
-    odds = [quote.decimal_odds for quote in legs_quotes]
+    # Every number below is computed on the price actually **paid**, not the one
+    # published.  On a sportsbook the two are the same; on an exchange they are
+    # not, and using the published one would split the stakes so the legs no
+    # longer return equal amounts — which is the difference between a hedged
+    # position and a bet.
+    odds = [net_decimal(quote, commissions) for quote in legs_quotes]
     ideal = stake_split(odds, total_stake)
     outcomes = settlement_outcomes(sport, market, period, line, shape)
+    # ``stake_split`` equalises the *full-win* returns, which is the floor-
+    # maximising ray only when every outcome pays one leg its full price and the
+    # others nothing.  On a quarter line it is not, and the sweep below explores
+    # along whatever ray it is given — so pointing it at the wrong one puts the
+    # optimum out of reach before any rounding happens.
+    if len(legs_quotes) == 2:
+        aimed = floor_maximising_split(
+            [
+                [
+                    _return_multiplier(results.get(quote.selection, LOSE), net)
+                    for quote, net in zip(legs_quotes, odds)
+                ]
+                for _, results in outcomes
+            ],
+            total_stake,
+        )
+        if aimed is not None and all(share > 0 for share in aimed):
+            ideal = aimed
 
     def evaluate(stakes: Sequence[float]) -> tuple[list[tuple[str, float]], float]:
         """Profit in every settlement outcome, and the floor across them."""
@@ -1053,12 +2189,12 @@ def _build_opportunity(
         profits: list[tuple[str, float]] = []
         for label, results in outcomes:
             returned = 0.0
-            for quote, stake in zip(legs_quotes, stakes):
+            for quote, stake, net in zip(legs_quotes, stakes, odds):
                 # A selection absent from an outcome's mapping contributes
                 # nothing, which is the right treatment for a leg that does not
                 # participate in that outcome.
                 result = results.get(quote.selection, LOSE)
-                returned += stake * _return_multiplier(result, quote.decimal_odds)
+                returned += stake * _return_multiplier(result, net)
             profits.append((label, returned - staked))
         return profits, min(profit for _, profit in profits)
 
@@ -1070,7 +2206,8 @@ def _build_opportunity(
         stake_candidates(ideal, total_stake, stake_increment), key=lambda s: evaluate(s)[1]
     )
     legs = tuple(
-        ArbLeg(quote=quote, stake=stake) for quote, stake in zip(legs_quotes, best_stakes)
+        ArbLeg(quote=quote, stake=stake, net_decimal_odds=net)
+        for quote, stake, net in zip(legs_quotes, best_stakes, odds)
     )
     staked = sum(leg.stake for leg in legs)
     profits, _ = evaluate(best_stakes)
@@ -1114,6 +2251,15 @@ def _build_opportunity(
             )
 
     margin = 1.0 - sum(1.0 / odd for odd in odds)
+    if any(leg.pays_commission for leg in legs):
+        charged = ", ".join(
+            sorted({f"{leg.source} {commission_for(leg.source, commissions).describe()}"
+                    for leg in legs if leg.pays_commission})
+        )
+        notes.append(
+            f"net of commission ({charged}); the quoted prices imply a wider margin "
+            "than this position actually pays"
+        )
     if margin > IMPLAUSIBLE_MARGIN:
         notes.append(
             f"margin of {margin * 100:.1f}% is implausibly large for a real cross-book "
@@ -1121,21 +2267,45 @@ def _build_opportunity(
             "markets that are not in fact the same contract — verify before staking"
         )
 
-    # A stake cap only binds if every book states one; an unstated limit is
-    # unknown, not unlimited, so a partial answer would be misleading.
+    # How large the position can actually be.
+    #
+    # This used to require *every* leg to state a limit, on the reasoning that an
+    # unstated limit is unknown rather than unlimited and a partial answer would
+    # mislead.  That was right when every source was a sportsbook, which mostly
+    # states nothing.  It is wrong now: an exchange publishes the money actually
+    # sitting behind the top of book — Matchbook's ``available-amount``, SX Bet's
+    # order size — so the common case is a position with one leg whose size is
+    # stated and one whose is not, and dropping the cap there says nothing about
+    # a $40 market being offered a $500 stake.
+    #
+    # A cap derived from the legs that *do* state a limit is a genuine upper
+    # bound: an unstated leg can only lower it further.  So it is reported, and
+    # the note says how many legs it was derived from, which is the part that
+    # keeps it from being read as the whole answer.
     limits = [quote.limit_amount for quote in legs_quotes]
     max_total_stake: float | None = None
-    if any(limit is not None and limit <= 0 for limit in limits):
-        # A stated limit of zero is "this book will not take the bet", which is
-        # not the same fact as "no limit is stated" and must not be reported as it.
-        max_total_stake = 0.0
-        notes.append("a book states a limit of zero, so this position cannot be placed")
-    elif all(limit is not None for limit in limits):
-        total_implied = sum(1.0 / odd for odd in odds)
-        # stake_i = T * (1/d_i)/S <= limit_i  =>  T <= limit_i * S * d_i
+    if any(limit is not None for limit in limits):
+        # ``T <= limit_i * d_i`` for every limit-stating leg, because the
+        # position must be risk-free: in the outcome where leg *i* alone wins,
+        # the return is ``stake_i * d_i`` and it must cover the whole total, so
+        # ``T <= stake_i * d_i <= limit_i * d_i``.  Every settlement shape this
+        # module builds gives each selection such an outcome, so the bound is
+        # exact.
+        #
+        # This used to be ``limit_i * S * d_i`` — the bound for stakes on the
+        # equal-return ray, where ``stake_i = T * (1/d_i)/S``.  That was right
+        # while the allocator only walked that ray and became a silent truncation
+        # when it stopped: an off-ray split can total more than the ray bound
+        # with every leg still inside its stated size, and the step-down never
+        # tried it.  Measured: a position staking 7 with legs at 5.00 of a
+        # stated 5.03 and 2.00 of a stated 60.94 was refused outright with
+        # "no whole-unit split at or below the 6 the venues state" — a number no
+        # venue stated — and 116 of 15,086 fuzzed limited slates were refused or
+        # understated, every one with the optimum's total above the ray bound.
         cap = min(
-            limit * total_implied * odd  # type: ignore[operator]
+            limit * odd
             for limit, odd in zip(limits, odds)
+            if limit is not None
         )
         # Floored to whole betting units. The cap is derived from ideal stakes, so
         # staking it and then rounding to whole units pushes the binding leg a
@@ -1144,7 +2314,27 @@ def _build_opportunity(
         # stops being risk-free.
         if stake_increment > 0:
             cap = int(cap / stake_increment + 1e-9) * stake_increment
+        # A cap of zero — stated limits too small to cover one betting unit — is
+        # not annotated here.  ``_examine_group`` rejects the position outright
+        # in that case, so a note would never be read by anybody: any cap at or
+        # below zero is also below *total_stake*, which is what triggers the
+        # rejection.
+        #
+        # There was a branch above this testing ``limit is not None and limit
+        # <= 0``, meaning a book that states a limit of zero, and it could never
+        # run: :class:`src.schema.Quote` refuses a non-positive ``limit_amount``
+        # outright, so no parsed or stored row can hold one.  Its covering test
+        # reached it only through ``model_copy``, which skips validation.  The
+        # lesson is the reason this comment exists rather than a second note —
+        # an unreachable branch reads as coverage and is worse than none.
         max_total_stake = cap
+        stated = sum(1 for limit in limits if limit is not None)
+        if stated < len(limits):
+            notes.append(
+                f"the bankroll cap comes from {stated} of {len(limits)} legs; the "
+                "others state no limit, which is unknown rather than unlimited, so "
+                "the real cap can only be lower"
+            )
 
     return Opportunity(
         event_key=event_key,
@@ -1167,11 +2357,21 @@ def _build_opportunity(
 # ── best-price surface ───────────────────────────────────────────────────────
 
 
-def best_prices(quotes: Sequence[Quote]) -> dict[MarketGroup, dict[Selection, Quote]]:
+def best_prices(
+    quotes: Sequence[Quote], commissions: Mapping[str, Commission] | None = None
+) -> dict[MarketGroup, dict[Selection, Quote]]:
     """Best available price for every selection of every comparable market.
 
     Useful on its own: it is the line-shopping view, and it is what an
     opportunity is drawn from.
+
+    Ranked **net of commission**, like everything else that compares two venues'
+    prices.  On the quoted number this surface named an exchange at 2.10 as
+    better than a book at 2.08 when the exchange pays 2.045, and printed an
+    overround of 0.9877 — a 1.23% edge — for a pair whose net sum is 1.0055 and
+    which therefore loses. It was the one place the commission model had not been
+    applied, and it contradicted the detector on exactly the legs the model
+    exists for.
     """
     surface: dict[MarketGroup, dict[Selection, Quote]] = defaultdict(dict)
     for quote in quotes:
@@ -1179,6 +2379,8 @@ def best_prices(quotes: Sequence[Quote]) -> dict[MarketGroup, dict[Selection, Qu
             continue
         bucket = surface[group_key(quote)]
         existing = bucket.get(quote.selection)
-        if existing is None or quote.decimal_odds > existing.decimal_odds:
+        if existing is None or net_decimal(quote, commissions) > net_decimal(
+            existing, commissions
+        ):
             bucket[quote.selection] = quote
     return dict(surface)

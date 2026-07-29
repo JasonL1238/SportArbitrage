@@ -81,9 +81,41 @@ class League:
     ``openDate`` of 2030-12-01."""
 
     plausible_total_range: tuple[float, float] = (0.5, 100.0)
-    """Sanity bounds for a full-game total in this league.  A total outside them
-    is a units error (Kambi sends lines in thousandths) or a market that was
-    mapped to the wrong sport."""
+    """Sanity bounds for a **main** full-game total in this league.  A total
+    outside them is a units error (Kambi sends lines in thousandths) or a market
+    that was mapped to the wrong sport.
+
+    Note the word *main*.  A book's alternate ladder runs well past its headline
+    number: Kalshi quotes MLB totals from 1.5 to 13.5, and 1.5 runs is a real
+    price on a real market rather than a fault.  Checks that have to accept a
+    whole ladder use :attr:`plausible_line_range` instead."""
+
+    @property
+    def plausible_line_range(self) -> tuple[float, float]:
+        """Bounds wide enough for an alternate ladder, not just the main line.
+
+        Both ends are widened, and by different factors, because the two carry
+        different loads.
+
+        The **upper** bound catches a units error: Kambi sends lines in
+        thousandths, so a total of 8.0 arrives as 8000.  Doubling it costs
+        nothing against a fault three orders of magnitude away, and buys the
+        exhibition fixtures where a real line sits above the league's ordinary
+        band — Polymarket quotes an MLS All-Star game at over/under 8.5 goals.
+
+        The **lower** bound was catching a book's own deep alternates — Kalshi's
+        MLB ladder reaches 1.5 runs — and reporting them as corruption, which is
+        the reverse of what it is for.
+
+        The other failure it was written against, a market mapped to the wrong
+        sport, is caught earlier and more precisely by participant resolution: a
+        soccer club does not resolve against the MLB roster, so a soccer total
+        cannot reach here wearing a baseball label in the first place.  The
+        motivating example still fails — an NFL total of 2.5 points is below
+        20/4 — so nothing that was caught stops being caught.
+        """
+        low, high = self.plausible_total_range
+        return (low / ALTERNATE_LINE_HEADROOM, high * ALTERNATE_LINE_CEILING)
 
     same_event_tolerance: timedelta = timedelta(minutes=90)
     """How far apart two books' start times may be and still describe the same
@@ -127,6 +159,15 @@ class League:
     noticing the problem.  Keeping them apart gets both."""
 
 
+#: How far below its main-line band a league's *alternate* total ladder may
+#: legitimately reach.  Four is set from the widest real ladder observed: Kalshi
+#: quotes MLB totals down to 1.5 against a main-line floor of 4.
+ALTERNATE_LINE_HEADROOM = 4.0
+
+#: And how far above it.  Two, which still leaves a thousandths error (8.0 sent
+#: as 8000) three orders of magnitude outside the bound.
+ALTERNATE_LINE_CEILING = 2.0
+
 #: Tennis start times are estimates ("not before"), and each book publishes its
 #: own, so the same match is routinely listed hours apart.  Widening the window
 #: is safe because the same two players never meet twice on one day.
@@ -140,10 +181,37 @@ TENNIS_TOLERANCE = timedelta(hours=14)
 #: mean something.
 TENNIS_DISAGREEMENT_THRESHOLD = timedelta(hours=6)
 
-#: Soccer books disagree by hours on kickoff (observed: 13:30Z vs 16:30Z for one
-#: Bundesliga fixture).  Two clubs never meet twice in a day and never on
-#: consecutive days, so nothing can be fused by a window this wide.
-SOCCER_TOLERANCE = timedelta(hours=12)
+#: Soccer books disagree by *days* on kickoff, not hours.
+#:
+#: Twelve hours was set from an observed 13:30Z-vs-16:30Z Bundesliga fixture — a
+#: three-hour disagreement — and the ten-source slate produces far worse.  Five
+#: real fixtures were split into two events each, and in every one of them the
+#: split fell cleanly between the sources, so the cross-book join was lost
+#: entirely rather than weakened:
+#:
+#: ===========================================  ======  =============================
+#: fixture                                       gap    the two sides
+#: ===========================================  ======  =============================
+#: Lille @ Angers (Ligue 1)                      18 h   pinnacle | 4 others
+#: Monaco @ Le Havre                             20 h   pinnacle | bovada, fanduel
+#: Rennes @ PSG                                  24 h   pinnacle | 3 others
+#: Werder Bremen @ Freiburg (Bundesliga)         24 h   2 Kambi  | 3 others
+#: Schalke 04 @ Augsburg                         26 h   2 Kambi  | 3 others
+#: ===========================================  ======  =============================
+#:
+#: Worse than losing the join, it was invisible: ``start_time_disagreement``
+#: cannot fire on rows that no longer share an ``event_key``, so the check that
+#: exists for exactly this never saw them and coverage counted each half as a
+#: single-book fixture.
+#:
+#: Thirty hours joins all five and is still far from anything it could fuse.  Two
+#: clubs do meet twice — a two-legged tie — but never inside three days, and the
+#: slate shows the margin directly: the closest genuinely-distinct pair of dates
+#: for one matchup is **ten days** (provisional La Liga fixtures listed 16 Aug by
+#: the Kambi tenants and 26–27 Aug by FanDuel and Pinnacle), which stays
+#: correctly separate at this width.  The widest cluster it forms spans 26 h, so
+#: nothing is chained together beyond the window either.
+SOCCER_TOLERANCE = timedelta(hours=30)
 
 #: The North American leagues without doubleheaders.  The same two teams can meet
 #: on *consecutive* days (an NHL or NBA back-to-back), and the closest such pair

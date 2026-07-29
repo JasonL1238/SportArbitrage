@@ -788,6 +788,51 @@ class TestAvailability:
         report = validate([*healthy, *suspended])
         assert "implausible_suspension_rate" in _codes(report, Severity.ERROR)
 
+    def test_it_still_fires_when_the_broken_sources_are_the_majority(self) -> None:
+        """The case a median-based reference went silent on.
+
+        Two sources at 100% suspended against one open source produced **zero**
+        findings once the reference was the median, because the broken pair *were*
+        the middle.  That is the shape of a shared fault — five order-driven
+        adapters deriving ``status`` the same wrong way — and it is precisely when
+        the check has to speak, not when it is safe for it to stop.
+        """
+        quotes = []
+        for index in range(5):
+            event = f"MLB-AA{index}@MLB-BB{index}:2026-07-28"
+            quotes += _complete_book("open_book", event_key=event)
+            for broken in ("broken_a", "broken_b"):
+                quotes += _complete_book(
+                    broken, event_key=event, status=QuoteStatus.SUSPENDED
+                )
+        report = validate(quotes)
+        flagged = {
+            finding.source
+            for finding in report.errors
+            if finding.code == "implausible_suspension_rate"
+        }
+        assert flagged == {"broken_a", "broken_b"}, "every offender is named, not just one"
+
+    def test_every_offender_is_named_not_only_the_worst(self) -> None:
+        """Naming ``max(rates)`` alone reported one broken source when several
+        shared a fault, leaving the rest invisible behind it."""
+        quotes = []
+        for index in range(5):
+            event = f"MLB-AA{index}@MLB-BB{index}:2026-07-28"
+            for healthy in ("open_a", "open_b", "open_c"):
+                quotes += _complete_book(healthy, event_key=event)
+            for broken in ("broken_a", "broken_b"):
+                quotes += _complete_book(
+                    broken, event_key=event, status=QuoteStatus.SUSPENDED
+                )
+        report = validate(quotes)
+        flagged = {
+            finding.source
+            for finding in report.errors
+            if finding.code == "implausible_suspension_rate"
+        }
+        assert flagged == {"broken_a", "broken_b"}
+
     def test_a_slate_suspended_at_every_book_is_not_flagged(self) -> None:
         """Books genuinely close markets overnight.  Agreement is the signal
         that this is real rather than a parsing fault."""
@@ -875,21 +920,39 @@ class TestCrossSourceIdentity:
         report = validate(quotes)
         assert "no_shared_events" in _codes(report, Severity.ERROR)
 
-    def test_a_soccer_home_away_swap_under_one_key_is_a_disagreement(self) -> None:
-        """Clubs have a home ground, so the two books cannot both be right."""
-        swapped = [
-            q.model_copy(
-                update={
-                    "home_participant": q.away_participant,
-                    "away_participant": q.home_participant,
-                    "home_team": q.away_team,
-                    "away_team": q.home_team,
-                }
-            )
-            for q in _book(SOCCER_GAME, "book_b")
-        ]
-        quotes = [*_book(SOCCER_GAME, "book_a"), *swapped]
-        assert "home_away_disagreement" in _codes(validate(quotes), Severity.ERROR)
+    def test_a_soccer_home_away_swap_is_reported_however_the_key_is_spelled(self) -> None:
+        """Clubs have a home ground, so the two books cannot both be right.
+
+        Reported whether or not the swapped book kept the other's key, because
+        the realistic case is that it did *not*: reconciliation rebuilds the key
+        from the participants each source reported, so a reversed book gets a key
+        of its own and used to fall out of this comparison entirely.
+
+        One fixture is a warning rather than an error — two books can legitimately
+        disagree about the home side of a match on neutral ground, and with a
+        single shared fixture there is no way to tell that from a broken adapter.
+        The severity is decided on the rate; see
+        ``TestAReversedBookIsNamedRatherThanLosingItsJoins``.
+        """
+        def swap(quote, keep_key: bool):
+            update = {
+                "home_participant": quote.away_participant,
+                "away_participant": quote.home_participant,
+                "home_team": quote.away_team,
+                "away_team": quote.home_team,
+            }
+            if not keep_key:
+                update["event_key"] = (
+                    f"{quote.home_participant}@{quote.away_participant}"
+                    f":{quote.event_key.partition(':')[2]}"
+                )
+            return quote.model_copy(update=update)
+
+        for keep_key in (True, False):
+            swapped = [swap(q, keep_key) for q in _book(SOCCER_GAME, "book_b")]
+            quotes = [*_book(SOCCER_GAME, "book_a"), *swapped]
+            codes = _codes(validate(quotes))
+            assert "home_away_disagreement" in codes, keep_key
 
     def test_a_tennis_ordering_disagreement_is_not_a_home_away_disagreement(self) -> None:
         """Each book orders the two players however it likes and src.events.orient
@@ -921,7 +984,7 @@ class TestCrossSourceIdentity:
         other = [
             q.model_copy(
                 update={
-                    "away_participant": "TENNIS-jannik.sinner",
+                    "away_participant": "TENNIS-janniksinner",
                     "away_team": "Jannik Sinner",
                 }
             )
@@ -1000,7 +1063,7 @@ class TestEmptyAndDegenerate:
         assert report.ok
         assert report.source_count == 1
 
-        from src.collector import _check_source_count
+        from src.collector import _check_source_health
         from src.sources.base import SourceHealth
 
         health = [
@@ -1011,5 +1074,5 @@ class TestEmptyAndDegenerate:
                 quote_count=6,
             )
         ]
-        _check_source_count(health, report)
+        _check_source_health(health, report, configured=["book_a"])
         assert "insufficient_sources" in _codes(report, Severity.ERROR)

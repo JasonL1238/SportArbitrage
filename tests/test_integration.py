@@ -12,6 +12,7 @@ those are invented and are never presented as observed data.
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -86,12 +87,24 @@ def sources():
         source.close()
 
 
+#: The instant the captured slate is judged against.
+#:
+#: Pinned rather than left as "now", because the started-game gate is a
+#: comparison against the wall clock: with the fixtures dated 2026-07-28, a run
+#: of this suite in the morning and one in the afternoon see different numbers of
+#: fixtures still in the future, and any assertion on a count moves under it.
+#: Just before the earliest kickoff on the captured slate.
+FIXTURE_AS_OF = datetime(2026, 7, 28, 12, 0, tzinfo=UTC)
+
+
 @pytest.fixture()
 def collected(tmp_path: Path, sources):
     """One complete run, persisted, ready to be re-queried."""
     raw_store = RawStore(tmp_path / "raw")
     with Store(tmp_path / "db.sqlite3") as store:
-        result = collect_once(sources, raw_store=raw_store, store=store)
+        result = collect_once(
+            sources, raw_store=raw_store, store=store, as_of=FIXTURE_AS_OF
+        )
         yield result, store, raw_store
 
 
@@ -198,7 +211,7 @@ class TestFullRun:
         SQLite — otherwise the stored history cannot be re-analysed."""
         result, store, _ = collected
         stored, _ = reconcile_event_keys(store.load_quotes(result.run_id))
-        from_storage = find_opportunities(stored)
+        from_storage = find_opportunities(stored, as_of=FIXTURE_AS_OF)
         assert len(from_storage.opportunities) == len(result.arb.opportunities)
         assert from_storage.comparable_group_count == result.arb.comparable_group_count
 
@@ -674,6 +687,14 @@ class TestThePipelineCanActuallySurfaceAnOpportunity:
     detector returns.  These tests inject two **synthetic** books priced to a
     known edge and follow it all the way through the pipeline to the command
     line.  The prices are invented for the test and are not observed data.
+
+    ``as_of`` is pinned to :data:`FIXTURE_AS_OF` for the same reason every other
+    test in this file pins it.  Left to default to ``datetime.now``, these four
+    passed until the wall clock reached the fixture's 22:41 UTC kick-off and
+    then failed for good — the started-game gate was doing its job on a slate
+    frozen in the past.  The one guard against a silently disconnected detector
+    was itself on a timer, and the failure looked like a real regression rather
+    than a stale fixture.
     """
 
     @pytest.fixture()
@@ -724,7 +745,9 @@ class TestThePipelineCanActuallySurfaceAnOpportunity:
     ) -> None:
         raw_store = RawStore(tmp_path / "raw")
         with Store(tmp_path / "db.sqlite3") as store:
-            result = collect_once(rigged_sources, raw_store=raw_store, store=store)
+            result = collect_once(
+                rigged_sources, raw_store=raw_store, store=store, as_of=FIXTURE_AS_OF
+            )
 
         assert result.arb is not None
         assert len(result.arb.opportunities) == 1
@@ -741,7 +764,9 @@ class TestThePipelineCanActuallySurfaceAnOpportunity:
     ) -> None:
         raw_store = RawStore(tmp_path / "raw")
         with Store(tmp_path / "db.sqlite3") as store:
-            result = collect_once(rigged_sources, raw_store=raw_store, store=store)
+            result = collect_once(
+                rigged_sources, raw_store=raw_store, store=store, as_of=FIXTURE_AS_OF
+            )
         legs = {leg.selection.value: leg for leg in result.arb.opportunities[0].legs}
         assert legs["home"].source == "book_a" and legs["home"].decimal_odds == 2.30
         assert legs["away"].source == "book_b" and legs["away"].decimal_odds == 2.05
@@ -751,7 +776,9 @@ class TestThePipelineCanActuallySurfaceAnOpportunity:
     ) -> None:
         raw_store = RawStore(tmp_path / "raw")
         with Store(tmp_path / "db.sqlite3") as store:
-            result = collect_once(rigged_sources, raw_store=raw_store, store=store)
+            result = collect_once(
+                rigged_sources, raw_store=raw_store, store=store, as_of=FIXTURE_AS_OF
+            )
         result.print_summary()
         out = capsys.readouterr().out
         assert "arbitrage: 1 opportunity" in out
@@ -768,7 +795,9 @@ class TestThePipelineCanActuallySurfaceAnOpportunity:
         the stored history cannot be re-analysed."""
         raw_store = RawStore(tmp_path / "raw")
         with Store(tmp_path / "db.sqlite3") as store:
-            result = collect_once(rigged_sources, raw_store=raw_store, store=store)
+            result = collect_once(
+                rigged_sources, raw_store=raw_store, store=store, as_of=FIXTURE_AS_OF
+            )
             stored, _ = reconcile_event_keys(store.load_quotes(result.run_id))
         again = find_opportunities(stored)
         assert len(again.opportunities) == 1

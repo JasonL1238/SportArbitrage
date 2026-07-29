@@ -45,6 +45,7 @@ from src.schema import (
 )
 from src.sources.base import ParseOutcome
 from src.sources.betrivers_kambi import (
+    MAX_BETOFFERS_PER_RESPONSE,
     CRITERIA,
     MAIN_LINE_TAG,
     OUT_OF_SCOPE,
@@ -469,11 +470,15 @@ def test_no_dropped_record_is_silent(parsed: ParseOutcome) -> None:
     reason.  Stable also means *bounded* — the labels embed player and club
     names, so keying a counter on them would produce thousands of one-off
     entries instead of a coverage signal."""
-    assert len(parsed.skipped) == 20
+    # 19, not 20: the American-odds disagreement moved to ``repaired``, because
+    # those rows are *published* with a derived price rather than dropped.
+    assert len(parsed.skipped) == 19
     assert sum(parsed.skipped.values()) > 700
-    for reason in parsed.skipped:
+    for reason in (*parsed.skipped, *parsed.repaired):
         assert reason == reason.strip()
         assert len(reason) < 60, reason
+    # And a repair is not a drop: every one of those rows is in the output.
+    assert parsed.repaired and not (set(parsed.repaired) & set(parsed.skipped))
 
 
 def test_futures_containers_are_recognised_before_name_resolution() -> None:
@@ -768,19 +773,58 @@ def test_parse_refuses_betoffers_without_a_slate(
 def test_a_truncated_betoffer_response_is_reported_not_silently_partial(
     kambi_raw: list[RawResponse],
 ) -> None:
-    """The offering API caps a response at 2000 offers and reports the real
-    count in ``range``.  A busy soccer batch can lose whole markets that way, so
-    a truncated payload must never look like a complete one."""
+    """A capped response must never look like a complete one.
+
+    Checked by comparing the ids asked for against the ids that came back.  The
+    guard used to read ``payload["range"]["total"]`` — and ``range`` appears in
+    **none** of the captured betoffer responses, whose top-level keys are exactly
+    ``betOffers``, ``events`` and ``prePacks``.  It returned ``None``
+    unconditionally, so both the fetch-time batch-halving retry and this
+    rejection were dead code written against a contract the endpoint does not
+    have.  The ``events`` array is real, and in every capture it echoes the
+    request exactly.
+    """
     listview = next(
         raw for raw in kambi_raw if raw.endpoint == "listview:ice_hockey/nhl"
     )
     betoffer = next(
         raw for raw in kambi_raw if raw.endpoint == "betoffer:ice_hockey/nhl:batch-01"
     )
-    payload = betoffer.json()
-    payload["range"] = {"start": 0, "size": 2000, "total": len(payload["betOffers"]) + 1}
-    outcome = parse_kambi([listview, _rewritten(betoffer, json.dumps(payload))])
-    assert [r.reason for r in outcome.rejections] == ["betoffer_response_truncated"]
+    asked = str((betoffer.request_params or {}).get("event_ids", "")).split(",")
+    assert len(asked) >= 2, "this fixture needs a multi-event batch"
+
+    def without_last_event(offers: int):
+        payload = betoffer.json()
+        payload["events"] = [
+            event for event in payload["events"] if str(event.get("id")) != asked[-1]
+        ]
+        # Pad the flat offer list to the cap, which is the other half of the
+        # signal: a response can only drop events off the end once it is full.
+        # Padded with offers the parser has no criterion for, so the count
+        # reaches the cap without inventing rows.
+        filler = dict(payload["betOffers"][0])
+        filler["criterion"] = {"id": -1, "label": "x", "englishLabel": "Not A Market"}
+        payload["betOffers"] = payload["betOffers"] + [
+            dict(filler, id=-index) for index in range(
+                max(offers - len(payload["betOffers"]), 0)
+            )
+        ]
+        return _rewritten(betoffer, json.dumps(payload))
+
+    outcome = parse_kambi([listview, without_last_event(MAX_BETOFFERS_PER_RESPONSE)])
+    truncation = [r for r in outcome.rejections if r.reason == "betoffer_response_truncated"]
+    assert truncation and asked[-1] in truncation[0].detail
+
+    # A missing event on a response nowhere near the cap is ordinary — an event
+    # that closed or started between the listView call and this one — and is
+    # counted rather than failing the whole tenant.  Grading it a rejection put
+    # 3,455 good rows behind ok=False on a real capture.
+    ordinary = parse_kambi([listview, without_last_event(0)])
+    assert not ordinary.rejections
+    assert ordinary.skipped["event_absent_from_betoffer_response"] == 1
+
+    # The untouched response says nothing at all.
+    assert not parse_kambi([listview, betoffer]).rejections
 
 
 # ── prices ───────────────────────────────────────────────────────────────────
@@ -813,7 +857,11 @@ def test_the_feeds_own_american_price_is_preferred_where_it_agrees(
         if stated is not None and int(str(stated).replace("+", "")) == quote.american_odds:
             verbatim += 1
     assert verbatim / len(parsed.quotes) > 0.9
-    assert parsed.skipped["feed_american_odds_disagreed_with_decimal"] == 54
+    # ``repaired``, not ``skipped``: these 54 rows *are* published, carrying a
+    # derived American price.  Counting them as skips reported them as
+    # discarded on a dashboard panel headed "seen but out of scope".
+    assert parsed.repaired["feed_american_odds_disagreed_with_decimal"] == 54
+    assert "feed_american_odds_disagreed_with_decimal" not in parsed.skipped
 
 
 # ── fetch guards ─────────────────────────────────────────────────────────────

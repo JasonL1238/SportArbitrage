@@ -936,13 +936,19 @@ class TestPushRisk:
 
 class TestQuarterLineDetection:
     def test_a_quarter_total_arb_is_settled_at_its_half_push(self) -> None:
-        """Synthetic, hand-computed.  Over/under 2.75 at 2.10 each, 100 staked
-        50/50.  Over 3+ goals: 50*2.10 = 105 against 100 staked, so +5.  Under 2:
-        +5.  Exactly 3 goals: the over's 2.5 half wins and its 3.0 half refunds,
-        returning 25*2.10 + 25 = 77.50, while the under's 3.0 half refunds and its
-        2.5 half loses, returning 25.  Total 102.50, so +2.50.  The floor is that
-        2.50 — not the 5 a half-line market would pay, and not the zero a
-        whole-line market would."""
+        """Synthetic, hand-computed.  Over/under 2.75 at 2.10 each.  At an even
+        50/50 of 100: over 3+ goals pays 50*2.10 = 105 against 100 staked, so +5,
+        and under 2 likewise.  Exactly 3 goals is the outcome that decides the
+        floor — the over's 2.5 half wins and its 3.0 half refunds, returning
+        25*2.10 + 25 = 77.50, while the under's 3.0 half refunds and its 2.5 half
+        loses, returning 25; total 102.50, so +2.50.  Not the 5 a half-line market
+        would pay, and not the zero a whole-line market would.
+
+        50/50 is not the best split, because the half-push outcome is not
+        symmetric: it pays the over more than the under, so shifting a unit off
+        the under raises the floor.  The engine stakes 50/49 of the 100 and the
+        floor becomes +3.00 — checked exhaustively against every whole-unit split
+        of every total up to the bankroll."""
         report = find_opportunities(
             _pair(
                 fixture=SOCCER_GAME,
@@ -958,8 +964,10 @@ class TestQuarterLineDetection:
         opp = report.opportunities[0]
         assert not opp.can_push
         assert opp.can_half_push
-        assert dict(opp.outcome_profits)["half_push_at_3"] == pytest.approx(2.50, abs=1e-9)
-        assert opp.guaranteed_profit == pytest.approx(2.50, abs=1e-9)
+        assert [leg.stake for leg in opp.legs] == [50.0, 49.0]
+        assert opp.total_stake == 99.0
+        assert dict(opp.outcome_profits)["half_push_at_3"] == pytest.approx(3.00, abs=1e-9)
+        assert opp.guaranteed_profit == pytest.approx(3.00, abs=1e-9)
         assert opp.is_risk_free
         assert any("quarter line" in note for note in opp.notes)
 
@@ -1030,8 +1038,10 @@ class TestQuarterLineDetection:
 
     def test_a_quarter_spread_arb_favours_the_side_that_half_wins(self) -> None:
         """Home -0.75 at 2.10 against away +0.75 at 2.10.  A one-goal home win
-        half-wins the home leg: 25*2.10 + 25 = 77.50 plus the away leg's refunded
-        half, 25, is 102.50."""
+        half-wins the home leg: at an even 50/50 that is 25*2.10 + 25 = 77.50 plus
+        the away leg's refunded half, 25, for 102.50 — the mirror of the total
+        above, and the outcome that sets the floor.  As there, the asymmetry means
+        49/50 of the bankroll pays more than 50/50."""
         report = find_opportunities(
             _pair(
                 fixture=SOCCER_GAME,
@@ -1045,7 +1055,8 @@ class TestQuarterLineDetection:
         )
         opp = report.opportunities[0]
         assert opp.line == -0.75
-        assert dict(opp.outcome_profits)["half_push_at_-1"] == pytest.approx(2.50, abs=1e-9)
+        assert [leg.stake for leg in opp.legs] == [49.0, 50.0]
+        assert dict(opp.outcome_profits)["half_push_at_-1"] == pytest.approx(3.00, abs=1e-9)
 
     def test_an_unmodelled_line_granularity_is_refused_and_counted(self) -> None:
         """Silently settling a line whose granularity is unknown means assuming it
@@ -1096,7 +1107,11 @@ class TestImplausibleMargins:
 
 
 class TestStakeRoundingAndLimits:
-    def test_stakes_are_whole_units_and_spend_the_whole_bankroll(self) -> None:
+    def test_stakes_are_whole_units_and_never_exceed_the_bankroll(self) -> None:
+        """Whole units, and at most the bankroll — *spending* all of it is not
+        required and is sometimes the worse position, so it is not asserted.
+        Here the whole bankroll happens to be the best answer, which is the
+        common case and worth keeping as one."""
         report = find_opportunities(
             _pair(home_odds=2.37, away_odds=2.11), total_stake=100.0, stake_increment=1.0
         )
@@ -1113,27 +1128,55 @@ class TestStakeRoundingAndLimits:
         assert opp.guaranteed_profit <= ideal + 1e-9
 
     def test_an_edge_thinner_than_one_betting_unit_is_rejected(self) -> None:
-        """Synthetic, hand-computed: 2.60 / 1.65 is a 0.93% edge.  On a 20-unit
-        bankroll the ideal split is 7.77 / 12.23; whole units force 8 / 12, and
-        the away leg then returns 12 * 1.65 = 19.80 against 20 staked.  The
-        headline margin is still positive, so this must be caught here."""
+        """Synthetic: 2.60 / 1.6276 is a 0.1% edge.  On a 10-unit bankroll *no*
+        whole-unit split of any total is risk-free — checked exhaustively, the
+        best of them still loses 0.117 — so the headline margin is positive and
+        there is nothing behind it.
+
+        This used to be 2.60 / 1.65 on 20 units, which was only unroundable while
+        the position had to spend the entire bankroll: 7 and 11 units stakes 18 of
+        the 20 and guarantees +0.15.  A bankroll is a ceiling, so that case now
+        belongs to the opposite test.
+        """
         report = find_opportunities(
-            _pair(home_odds=2.60, away_odds=1.65), total_stake=20.0, stake_increment=1.0
+            _pair(home_odds=2.60, away_odds=1.6276), total_stake=10.0, stake_increment=1.0
         )
         assert report.opportunities == []
         assert [d.code for d in report.diagnostics] == ["rounding_destroys_edge"]
 
+    def test_an_edge_that_survives_below_the_bankroll_is_taken(self) -> None:
+        """2.60 / 1.65 on 20 units: every full-bankroll split loses (the best
+        floors at -0.20), and staking 18 of the 20 guarantees +0.15.  Requiring
+        the whole bankroll refused this outright."""
+        report = find_opportunities(
+            _pair(home_odds=2.60, away_odds=1.65), total_stake=20.0, stake_increment=1.0
+        )
+        assert len(report.opportunities) == 1, [d.code for d in report.diagnostics]
+        opp = report.opportunities[0]
+        assert sorted(leg.stake for leg in opp.legs) == [7.0, 11.0]
+        assert opp.total_stake == 18.0
+        assert opp.guaranteed_profit == pytest.approx(0.15, abs=0.01)
+        assert opp.is_risk_free
+
     def test_the_same_thin_edge_survives_a_larger_bankroll(self) -> None:
-        """Ideal split of 10,000 is 3882.36 / 6117.64; the spare unit goes to the
-        larger remainder, giving 3882 / 6118.  Home returns 3882 * 2.6 =
-        10,093.20 and away 6118 * 1.65 = 10,094.70, so the floor is +93.20."""
+        """Ideal split of 10,000 is 3882.36 / 6117.64.  Rounding both down to
+        3882 / 6117 stakes 9,999: home returns 3882 * 2.6 = 10,093.20 and away
+        6117 * 1.65 = 10,093.05, so the floor is +94.05.
+
+        Handing the spare unit to the larger remainder — 3882 / 6118, spending
+        the whole 10,000 — floors at +93.20 instead.  The unit lands on the leg
+        that is not setting the floor, where it buys nothing and is subtracted
+        from every outcome.  Checked exhaustively: +94.05 is the best any
+        whole-unit split of any total up to the bankroll can pay.
+        """
         report = find_opportunities(
             _pair(home_odds=2.60, away_odds=1.65), total_stake=10_000.0, stake_increment=1.0
         )
         assert len(report.opportunities) == 1
         opp = report.opportunities[0]
-        assert sorted(leg.stake for leg in opp.legs) == [3882.0, 6118.0]
-        assert opp.guaranteed_profit == pytest.approx(93.20, abs=0.01)
+        assert sorted(leg.stake for leg in opp.legs) == [3882.0, 6117.0]
+        assert opp.total_stake == 9_999.0
+        assert opp.guaranteed_profit == pytest.approx(94.05, abs=0.01)
 
     def test_stated_limits_cap_the_bankroll(self) -> None:
         """Both books cap at 50. Equal odds means an equal split, so the whole
@@ -1154,10 +1197,29 @@ class TestStakeRoundingAndLimits:
         opp = report.opportunities[0]
         assert opp.max_total_stake == pytest.approx(50.0, rel=1e-6)
 
-    def test_an_unstated_limit_is_unknown_rather_than_unlimited(self) -> None:
+    def test_a_partly_stated_limit_still_caps_the_bankroll_and_says_so(self) -> None:
+        """One stated limit is a real upper bound, and worth reporting as one.
+
+        This deliberately reverses an earlier rule that required *every* leg to
+        state a limit.  That rule was right while every source was a sportsbook,
+        which mostly states nothing.  Exchanges publish the money actually behind
+        the top of book, so a position with one stated leg and one unstated one is
+        now the common case — and refusing to report a cap there says nothing at
+        all about a $40 market being offered a $500 stake.  An unstated leg can
+        only lower the cap further, so the bound holds; the note is what stops it
+        being read as the whole answer.
+        """
         quotes = _pair(home_odds=2.10, away_odds=2.10)
         quotes[0] = quotes[0].model_copy(update={"limit_amount": 50.0})
-        report = find_opportunities(quotes)
+        opportunity = find_opportunities(quotes).opportunities[0]
+        # Even prices, so the stated leg takes half the bankroll: a 50-unit cap
+        # on that leg caps the position at 100.
+        assert opportunity.max_total_stake == pytest.approx(100.0)
+        assert any("1 of 2 legs" in note for note in opportunity.notes)
+
+    def test_no_stated_limit_anywhere_reports_no_cap(self) -> None:
+        """Unknown stays unknown; nothing is invented from an absence."""
+        report = find_opportunities(_pair(home_odds=2.10, away_odds=2.10))
         assert report.opportunities[0].max_total_stake is None
 
 
@@ -1168,16 +1230,22 @@ class TestStakeAllocation:
         """Hand-computed: 6.19 / 1.20 is a 0.51% edge.  Ideal stakes on a 200
         bankroll are 32.16 / 167.84.  Giving the spare unit to the *larger*
         remainder — which is what minimising rounding error does — yields 32/168
-        and a floor of 32 * 6.19 - 200 = -1.92.  The other whole-unit split,
-        33/167, floors at 33 * 6.19 - 200 = +4.27 and 167 * 1.20 - 200 = +0.40.
-        The second is a real risk-free position and must be the one reported."""
+        and a floor of 32 * 6.19 - 200 = -1.92.  Of the splits that spend the
+        whole bankroll only 33/167 is risk-free, flooring at +0.40.
+
+        Better still, and what is reported: 32/165 stakes 197 of the 200 and
+        floors at 165 * 1.20 - 197 = +1.00, with home returning 198.08.  Two and
+        a half times the money for three units of the bankroll left unstaked, and
+        checked exhaustively to be the best any whole-unit split can pay.
+        """
         report = find_opportunities(
             _pair(home_odds=6.19, away_odds=1.20), total_stake=200.0, stake_increment=1.0
         )
         assert len(report.opportunities) == 1
         opp = report.opportunities[0]
-        assert sorted(leg.stake for leg in opp.legs) == [33.0, 167.0]
-        assert opp.guaranteed_profit == pytest.approx(0.40, abs=0.01)
+        assert sorted(leg.stake for leg in opp.legs) == [32.0, 165.0]
+        assert opp.total_stake == 197.0
+        assert opp.guaranteed_profit == pytest.approx(1.00, abs=0.01)
         assert opp.is_risk_free
 
     @pytest.mark.parametrize(
@@ -1229,15 +1297,30 @@ class TestLimits:
         for leg in restaked.opportunities[0].legs:
             assert leg.stake <= leg.quote.limit_amount + 1e-9
 
-    def test_a_stated_limit_of_zero_is_not_reported_as_no_limit(self) -> None:
+    def test_a_limit_too_small_to_stake_is_not_reported_as_no_limit(self) -> None:
         """"This book will not take the bet" and "no limit is stated" are
-        different facts and must not share a representation."""
+        different facts and must not share a representation.
+
+        This used to set ``limit_amount`` to ``0.0`` through ``model_copy``,
+        which skips validation — and :class:`src.schema.Quote` refuses a
+        non-positive limit, so it was reaching a branch no parsed or stored row
+        could ever produce.  The state that *is* reachable is a limit too small
+        to cover one betting unit, and that one went unreported: the position
+        printed a guarantee and ranked by it.
+        """
         quotes = _pair(home_odds=2.10, away_odds=2.10)
-        quotes[0] = quotes[0].model_copy(update={"limit_amount": 0.0})
+        with pytest.raises(Exception):
+            type(quotes[0]).model_validate(
+                {**quotes[0].model_dump(), "limit_amount": 0.0}
+            )
+
+        quotes[0] = quotes[0].model_copy(update={"limit_amount": 0.4})
         quotes[1] = quotes[1].model_copy(update={"limit_amount": 500.0})
-        opp = find_opportunities(quotes).opportunities[0]
-        assert opp.max_total_stake == 0.0
-        assert any("limit of zero" in note for note in opp.notes)
+        report = find_opportunities(quotes)
+        assert report.opportunities == []
+        assert "cannot_be_placed_at_the_stated_limits" in [
+            d.code for d in report.diagnostics
+        ]
 
 
 class TestPickEmSpread:
@@ -1486,6 +1569,15 @@ class TestRealFixtures:
             "ambiguous_tie_settlement",
             "duplicate_selection",
             "legs_disagree_on_the_game",
+            # Five markets on this slate moved here from ``stale_leg`` when the
+            # freshness and settlement gates were searched jointly rather than
+            # in sequence.  Both statements were true of them; this is the
+            # binding one — the legs pair Kalshi with a sportsbook, so they
+            # could not void together however close together they were priced,
+            # while the staleness was incidental to which legs the price search
+            # happened to pick.  No position was gained or lost: 0 before, 0
+            # after.
+            "legs_do_not_void_together",
             "margin_implausibly_large",
             "mixed_sport",
             "rounding_destroys_edge",

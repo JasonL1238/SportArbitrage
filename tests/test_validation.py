@@ -119,8 +119,8 @@ TENNIS_MATCH = Fixture(
     league="ATP",
     home_team="Ugo Humbert",
     away_team="Carlos Alcaraz",
-    home_participant="TENNIS-humbert.ugo",
-    away_participant="TENNIS-alcaraz.carlos",
+    home_participant="TENNIS-humbertugo",
+    away_participant="TENNIS-alcarazcarlos",
     commence=datetime(2026, 7, 28, 12, 0, tzinfo=UTC),
     total=22.5,
     spread=3.5,
@@ -782,15 +782,15 @@ class TestHomeAwayAgreement:
         assert "participant_order_not_canonical" in _errors(quotes)
 
     def test_two_books_naming_different_players_is_an_error(self) -> None:
-        """Same event key, different matchup — the failure the pair check exists
-        for, and the one tennis is exposed to precisely because it has no
+        """Same fixture by key, different matchup — the failure the pair check
+        exists for, and the one tennis is exposed to precisely because it has no
         home/away check to fall back on."""
         other = [
             _quote(
                 TENNIS_MATCH,
                 "book_b",
-                home_participant="TENNIS-humbert.ugo",
-                away_participant="TENNIS-jannik.sinner",
+                home_participant="TENNIS-humbertugo",
+                away_participant="TENNIS-janniksinner",
                 home_team="Ugo Humbert",
                 away_team="Jannik Sinner",
                 market=Market.MONEYLINE,
@@ -803,8 +803,15 @@ class TestHomeAwayAgreement:
         quotes = [*_book(TENNIS_MATCH, "book_a"), *other]
         assert "participant_pair_disagreement" in _errors(quotes)
 
-    def test_a_soccer_home_away_swap_is_still_an_error(self) -> None:
-        """Soccer clubs do have a home side, so the check stays live there."""
+    def test_a_soccer_home_away_swap_is_still_caught(self) -> None:
+        """Soccer clubs do have a home side, so the check stays live there.
+
+        The swapped book carries the event key its *own* participants produce,
+        because that is the only state the pipeline can reach: reconciliation
+        rebuilds the key from what each source reported.  Grouping these checks
+        on the key therefore put the reversed rows in a group of their own, where
+        they had nobody to disagree with — the check ran and could never fire.
+        """
         swapped = [
             _quote(
                 SOCCER_GAME,
@@ -813,6 +820,8 @@ class TestHomeAwayAgreement:
                 away_participant=SOCCER_GAME.home_participant,
                 home_team=SOCCER_GAME.away_team,
                 away_team=SOCCER_GAME.home_team,
+                event_key=f"{SOCCER_GAME.home_participant}@"
+                          f"{SOCCER_GAME.away_participant}:2026-08-15",
                 market=Market.MONEYLINE,
                 selection=selection,
                 decimal_odds=odds,
@@ -825,7 +834,12 @@ class TestHomeAwayAgreement:
             )
         ]
         quotes = [*_book(SOCCER_GAME, "book_a"), *swapped]
-        assert "home_away_disagreement" in _errors(quotes)
+        codes = _codes(quotes)
+        assert "home_away_disagreement" in codes
+        # One fixture between two sources is a neutral-venue judgement, not a
+        # broken adapter, so it is said rather than failed on; the live slate has
+        # exactly one such case, a pre-season friendly.
+        assert "home_away_disagreement" not in _errors(quotes)
 
 
 class TestStartTimeTolerance:

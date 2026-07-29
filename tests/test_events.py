@@ -320,9 +320,45 @@ class TestReconciliation:
 
 
 class TestRealFixtureSlate:
-    def test_the_captured_slate_needs_no_correction(self, all_fixture_quotes) -> None:
-        """The books agreed on the captured slate, so reconciliation is a no-op
-        here.  That is what makes the synthetic cases above necessary."""
+    def test_reconciliation_never_moves_a_row_to_a_different_matchup(
+        self, all_fixture_quotes
+    ) -> None:
+        """The invariant, rather than a count of corrections.
+
+        This asserted ``changes == []`` — "the books agreed on the captured
+        slate" — which was a fact about *that* capture, not about the code.  It
+        held for three books captured minutes apart and stopped holding the
+        moment a fifth was captured three hours later: a tennis match whose
+        "not before" estimate had moved across midnight legitimately needed its
+        date corrected, and the test called that a regression.
+
+        What must be true of every correction, on any slate, is that it moves a
+        row *within its own matchup*: reconciliation may change which fixture of
+        a pair a row belongs to and which date it is filed under, and may never
+        change who is playing.  Getting that wrong is the doubleheader mis-join,
+        and it is silent.
+        """
         reconciled, changes = reconcile_event_keys(all_fixture_quotes)
-        assert changes == []
         assert len(reconciled) == len(all_fixture_quotes)
+
+        before = {
+            (quote.source, quote.source_event_id): (
+                quote.away_participant,
+                quote.home_participant,
+            )
+            for quote in all_fixture_quotes
+        }
+        for change in changes:
+            matchup = before[(change.source, change.source_event_id)]
+            assert change.now.split(":")[0] == "@".join(matchup), change
+            assert change.was != change.now
+
+    def test_every_row_ends_on_a_key_its_own_participants_imply(
+        self, all_fixture_quotes
+    ) -> None:
+        """After reconciliation the key is derived from the row, not inherited."""
+        reconciled, _ = reconcile_event_keys(all_fixture_quotes)
+        for quote in reconciled:
+            matchup, _, rest = quote.event_key.partition(":")
+            assert matchup == f"{quote.away_participant}@{quote.home_participant}"
+            assert rest[:10].startswith("20"), quote.event_key

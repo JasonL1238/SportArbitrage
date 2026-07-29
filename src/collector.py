@@ -10,7 +10,10 @@ run reproducible offline.
 A source that fails does not abort the run — the other sources still collect and
 the failure is recorded as unhealthy, because unattended operation is a
 requirement.  A run is only ``ok`` when validation passes *and* at least two
-sportsbooks actually produced data.
+**venues** actually produced data — any two, not two sportsbooks: two exchanges
+can be compared with each other, and refusing that would throw away a usable
+slate.  A run where *no* sportsbook produced is warned about by name, because a
+book's posted price and an order book's resting offer are different things.
 
 That last bar is now reported **per sport** as well as overall, because "two
 books responded" and "two books priced this sport" are different facts, and only
@@ -28,42 +31,83 @@ from __future__ import annotations
 
 import argparse
 import logging
+import math
 import sys
 import time
 from collections import Counter, defaultdict
-from dataclasses import dataclass
-from datetime import UTC, datetime
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime, timedelta
 from inspect import signature
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Callable, Iterator, Mapping, Sequence
+from uuid import uuid4
 
 from src import settings
-from src.arb import ArbReport, best_prices, find_opportunities
+from src.arb import (
+    STAKE_INCREMENT,
+    MAX_OBSERVATION_SPREAD,
+    MAX_PRICE_AGE,
+    ArbReport,
+    _counterparties,
+    best_prices,
+    counterparty_groups,
+    describe_age,
+    find_opportunities,
+    merge_counterparty_groups,
+)
+from src.settlement import mismatch as settlement_mismatch
+from src.commission import commission_for, net_decimal_odds
+from src.distinctness import (
+    MIRROR_AGREEMENT_RATE,
+    Agreement,
+    compare_all,
+    find_mirrors,
+)
 from src.events import reconcile_event_keys
 from src.leagues import LEAGUES, LEAGUES_BY_SPORT, is_known
 from src.leagues import league as get_league
+from src.normalize import decimal_to_american
 from src.raw_store import RawResponse, RawStore
-from src.schema import Quote, Sport
+from src.schema import Market, Quote, Sport
+from src.sources import registry
+from src.sources._common import Tier
 from src.sources.base import OddsSource, ParseOutcome, SourceHealth
-from src.sources.betrivers_kambi import BetRiversKambiAdapter
-from src.sources.fanduel import FanDuelAdapter
 from src.sources.guards import SourceError
-from src.sources.pinnacle import PinnacleAdapter
 from src.store import IncompatibleDatabase, MigrationError, Store, migrate_database
 from src.validation import Severity, ValidationReport, validate
 
 log = logging.getLogger("collector")
 
-#: Every source is a public endpoint of the sportsbook's own web experience,
-#: fetched directly. No third-party odds API, key, account, or paid service.
-SOURCE_FACTORIES = {
-    "fanduel": FanDuelAdapter,
-    "pinnacle": PinnacleAdapter,
-    "betrivers_kambi": BetRiversKambiAdapter,
+#: How to build each registered source, derived from
+#: :data:`src.sources.registry.SOURCES`.
+#:
+#: Every source is a public endpoint of the venue's own web experience, fetched
+#: directly. No third-party odds API, key, account, or paid service.
+#:
+#: The values are ``functools.partial`` objects with the instance's configuration
+#: already bound — the Kambi operator token, say — which is what makes a *source*
+#: an instance rather than a module.  A bare class could not express two books
+#: served by one adapter, and two books served by one adapter is what the Kambi
+#: platform is.  Kept as a plain mapping because it is also the seam tests inject
+#: a fake source through.
+SOURCE_FACTORIES: dict[str, Callable[..., OddsSource]] = {
+    entry.key: entry.factory() for entry in registry.SOURCES
 }
 
-#: The goal requires two independent sportsbooks; one is not a pipeline.
+#: Comparison needs two counterparties; one is not a pipeline.  This is the
+#: *comparability* bar and nothing else — whether the run as a whole is healthy is
+#: judged against what was configured and against this source's own recent
+#: history, because "two of thirty sources answered" is not a healthy run even
+#: though it clears this floor.  See :func:`_check_source_health`.
 MIN_HEALTHY_SOURCES = 2
+
+#: Below this share of the configured venues answering, a run is broken rather
+#: than thin — however many of the survivors can still be compared with each
+#: other.  Half is deliberately generous: it passes a bad day and fails a
+#: pipeline that has lost most of its sources.  Eight of ten geo-blocked on a
+#: fresh database used to report zero errors and exit 0, because the floor above
+#: was clear and the regression check needs a history it did not have.
+MIN_PRODUCING_SHARE = 0.5
 
 #: Leagues collected when none are named.  The NBA is registered but left out:
 #: it is in its offseason, so every book returns futures containers only, and
@@ -384,6 +428,12 @@ def build_sources(
     no tennis is a fact about that book, not an error in the command.
     """
     selected = list(keys) if keys else list(SOURCE_FACTORIES)
+    # Slow sources last.  Every price in a run has to be comparable with the
+    # others, and a source paced to its own rate limit can take minutes — so
+    # where it sits in the order decides how many *other* sources it pushes out
+    # of that window.  Smarkets in the middle cost Kalshi and Polymarket 847
+    # comparable markets between them, purely by being ahead of them.
+    selected.sort(key=lambda key: key in registry.SLOW_SOURCES)
     unknown = [key for key in selected if key not in SOURCE_FACTORIES]
     if unknown:
         raise SystemExit(f"unknown source(s): {unknown}; known: {sorted(SOURCE_FACTORIES)}")
@@ -412,14 +462,11 @@ def build_sources(
     return built
 
 
-def _accepts_leagues(factory: type) -> bool:
-    try:
-        return "leagues" in signature(factory).parameters
-    except (TypeError, ValueError):  # pragma: no cover - builtins only
-        return False
+def _accepts_leagues(factory: Callable[..., OddsSource]) -> bool:
+    return registry.accepts_leagues(factory)
 
 
-def _build_with_leagues(key: str, factory: type, wanted: Sequence[str]):
+def _build_with_leagues(key: str, factory: Callable[..., OddsSource], wanted: Sequence[str]):
     """Configure one adapter for as many of *wanted* as it will accept."""
     try:
         return factory(leagues=wanted, timeout=settings.HTTP_TIMEOUT)
@@ -465,11 +512,19 @@ def collect_once(
     as_of: datetime | None = None,
     sports: Sequence[str] | None = None,
     leagues: Sequence[str] | None = None,
+    tier: Tier = Tier.FULL,
 ) -> RunResult:
     """Fetch, persist raw, parse, reconcile, validate, find arbitrage, persist.
 
     *as_of* is the moment arbitrage is judged against, defaulting to now.  It is
     injectable so a test can pin it rather than depending on the wall clock.
+
+    *tier* is the request budget.  ``core`` asks every source only for the
+    endpoints that return a whole league at once, which is a few requests per
+    source and is what makes a short polling interval defensible; ``full`` adds
+    the per-event follow-ups.  It is recorded on the run and reflected in what
+    each source *claims* to price, so a market missing because it was not asked
+    for is never reported as a market that disappeared.
 
     *sports* and *leagues* narrow what is *kept*, and they are applied **after**
     reconciliation rather than before it.  Order matters: books disagree about
@@ -479,17 +534,32 @@ def collect_once(
     the run, never silently discarded.
     """
     started_at = datetime.now(UTC)
-    run_id = store.start_run(started_at) if store else None
+    run_id = (
+        store.start_run(started_at, sports=sports, leagues=leagues) if store else None
+    )
+    # Identifies this pass on every response it captures.  A run id would do
+    # where there is a store, but a store-less collection has none, and the
+    # value only ever has to be *different* between passes.
+    capture_id = uuid4().hex[:16]
 
     all_quotes: list[Quote] = []
     health_reports: list[SourceHealth] = []
     coverage: list[LeagueCoverage] = []
     undeclared: list[str] = []
+    claimed: dict[tuple[str, str], frozenset[Market]] = {}
 
     for source in sources:
-        health, outcome = _collect_source(source, raw_store=raw_store, store=store, run_id=run_id)
+        health, outcome = _collect_source(
+            source,
+            raw_store=raw_store,
+            store=store,
+            run_id=run_id,
+            tier=tier,
+            capture_id=capture_id,
+        )
         health_reports.append(health)
         all_quotes.extend(outcome.quotes)
+        claimed.update(_declared_markets(source, tier))
 
         declared = configured_leagues(source)
         if not declared:
@@ -501,6 +571,7 @@ def collect_once(
             store.save_health(run_id, health)
             store.save_rejections(run_id, outcome.rejections)
             store.save_skipped(run_id, source.source_key, dict(outcome.skipped))
+            store.save_repaired(run_id, source.source_key, dict(outcome.repaired))
             store.save_league_coverage(
                 run_id,
                 source.source_key,
@@ -512,6 +583,28 @@ def collect_once(
     # own slate, which makes "#2" a per-source ordinal rather than an identity;
     # left uncorrected, one book's game 2 joins onto another book's game 1.
     all_quotes, rekeys = reconcile_event_keys(all_quotes)
+
+    # Measured on **everything collected**, before any scope filter, and passed
+    # explicitly from here on.
+    #
+    # ``find_opportunities`` measures the gate from the rows it is handed, so a
+    # narrowed call measures it from narrowed evidence — and narrowing can only
+    # ever weaken it.  Two Kambi tenants that are one counterparty across 30 ATP
+    # moneylines share 18 WTA selections, which is under
+    # ``MIN_SHARED_SELECTIONS``: ``arb --league WTA`` therefore measured
+    # UNDECIDED, opened the gate, and reported a position with both legs at one
+    # book and no diagnostic at all.  This is what ``counterparty_groups``' own
+    # docstring calls the most expensive defect this gate has had — round 16
+    # fixed where a mirror is *filed* and left where it is *measured*.
+    measured_counterparties = counterparty_groups(all_quotes)
+    # Kept for the distinctness *filing* below, for the same reason the gate is
+    # measured here: the evidence does not stop existing because this command
+    # was asked about one league.  ``_check_distinctness`` ran on the filtered
+    # rows, so ``collect --sport tennis`` over two sources mirrored on 24 MLB
+    # selections stayed green — the gate still blocked positions, but the
+    # finding that tells a person to remove one of the two from the registry
+    # was hidden on exactly the narrowed runs an operator uses day to day.
+    unfiltered_quotes = all_quotes
 
     excluded = 0
     if sports or leagues:
@@ -528,8 +621,20 @@ def collect_once(
             and (not leagues or entry.league in leagues)
         ]
 
-    report = validate(all_quotes)
-    _check_source_count(health_reports, report)
+    report = validate(
+        all_quotes,
+        capabilities=claimed,
+        order_book_sources=_order_book_sources(sources),
+    )
+    _check_source_health(
+        health_reports,
+        report,
+        configured=[source.source_key for source in sources],
+        expected=_sources_covering(coverage, sports, leagues),
+        store=store,
+        run_id=run_id,
+        narrowed=bool(sports or leagues),
+    )
 
     sports_seen = sport_coverage(all_quotes, coverage)
     _report_sport_coverage(sports_seen, report)
@@ -542,6 +647,8 @@ def collect_once(
             "that was never requested",
             source=source_key,
         )
+    _check_distinctness(unfiltered_quotes, report)
+
     for rekey in rekeys:
         report.add(
             Severity.WARNING,
@@ -552,13 +659,25 @@ def collect_once(
         )
 
     # Gated on the clock: a live run only cares about games not yet started.
-    arb_report = find_opportunities(all_quotes, as_of=as_of or datetime.now(UTC))
+    # The mirror gate is measured inside ``find_opportunities`` from these same
+    # rows, so the live verdict and a later re-analysis of the stored rows agree
+    # without either caller having to remember it.
+    arb_report = find_opportunities(
+        all_quotes,
+        as_of=as_of or datetime.now(UTC),
+        one_counterparty=measured_counterparties,
+    )
 
     if store is not None and run_id is not None:
         # One unusable run must not end an unattended watch loop, and it must
         # not be recorded as though nothing happened either.
+        #
+        # Persisted per source, so one adapter emitting a duplicate costs that
+        # adapter's rows rather than the whole run's.  With three books the
+        # difference was a bad day; with ten it is the difference between a
+        # reported fault and a lost slate.
         try:
-            store.save_quotes(run_id, all_quotes)
+            _, failures = store.save_quotes_by_source(run_id, all_quotes)
         except Exception as exc:  # noqa: BLE001
             log.exception("failed to persist quotes for run %s", run_id)
             report.add(
@@ -567,12 +686,24 @@ def collect_once(
                 f"{type(exc).__name__}: {exc} — the run's rows violate a storage "
                 "invariant, most likely two prices for one selection",
             )
+        else:
+            for source_key, reason in sorted(failures.items()):
+                report.add(
+                    Severity.ERROR,
+                    "quotes_not_persisted",
+                    f"{reason} — {source_key}'s rows violate a storage invariant, most "
+                    "likely two prices for one selection; every other source's rows "
+                    "were stored",
+                    source=source_key,
+                )
         store.save_findings(run_id, report.findings)
         store.finish_run(
             run_id,
             finished_at=datetime.now(UTC),
             report=report,
-            note=_run_note(sports_seen, sports, leagues, excluded),
+            note=_run_note(sports_seen, sports, leagues, excluded, tier),
+            excluded=excluded,
+            counterparties=measured_counterparties,
         )
 
     return RunResult(
@@ -587,14 +718,114 @@ def collect_once(
     )
 
 
+def _check_distinctness(quotes: Sequence[Quote], report: ValidationReport) -> list[Agreement]:
+    """Refuse a run in which two registered sources are one counterparty.
+
+    The gate exists because a mirror is invisible to every other check here: it
+    satisfies the source contract, emits valid rows, raises the cross-source
+    coverage counts, and clears ``require_distinct_sources`` in :mod:`src.arb` —
+    which compares source *keys*, and two keys is exactly what a mirror has.
+    What it does not have is two counterparties, so an "arbitrage" between the
+    two is a position nobody can hold, sitting at the top of the report and
+    indistinguishable from a real one.
+
+    It used to be measured and then not consulted: :mod:`src.distinctness` had no
+    caller outside the tests, so the registry could gain a mirror and nothing
+    would say so.  Measuring without acting is the same as not measuring.
+
+    Graded an **error**, because the consequence is a false position rather than
+    a reporting inaccuracy — and the remedy is a person removing one of the two
+    from the registry, which needs the run to stop being green.  "Not enough
+    shared selections to tell" is deliberately not an error: that is a thin
+    slate, not a mirror, and failing on it would make every out-of-season sport
+    unaddable.
+    """
+    mirrors = find_mirrors(quotes)
+    for pair in mirrors:
+        whole_book = pair.rate >= MIRROR_AGREEMENT_RATE
+        if whole_book:
+            report.add(
+                Severity.ERROR,
+                "sources_are_one_counterparty",
+                f"{pair.summary()}. Two licences of one book, not two books: a position "
+                "across them cannot be held, and nothing else in the pipeline can see "
+                "the difference. Remove one from src.sources.registry and record it in "
+                "docs/SOURCE_FEASIBILITY.md with the source it mirrors",
+                source=pair.source_b,
+            )
+            continue
+        # A partial mirror is a different problem with a different remedy.  These
+        # two disagree about most sports and are one feed in some, so removing
+        # either would throw away real coverage that the other does not have.
+        # What has to stop is comparing them *where* they are one feed, which is
+        # done rather than asked for: the leagues are handed to the detector as
+        # one counterparty and no position can span them there.
+        report.add(
+            Severity.WARNING,
+            "sources_are_one_counterparty_in_some_leagues",
+            f"{pair.summary()}. They are not one book everywhere — outside those "
+            "competitions they disagree often enough to be two — so both are kept "
+            "and they are treated as one counterparty in the leagues named, where "
+            "no position between them is reported",
+            source=pair.source_b,
+        )
+    return mirrors
+
+
+def _order_book_sources(sources: Sequence[OddsSource]) -> set[str]:
+    """Sources whose rows exist only where somebody offered liquidity.
+
+    Exchanges and prediction markets.  Two validation checks mean something
+    different there — a missing leg is an empty book rather than a parser fault —
+    and the registry is where that fact lives, so it is read off the registry
+    rather than guessed from the data.  A source the registry does not know (a
+    test's fake, say) is treated as a sportsbook, which is the stricter reading.
+    """
+    order_driven: set[str] = set()
+    for source in sources:
+        entry = registry.BY_KEY.get(source.source_key)
+        if entry is not None and entry.kind.has_stated_liquidity:
+            order_driven.add(source.source_key)
+    return order_driven
+
+
+def _declared_markets(
+    source: OddsSource, tier: Tier
+) -> dict[tuple[str, str], frozenset[Market]]:
+    """What one source says it prices, keyed ``(source, league)``.
+
+    An adapter that publishes nothing contributes nothing, and validation then
+    falls back to expecting the sport's full core market set of it — which is the
+    old behaviour and the safe direction to fail in.
+    """
+    declare = getattr(source, "capabilities", None)
+    if declare is None:
+        return {}
+    # Whether the tier is accepted is decided by *inspecting* the signature, not
+    # by calling and catching TypeError.  Catching it swallowed any TypeError
+    # raised inside the method's own body, called it a second time, and let the
+    # identical error escape on the retry — turning one adapter's bug into the
+    # end of the run rather than into that adapter's problem.
+    try:
+        takes_tier = "tier" in signature(declare).parameters
+    except (TypeError, ValueError):  # pragma: no cover - builtins only
+        takes_tier = False
+    claims = declare(tier=tier) if takes_tier else declare()
+    return {
+        (source.source_key, league): frozenset(markets)
+        for league, markets in dict(claims).items()
+    }
+
+
 def _run_note(
     coverage: Sequence[SportCoverage],
     sports: Sequence[str] | None,
     leagues: Sequence[str] | None,
     excluded: int,
+    tier: Tier = Tier.FULL,
 ) -> str:
     """One line stored with the run, so its scope is recoverable later."""
-    parts = []
+    parts = [f"tier={tier.value}"]
     usable = [c.sport for c in coverage if c.is_comparable]
     single = [c.sport for c in coverage if not c.is_comparable]
     parts.append(f"comparable sports (2+ books on one fixture): {', '.join(usable) or 'none'}")
@@ -615,20 +846,53 @@ def _collect_source(
     raw_store: RawStore,
     store: Store | None,
     run_id: int | None,
+    tier: Tier = Tier.FULL,
+    capture_id: str = "",
 ) -> tuple[SourceHealth, ParseOutcome]:
     checked_at = datetime.now(UTC)
     started = time.perf_counter()
     raws: list[RawResponse] = []
 
     try:
-        raws = source.fetch_raw()
+        raws = _fetch(source, tier)
         latency_ms = (time.perf_counter() - started) * 1000
     except SourceError as exc:
+        # Keep the bytes that explain the failure.  A block page whose markers
+        # changed, or a JSON error envelope nobody has seen before, is
+        # unreadable from a log line and obvious from the payload — and it is
+        # the one response most worth having when the same failure recurs.
+        refusal = getattr(exc, "raw", None)
+        if refusal is not None:
+            # Isolated like every other raw write.  This call sat outside the
+            # per-source isolation, and the two failures it joins are
+            # *correlated*: a venue blocking you is exactly when a refusal
+            # payload exists, and an unwritable raw directory makes every
+            # source take some write path — so a blocked source plus a bad
+            # directory aborted the whole pass with no health rows, an
+            # unfinished run wearing the Ctrl-C signature, and the healthy
+            # sources' fetches discarded.  Losing the *capture* of a refusal
+            # must never outrank recording the refusal itself.
+            try:
+                refusal, _ = _persist_raw(
+                    refusal,
+                    raw_store=raw_store,
+                    store=store,
+                    run_id=run_id,
+                    capture_id=capture_id,
+                )
+            except Exception:  # noqa: BLE001
+                log.exception(
+                    "failed to persist %s's refusal payload; the refusal itself "
+                    "is still recorded",
+                    source.source_key,
+                )
         return (
             SourceHealth(
                 source_key=source.source_key,
                 ok=False,
                 checked_at=checked_at,
+                request_count=1 if refusal is not None else 0,
+                raw_bytes=refusal.byte_size if refusal is not None else 0,
                 latency_ms=(time.perf_counter() - started) * 1000,
                 error_kind=getattr(exc, "kind", "source_error"),
                 error_message=str(exc),
@@ -649,16 +913,52 @@ def _collect_source(
             ParseOutcome(),
         )
 
+    # Scopes this source asked for and was refused, on a pass it survived.  The
+    # adapters log these and the tally counts them; nothing read them, so a book
+    # that lost a league to a 429 still summarised as OK.
+    tally = getattr(source, "last_fetch", None)
+    failed_scopes = tuple(getattr(tally, "failed_scopes", ()))
+    scopes_requested = int(getattr(tally, "scopes_requested", 0))
+
     # Raw bytes land on disk before anything interprets them.
+    #
+    # Wrapped per source like the fetch and the parse.  This was the one stage
+    # per-source isolation did not cover: an unwritable raw directory on the
+    # *first* source aborted the whole pass, discarding three healthy sources'
+    # fetches and leaving an unfinished run that ``runs`` labels "interrupted
+    # mid-pass" — the mark of an operator's Ctrl-C, not a crash.  A failed
+    # write is that source's failure, recorded as one; when the cause is the
+    # directory itself, every source fails the same way and the run finishes
+    # with ten explicit failures instead of vanishing half-done.
     unchanged_payloads = 0
-    for raw in raws:
-        path = raw_store.write(raw)
-        unchanged = False
-        if store is not None and run_id is not None:
-            previous = store.previous_sha(raw.source, raw.endpoint, before_run_id=run_id)
-            unchanged = previous is not None and previous == raw.sha256
-            store.record_raw(run_id, raw, path, unchanged=unchanged)
-        unchanged_payloads += int(unchanged)
+    try:
+        for index, raw in enumerate(raws):
+            # The stamped row replaces the unstamped one *in the list the parser
+            # is about to be handed*, so collection and replay read the same
+            # bytes with the same provenance.
+            raws[index], unchanged = _persist_raw(
+                raw,
+                raw_store=raw_store,
+                store=store,
+                run_id=run_id,
+                capture_id=capture_id,
+            )
+            unchanged_payloads += int(unchanged)
+    except Exception as exc:  # noqa: BLE001
+        log.exception("failed to persist %s's raw bytes", source.source_key)
+        return (
+            SourceHealth(
+                source_key=source.source_key,
+                ok=False,
+                checked_at=checked_at,
+                request_count=len(raws),
+                raw_bytes=sum(raw.byte_size for raw in raws),
+                latency_ms=latency_ms,
+                error_kind="raw_write_failed",
+                error_message=f"{type(exc).__name__}: {exc}",
+            ),
+            ParseOutcome(),
+        )
 
     try:
         outcome = source.parse(raws)
@@ -709,22 +1009,303 @@ def _collect_source(
             event_count=len(outcome.event_keys),
             rejection_count=len(outcome.rejections),
             skipped_count=sum(outcome.skipped.values()),
+            repaired_count=sum(outcome.repaired.values()),
             unchanged_payloads=unchanged_payloads,
             error_kind=error_kind,
             error_message=error_message,
+            scopes_requested=scopes_requested,
+            failed_scopes=failed_scopes,
         ),
         outcome,
     )
 
 
-def _check_source_count(health: Sequence[SourceHealth], report: ValidationReport) -> None:
+def _persist_raw(
+    raw: RawResponse,
+    *,
+    raw_store: RawStore,
+    store: Store | None,
+    run_id: int | None,
+    capture_id: str = "",
+) -> tuple[RawResponse, bool]:
+    """Write one captured response to disk.  Returns the stamped row and "unchanged".
+
+    Stamping :attr:`~src.raw_store.RawResponse.capture_id` happens here because
+    this is the only layer that knows where one collection pass ends: adapters
+    are built once and reused across every pass of a watch loop, so an id held on
+    the adapter or its HTTP client would be the same for all of them.
+
+    The stamped response is *returned* rather than only written, because
+    ``RawResponse`` is frozen and rebinding it here would leave the caller's list
+    — the one handed to ``parse`` — unstamped.  That split matters:
+    :func:`~src.sources._common.latest_capture` reads the stamp when there is one
+    and falls back to a timestamp window when there is not, so collection and
+    replay would take different branches over the same bytes.  For a pass longer
+    than that window they disagree, and for Smarkets they disagree by dropping
+    the ``events`` response, which makes the parser raise at collection and
+    succeed on replay.
+    """
+    if capture_id and not raw.capture_id:
+        raw = replace(raw, capture_id=capture_id)
+    path = raw_store.write(raw)
+    if store is None or run_id is None:
+        return raw, False
+    previous = store.previous_sha(raw.source, raw.endpoint, before_run_id=run_id)
+    unchanged = previous is not None and previous == raw.sha256
+    store.record_raw(run_id, raw, path, unchanged=unchanged)
+    return raw, unchanged
+
+
+def _fetch(source: OddsSource, tier: Tier) -> list[RawResponse]:
+    """Ask a source for its responses, tolerating one that predates tiering.
+
+    A source injected by a test — or written before the tier argument existed —
+    takes no keyword, and refusing to call it would turn a compatible adapter
+    into a failed one.  Decided by *inspecting* the signature rather than by
+    calling and catching ``TypeError``: catching it would swallow a real
+    ``TypeError`` from inside the adapter's own fetch and silently retry the
+    whole network pass.
+    """
+    try:
+        takes_tier = "tier" in signature(source.fetch_raw).parameters
+    except (TypeError, ValueError):  # pragma: no cover - builtins only
+        takes_tier = False
+    # Copied into a list this function owns: the caller stamps each response in
+    # place, and an adapter that handed back a tuple — or its own cached list —
+    # must not have that done to it.
+    return list(source.fetch_raw(tier=tier) if takes_tier else source.fetch_raw())
+
+
+def _sources_covering(
+    coverage: Sequence[LeagueCoverage],
+    sports: Sequence[str] | None,
+    leagues: Sequence[str] | None,
+) -> set[str]:
+    """Sources that *declared* they cover the requested scope.
+
+    The denominator for "how much of the pipeline answered".  Without it a
+    narrowed run had no collapse check at all: the exemption below was blanket,
+    on the reasoning that several adapters accept a league they have no path
+    for — true, and it also meant ``collect --sport baseball`` could lose eight
+    of its ten books and exit 0, on a slate where all ten do serve baseball.
+
+    Declared, not produced, so a source going silent still counts against it.
+    """
+    if not sports and not leagues:
+        return {entry.source_key for entry in coverage}
+    return {
+        entry.source_key
+        for entry in coverage
+        if (not sports or entry.sport in sports) and (not leagues or entry.league in leagues)
+    }
+
+
+def _check_source_health(
+    health: Sequence[SourceHealth],
+    report: ValidationReport,
+    *,
+    configured: Sequence[str],
+    expected: set[str] | None = None,
+    store: Store | None = None,
+    run_id: int | None = None,
+    narrowed: bool = False,
+) -> None:
+    """Judge the run against what was asked for, not against a fixed floor.
+
+    ``MIN_HEALTHY_SOURCES`` is a *comparability* bar: below two counterparties
+    nothing can be compared at all, so that stays an error.  But it is a floor,
+    not a verdict.  "Two of thirty sources answered" clears it while being a
+    catastrophic run, and the shape of that failure — most books blocked, two
+    still working — is exactly what a growing source list makes likely.
+
+    So two further things are checked, each answering a question the floor
+    cannot:
+
+    * **Against the configuration.**  Sources that were asked and produced
+      nothing are named, because a silent shortfall is indistinguishable from a
+      thin slate.
+    * **Against this source's own past.**  A book that produced rows in a recent
+      run and produces none now has *regressed*, which is a different fact from
+      one that has never worked, and it is the one an unattended watch loop has
+      to shout about.  Graded an error for that reason: the row count alone would
+      stay plausible while a feed quietly died.
+    """
     producing = [h.source_key for h in health if h.quote_count > 0]
+    silent = [h.source_key for h in health if h.quote_count == 0]
+
     if len(producing) < MIN_HEALTHY_SOURCES:
         report.add(
             Severity.ERROR,
             "insufficient_sources",
             f"only {len(producing)} source(s) produced data ({producing or 'none'}); "
-            f"at least {MIN_HEALTHY_SOURCES} are required",
+            f"at least {MIN_HEALTHY_SOURCES} are required for anything to be compared",
+        )
+
+    # A slate with no sportsbook in it is a different kind of slate, and it was
+    # indistinguishable from a healthy one.  The floor above counts *venues*, so
+    # two exchanges clear it: every sportsbook could be geo-blocked or have
+    # changed format and an unattended watch loop still reported ``ok`` and
+    # exited 0, with exchanges rendered as "book(s)" in the coverage summary.
+    #
+    # A warning, not an error: two exchanges genuinely can be compared with each
+    # other, and refusing that would throw away a usable slate.  What was wrong
+    # was the silence — and the claim, in this module's own header and in the
+    # README, that ``ok`` means "at least two *sportsbooks* produced data".  It
+    # never meant that; now the run says which it is.
+    books = [
+        h.source_key
+        for h in health
+        if h.quote_count > 0
+        and (entry := registry.BY_KEY.get(h.source_key)) is not None
+        and not entry.kind.has_stated_liquidity
+    ]
+    if producing and not books:
+        report.add(
+            Severity.WARNING,
+            "no_sportsbook_produced",
+            f"every venue that produced data is an exchange or prediction market "
+            f"({', '.join(sorted(producing))}) — no sportsbook did. Prices can "
+            "still be compared, but a book's posted price and an order book's "
+            "resting offer are different things: the sizes, the commission and "
+            "what happens to a cancelled game all differ",
+        )
+
+    if silent and len(configured) > len(producing):
+        # Graded on the *share* that answered, not on the absolute count.  Two of
+        # thirty sources answering clears ``MIN_HEALTHY_SOURCES`` and used to
+        # pass: on a fresh database with eight of ten geo-blocked — every
+        # sportsbook among them — the run reported zero errors and exited 0,
+        # because ``source_stopped_producing`` needs a history it does not have
+        # and two is still "enough to compare".  This function's own docstring
+        # calls that "a catastrophic run"; it is now graded as one.
+        # Graded against the sources that *declared* they cover this scope, not
+        # against everything configured.  A run restricted by --sport/--league
+        # leaves sources silent for a good reason — several adapters accept a
+        # league they have no path for — but exempting such a run wholesale left
+        # it with no collapse check at all, and ``collect --sport baseball`` can
+        # lose eight of the ten books that do serve baseball.
+        # The sources that declared they cover this scope, and nothing else.
+        #
+        # An earlier version added back every source missing from ``coverage``,
+        # to stop one that declares no leagues vanishing from the denominator.
+        # That was a no-op where it was meant to help — an unnarrowed run already
+        # counts everything configured, and ``league_coverage`` emits an entry
+        # per configured league even at zero quotes — and actively wrong where it
+        # fired: ``coverage`` is scope-filtered, so on ``--league TENNIS_OTHER``
+        # it re-added the seven sources that never claimed tennis and failed a
+        # run whose three relevant sources had all answered.
+        relevant = set(expected) & set(configured) if expected else set(configured)
+        answered = [key for key in producing if key in relevant] if relevant else producing
+        denominator = len(relevant) or len(configured)
+        share = len(answered) / denominator
+        collapsed = share < MIN_PRODUCING_SHARE
+        report.add(
+            Severity.ERROR if collapsed else Severity.WARNING,
+            "configured_sources_produced_nothing",
+            f"{len(producing)} of {len(configured)} configured source(s) produced rows; "
+            f"silent: {', '.join(sorted(silent))} — a shortfall against what was asked "
+            "for, which a row count alone cannot show"
+            + (
+                f"; that is {share * 100:.0f}% of the venues answering, which is a "
+                "broken pipeline rather than a thin slate, whether or not any two of "
+                "them can still be compared"
+                if collapsed
+                else ""
+            ),
+        )
+
+    # A scope this source asked for and was refused, on a run it survived.
+    #
+    # ``ScopeTally`` counted these and only ``require_something`` ever read the
+    # count — and only when *every* scope came back empty, so one surviving
+    # league discarded every refusal.  A book answering 429 on one league lost
+    # 14% of its rows and summarised as ``OK (701 quotes, 12 requests)``, with no
+    # finding, no error, and exit 0.  Graded a warning rather than an error: the
+    # book is still usable and the rest of its slate is real, but the shortfall
+    # has to be visible to somebody deciding whether to act on the run.
+    for entry in health:
+        if not entry.failed_scopes:
+            continue
+        # Graded on the share lost, as ``configured_sources_produced_nothing``
+        # is: one league of nine is a bad afternoon and eight of nine is a
+        # broken feed, and a flat warning called them the same thing — a book
+        # that lost 89% of its scopes read as PASS, exit 0, one line among a
+        # hundred warnings.
+        # Graded on the share of scopes lost *and* on the source going quiet.
+        #
+        # Scope count alone is the wrong weight: Pinnacle's soccer is 91% of its
+        # rows and one of its six scopes, so losing it entirely graded a warning
+        # while losing four idle ones graded an error.  There is no honest way to
+        # weight a scope that returned nothing — its size is exactly what was not
+        # collected — so the second clause asks the question that can be
+        # answered: did what survived amount to a slate?
+        asked = entry.scopes_requested or len(entry.failed_scopes)
+        share_lost = len(entry.failed_scopes) / max(asked, 1)
+        collapsed = share_lost > (1 - MIN_PRODUCING_SHARE) or not entry.event_count
+        report.add(
+            Severity.ERROR if collapsed else Severity.WARNING,
+            "scopes_refused",
+            f"{entry.source_key} was refused {len(entry.failed_scopes)} of the scopes it "
+            f"asked for and returned the rest: {'; '.join(entry.failed_scopes[:3])}"
+            + (" …" if len(entry.failed_scopes) > 3 else "")
+            + (
+                " — most of what this source was asked for, which is a broken feed "
+                "rather than a quiet league"
+                if collapsed
+                else ""
+            ),
+            source=entry.source_key,
+        )
+
+    # A source that rejected rows is unhealthy, and only ``SourceHealth`` knew.
+    # ``RunResult.ok`` reads the validation report alone, so a book that refused
+    # 5,000 in-scope markets produced a report byte-identical to a clean run.
+    for entry in health:
+        if entry.ok or not entry.error_kind:
+            continue
+        report.add(
+            Severity.WARNING if entry.quote_count else Severity.ERROR,
+            f"source_unhealthy:{entry.error_kind}",
+            f"{entry.source_key} reported {entry.error_kind}: {entry.error_message}"
+            + (
+                f" — it still stored {entry.quote_count:,} rows, so the run is usable "
+                "without it being right"
+                if entry.quote_count
+                else " and stored nothing"
+            ),
+            source=entry.source_key,
+        )
+
+    if store is None or run_id is None or not silent:
+        return
+    if narrowed:
+        # A run restricted to one sport or league is *expected* to produce
+        # nothing from the sources that cannot serve it, and several adapters
+        # accept a league they have no path for.  Comparing that against a run
+        # that asked for everything manufactures the alarm rather than raising
+        # it, so the check simply does not apply here — and says so, rather than
+        # firing and being learned to ignore.
+        report.add(
+            Severity.WARNING,
+            "regression_check_skipped_for_a_narrowed_run",
+            "this run was restricted by --sport/--league, so a source producing "
+            "nothing is not compared against its history: the comparison would be "
+            "against runs that asked for more",
+        )
+        return
+    try:
+        previously = store.sources_that_have_produced(run_id)
+    except Exception:  # noqa: BLE001 - history is a nicety; the run is not
+        log.exception("could not read source history")
+        return
+    regressed = sorted(set(silent) & previously)
+    for source_key in regressed:
+        report.add(
+            Severity.ERROR,
+            "source_stopped_producing",
+            f"{source_key} has produced rows before and produced none now — a feed "
+            "that worked and has stopped, which is a defect rather than a thin slate",
+            source=source_key,
         )
 
 
@@ -802,13 +1383,60 @@ def replay_run(
     ones stored.
     """
     problems: list[str] = []
+    # The run's **own recorded scope** is applied to the replayed side whatever
+    # the command asks for.  A scope-collected run stores fewer rows than its
+    # raws parse *by design* — the filter's drops are counted, not lost — and
+    # replaying it unscoped reported those drops as corruption: ``row count
+    # differs: stored 2476, replayed 5429 / replay invented row`` on a run whose
+    # own note says "2953 rows excluded by filter", with the dashboard masthead
+    # reading "replay FAIL".  The README's quick start (``collect --sport
+    # hockey`` then ``replay``) walked straight into it.
+    run_sports, run_leagues, _ = store.run_scope(run_id)
     stored = store.load_quotes(run_id, sports=sports, leagues=leagues)
+    # A run stamped by ``migrate`` was collected under an older schema, and the
+    # parser has legitimately changed since — a difference on such a run can be
+    # evolution rather than corruption, and the verdict has to say which kind of
+    # claim it is making.  The stamp is the only thing that can tell them apart:
+    # the sha check still catches changed bytes either way.  Applied to **every**
+    # failing return, including "no stored raw responses" — v3 predates raw
+    # capture for some runs, which is itself evolution rather than loss.
+    run_row = store.run_row(run_id)
+    migrated_from = run_row["migrated_from"] if run_row is not None else None
+
+    def _judged(problems: list[str]) -> tuple[bool, list[str]]:
+        if problems and migrated_from is not None:
+            problems.insert(
+                0,
+                f"run {run_id} was collected under schema v{migrated_from} and "
+                "migrated: the parser has changed since, so the differences below "
+                "can be parser evolution rather than corruption — the stored rows "
+                "are still what was collected, and a sha mismatch (none unless "
+                "named below) is the only sign of changed bytes",
+            )
+        return not problems, problems
     by_source_paths: dict[str, list[Path]] = {}
     for source_key, path in store.raw_paths(run_id):
         by_source_paths.setdefault(source_key, []).append(path)
 
     if not by_source_paths:
-        return False, [f"run {run_id} has no stored raw responses"]
+        return _judged([f"run {run_id} has no stored raw responses"])
+
+    # Which sources actually contributed rows.  A source whose *fetch* failed
+    # still has bytes on disk — the refusal that explains the failure is
+    # captured deliberately — and those bytes are not a slate: handing Pinnacle's
+    # 503 maintenance page to its parser raises, correctly, because half a
+    # matchups/markets pair cannot be joined.  Replaying it as though it were
+    # data failed the whole replay every time a venue had a bad hour.
+    #
+    # So a parse that raises is a *problem* for a source that stored rows, and a
+    # *note* for one that stored none: there, the raise is the parser saying the
+    # bytes were never a slate, which is exactly what the health record already
+    # says.  The invented-row case is still caught — a source that stored nothing
+    # and now parses to something is a divergence, and it reaches the comparison
+    # below rather than being skipped.
+    produced = {
+        row["source_key"] for row in store.health_for_run(run_id) if row["quote_count"]
+    }
 
     replayed: list[Quote] = []
     for source_key, paths in by_source_paths.items():
@@ -824,12 +1452,25 @@ def replay_run(
             # fixture to land on the same key the collector stored.
             replayed.extend(source.parse(raws).quotes)
         except Exception as exc:  # noqa: BLE001
-            problems.append(f"{source_key}: replay raised {type(exc).__name__}: {exc}")
+            message = f"{source_key}: replay raised {type(exc).__name__}: {exc}"
+            if source_key in produced:
+                problems.append(message)
+            else:
+                log.info("%s (it stored no rows on this run, so nothing is lost)", message)
         finally:
             source.close()
 
     replayed, _ = reconcile_event_keys(replayed)
-    replayed = [quote for quote in replayed if in_scope(quote, sports, leagues)]
+    # Both scopes apply, as successive filters: what the run kept, then what the
+    # command asked about.  A union would let a baseball row through when the
+    # command asked for hockey on a baseball-scoped run — an invented row again,
+    # from the fix for the last one.
+    replayed = [
+        quote
+        for quote in replayed
+        if in_scope(quote, run_sports or None, run_leagues or None)
+        and in_scope(quote, sports, leagues)
+    ]
 
     stored_map = {q.dedup_key: q for q in stored}
     replay_map = {q.dedup_key: q for q in replayed}
@@ -846,16 +1487,45 @@ def replay_run(
 
     for key in sorted(set(stored_map) & set(replay_map)):
         before, after = stored_map[key], replay_map[key]
-        if abs(before.decimal_odds - after.decimal_odds) > 1e-9:
-            problems.append(
-                f"odds changed on replay for {key}: {before.decimal_odds} -> {after.decimal_odds}"
-            )
-        if before.observed_at != after.observed_at:
-            problems.append(f"observed_at changed on replay for {key}")
+        for field, was, now in _row_differences(before, after):
+            problems.append(f"{field} changed on replay for {key}: {was!r} -> {now!r}")
         if len(problems) > 20:
             break
 
-    return not problems, problems
+    return _judged(problems)
+
+
+#: Prices are floats and have been through SQLite, so they are compared to a
+#: tolerance rather than for identity.  Everything else must come back exactly.
+REPLAY_FLOAT_TOLERANCE = 1e-9
+
+
+def _row_differences(before: Quote, after: Quote) -> Iterator[tuple[str, Any, Any]]:
+    """Every field on which a stored row and its re-parse disagree.
+
+    **Every** field, not the two that used to be checked.  ``dedup_key`` covers
+    identity — source, fixture, market, period, side, line, selection — so a
+    comparison keyed on it and then checking only ``decimal_odds`` and
+    ``observed_at`` was blind to everything else the parser produces.  Measured
+    against the committed fixtures, a parser that rewrote one field per run
+    still reported **PASS** while flipping ``status`` from ACTIVE to SUSPENDED
+    on 3,293 rows — which is exactly what :func:`src.arb.find_opportunities`
+    reads to decide whether a price is takeable — and while rewriting
+    ``limit_amount`` on 2,346, which sets the bankroll a position claims it can
+    be placed at.  Also silently reproducible: ``american_odds``,
+    ``implied_probability``, ``home_team`` and ``raw_ref``, the last of which is
+    the pointer back to the bytes a row came from.
+
+    This is the pipeline's one guarantee that parsing is a pure function of the
+    captured bytes.  It has to compare the whole row or it does not say that.
+    """
+    for name in type(before).model_fields:
+        was, now = getattr(before, name), getattr(after, name)
+        if isinstance(was, float) and isinstance(now, float):
+            if abs(was - now) > REPLAY_FLOAT_TOLERANCE:
+                yield name, was, now
+        elif was != now:
+            yield name, was, now
 
 
 # ── CLI ──────────────────────────────────────────────────────────────────────
@@ -888,20 +1558,45 @@ def _cmd_collect(args: argparse.Namespace) -> int:
     raw_store = RawStore(settings.RAW_DIR)
     sources = build_sources(args.source, leagues=resolve_leagues(sports, leagues))
     store = None if args.no_store else _open_store()
+    tier = Tier(args.tier)
     exit_code = 0
     try:
         iteration = 0
         while True:
             iteration += 1
-            result = collect_once(
-                sources,
-                raw_store=raw_store,
-                store=store,
-                sports=sports,
-                leagues=leagues,
-            )
+            try:
+                result = collect_once(
+                    sources,
+                    raw_store=raw_store,
+                    store=store,
+                    sports=sports,
+                    leagues=leagues,
+                    tier=tier,
+                )
+            except Exception as exc:  # noqa: BLE001
+                # Unattended operation is a requirement, and only the quote
+                # insert used to be protected: a locked database, a disk error
+                # writing a raw capture, or a bug in one adapter's own
+                # bookkeeping ended the loop entirely.  One failed pass is a
+                # failed pass; the next one is five minutes away.
+                log.exception("collection pass %d failed", iteration)
+                exit_code = 1
+                if not args.watch:
+                    raise
+                if args.max_runs and iteration >= args.max_runs:
+                    break
+                log.info("sleeping %ss before the next run", args.interval)
+                time.sleep(args.interval)
+                continue
             result.print_summary()
-            exit_code = 0 if result.ok else 1
+            # **Sticky.**  ``exit_code = 0 if result.ok else 1`` let one good
+            # pass overwrite an earlier failure, so a bounded batch — ``--watch
+            # --max-runs 3`` in cron — exited 0 when pass 2 of 3 died with a
+            # traceback and only the *final* pass's verdict survived.  An
+            # endless watch never reaches the exit, so the only reader of this
+            # value is exactly the bounded batch that was being lied to.
+            if not result.ok:
+                exit_code = 1
             if not args.watch:
                 break
             if args.max_runs and iteration >= args.max_runs:
@@ -934,13 +1629,273 @@ def _cmd_migrate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _non_negative(name: str, *, whole: bool = True):
+    """An argparse type for a value where zero is meaningful but below zero is not.
+
+    ``--max-runs 0`` means unlimited, so it cannot use :func:`_positive` — and
+    as a bare ``int`` a *negative* also read as unlimited and then delivered one
+    pass in silence.
+
+    ``--min-margin 0`` means "report every edge", so it needs the same treatment
+    with ``whole=False``.  As a bare ``float`` a negative bar admitted markets
+    with no edge at all and then filed them under ``rounding_destroys_edge`` —
+    "margin -3.54% is too thin for a 1-unit stake increment", of 110 markets on
+    the captured slate, when rounding had destroyed nothing and there was
+    nothing there to round.  No position is reported either way, so this is a
+    diagnostic that accuses the wrong thing rather than money at risk.
+    """
+
+    def parse(text: str):
+        try:
+            value = int(text) if whole else float(text)
+        except ValueError:
+            raise argparse.ArgumentTypeError(
+                f"{text!r} is not a {'whole number' if whole else 'number'}"
+            ) from None
+        # Finite first: every comparison below is **False** for NaN, and
+        # ``1e400`` parses to ``inf`` without raising.
+        if not whole and not math.isfinite(value):
+            raise argparse.ArgumentTypeError(f"must be a finite number, got {text}")
+        if value < 0:
+            raise argparse.ArgumentTypeError(f"cannot be negative, got {text}")
+        return value
+
+    return parse
+
+
+def _a_rate(name: str):
+    """An argparse type for a proportion, which is a number between 0 and 1.
+
+    ``--min-rate`` was a bare ``float``.  ``nan`` made the threshold unreachable,
+    so the command exited **0** on the database it exits 1 on by default — a
+    silent all-clear from the check an unattended watch reads.  ``1e400`` printed
+    "below the inf% success threshold", and ``80`` — which the output invites,
+    since every rate on it is a percentage — printed "below the 8000% success
+    threshold" and failed every source.
+    """
+
+    def parse(text: str):
+        try:
+            value = float(text)
+        except ValueError:
+            raise argparse.ArgumentTypeError(f"{text!r} is not a number") from None
+        if not math.isfinite(value):
+            raise argparse.ArgumentTypeError(f"must be a finite number, got {text}")
+        if not 0.0 <= value <= 1.0:
+            raise argparse.ArgumentTypeError(
+                f"is a proportion between 0 and 1, not a percentage, got {text}"
+            )
+        return value
+
+    return parse
+
+
+def _positive(name: str):
+    """An argparse type that refuses zero and negatives up front.
+
+    ``--stake 0`` used to reach :func:`src.arb.find_opportunities` and raise
+    ``ValueError`` from inside the first position it tried to build — so the same
+    invalid argument aborted with a traceback on a slate that had an opportunity
+    and was accepted in silence on one that did not.  ``--limit 0`` was worse: it
+    printed exactly one row, because the counter was incremented before the
+    limit was tested.
+    """
+
+    def parse(text: str):
+        try:
+            value = float(text) if name != "count" else int(text)
+        except ValueError:
+            raise argparse.ArgumentTypeError(f"{text!r} is not a number") from None
+        # Finite first, because every comparison below is **False** for NaN.
+        #
+        # ``--stake nan`` and ``--stake inf`` walked past ``value <= 0`` and
+        # past the one-unit floor, reached ``stake_candidates``' ``int()`` and
+        # aborted with a raw ValueError/OverflowError on a slate that had a
+        # position — and were accepted in silence on one that did not.  That is
+        # verbatim the failure this type exists to remove.  ``1e400`` parses to
+        # ``inf`` without raising, so the text is not a sufficient check either.
+        if not math.isfinite(value):
+            raise argparse.ArgumentTypeError(f"must be a finite number, got {text}")
+        if value <= 0:
+            raise argparse.ArgumentTypeError(f"must be greater than zero, got {text}")
+        if name == "stake" and value < STAKE_INCREMENT:
+            # A bankroll under one betting unit rounds every leg to zero.
+            # ``find_opportunities`` refuses it, and reaching that refusal from
+            # the command line means a traceback — the exact failure this type
+            # was written to remove, reintroduced one argument over.
+            raise argparse.ArgumentTypeError(
+                f"must be at least one {STAKE_INCREMENT:g}-unit stake, got {text}"
+            )
+        return value
+
+    return parse
+
+
+def _resolve_run(
+    store: Store,
+    requested: int | None,
+    *,
+    what: str,
+    needs_fresh_prices: bool = True,
+    sports: Sequence[str] | None = None,
+    leagues: Sequence[str] | None = None,
+) -> tuple[int | None, str]:
+    """The run a read command should work on, or ``None`` with the reason why.
+
+    Three failures used to be indistinguishable from a quiet slate, all of them
+    printing nothing unusual and exiting 0:
+
+    * ``--run`` naming a run that does not exist — the command reported "0
+      opportunities from 0 cross-book markets", which is what a real run with no
+      edge says.
+    * ``--run`` naming a run that stored no rows.
+    * No ``--run`` at all, against a database whose newest finished run is
+      **weeks old**.  This is the one that matters: :meth:`Store.latest_run_id`
+      returns the newest finished run however old it is, and every freshness
+      check in the detector is *relative* — two legs captured six weeks ago are
+      seconds apart and clear it. The started-game gate does not help either,
+      since a fixture weeks out is still in the future.  So the morning after
+      collection silently stops, ``arb`` prints a full page of "guaranteed"
+      positions priced before the outage, with nothing anywhere naming their age.
+
+    The age is stated on every run, not only a stale one, so the number is
+    normally visible rather than appearing only in the failure.
+
+    *needs_fresh_prices* is false for the commands that do not read a price for
+    its takeability.  ``replay`` re-parses stored bytes and ``mirrors`` measures a
+    structural property of two feeds; refusing them because the prices are old
+    answers a question neither asked, and ``src.report`` calls ``replay_run``
+    directly, so the same operation would have succeeded there and failed here.
+    """
+    # Resolution is scope-aware: "the newest run" for ``arb --sport baseball``
+    # is the newest run *holding a baseball row*, not the newest run outright.
+    # Scope-blind resolution picked a ``--sport tennis`` run — which kept no
+    # baseball by the operator's own flag — printed the quiet-slate sentence
+    # this docstring exists to prevent, and exited 0, while the previous run's
+    # real baseball edge sat one ``--run`` away and ``health`` on the same
+    # database described that earlier run.
+    run_id = (
+        requested
+        if requested is not None
+        else store.latest_run_id(sports=sports, leagues=leagues)
+    )
+    if run_id is None:
+        newest = store.latest_run_id()
+        if newest is not None:
+            run_sports, run_leagues, _ = store.run_scope(newest)
+            described = " ".join(
+                part
+                for part in (
+                    f"--sport {','.join(run_sports)}" if run_sports else "",
+                    f"--league {','.join(run_leagues)}" if run_leagues else "",
+                )
+                if part
+            )
+            return None, (
+                f"no stored run holds prices{_scope_label(sports, leagues)} — the "
+                f"newest run {newest} "
+                + (
+                    f"was collected under {described}, which excludes what was asked "
+                    "for; collect again without that scope, or pass --run to read an "
+                    "earlier run"
+                    if described
+                    else "holds none; collect again"
+                )
+            )
+        return None, f"no stored runs {what}"
+    row = store.run_row(run_id)
+    if row is None:
+        return None, (
+            f"run {run_id} does not exist — the stored runs are "
+            f"{_known_runs(store)}"
+        )
+    if row["finished_at"] is None:
+        return None, (
+            f"run {run_id} never finished, so what it holds is a fraction of a "
+            "collection rather than a slate"
+        )
+    if not row["quote_count"]:
+        # The case this function's own docstring lists and never checked.
+        #
+        # ``run_row`` selects ``quote_count`` for exactly this, and nothing read
+        # it.  ``collect_once`` calls ``finish_run`` unconditionally, so a pass
+        # in which every source failed leaves a *finished* run holding nothing —
+        # and ``show``/``arb``/``lines`` then answered "0 rows", "0
+        # opportunities from 0 cross-book markets" and "0 market(s) shown", each
+        # exiting 0.  Those are the sentences a quiet slate produces, which is
+        # the confusion the docstring says this exists to prevent.
+        return None, (
+            f"run {run_id} finished but stored no prices, so there is nothing {what} "
+            "— every source failed on that pass. Its health rows say which; collect "
+            "again, or pass --run to read an earlier one"
+        )
+    started = datetime.fromisoformat(row["started_at"])
+    if started.tzinfo is None:
+        # Everything this build writes is timezone-aware, but an older or
+        # hand-edited database need not be, and a freshness check is the last
+        # place that should abort a command with a TypeError.
+        started = started.replace(tzinfo=UTC)
+    age = datetime.now(UTC) - started
+    if needs_fresh_prices and requested is None and age < -_CLOCK_SKEW:
+        # A run from the future is a clock problem, not a fresh run, and letting
+        # it through is the failing-open direction: a naive stamp written east of
+        # UTC and read as UTC looks *newer* than it is, so a stale run would sail
+        # past the age gate on a negative number.
+        return None, (
+            f"run {run_id} is stamped {describe_age(-age)} in the future — its clock "
+            "and this machine's disagree, so its age cannot be judged. Pass --run to "
+            "read it anyway, or fix the clock"
+        )
+    if needs_fresh_prices and age > MAX_PRICE_AGE and requested is None:
+        return None, (
+            f"the newest finished run is {run_id}, collected {describe_age(age)} ago "
+            f"— older than the {describe_age(MAX_PRICE_AGE)} a price stays takeable. "
+            "Collect again, or pass --run to read it anyway as history"
+        )
+    note = f"run {run_id}, collected {describe_age(age)} ago"
+    if row["finished_at"] is not None and not row["ok"]:
+        # Resolution never read the verdict, so ``arb`` printed "guaranteed"
+        # positions from a run validation had recorded FAILED — whose stored
+        # findings can include "every price from this source is suspect" — with
+        # nothing on the surface and exit 0.  The failed verdict cost nothing.
+        # Not a refusal (history is the operator's to read); a caveat the
+        # sentence carries everywhere the run's number goes.
+        errors = int(row["error_count"] or 0)
+        note += (
+            f" — recorded FAILED with {errors} validation error"
+            f"{'' if errors == 1 else 's'}; its prices may be mis-parsed, see "
+            f"`runs` or the dashboard's Checks"
+        )
+    if requested is None and (sports or leagues):
+        newest = store.latest_run_id()
+        if newest is not None and newest != run_id:
+            # The scope is *not* named here: every caller of this function
+            # appends ``_scope_label`` to the note it prints, so naming it twice
+            # produced "holds no prices [sport=tennis] and was skipped
+            # [sport=tennis]".
+            note += f" — the newer run {newest} holds none of it and was skipped"
+    return run_id, note
+
+
+#: How far ahead of this machine a run's clock may be before its age is unusable.
+_CLOCK_SKEW = timedelta(minutes=5)
+
+
+def _known_runs(store: Store) -> str:
+    rows = store.query("SELECT id FROM collection_run ORDER BY id DESC LIMIT 6")
+    if not rows:
+        return "none"
+    listed = ", ".join(str(row["id"]) for row in rows)
+    return listed
+
+
 def _cmd_replay(args: argparse.Namespace) -> int:
     sports, leagues = _filter_args(args)
     raw_store = RawStore(settings.RAW_DIR)
     with _open_store() as store:
-        run_id = args.run or store.latest_run_id()
+        run_id, note = _resolve_run(store, args.run, what="to replay", needs_fresh_prices=False)
         if run_id is None:
-            print("no stored runs to replay")
+            print(note)
             return 1
         ok, problems = replay_run(
             run_id, store=store, raw_store=raw_store, sports=sports, leagues=leagues
@@ -963,17 +1918,49 @@ def _cmd_runs(args: argparse.Namespace) -> int:
             return 1
         print(f"{'run':>4}  {'started':<26} {'ok':<3} {'quotes':>7} {'events':>7} {'err':>4} {'warn':>5}")
         for row in rows:
+            # An unfinished run is not a failed one, and printing ``ok=False``
+            # for it says the collection ran and the checks found problems —
+            # when what happened is that it never got to the checks.  That is
+            # what an interrupted pass leaves behind, and it is also the run the
+            # read commands deliberately skip, so the two views contradicted
+            # each other on the same database seconds apart.
+            state = "?" if row["finished_at"] is None else str(bool(row["ok"]))
             print(
-                f"{row['id']:>4}  {row['started_at']:<26} {str(bool(row['ok'])):<5}"
+                f"{row['id']:>4}  {row['started_at']:<26} {state:<5}"
                 f"{row['quote_count']:>7} {row['event_count']:>7}"
                 f"{row['error_count']:>4} {row['warning_count']:>5}"
             )
+            if row["finished_at"] is None:
+                print("        never finished — interrupted mid-pass; "
+                      "arb, lines, report and mirrors skip it")
+            stored_by_source = store.stored_quote_counts(row["id"])
+            lost = store.sources_that_failed_to_persist(row["id"])
             for health in store.health_for_run(row["id"]):
                 status = "ok" if health["ok"] else f"FAILED[{health['error_kind']}]"
                 print(
                     f"        {health['source_key']:<16} {status:<24}"
                     f"{health['quote_count']:>6} quotes {health['event_count']:>4} events"
                 )
+                # The fetch can succeed and the *insert* still fail, which is the
+                # case ``save_quotes_by_source`` isolates per source.  Printing
+                # only what the adapter produced read as ``ok  2346 quotes`` for a
+                # source with nothing in the table.
+                #
+                # Gated on the run's own ``quotes_not_persisted`` finding, not on
+                # the two counts differing.  ``source_health`` counts what the
+                # adapter produced, *before* the ``--sport``/``--league`` filter
+                # drops what was out of scope — so ``collect --league EPL`` had
+                # this accusing the database of losing 351 FanDuel rows, naming an
+                # error the run does not contain, two lines above the run's own
+                # note saying those rows were excluded by filter.
+                produced = health["quote_count"]
+                stored = stored_by_source.get(health["source_key"], 0)
+                if lost is None or health["source_key"] in lost:
+                    print(
+                        f"        {'':<16} {stored} of those {produced} rows are in the "
+                        "database — the rest were not stored; see the "
+                        "quotes_not_persisted error"
+                    )
             # Per-sport, because "the run stored 12,000 rows" says nothing about
             # whether any one sport is comparable across books.
             cross = store.cross_book_event_counts(row["id"], min_books=MIN_HEALTHY_SOURCES)
@@ -1011,9 +1998,11 @@ def _cmd_runs(args: argparse.Namespace) -> int:
 def _cmd_show(args: argparse.Namespace) -> int:
     sports, leagues = _filter_args(args)
     with _open_store() as store:
-        run_id = args.run or store.latest_run_id()
+        run_id, note = _resolve_run(
+            store, args.run, what="to show", sports=sports, leagues=leagues
+        )
         if run_id is None:
-            print("no stored runs")
+            print(note)
             return 1
         clause, params = _sql_scope(sports, leagues)
         rows = store.query(
@@ -1025,7 +2014,13 @@ def _cmd_show(args: argparse.Namespace) -> int:
                  LIMIT ?""",
             (run_id, *params, args.limit),
         )
-        print(f"run {run_id}{_scope_label(sports, leagues)}: showing {len(rows)} rows")
+        # ``note`` carries the run's age and any caveat on it — a FAILED
+        # verdict, a newer out-of-scope run skipped.  ``show`` was building its
+        # own header and throwing all of that away, so it alone printed
+        # thirty-six-hour-old prices with no age on them while ``arb`` and
+        # ``lines`` stated it, against this module's own promise that the age is
+        # stated on every run and not only a stale one.
+        print(f"{note}{_scope_label(sports, leagues)}: showing {len(rows)} rows")
         for row in rows:
             line = "" if row["line"] is None else f" {row['line']:+g}"
             side = f" {row['side']}" if row["side"] else ""
@@ -1056,17 +2051,46 @@ def _cmd_arb(args: argparse.Namespace) -> int:
     """Re-run arbitrage detection over a stored run, without refetching."""
     sports, leagues = _filter_args(args)
     with _open_store() as store:
-        run_id = args.run or store.latest_run_id()
+        run_id, note = _resolve_run(
+            store, args.run, what="to analyse", sports=sports, leagues=leagues
+        )
         if run_id is None:
-            print("no stored runs")
+            print(note)
             return 1
-        quotes, _ = reconcile_event_keys(
-            store.load_quotes(run_id, sports=sports, leagues=leagues)
+        # The gate is measured on the **whole run** and the report is narrowed,
+        # not the other way round: the evidence that two venues are one
+        # counterparty does not stop existing because this command was asked
+        # about one league.  See ``collect_once``.
+        everything, _ = reconcile_event_keys(store.load_quotes(run_id))
+        # Re-measured from the stored rows AND unioned with what the collector
+        # recorded at collection time.  A scoped run stores only the kept rows,
+        # so the store alone is narrowed evidence — the mirror established on 22
+        # shared MLB selections vanished from a ``--sport tennis`` run's rows,
+        # the gate reopened, and this command published a "guaranteed" +3.00
+        # with both legs at one operator seconds after the live pass refused it.
+        measured_counterparties = merge_counterparty_groups(
+            counterparty_groups(everything),
+            store.recorded_counterparty_groups(run_id),
         )
+        quotes = [q for q in everything if in_scope(q, sports, leagues)]
+        # Gated on the clock by default, exactly as the live path is.  Without
+        # it, re-analysing yesterday's run prints positions on games that have
+        # already been played, indistinguishable from takeable ones — and the
+        # default ``--run`` is the latest run, so the same command was live on
+        # one invocation and historical on the next.
         report = find_opportunities(
-            quotes, total_stake=args.stake, min_margin=args.min_margin / 100.0
+            quotes,
+            total_stake=args.stake,
+            min_margin=args.min_margin / 100.0,
+            as_of=None if args.include_started else datetime.now(UTC),
+            one_counterparty=measured_counterparties,
         )
-        print(f"run {run_id}{_scope_label(sports, leagues)}: {report.summary()}")
+        if args.include_started:
+            print(
+                "including fixtures that have already started — these are a "
+                "historical study, not positions anyone can take"
+            )
+        print(f"{note}{_scope_label(sports, leagues)}: {report.summary()}")
         for opportunity in report.opportunities:
             print(opportunity.describe())
         rejected = Counter(d.code for d in report.diagnostics)
@@ -1079,23 +2103,58 @@ def _cmd_arb(args: argparse.Namespace) -> int:
         return 0
 
 
+def _net_or_quoted(quote: Quote) -> float:
+    """The price after commission, falling back to the quoted one.
+
+    The commission models refuse odds at or below 1.0, which the schema's floor
+    already makes unreachable from a live row — but this is a display path, and
+    ``src.report`` guards the identical call for the identical reason.  One
+    surface aborting a whole command on a row the other renders as "unknown"
+    would be a difference nobody could explain.
+    """
+    try:
+        return net_decimal_odds(quote.source, quote.decimal_odds)
+    except ValueError:
+        return quote.decimal_odds
+
+
 def _cmd_lines(args: argparse.Namespace) -> int:
     """Best available price per selection, across books — the line-shopping view.
 
     This is the surface arbitrage is drawn from, so printing it is how you tell a
     genuine "no edge today" apart from a market nobody is actually comparing.
+
+    Printed **net of commission**, because that is what :func:`best_prices`
+    ranks by and what :func:`find_opportunities` acts on.  Printing the quoted
+    number beside a sum computed from it put this command into direct
+    contradiction with the detector on exactly the legs the commission model
+    exists for: four markets on the committed slate printed a sum below 1.0 —
+    ``MLB-TEX@MLB-TB total/full_game @8.5`` showed 0.9976 — whose net sum is
+    1.0200 and which ``arb`` therefore, correctly, does not report.  An operator
+    comparing the two surfaces would have concluded the detector was broken.
+
+    Where the quoted and net prices differ the quoted one is shown too, since
+    the net price is not what you will see on the venue's own screen.
     """
     sports, leagues = _filter_args(args)
     with _open_store() as store:
-        run_id = args.run or store.latest_run_id()
+        run_id, note = _resolve_run(
+            store, args.run, what="to read", sports=sports, leagues=leagues
+        )
         if run_id is None:
-            print("no stored runs")
+            print(note)
             return 1
         quotes, _ = reconcile_event_keys(
             store.load_quotes(run_id, sports=sports, leagues=leagues)
         )
         surface = best_prices(quotes)
         sport_of = {quote.event_key: (quote.sport.value, quote.league) for quote in quotes}
+        # Measured on the whole run and unioned with the collection-time
+        # record, for the same reason ``arb`` does it.
+        one_counterparty = merge_counterparty_groups(
+            counterparty_groups(reconcile_event_keys(store.load_quotes(run_id))[0]),
+            store.recorded_counterparty_groups(run_id),
+        )
 
         shown = 0
         for key in sorted(surface, key=str):
@@ -1107,20 +2166,124 @@ def _cmd_lines(args: argparse.Namespace) -> int:
             sport, league = sport_of.get(event_key, ("?", "?"))
             label = f"{market.value}/{period.value}" + (f"/{side.value}" if side else "")
             line_label = "" if line is None else f" @ {line:+g}"
-            overround = sum(1.0 / q.decimal_odds for q in selections.values())
+            net = {
+                selection: _net_or_quoted(quote)
+                for selection, quote in selections.items()
+            }
+            overround = sum(1.0 / price for price in net.values())
             print(
                 f"[{sport}/{league}] {event_key} {label}{line_label}  (sum {overround:.4f})"
             )
+            if overround < 1.0:
+                refusal = _why_the_detector_would_refuse(
+                    list(selections.values()), one_counterparty
+                )
+                if refusal is not None:
+                    print(f"    note: {refusal}")
             for selection, quote in sorted(selections.items(), key=lambda i: i[0].value):
+                charged = commission_for(quote.source)
+                gross = (
+                    ""
+                    if charged.is_free
+                    else f"  (quoted {quote.decimal_odds:.3f}, {charged.describe()})"
+                )
+                american = (
+                    quote.american_odds
+                    if charged.is_free
+                    else decimal_to_american(net[selection])
+                )
                 print(
-                    f"    {selection.value:<6} {quote.decimal_odds:>7.3f} "
-                    f"{quote.american_odds:>+6d}  {quote.source}"
+                    f"    {selection.value:<6} {net[selection]:>7.3f} "
+                    f"{american:>+6d}  {quote.source}{gross}"
                 )
             shown += 1
             if shown >= args.limit:
-                break
-        print(f"\n{shown} market(s) shown of {len(surface)}{_scope_label(sports, leagues)}")
+                break  # tested after the increment, so --limit N shows N
+        print(f"\n{shown} market(s) shown of {len(surface)} in {note}"
+              f"{_scope_label(sports, leagues)}")
         return 0
+
+
+def _why_the_detector_would_refuse(
+    legs: Sequence[Quote], one_counterparty: Mapping[str, Sequence[frozenset[str]]]
+) -> str | None:
+    """Why ``arb`` will not report a sub-1.0 sum this surface is showing.
+
+    Commission was the first way these two surfaces contradicted each other, and
+    fixing it left the other two gates open: a sum below 1.0 here is printed the
+    same whether the detector would act on it or refuse it outright.  Verified
+    against the committed slate — a fanduel/kalshi pair prints ``sum 0.9282``, a
+    7.2% apparent edge, and is rejected as ``legs_do_not_void_together``; two
+    mirrored Kambi tenants print ``sum 0.9302`` while the run reports ``0
+    opportunities from 0 cross-book markets`` and emits no diagnostic at all, so
+    nothing anywhere explains the contradiction.
+
+    This says so on the line itself.  Reporting is not the gate — the detector
+    stays the authority on what is takeable — so this deliberately explains
+    rather than filters.
+    """
+    # Freshness first, because it is the refusal that actually fires.  On the
+    # committed slate **all three** sub-1.0 cross-book groups are refused as
+    # ``stale_leg`` and this returned ``None`` for every one of them — so the
+    # annotation explained the two gates that had not fired and stayed silent on
+    # the one that had, which is the contradiction it was written to close.
+    spread = max(q.observed_at for q in legs) - min(q.observed_at for q in legs)
+    if spread > MAX_OBSERVATION_SPREAD:
+        return (
+            f"these prices were observed {describe_age(spread)} apart, further than "
+            "two legs may be to have been available at the same moment"
+        )
+    sources = [quote.source for quote in legs]
+    mapping = _counterparties(list(legs), one_counterparty)
+    identities = {mapping.get(source, source) for source in sources}
+    if len(identities) < len(set(sources)):
+        return (
+            "two of these venues are measurably one counterparty, so this is one "
+            "book against itself and not a position anybody can hold"
+        )
+    clash = settlement_mismatch(sources)
+    if clash is not None:
+        return f"these venues do not void together — {clash.note}"
+    # Deliberately not exhaustive, and it says so rather than implying it is.
+    # The detector has a dozen further refusals — an implausible margin, an
+    # ambiguous tie, a duplicate selection, a line granularity it cannot
+    # represent — and they are properties of a *position* it has assembled, not
+    # of the best-price surface printed here.  What this covers is the set that
+    # can be decided from two prices alone.
+    return None
+
+
+def _cmd_mirrors(args: argparse.Namespace) -> int:
+    """Print how closely every pair of sources agrees on price.
+
+    The number behind the distinctness gate, so it can be read before it fails a
+    run rather than only afterwards — and so a candidate source can be screened
+    against the registry before anybody writes it in.
+    """
+    sports, leagues = _filter_args(args)
+    with _open_store() as store:
+        run_id, note = _resolve_run(store, args.run, what="to compare", needs_fresh_prices=False)
+        if run_id is None:
+            print(note)
+            return 1
+        quotes, _ = reconcile_event_keys(
+            store.load_quotes(run_id, sports=sports, leagues=leagues)
+        )
+        pairs = compare_all(quotes)
+        if not pairs:
+            print(f"run {run_id}: fewer than two sources stored, so nothing to compare")
+            return 1
+        print(f"run {run_id}{_scope_label(sports, leagues)}: {len(pairs)} source pair(s)")
+        for pair in pairs:
+            print(f"  {pair.summary()}")
+        mirrors = [pair for pair in pairs if pair.verdict.blocks_registration]
+        if mirrors:
+            print(
+                f"\n{len(mirrors)} pair(s) are one counterparty. Remove one of each from "
+                "src.sources.registry: an arbitrage reported between them is a position "
+                "nobody can hold."
+            )
+        return 1 if mirrors else 0
 
 
 def _cmd_health(args: argparse.Namespace) -> int:
@@ -1131,22 +2294,59 @@ def _cmd_health(args: argparse.Namespace) -> int:
         if not rows:
             print(f"no runs recorded{_scope_label(sports, leagues)}")
             return 1
+        # The success rates are computed over **every** run in the window, not
+        # the scoped ones.  Health is a property of a source, not of a sport:
+        # ``run_summaries`` keeps only runs holding a row in scope, which deleted
+        # from this command exactly the runs it exists to surface — a total
+        # outage stores nothing, so ``health`` read 60% and exited 1 while
+        # ``health --sport baseball`` read 100% and exited 0 on the same
+        # database.  A first repair kept the scoped rates and flagged blank runs
+        # beside them, which fixed that case and left two others: the flag fired
+        # "a source is below the threshold" over a table showing every rate at
+        # 100%, and a source that failed on a run holding *another* sport's rows
+        # still vanished from the scoped rate.  Scope narrows what is *shown*
+        # about coverage; it must not narrow what the verdict is computed from.
+        every_run = store.run_summaries(limit=args.limit)
         per_source: dict[str, list[bool]] = {}
-        for row in rows:
+        for row in every_run:
             for health in store.health_for_run(row["id"]):
                 per_source.setdefault(health["source_key"], []).append(bool(health["ok"]))
 
-        print(f"{'source':<18} {'runs':>5} {'ok':>5} {'rate':>6}  last")
-        worst_ok = True
+        print(f"{'source':<18} {'runs':>5} {'ok':>5} {'rate':>6}  last (newest first)")
+        below: list[str] = []
         for source_key, outcomes in sorted(per_source.items()):
             ok_count = sum(outcomes)
             rate = ok_count / len(outcomes)
             recent = "".join("." if ok else "X" for ok in outcomes)
             print(f"{source_key:<18} {len(outcomes):>5} {ok_count:>5} {rate * 100:>5.0f}%  {recent}")
             if rate < args.min_rate:
-                worst_ok = False
+                below.append(source_key)
 
-        latest = rows[0]
+        if sports or leagues:
+            scoped_ids = {row["id"] for row in rows}
+            uncovered = [row for row in every_run if row["id"] not in scoped_ids]
+            if uncovered:
+                print(
+                    f"\nrates above cover all {len(every_run)} run(s); "
+                    f"run(s) {', '.join(str(row['id']) for row in uncovered)} hold no "
+                    f"prices{_scope_label(sports, leagues)} and appear only in the rates"
+                )
+
+        # The same run the read commands work on, so ``health`` and ``arb`` cannot
+        # describe different collections seconds apart.  An interrupted pass is
+        # listed above with its own marker and named here, rather than silently
+        # becoming "the latest run" for one command and not for another.
+        finished = [row for row in rows if row["finished_at"] is not None]
+        if len(finished) < len(rows):
+            unfinished = [str(row["id"]) for row in rows if row["finished_at"] is None]
+            print(
+                f"\nrun(s) {', '.join(unfinished)} never finished and are not counted "
+                "below; every other command skips them too"
+            )
+        if not finished:
+            print("no finished runs to summarise")
+            return 1
+        latest = finished[0]
         # Health per source is not health per sport: a book can be perfectly
         # healthy and still be the only book pricing a sport.
         print(f"\nlatest run {latest['id']} — which sports are comparable across books:")
@@ -1192,9 +2392,29 @@ def _cmd_health(args: argparse.Namespace) -> int:
         ]
         if unusable:
             print(f"not comparable across books: {', '.join(unusable)}")
-        if not worst_ok:
-            print(f"a source is below the {args.min_rate * 100:.0f}% success threshold")
-        return 0 if worst_ok and latest["ok"] else 1
+        if below:
+            # Named, so the sentence cannot contradict the table it follows —
+            # the flag it replaced also fired for blank scoped-out runs, printing
+            # "a source is below the threshold" over rates that all read 100%.
+            print(
+                f"{', '.join(below)} below the "
+                f"{args.min_rate * 100:.0f}% success threshold"
+            )
+        # The verdict reads the newest finished run **overall**: under a scope,
+        # ``latest`` is the newest run with rows in scope, and if the run after
+        # it failed outright the scoped view was exiting 0 on a database whose
+        # unscoped view exits 1.
+        overall = next(
+            (row for row in every_run if row["finished_at"] is not None), None
+        )
+        if overall is not None and overall["id"] != latest["id"] and not overall["ok"]:
+            print(
+                f"newest run {overall['id']} was recorded FAILED — it holds no "
+                f"prices{_scope_label(sports, leagues)}, so it is absent from the "
+                "coverage above"
+            )
+        newest_ok = bool(overall["ok"]) if overall is not None else bool(latest["ok"])
+        return 0 if not below and newest_ok else 1
 
 
 def _add_scope_arguments(parser: argparse.ArgumentParser) -> None:
@@ -1215,6 +2435,9 @@ def _add_scope_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    refusal = settings.refuse_bad_settings()
+    if refusal is not None:
+        return refusal
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)-7s %(name)s: %(message)s"
     )
@@ -1235,9 +2458,38 @@ def main(argv: Sequence[str] | None = None) -> int:
     collect.add_argument(
         "--source", action="append", choices=sorted(SOURCE_FACTORIES), help="repeatable"
     )
+    collect.add_argument(
+        "--tier",
+        choices=[tier.value for tier in Tier],
+        default=Tier.FULL.value,
+        help=(
+            "request budget. 'core' asks each source only for the endpoints that "
+            "return a whole league at once (a few requests per source, safe on a "
+            "short interval); 'full' adds the per-event follow-ups — FanDuel's "
+            "soccer detail pages are 126 of its 133 requests"
+        ),
+    )
     collect.add_argument("--watch", action="store_true", help="collect repeatedly")
-    collect.add_argument("--interval", type=int, default=settings.DEFAULT_INTERVAL_SECONDS)
-    collect.add_argument("--max-runs", type=int, default=0, help="0 means unlimited")
+    # Both guarded, because ``--watch`` is the unattended mode.
+    #
+    # As bare ``int`` these took values they cannot honour: ``--interval -5``
+    # reached ``time.sleep`` and killed the loop with a traceback after the
+    # first successful pass; ``--interval 0`` polled ten public endpoints
+    # continuously, defeating the politeness this pipeline calls "a design
+    # property here, not a courtesy"; and ``--max-runs -1`` read as unlimited
+    # (0 means unlimited) and delivered exactly one pass with no message.
+    collect.add_argument(
+        "--interval",
+        type=_positive("interval"),
+        default=settings.DEFAULT_INTERVAL_SECONDS,
+        help="seconds between passes in --watch; must be positive",
+    )
+    collect.add_argument(
+        "--max-runs",
+        type=_non_negative("count"),
+        default=0,
+        help="0 means unlimited",
+    )
     collect.add_argument("--no-store", action="store_true", help="skip the database, still store raw")
     _add_scope_arguments(collect)
     collect.set_defaults(func=_cmd_collect)
@@ -1248,29 +2500,42 @@ def main(argv: Sequence[str] | None = None) -> int:
     replay.set_defaults(func=_cmd_replay)
 
     runs = subparsers.add_parser("runs", help="list recent runs and per-source health")
-    runs.add_argument("--limit", type=int, default=10)
+    runs.add_argument("--limit", type=_positive("count"), default=10)
     _add_scope_arguments(runs)
     runs.set_defaults(func=_cmd_runs)
 
     show = subparsers.add_parser("show", help="print normalized rows from a run")
     show.add_argument("--run", type=int)
-    show.add_argument("--limit", type=int, default=40)
+    show.add_argument("--limit", type=_positive("count"), default=40)
     _add_scope_arguments(show)
     show.set_defaults(func=_cmd_show)
 
     arb = subparsers.add_parser("arb", help="find arbitrage in a stored run")
     arb.add_argument("--run", type=int, help="run id; defaults to the most recent")
-    arb.add_argument("--stake", type=float, default=100.0, help="bankroll per position")
     arb.add_argument(
-        "--min-margin", type=float, default=0.0, help="minimum edge to report, in percent"
+        "--stake", type=_positive("stake"), default=100.0, help="bankroll per position"
+    )
+    arb.add_argument(
+        "--min-margin",
+        type=_non_negative("min-margin", whole=False),
+        default=0.0,
+        help="minimum edge to report, in percent",
     )
     arb.add_argument("--verbose", action="store_true", help="explain every rejected market")
+    arb.add_argument(
+        "--include-started",
+        action="store_true",
+        help=(
+            "also report fixtures that have already begun. A historical study of "
+            "what the stored prices implied — never a position that can be taken"
+        ),
+    )
     _add_scope_arguments(arb)
     arb.set_defaults(func=_cmd_arb)
 
     lines = subparsers.add_parser("lines", help="best price per market across books")
     lines.add_argument("--run", type=int, help="run id; defaults to the most recent")
-    lines.add_argument("--limit", type=int, default=20)
+    lines.add_argument("--limit", type=_positive("count"), default=20)
     lines.add_argument(
         "--cross-book-only",
         action="store_true",
@@ -1279,9 +2544,23 @@ def main(argv: Sequence[str] | None = None) -> int:
     _add_scope_arguments(lines)
     lines.set_defaults(func=_cmd_lines)
 
+    mirrors = subparsers.add_parser(
+        "mirrors",
+        help="how closely each pair of sources agrees on price — the distinctness gate",
+    )
+    mirrors.add_argument("--run", type=int, help="run id; defaults to the most recent")
+    _add_scope_arguments(mirrors)
+    mirrors.set_defaults(func=_cmd_mirrors)
+
     health = subparsers.add_parser("health", help="per-source success rate across recent runs")
-    health.add_argument("--limit", type=int, default=20, help="how many runs to look back over")
-    health.add_argument("--min-rate", type=float, default=0.8, help="failure threshold, 0-1")
+    health.add_argument(
+        "--limit", type=_positive("count"), default=20,
+        help="how many runs to look back over",
+    )
+    health.add_argument(
+        "--min-rate", type=_a_rate("min-rate"), default=0.8,
+        help="failure threshold, 0-1",
+    )
     _add_scope_arguments(health)
     health.set_defaults(func=_cmd_health)
 
