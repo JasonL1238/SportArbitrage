@@ -537,9 +537,10 @@ class MatchbookAdapter:
                     self._source_key, MAX_PAGES_PER_SPORT, sport.value, offset, total,
                 )
                 if self.last_fetch is not None:
-                    self.last_fetch.failed(
-                        f"{sport.value}: stopped at the "
-                        f"{MAX_PAGES_PER_SPORT}-page cap",
+                    # Filed under the scope's own name; a decorated one would be
+                    # a scope the book was never asked for — see the siblings.
+                    self.last_fetch.truncated(
+                        sport.value,
                         CoverageCappedError(
                             f"{self._source_key}: collected {offset} of {total} "
                             f"{sport.value} events before the "

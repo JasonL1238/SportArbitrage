@@ -85,6 +85,7 @@ from src.sources._common import (
 )
 from src.sources.base import ParseOutcome
 from src.sources.guards import (
+    CoverageCappedError,
     FormatChangeError,
     SourceError,
     require_keys,
@@ -505,6 +506,13 @@ def _us_page(page_key: str, sport: Sport, league_key: str) -> PageSpec:
     )
 
 
+#: The one page whose fixtures get a second, per-event request.  Named rather
+#: than spelled out at each use: the fetch loop, the endpoint router and the
+#: detail hop's scope name all mean *this* page, and one of them was reading a
+#: leaked loop variable that agreed with it only because "soccer" is last in
+#: :data:`PAGES`.
+SOCCER_PAGE_KEY = "soccer"
+
 PAGES: Mapping[str, PageSpec] = {
     "mlb": _us_page("mlb", Sport.BASEBALL, "MLB"),
     "wnba": _us_page("wnba", Sport.BASKETBALL, "WNBA"),
@@ -596,7 +604,7 @@ def page_for_endpoint(endpoint: str) -> PageSpec | None:
     league_label, _, event_id = endpoint[len(prefix) :].rpartition("-")
     if not event_id or league_label not in _LEAGUE_BY_LABEL:
         return None
-    if PAGE_BY_LEAGUE[_LEAGUE_BY_LABEL[league_label]] != "soccer":
+    if PAGE_BY_LEAGUE[_LEAGUE_BY_LABEL[league_label]] != SOCCER_PAGE_KEY:
         return None
     return SOCCER_EVENT_PAGE
 
@@ -712,12 +720,37 @@ class FanDuelAdapter:
                 continue
             raws.append(raw)
             tally.produced(page_key, 1)
-            if page_key == "soccer":
+            if page_key == SOCCER_PAGE_KEY:
                 soccer_raw = raw
         tally.require_something(what="slate page")
 
         if soccer_raw is not None and self.soccer_detail and tier.includes_depth:
-            for league_key, event_id in self._soccer_detail_targets(soccer_raw):
+            # One scope for the whole detail hop, registered once, whatever
+            # happens inside it.
+            #
+            # Each refusal used to register a scope of its own —
+            # ``failed(f"{page_key}:event:{event_id}", …)`` — and ``failed``
+            # registers what it is handed, so the denominator grew in lockstep
+            # with the numerator: 12 refusals out of 126 optional hops read as
+            # 12 of 18 scopes lost, which is 67%, which is an ERROR and
+            # ``report.ok = False`` on a pass that collected 99% of what it
+            # asked for.  Registering the hops individually instead would fix
+            # the ratio and break something worse — 126 detail scopes beside
+            # six slate pages means losing five of the six sports dilutes to 4%,
+            # and the sports are where the rows are.  So the hop is one scope,
+            # counted in the same unit as the pages beside it, and how much of
+            # it was lost is said in the message rather than in the arithmetic.
+            #
+            # ``page_key`` was also a leaked loop variable here, correct only
+            # because ``"soccer"`` happens to be last in ``PAGES``.
+            detail_scope = f"{SOCCER_PAGE_KEY}:detail"
+            targets = list(self._soccer_detail_targets(soccer_raw))
+            # No explicit ``requested`` call: both branches below register the
+            # scope, because ``failed`` and ``produced`` register what they are
+            # handed, and one of them always runs when there are targets.
+            refusals: list[SourceError] = []
+            landed = len(raws)
+            for league_key, event_id in targets:
                 try:
                     raws.append(
                         self._get(
@@ -748,11 +781,82 @@ class FanDuelAdapter:
                     # parser change; the *partial* loss surfaced as two warnings
                     # the code documents as firing on every normal run, so half
                     # of FanDuel's soccer handicaps could vanish with no signal.
-                    tally.failed(f"{page_key}:event:{event_id}", exc)
+                    refusals.append(exc)
                     log.warning(
                         "%s: soccer detail for event %s refused: %s",
                         self._source_key, event_id, exc,
                     )
+            if targets:
+                got = len(raws) - landed
+                if refusals and len(refusals) == len(targets):
+                    # Every hop refused: the enrichment scope itself is gone.
+                    tally.failed(
+                        detail_scope,
+                        CoverageCappedError(
+                            f"{self._source_key}: all {len(targets)} soccer "
+                            f"detail page(s) were refused, so those fixtures "
+                            f"carry no handicap or total from this source "
+                            f"(first: {refusals[0]})"
+                        ),
+                    )
+                elif refusals and got:
+                    # Some hops landed — the scope answered — and some were
+                    # refused.  That is a truncated enrichment, not a refused
+                    # one: filing it under ``failed`` put ``soccer:detail`` in
+                    # the share-lost numerator and graded a run that kept 17 of
+                    # 20 detail pages the same way as one that lost the whole
+                    # hop.  ``produced`` still registers the landings so the
+                    # denominator knows the scope was asked for.
+                    tally.produced(detail_scope, got)
+                    tally.truncated(
+                        detail_scope,
+                        CoverageCappedError(
+                            f"{self._source_key}: {len(refusals)} of {len(targets)} "
+                            f"soccer detail page(s) were refused, so those fixtures "
+                            f"carry no handicap or total from this source "
+                            f"(first: {refusals[0]})"
+                        ),
+                    )
+                elif refusals:
+                    # Some hops refused, the rest postponed/malformed — nothing
+                    # landed.  ``refusals and not got`` used to call this
+                    # "all N were refused" even when only one was; that put a
+                    # mixed unavailable slate in the share-lost numerator.
+                    tally.produced(detail_scope, 0)
+                    tally.truncated(
+                        detail_scope,
+                        CoverageCappedError(
+                            f"{self._source_key}: {len(refusals)} of {len(targets)} "
+                            f"soccer detail page(s) were refused and the rest "
+                            f"came back without events, so those fixtures carry "
+                            f"no handicap or total from this source "
+                            f"(first: {refusals[0]})"
+                        ),
+                    )
+                elif not got:
+                    # Every hop answered the postponed/malformed shape this loop
+                    # swallows on purpose.  One fixture doing that costs that
+                    # fixture's handicaps; *every* fixture doing it costs the
+                    # whole enrichment with nothing on ``failed_scopes`` and
+                    # nothing on ``truncated_scopes``, so the run looked clean
+                    # while FanDuel soccer carried no totals at all.
+                    tally.produced(detail_scope, 0)
+                    tally.truncated(
+                        detail_scope,
+                        CoverageCappedError(
+                            f"{self._source_key}: all {len(targets)} soccer "
+                            f"detail page(s) came back without events "
+                            f"(postponed or moved), so those fixtures carry no "
+                            f"handicap or total from this source"
+                        ),
+                    )
+                else:
+                    # Counted in responses that actually landed, not in hops
+                    # attempted.  Every hop answering with the postponed-fixture
+                    # shape is swallowed on purpose and leaves ``refusals``
+                    # empty, so counting targets marked the scope as having
+                    # produced 20 items when nothing at all had arrived.
+                    tally.produced(detail_scope, got)
         return raws
 
     def _get(

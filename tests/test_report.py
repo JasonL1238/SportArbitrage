@@ -41,7 +41,13 @@ SLATE = {
     "baseball": {
         "league": "MLB",
         "sport": Sport.BASEBALL,
-        "sources": ("book_a", "book_b"),
+        # ``smarkets`` is a real registered venue and it charges commission, so
+        # the fixture contains at least one row whose net price differs from its
+        # quoted one.  Without that, every commission-aware path on the page was
+        # inert under test: ``netOdds``, ``americanOf``, ``charges`` and
+        # ``venueKind`` could each be replaced by a constant and the harness
+        # stayed green, because two synthetic sportsbooks never exercise them.
+        "sources": ("book_a", "book_b", "smarkets"),
         "fixtures": (
             ("MLB-PHI", "MLB-MIA", "Philadelphia Phillies", "Miami Marlins"),
             ("MLB-NYM", "MLB-ATL", "New York Mets", "Atlanta Braves"),
@@ -112,8 +118,24 @@ def _fixture_quotes(spec: dict, source: str, drift: float) -> list[Quote]:
             make_quote(**common, market=Market.TEAM_TOTAL, selection=Selection.OVER,
                        side=Side.HOME, line=spec["team_total_line"], decimal_odds=1.87,
                        source_market_id=f"{market_id}tt", status=QuoteStatus.SUSPENDED),
-            # A window where the scores can end level, so the draw is a real
-            # third selection rather than a misparsed runner.
+            # One side of a total with no counterpart — a group the overview
+            # used to count under "each with every side priced".  Kept active so
+            # the active filter alone cannot hide it.
+            make_quote(**common, market=Market.TOTAL, selection=Selection.OVER,
+                       line=spec["total_line"] + 1.0, decimal_odds=1.80,
+                       source_market_id=f"{market_id}tot-half"),
+            # A window where the scores can end level: a complete three-way, so
+            # the page has both a market it may sum and — by dropping the draw
+            # in a harness case — one it must refuse.  Without the home and away
+            # legs here, ``sumsToAMargin``'s moneyline-shape check was only ever
+            # exercised against two-way windows, and ``return rows.length >= 2``
+            # produced a page byte-identical to the real rule.
+            make_quote(**common, market=Market.MONEYLINE, period=spec["extra_period"],
+                       selection=Selection.HOME, decimal_odds=2.20 + drift,
+                       source_market_id=f"{market_id}alt"),
+            make_quote(**common, market=Market.MONEYLINE, period=spec["extra_period"],
+                       selection=Selection.AWAY, decimal_odds=2.30 - drift,
+                       source_market_id=f"{market_id}alt"),
             make_quote(**common, market=Market.MONEYLINE, period=spec["extra_period"],
                        selection=Selection.DRAW, decimal_odds=8.5,
                        source_market_id=f"{market_id}alt"),
@@ -129,7 +151,7 @@ def slate_quotes() -> list[Quote]:
     return quotes
 
 
-ROWS_PER_FIXTURE = 8
+ROWS_PER_FIXTURE = 11
 EXPECTED_ROWS = sum(
     len(spec["fixtures"]) * len(spec["sources"]) * ROWS_PER_FIXTURE for spec in SLATE.values()
 )
@@ -180,8 +202,10 @@ def populated(tmp_path) -> Store:
             first = quotes[0]
             quotes[0] = first.model_copy(update={"decimal_odds": first.decimal_odds + 0.10})
         store.save_quotes(run_id, quotes)
-        for source in ("book_a", "book_b"):
+        for source in ("book_a", "book_b", "smarkets"):
             rows = [q for q in quotes if q.source == source]
+            if not rows:
+                continue
             store.save_health(
                 run_id,
                 SourceHealth(
@@ -191,12 +215,20 @@ def populated(tmp_path) -> Store:
                 ),
             )
             # book_a was asked for hockey and soccer; it returned hockey only, so
-            # soccer is a gap the page has to be able to name.
-            configured = (
-                [("MLB", "baseball"), ("WNBA", "basketball"), ("NHL", "hockey"), ("EPL", "soccer")]
-                if source == "book_a"
-                else [("MLB", "baseball"), ("WNBA", "basketball"), ("NHL", "hockey")]
-            )
+            # soccer is a gap the page has to be able to name.  smarkets is on
+            # baseball only — it is here so the fixture contains a venue that
+            # charges commission, not so it covers every sport.
+            if source == "smarkets":
+                configured = [("MLB", "baseball")]
+            elif source == "book_a":
+                configured = [
+                    ("MLB", "baseball"), ("WNBA", "basketball"),
+                    ("NHL", "hockey"), ("EPL", "soccer"),
+                ]
+            else:
+                configured = [
+                    ("MLB", "baseball"), ("WNBA", "basketball"), ("NHL", "hockey"),
+                ]
             store.save_league_coverage(
                 run_id,
                 source,
@@ -305,13 +337,50 @@ def test_every_sport_is_reported_with_its_books(populated: Store) -> None:
     coverage = {entry["sport"]: entry for entry in data["runs"][0]["sports"]}
     assert set(coverage) == {"baseball", "basketball", "hockey", "soccer"}
 
-    assert coverage["baseball"]["books"] == ["book_a", "book_b"]
+    assert coverage["baseball"]["books"] == ["book_a", "book_b", "smarkets"]
     assert coverage["basketball"]["books"] == ["book_a", "book_b"]
     # The case that matters: one book, so nothing about it can be compared.
     assert coverage["hockey"]["books"] == ["book_a"]
     # Configured and returned nothing at all — reported, not omitted.
     assert coverage["soccer"]["books"] == []
     assert coverage["soccer"]["quote_count"] == 0
+
+
+def test_a_venue_whose_prices_are_on_the_page_is_described(tmp_path) -> None:
+    """Health rows alone used to decide who the page knew how to describe.
+
+    A source whose quotes were embedded but whose health row was not — a
+    ``--runs`` larger than ``--quote-runs``, or a fixture that stored prices
+    without a health row — was absent from ``SOURCE_INFO``.  The page then
+    fell back to the raw key, treated the venue as a free sportsbook, and
+    printed the *gross* American odds beside the *net* return for every one of
+    its rows.  The commission-aware paths (``netOdds``, ``americanOf``,
+    ``charges``, ``venueKind``) were all inert under that shape.
+    """
+    from src.sources.base import SourceHealth
+
+    store = Store(tmp_path / "quoted-only.sqlite3")
+    started = datetime(2026, 7, 28, 7, 0, tzinfo=UTC)
+    run_id = store.start_run(started)
+    quotes = slate_quotes()
+    store.save_quotes(run_id, quotes)
+    # Health for the free books only — smarkets has prices and no health row.
+    for source in ("book_a", "book_b"):
+        rows = [q for q in quotes if q.source == source]
+        store.save_health(
+            run_id,
+            SourceHealth(
+                source_key=source, ok=True, checked_at=started, request_count=1,
+                quote_count=len(rows), event_count=1,
+            ),
+        )
+    store.finish_run(run_id, finished_at=started, report=_Findings(quotes))
+
+    data = build_report(store)
+    by_key = {entry["key"]: entry for entry in data["sources"]}
+    assert "smarkets" in by_key
+    assert by_key["smarkets"]["commission"], by_key["smarkets"]
+    assert by_key["smarkets"]["kind"] == "exchange"
 
 
 def test_the_two_book_bar_is_stated_per_sport(populated: Store) -> None:
@@ -562,6 +631,14 @@ def test_the_vocabularies_shown_are_the_closed_enums(populated: Store) -> None:
     """The page claims these lists are closed, so it must show the real ones —
     including ``sport``, which only became a real dimension in this schema."""
     shown = {entry["name"]: entry["values"] for entry in build_report(populated)["vocabularies"]}
+    # Each list is asserted against the enum it is built from, so on its own this
+    # only catches a vocabulary being *dropped* from the payload — two empty
+    # lists compare equal, and so do two renamed ones.  The neighbour above
+    # carries an inertness guard for the same reason; this one had none.
+    assert set(shown) >= {"sport", "market", "period", "selection", "side", "status"}
+    assert all(values for values in shown.values()), shown
+    assert "baseball" in shown["sport"] and "moneyline" in shown["market"]
+    assert "full_game" in shown["period"] and "draw" in shown["selection"]
     assert shown["sport"] == [s.value for s in Sport]
     assert shown["market"] == [m.value for m in Market]
     assert shown["period"] == [p.value for p in Period]
@@ -637,6 +714,114 @@ def test_the_page_script_runs_and_fills_every_region(populated: Store, tmp_path)
     assert "script ran clean" in result.stdout
     assert "svg well-formed" in result.stdout
     assert "plain English ok" in result.stdout
+    # This page embeds every run, so the truncation branch is unreachable here
+    # and the harness says so rather than passing silently.
+    assert "truncation not exercised" in result.stdout
+
+
+def test_the_page_script_runs_against_a_truncated_payload(
+    populated: Store, tmp_path
+) -> None:
+    """The same script, on a page whose picker lists more collections than it
+    carries prices for.
+
+    This is the ordinary shape of a real page — ``--quote-runs`` is what keeps a
+    dashboard from being tens of megabytes — and the harness had never seen it.
+    Everything above renders every run's prices, so ``detailLoaded`` was only
+    ever asked about runs that *were* loaded: it could be replaced outright with
+    ``return true`` and the whole suite stayed green, while the page told a
+    reader that a collection holding 71 saved responses had saved nothing.
+
+    Two runs, one embedded.  The harness switches the picker to the other one,
+    which is the only way any of this is reachable.
+    """
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed; the dashboard's script cannot be executed here")
+
+    page = tmp_path / "dashboard-truncated.html"
+    page.write_text(
+        render_page(build_report(populated, quote_runs=1)), encoding="utf-8"
+    )
+    harness = Path(__file__).parent / "dashboard_smoke.mjs"
+    result = subprocess.run(
+        [node, str(harness), str(page)], capture_output=True, text=True, timeout=60
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "script ran clean" in result.stdout
+    assert "truncation is distinguished" in result.stdout
+    assert "named on screen" in result.stdout
+
+
+def test_the_page_describes_a_quarter_line_the_way_the_detector_settles_it(
+    populated: Store, tmp_path
+) -> None:
+    """The sentence and the stake sizing must agree about who is paid.
+
+    A quarter line splits the stake across two half-lines, so at the one score
+    between them half pushes and half settles — for *one* side as a half-win and
+    for the other as a half-loss, never both.  The page told both sides it "pays
+    half": on 127 of the 254 quarter-line rows in the committed captures it
+    promised a payout to the reader who was losing half the stake there, and the
+    two sentences appeared side by side on the same fixture panel.  It also named
+    scores that cannot occur ("a 0.5-goal loss") and thresholds that overlapped
+    the split ("win by 1 or more; a 1-goal win pays half").
+
+    The expectations are generated here, from :func:`src.arb.settlement_outcomes`
+    — the function that decides what the position is actually worth — so this
+    cannot be satisfied by editing a string in the harness.  It is the same
+    shape as the overround cross-check: one oracle, two languages.
+    """
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed; the dashboard's script cannot be executed here")
+
+    from src.arb import settlement_outcomes
+
+    cases: list[dict] = []
+    plans = [
+        (Sport.SOCCER, Market.SPREAD, (Selection.HOME, Selection.AWAY),
+         (-2.75, -1.75, -1.25, -0.75, -0.25, 0.25, 0.75, 1.25, 1.75, 2.75)),
+        (Sport.SOCCER, Market.TOTAL, (Selection.OVER, Selection.UNDER),
+         (2.25, 2.75, 3.25, 3.75, 4.25)),
+        (Sport.BASKETBALL, Market.SPREAD, (Selection.HOME, Selection.AWAY),
+         (-6.75, -6.25, 6.25, 6.75)),
+    ]
+    for sport, market, shape, lines in plans:
+        for line in lines:
+            outcomes = settlement_outcomes(
+                sport, market, Period.FULL_GAME, line, set(shape)
+            )
+            landing, verdicts = next(
+                (name, mapping) for name, mapping in outcomes
+                if any(str(v).startswith("half") for v in mapping.values())
+            )
+            for selection in shape:
+                # Each row stores the line from its own side's perspective, and
+                # that is what the page is handed.
+                own = line if selection in (Selection.HOME, Selection.OVER) else -line
+                cases.append({
+                    "sport": sport.value,
+                    "market": market.value,
+                    "selection": selection.value,
+                    "line": own if market is Market.SPREAD else line,
+                    "half_wins": str(verdicts[selection]) == "half_win",
+                    "landing": abs(int(round(line))),
+                })
+    assert cases and any(c["half_wins"] for c in cases)
+    assert not all(c["half_wins"] for c in cases), "the oracle must discriminate"
+
+    expectations = tmp_path / "quarter-lines.json"
+    expectations.write_text(json.dumps(cases), encoding="utf-8")
+    page = tmp_path / "dashboard.html"
+    page.write_text(render_page(build_report(populated)), encoding="utf-8")
+    harness = Path(__file__).parent / "dashboard_smoke.mjs"
+    result = subprocess.run(
+        [node, str(harness), str(page), str(expectations)],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "quarter lines agree with the detector" in result.stdout
 
 
 def test_every_panel_can_be_routed_to(populated: Store, tmp_path) -> None:
@@ -670,9 +855,11 @@ def test_the_real_validation_report_still_fits_the_store(tmp_path) -> None:
     Skipped while ``src.validation`` is mid-rewrite rather than silently passing:
     the point of the test is that the two agree.
     """
-    validation = pytest.importorskip(
-        "src.validation", reason="src.validation is being rewritten by another change"
-    )
+    # Imported, not ``importorskip``-ed: ``src.validation`` is first-party and
+    # the whole point of this test is that the real report fits the store.  The
+    # helper would turn a genuine ImportError — the exact breakage worth
+    # catching — into a skip and an exit code of 0.
+    import src.validation as validation
     with Store(tmp_path / "real.sqlite3") as store:
         run_id = store.start_run(datetime.now(UTC))
         quotes = slate_quotes()
@@ -699,14 +886,21 @@ def test_every_real_skip_reason_has_an_explanation(source: str) -> None:
     were actively false: Smarkets' HANDICAP and OVER_UNDER skips *are* two of
     the four kinds, and an already-started market is not a market type at all.
     """
-    import glob
-
     from src.raw_store import RawStore
 
-    paths = sorted(glob.glob(f"tests/fixtures/raw/{source}__*.json"))
-    if not paths:
-        pytest.skip(f"no captured responses for {source}")
-    store = RawStore("tests/fixtures/raw")
+    # Resolved against this file, not against the working directory, exactly as
+    # ``tests/conftest.py`` does it and for the same reason: run from anywhere
+    # but the repository root the glob matched nothing, and the ``skip`` below
+    # turned "I looked in the wrong place" into "this source has no captures" —
+    # a green run that checked nothing.  A registered source with no fixture is
+    # a real failure, so it is one.
+    fixtures = Path(__file__).parent / "fixtures" / "raw"
+    paths = sorted(fixtures.glob(f"{source}__*.json"))
+    assert paths, (
+        f"no captured responses for {source} in {fixtures} — every registered "
+        "source needs a fixture, or this guard silently stops covering it"
+    )
+    store = RawStore(fixtures)
     adapter = SOURCE_FACTORIES[source]()
     try:
         skipped = adapter.parse([store.read(path) for path in paths]).skipped

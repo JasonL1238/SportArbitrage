@@ -29,7 +29,7 @@ import sys
 import webbrowser
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 from src import settings
 from src.commission import commission_for, net_decimal_odds
@@ -686,6 +686,32 @@ def build_report(
                 # visible, hidden again by the surface most likely to be read.
                 "repaired_count": h["repaired_count"],
                 "scopes_requested": h["scopes_requested"],
+                # Distinct scopes refused — the numerator the dashboard prints
+                # as "refused N of M".  Without this field the page falls back
+                # to ``scopes_refused.length``, and one scope that produced two
+                # messages (SX Bet's metadata half and its order-book half)
+                # read as "refused 2 of the 1 scope(s)".
+                #
+                # Additive migration backfills ``0`` onto older rows that still
+                # carry refusal messages.  Re-deriving the distinct count here
+                # means a pre-upgrade run does not render as a clean one.
+                "scopes_failed": (
+                    h["scopes_failed"]
+                    if h["scopes_failed"]
+                    or not (h["scopes_refused"] or "").strip()
+                    else len({
+                        # ``"{scope}: {error}"`` — split on the first colon-space,
+                        # not the first colon.  Pinnacle's fallback scopes are
+                        # ``MLB:246`` / ``MLB:247``, and splitting on ``:`` alone
+                        # collapsed every refused league under one sport.
+                        entry.split(": ", 1)[0]
+                        for entry in (h["scopes_refused"] or "").split("\n")
+                        if entry
+                    })
+                ),
+                "scopes_truncated": [
+                    entry for entry in (h["scopes_truncated"] or "").split("\n") if entry
+                ],
                 "scopes_refused": [
                     entry for entry in (h["scopes_refused"] or "").split("\n") if entry
                 ],
@@ -758,9 +784,17 @@ def build_report(
             "max_quote_rows": max_quote_rows,
             "min_books": MIN_BOOKS_FOR_COMPARISON,
         },
+        # Every venue whose prices are on the page, not only those with a health
+        # row in the listed runs.  Health is what used to decide membership, so a
+        # source whose quotes were embedded but whose health row sat outside
+        # ``--runs`` was absent from ``SOURCE_INFO``: the page fell back to the
+        # raw key, treated it as a sportsbook that charges nothing, and printed
+        # the *gross* American odds beside the *net* return — the same row
+        # disagreeing with itself.  Union with the quoted sources makes the
+        # page describe every venue whose prices it shows.
         "sources": [
             _source_entry(key)
-            for key in sorted({h["key"] for run in runs for h in run["sources"]})
+            for key in sorted(_venues_on_the_page(runs, quotes, strings))
         ],
         "venue_kinds": VENUE_KINDS,
         "runs": runs,
@@ -1179,6 +1213,32 @@ def _unknown_source(key: str) -> dict[str, str]:
         "kind": "sportsbook",
         "what": "No description recorded for this source.",
     }
+
+
+def _venues_on_the_page(
+    runs: Sequence[Mapping[str, Any]],
+    quotes: Mapping[str, Any],
+    strings: Sequence[str],
+) -> set[str]:
+    """Every venue the page has a reason to name.
+
+    Health rows are the venues that answered this collection; quote rows are the
+    venues whose prices are actually embedded.  They are not the same set when
+    ``--runs`` is larger than ``--quote-runs``, or when a source produced rows
+    that were stored under a different identity from its health key — and the
+    page must describe every venue whose prices it shows, or the commission-
+    aware paths silently treat a charging venue as free.
+    """
+    keys = {h["key"] for run in runs for h in run["sources"]}
+    columns: Sequence[str] = quotes.get("columns") or ()
+    if "source" not in columns:
+        return keys
+    source_col = columns.index("source")
+    for row in quotes.get("rows") or ():
+        index = row[source_col]
+        if isinstance(index, int) and 0 <= index < len(strings):
+            keys.add(strings[index])
+    return keys
 
 
 def _source_entry(key: str) -> dict[str, Any]:

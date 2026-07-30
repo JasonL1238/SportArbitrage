@@ -769,10 +769,18 @@ class FakeSource:
 
 @pytest.fixture()
 def collector():
-    return pytest.importorskip(
-        "src.collector",
-        reason="src.collector needs src.arb, src.validation and the adapters",
-    )
+    """Imported, not ``importorskip``-ed.
+
+    ``src.collector`` is first-party and is the module this file exists to test.
+    ``importorskip`` turns *any* ImportError inside it — a typo, a deleted
+    helper, a circular import — into a skip, and pytest exits 0: the whole
+    collect-and-replay block reported ``31 passed, 15 skipped`` with the
+    pipeline unimportable.  A third-party optional dependency is what that
+    helper is for; this is not one.
+    """
+    import src.collector
+
+    return src.collector
 
 
 def test_a_run_persists_every_sport_it_collected(tmp_path: Path, collector) -> None:

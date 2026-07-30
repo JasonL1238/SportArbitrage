@@ -764,6 +764,36 @@ class TestTieSettlementBySport:
         assert report.opportunities == []
         assert [d.code for d in report.diagnostics] == ["ambiguous_tie_settlement"]
 
+    @pytest.mark.parametrize(
+        ("fixture", "period"),
+        [
+            (WNBA_GAME, Period.REGULATION),
+            (WNBA_GAME, Period.FIRST_HALF),
+            (NFL_GAME, Period.REGULATION),
+            (NFL_GAME, Period.FIRST_HALF),
+            (SOCCER_GAME, Period.FIRST_HALF),
+        ],
+        ids=lambda value: getattr(value, "league", None) or value.value,
+    )
+    def test_every_partial_window_refuses_a_two_way_moneyline(
+        self, fixture: Fixture, period: Period
+    ) -> None:
+        """The five windows whose settlement facts no test used to reach, asserted
+        where being wrong costs money rather than only in ``test_vocab``.
+
+        Each of these is priced three-way, so two legs are a market with its draw
+        missing and the detector must refuse.  Flip ``draw_is_priced`` to False
+        for any one of them and this stops being a refusal: the pair publishes as
+        a two-way position carrying a *push* on a level score, which is a
+        "guarantee" that returns the stake on the single most likely scoreline in
+        a half.
+        """
+        report = find_opportunities(
+            _pair(fixture=fixture, period=period, home_odds=2.10, away_odds=2.10)
+        )
+        assert report.opportunities == []
+        assert [d.code for d in report.diagnostics] == ["ambiguous_tie_settlement"]
+
     def test_a_two_way_hockey_full_game_moneyline_is_fine(self) -> None:
         """The shootout decides it, so two legs really are the whole contract."""
         report = find_opportunities(

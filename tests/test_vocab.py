@@ -117,6 +117,104 @@ class TestSettlementFacts:
         assert scoring_unit(Sport.TENNIS) == "games"
 
 
+class TestEverySettlementFactIsWrittenDown:
+    """The table asserted entry by entry, against literals rather than against
+    itself.
+
+    The reasoned tests above are real oracles, but they only reach nine of the
+    fourteen entries.  ``basketball/regulation``, ``basketball/first_half``,
+    ``football/regulation``, ``football/first_half`` and ``soccer/first_half``
+    had none: flipping ``draw_is_priced`` on four of them at once left 655 of 656
+    adversarial cases green, and the one failure blamed the README.
+
+    No fixture can close that gap.  A July capture contains no NFL first-half
+    three-way, so replaying real bytes proves nothing about these windows — the
+    fact has to be *written down*, the way ``COMMISSIONS`` and ``SETTLEMENT``
+    are.  What it is worth if it is wrong is the whole stake: ``src.arb`` skips
+    ``ambiguous_tie_settlement`` when ``draw_is_priced`` is False and appends a
+    push outcome instead, so a flip publishes a real three-way market as a
+    void-on-tie two-way "guarantee".
+    """
+
+    #: ``(sport, period) -> (draw_is_priced, tie_possible, scoring_unit)``.
+    #: Keyed and valued in plain strings and bools so that renaming an enum
+    #: member is a failure here rather than a silent rewrite of the oracle.
+    EXPECTED = {
+        ("baseball", "full_game"): (False, False, "runs"),
+        ("baseball", "first_5_innings"): (True, True, "runs"),
+        ("baseball", "first_1_inning"): (True, True, "runs"),
+        ("basketball", "full_game"): (False, False, "points"),
+        ("basketball", "regulation"): (True, True, "points"),
+        ("basketball", "first_half"): (True, True, "points"),
+        ("hockey", "full_game"): (False, False, "goals"),
+        ("hockey", "regulation"): (True, True, "goals"),
+        ("football", "full_game"): (False, True, "points"),
+        ("football", "regulation"): (True, True, "points"),
+        ("football", "first_half"): (True, True, "points"),
+        ("tennis", "full_game"): (False, False, "games"),
+        ("soccer", "full_game"): (True, True, "goals"),
+        ("soccer", "first_half"): (True, True, "goals"),
+    }
+
+    def test_the_table_is_exactly_what_it_is(self) -> None:
+        assert {
+            (sport.value, period.value): (
+                rules.draw_is_priced,
+                rules.tie_possible,
+                rules.scoring_unit,
+            )
+            for (sport, period), rules in PERIOD_RULES.items()
+        } == self.EXPECTED
+
+    def test_a_partial_window_that_can_end_level_is_priced_three_way(self) -> None:
+        """The five entries the reasoned tests above could not reach, stated as
+        the rule they share.
+
+        A partial window — a half, or regulation before overtime — stops on the
+        clock rather than on a decision, so it can end level; and where a level
+        result is a real outcome the books sell it as one.  The half-time result
+        and the 60-minute "regular time" line are three-way markets in all three
+        of these sports, which is why a two-way price in one of these windows is
+        a market with a leg missing rather than a two-way contract.
+        """
+        for sport, period in (
+            (Sport.BASKETBALL, Period.REGULATION),
+            (Sport.BASKETBALL, Period.FIRST_HALF),
+            (Sport.FOOTBALL, Period.REGULATION),
+            (Sport.FOOTBALL, Period.FIRST_HALF),
+            (Sport.SOCCER, Period.FIRST_HALF),
+        ):
+            assert draw_is_priced(sport, period), f"{sport.value}/{period.value}"
+            assert tie_possible(sport, period), f"{sport.value}/{period.value}"
+
+    def test_the_partial_window_differs_from_its_own_full_game(self) -> None:
+        """Stated as a contrast so that "everything is three-way" cannot pass it.
+
+        Basketball and football price the same fixture two ways at once: the
+        full game cannot be sold as a draw because overtime decides it, while
+        regulation and the first half can.  A change that flipped a whole sport
+        in one direction would satisfy the entry-by-entry pin's *shape* and fail
+        here.
+        """
+        for sport in (Sport.BASKETBALL, Sport.FOOTBALL):
+            assert not draw_is_priced(sport, Period.FULL_GAME), sport
+            assert draw_is_priced(sport, Period.REGULATION), sport
+        # Soccer is the mirror image: 90 minutes is itself a draw-priced window,
+        # so its first half is not a contrast but a continuation.
+        assert draw_is_priced(Sport.SOCCER, Period.FULL_GAME)
+
+    def test_football_is_the_only_window_that_ties_without_pricing_it(self) -> None:
+        """``(False, True)`` is the combination that costs a bankroll, because it
+        is the only one where a two-way market is complete *and* has a push.  It
+        appears exactly once, and a second appearance would mean some other
+        window had quietly acquired a void outcome."""
+        assert [
+            f"{sport.value}/{period.value}"
+            for (sport, period), rules in PERIOD_RULES.items()
+            if rules.tie_possible and not rules.draw_is_priced
+        ] == ["football/full_game"]
+
+
 class TestUnknownWindowsAreRefused:
     def test_an_unrecorded_window_is_not_collectable(self) -> None:
         """Tennis has no first half, and hockey has no fifth inning."""

@@ -100,6 +100,22 @@ class SourceHealth:
     error_message: str | None = None
     scopes_requested: int = 0
     """How many scopes this source asked for, so a refusal has a denominator."""
+    scopes_failed: int = 0
+    """How many **distinct** scopes were refused, which is the numerator.
+
+    Not ``len(failed_scopes)``: that is a list of messages, and one scope can
+    produce two of them — SX Bet's metadata half and its order-book half are one
+    scope and two requests — while the denominator de-duplicates.  Counting
+    messages printed "was refused 2 of the 1 scope(s) it asked for".
+    """
+    truncated_scopes: tuple[str, ...] = ()
+    """Scopes that answered and then stopped short of their whole slate.
+
+    Reported, never graded against the denominator.  A self-imposed page cap
+    leaves behind a fraction of *one* scope, of unknown size, and calling that
+    "the whole scope was lost" reported a Polymarket run that collected 41 MLB
+    events as one that "returned none of the rest".
+    """
     failed_scopes: tuple[str, ...] = ()
     """Scopes this source asked for and was refused, on a run it survived.
 
@@ -121,7 +137,9 @@ class SourceHealth:
         if self.latency_ms is not None:
             parts.append(f"{self.latency_ms:.0f} ms")
         if self.failed_scopes:
-            parts.append(f"{len(self.failed_scopes)} SCOPE(S) REFUSED")
+            parts.append(f"{self.scopes_failed or len(self.failed_scopes)} SCOPE(S) REFUSED")
+        if self.truncated_scopes:
+            parts.append(f"{len(self.truncated_scopes)} scope(s) cut short")
         if self.rejection_count:
             parts.append(f"{self.rejection_count} REJECTED")
         if self.skipped_count:

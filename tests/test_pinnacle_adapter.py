@@ -1025,14 +1025,42 @@ class TestProvenance:
 
 
 class TestResponsePairing:
-    def test_a_half_pair_is_rejected_rather_than_silently_empty(
+    def test_a_matchups_page_with_no_markets_is_counted_not_rejected(
         self, captures
     ) -> None:
+        """The shape the fetcher now produces deliberately.
+
+        ``_fetch_scope`` appends the matchups response *before* it asks for
+        markets, so a league whose ``markets/straight`` answers 403 leaves its
+        fixture list on disk rather than discarding a response already paid for.
+        Rejecting that sets ``error_kind`` and flips ``SourceHealth.ok``, so
+        keeping the page turned "one league of six lost its prices" into
+        ``pinnacle: FAILED`` and reported one 403 twice — once as
+        ``scopes_refused``, which names the cause, and once as
+        ``source_unhealthy:rejections``, which does not.
+        """
         matchups = next(
             raw for raw in _scope(captures, EPL_SCOPE) if raw.endpoint.startswith("matchups:")
         )
         other = _scope(captures, MLB_SCOPE)
         outcome = parse_pinnacle([*other, matchups])
+        assert outcome.quotes
+        assert outcome.rejections == []
+        assert outcome.skipped["matchups_without_markets"] == 1
+
+    def test_a_markets_page_with_no_matchups_is_still_rejected(
+        self, captures
+    ) -> None:
+        """Nothing in the fetcher produces this one: matchups is requested first
+        and kept whatever happens next.  A markets response with nothing to join
+        against therefore means a renamed endpoint or a capture directory that
+        lost a file, and silence would look exactly like a league with no
+        fixtures."""
+        markets = next(
+            raw for raw in _scope(captures, EPL_SCOPE) if raw.endpoint.startswith("markets:")
+        )
+        other = _scope(captures, MLB_SCOPE)
+        outcome = parse_pinnacle([*other, markets])
         assert outcome.quotes
         assert [r.reason for r in outcome.rejections] == ["unpaired_response"]
 

@@ -491,6 +491,10 @@ class PinnacleAdapter:
         into: list[RawResponse] | None = None,
         tally: ScopeTally | None = None,
     ) -> list[RawResponse]:
+        # Every path below appends into this list as its responses land, so a
+        # sport that fails half-way keeps the half that arrived.
+        pages: list[RawResponse] = [] if into is None else into
+        start = len(pages)
         if sport in SPORT_ENDPOINT_SPORTS and self._prefers_sport_endpoint(sport):
             sport_id = PINNACLE_ID_BY_SPORT[sport]
             scope = _Scope(
@@ -499,7 +503,7 @@ class PinnacleAdapter:
                 markets_path=f"/sports/{sport_id}/markets/straight",
             )
             try:
-                pages = self._fetch_scope(scope)
+                got = self._fetch_scope(scope, into=pages)
             except SourceError as exc:
                 log.warning(
                     "%s: per-sport endpoint for %s failed (%s); falling back to leagues",
@@ -511,15 +515,13 @@ class PinnacleAdapter:
                 # coverage league by league and records what it gets, so naming
                 # the sport too would count one loss twice.  If the fallback
                 # itself raises, the caller names the sport.
-                pages = self._fetch_sport_by_league_index(sport, tally=tally)
+                self._fetch_sport_by_league_index(sport, tally=tally, into=pages)
             else:
                 if tally is not None:
-                    tally.produced(sport.value, _matchup_count(pages))
+                    tally.produced(sport.value, _matchup_count(got))
         else:
-            pages = self._fetch_routed_leagues(sport, tally=tally)
-        if into is not None:
-            into.extend(pages)
-        return pages
+            self._fetch_routed_leagues(sport, tally=tally, into=pages)
+        return pages[start:]
 
     def _prefers_sport_endpoint(self, sport: Sport) -> bool:
         """Is the whole-sport endpoint the right call for this sport?
@@ -553,7 +555,11 @@ class PinnacleAdapter:
         )
 
     def _fetch_routed_leagues(
-        self, sport: Sport, *, tally: ScopeTally | None = None
+        self,
+        sport: Sport,
+        *,
+        tally: ScopeTally | None = None,
+        into: list[RawResponse] | None = None,
     ) -> list[RawResponse]:
         """Every routed league of one sport, each tallied on its own.
 
@@ -567,8 +573,15 @@ class PinnacleAdapter:
         — because it is the unit this method asks in.  Requesting per sport and
         refusing per league made the two incomparable.
         """
-        raws: list[RawResponse] = []
+        raws: list[RawResponse] = [] if into is None else into
+        start = len(raws)
         failures: list[SourceError] = []
+        # Counted rather than inferred from ``raws``.  "Did any league work?"
+        # used to be asked as "is the page list empty?", which stopped being the
+        # same question once a *failed* league started leaving its matchups page
+        # behind: one league answering 403 on its markets call would have made
+        # the whole sport look like it had produced something.
+        collected = 0
         for route in self._routes_for(sport):
             scope = _Scope(
                 token=league_scope(route.league_key, route.pinnacle_id),
@@ -577,23 +590,27 @@ class PinnacleAdapter:
             )
             if tally is not None:
                 tally.requested(route.league_key)
-            before = len(raws)
             try:
-                raws.extend(self._fetch_scope(scope))
+                got = self._fetch_scope(scope, into=raws)
             except SourceError as exc:
                 log.warning("%s: league %s failed: %s", self._source_key, route.pinnacle_id, exc)
                 failures.append(exc)
                 if tally is not None:
                     tally.failed(route.league_key, exc)
                 continue
+            collected += len(got)
             if tally is not None:
-                tally.produced(route.league_key, _matchup_count(raws[before:]))
-        if not raws and failures:
+                tally.produced(route.league_key, _matchup_count(got))
+        if not collected and failures:
             raise failures[0]
-        return raws
+        return raws[start:]
 
     def _fetch_sport_by_league_index(
-        self, sport: Sport, *, tally: ScopeTally | None = None
+        self,
+        sport: Sport,
+        *,
+        tally: ScopeTally | None = None,
+        into: list[RawResponse] | None = None,
     ) -> list[RawResponse]:
         """Degraded path: enumerate the sport's leagues and fetch the busiest.
 
@@ -640,7 +657,7 @@ class PinnacleAdapter:
                 # operator's side: fixtures this venue has and this run does not.
                 # Logging it and calling the source healthy is the difference
                 # between a bounded fallback and a silent one.
-                tally.failed(
+                tally.truncated(
                     f"{sport.value}: {omitted} league(s) beyond the fallback cap",
                     CoverageCappedError(
                         f"{self._source_key}: the league-index fallback fetched the "
@@ -648,7 +665,9 @@ class PinnacleAdapter:
                         f"with fixtures; the other {omitted} were not collected"
                     ),
                 )
-        raws: list[RawResponse] = [index]
+        raws: list[RawResponse] = [] if into is None else into
+        start = len(raws)
+        raws.append(index)
         for entry in chosen:
             pinnacle_id = int(entry["id"])
             key = canonical_league_key(sport, pinnacle_id, entry.get("name")) or "UNMAPPED"
@@ -665,19 +684,20 @@ class PinnacleAdapter:
             scope_name = f"{key}:{pinnacle_id}"
             if tally is not None:
                 tally.requested(scope_name)
-            before = len(raws)
             try:
-                raws.extend(self._fetch_scope(scope))
+                got = self._fetch_scope(scope, into=raws)
             except SourceError as exc:
                 log.warning("%s: fallback league %s failed: %s", self._source_key, pinnacle_id, exc)
                 if tally is not None:
                     tally.failed(scope_name, exc)
                 continue
             if tally is not None:
-                tally.produced(scope_name, _matchup_count(raws[before:]))
-        return raws
+                tally.produced(scope_name, _matchup_count(got))
+        return raws[start:]
 
-    def _fetch_scope(self, scope: _Scope) -> list[RawResponse]:
+    def _fetch_scope(
+        self, scope: _Scope, *, into: list[RawResponse] | None = None
+    ) -> list[RawResponse]:
         """Fetch one matchups/markets pair, or nothing if the scope is idle.
 
         An empty ``matchups`` array is a real off day for that league, not a
@@ -686,15 +706,32 @@ class PinnacleAdapter:
         structurally changed response still raises, because that *is* a failure
         and must not look like an off day.  :meth:`fetch_raw` raises if every
         scope came back idle.
+
+        The matchups response is appended to *into* **before** the markets call
+        goes out.  Both used to be gathered locally and handed over only if both
+        succeeded, so a refused ``markets/straight`` discarded a matchups
+        response that had already arrived and already been paid for — the loss
+        the five sibling adapters' ``into=`` was added to stop, still present in
+        the one adapter nobody listed alongside them.  It is half of every
+        Pinnacle request: a league that answers 403 on the second call leaves
+        nothing on disk to diagnose the 403 from, and the fixtures it did list
+        are gone.
+
+        Returns only the responses *this call* added, so a caller that also
+        passed ``into`` can count them without re-slicing.
         """
+        pages: list[RawResponse] = [] if into is None else into
+        before = len(pages)
         matchups = self._get(scope.matchups_path, f"{_KIND_MATCHUPS}:{scope.token}")
         listed = require_list(matchups.json(), source=self._source_key, endpoint=matchups.endpoint)
         if not listed:
             log.info("%s: %s returned no matchups", self._source_key, scope.token)
-            return []
+            return pages[before:]
+        pages.append(matchups)
         markets = self._get(scope.markets_path, f"{_KIND_MARKETS}:{scope.token}")
         require_list(markets.json(), source=self._source_key, endpoint=markets.endpoint)
-        return [matchups, markets]
+        pages.append(markets)
+        return pages[before:]
 
     def _get(self, path: str, endpoint: str) -> RawResponse:
         return self._http.get(f"{self.base_url}{path}", endpoint=endpoint)
@@ -856,9 +893,27 @@ def _pair_responses(
     for token in sorted(grouped):
         slot = grouped[token]
         missing = [kind for kind in (_KIND_MATCHUPS, _KIND_MARKETS) if kind not in slot]
+        if missing == [_KIND_MARKETS]:
+            # Matchups arrived, markets did not.  This is now a shape the
+            # fetcher **produces on purpose**: ``_fetch_scope`` appends the
+            # matchups response before making the markets call, so a league
+            # whose ``markets/straight`` answers 403 leaves its fixture list on
+            # disk instead of discarding a response already paid for.
+            #
+            # Counted, not rejected.  A rejection sets ``error_kind`` and flips
+            # ``SourceHealth.ok``, so keeping the page turned a run where one
+            # league of six lost its prices into ``pinnacle: FAILED``, and
+            # reported the same 403 twice — once as ``scopes_refused``, which
+            # names the cause, and once as ``source_unhealthy:rejections``,
+            # which does not.  The refusal is already reported by the fetcher;
+            # this half-pair is its evidence, not a second fault.
+            outcome.skipped["matchups_without_markets"] += 1
+            continue
         if missing:
-            # In scope but unusable: half a pair cannot be joined, and silence
-            # here would look exactly like a league with no fixtures.
+            # No matchups to join against is still a rejection: nothing in the
+            # fetcher produces that shape, so it means a renamed endpoint or a
+            # capture directory that lost a file — and silence here would look
+            # exactly like a league with no fixtures.
             outcome.reject(
                 source,
                 "unpaired_response",

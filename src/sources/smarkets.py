@@ -532,8 +532,14 @@ class SmarketsAdapter:
             # bound on request volume is politeness and stays; reporting the run
             # as complete afterwards is not".
             if nxt and self.last_fetch is not None:
-                self.last_fetch.failed(
-                    f"{sport.value}: stopped at the {MAX_PAGES_PER_SPORT}-page cap",
+                # Filed under the scope's own name.  ``failed()`` *registers*
+                # the name it is given, so a decorated one ("soccer: stopped at
+                # the 2-page cap") is a scope the book was never asked for: it
+                # lands in the numerator and the denominator both, and a source
+                # whose every scope truncated then grades 0.5 — a WARNING saying
+                # it "returned the rest" — when the share lost is 1.0.
+                self.last_fetch.truncated(
+                    sport.value,
                     CoverageCappedError(
                         f"{self._source_key}: {sport.value} still had a cursor when "
                         f"the {MAX_PAGES_PER_SPORT}-page cap was reached; the rest "

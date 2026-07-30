@@ -388,6 +388,24 @@ class ScopeTally:
     tally knew; nothing could ask it.
     """
 
+    truncated_scopes: list[str] = field(default_factory=list)
+    """``"scope: reason"`` per scope that produced a slate and then stopped early.
+
+    A third state, and it needs to be one.  "Refused" and "produced" cannot
+    express a scope that answered, handed over most of a league, and hit a
+    self-imposed page cap — and filing it as a refusal says something false in
+    the direction that matters: Polymarket returning 41 of its MLB events was
+    reported as ``was refused 1 of the 1 scope(s) it asked for and returned none
+    of the rest``, graded ERROR, and set a non-zero exit code on a run that had
+    collected 2,393 rows from ten venues.
+
+    So a truncation is reported on its own line and never enters the
+    share-of-scopes-lost arithmetic.  How much a cap left behind is not knowable
+    from the count of scopes — it is a fraction of *one* scope, of unknown size —
+    and the honest reading of "one scope truncated of one scope asked for" is not
+    100% lost.
+    """
+
     _requested: set[str] = field(default_factory=set, repr=False)
     """Which scope names have been counted, so the count matches the names.
 
@@ -417,10 +435,39 @@ class ScopeTally:
         else:
             self.empty_scopes.append(scope)
 
+    _failed: set[str] = field(default_factory=set, repr=False)
+    """Distinct scope names refused, which is the numerator.
+
+    ``failed_scopes`` is a list of *messages* and one scope can produce two of
+    them — SX Bet's metadata half and its order-book half are one scope and two
+    requests — while ``requested`` de-duplicates.  Counting the messages put the
+    numerator above the denominator and printed "was refused 2 of the 1 scope(s)
+    it asked for", which is the failure this class's own docstring says the
+    design eliminates, reached by a different route.
+    """
+
     def failed(self, scope: str, error: SourceError) -> None:
         self.requested(scope)
+        self._failed.add(scope)
         self.failures.append(error)
         self.failed_scopes.append(f"{scope}: {error}")
+
+    def truncated(self, scope: str, error: SourceError) -> None:
+        """Record that *scope* answered but stopped short of its whole slate.
+
+        Deliberately does **not** call :meth:`requested`, and does not touch
+        ``failures``: a cap is a note about a scope, not a scope of its own, and
+        the scope it is about has either already been registered by the caller
+        or — in Pinnacle's league-index fallback — names leagues that were never
+        asked for at all.  Registering either kind moves the denominator, which
+        is how the invented scope names of round 28 diluted every share.
+        """
+        self.truncated_scopes.append(f"{scope}: {error}")
+
+    @property
+    def scopes_failed(self) -> int:
+        """How many distinct scopes were refused outright."""
+        return len(self._failed)
 
     def require_something(self, *, what: str = "pregame event") -> None:
         """Raise unless at least one scope produced data.

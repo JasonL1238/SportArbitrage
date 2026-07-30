@@ -250,7 +250,9 @@ CREATE TABLE IF NOT EXISTS source_health (
     repaired_count  INTEGER NOT NULL DEFAULT 0,
     unchanged_payloads INTEGER NOT NULL DEFAULT 0,
     scopes_requested   INTEGER NOT NULL DEFAULT 0,
+    scopes_failed      INTEGER NOT NULL DEFAULT 0,
     scopes_refused     TEXT,
+    scopes_truncated   TEXT,
     error_kind      TEXT,
     error_message   TEXT,
     PRIMARY KEY (run_id, source_key)
@@ -906,7 +908,9 @@ class Store:
     #: insert against yesterday's database.
     _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
         ("source_health", "scopes_requested", "INTEGER NOT NULL DEFAULT 0"),
+        ("source_health", "scopes_failed", "INTEGER NOT NULL DEFAULT 0"),
         ("source_health", "scopes_refused", "TEXT"),
+        ("source_health", "scopes_truncated", "TEXT"),
         ("source_health", "repaired_count", "INTEGER NOT NULL DEFAULT 0"),
         ("collection_run", "scope_sports", "TEXT NOT NULL DEFAULT ''"),
         ("collection_run", "scope_leagues", "TEXT NOT NULL DEFAULT ''"),
@@ -1195,9 +1199,10 @@ class Store:
                    (run_id, source_key, ok, checked_at, request_count, raw_bytes, latency_ms,
                     quote_count, event_count, rejection_count, skipped_count,
                     repaired_count,
-                    unchanged_payloads, scopes_requested, scopes_refused,
+                    unchanged_payloads, scopes_requested, scopes_failed,
+                    scopes_refused, scopes_truncated,
                     error_kind, error_message)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     run_id,
                     health.source_key,
@@ -1213,11 +1218,16 @@ class Store:
                     health.repaired_count,
                     health.unchanged_payloads,
                     health.scopes_requested,
+                    health.scopes_failed,
                     # Stored, because a refusal that lives only in a finding's
                     # message text cannot be compared across runs — and "this
                     # league was refused yesterday too" is the fact that turns a
                     # bad afternoon into a dead feed.
                     "\n".join(health.failed_scopes) or None,
+                    # Stored for the same reason, and separately: a cap that is
+                    # hit every single run is a cap set too low, and that is only
+                    # visible by comparing runs.
+                    "\n".join(health.truncated_scopes) or None,
                     health.error_kind,
                     health.error_message,
                 ),

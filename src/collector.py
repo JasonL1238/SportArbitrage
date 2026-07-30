@@ -918,7 +918,10 @@ def _collect_source(
     # that lost a league to a 429 still summarised as OK.
     tally = getattr(source, "last_fetch", None)
     failed_scopes = tuple(getattr(tally, "failed_scopes", ()))
+    truncated_scopes = tuple(getattr(tally, "truncated_scopes", ()))
     scopes_requested = int(getattr(tally, "scopes_requested", 0))
+    # Distinct scopes refused, not messages logged — see ``SourceHealth``.
+    scopes_failed = int(getattr(tally, "scopes_failed", len(failed_scopes)))
 
     # Raw bytes land on disk before anything interprets them.
     #
@@ -954,6 +957,13 @@ def _collect_source(
                 request_count=len(raws),
                 raw_bytes=sum(raw.byte_size for raw in raws),
                 latency_ms=latency_ms,
+                # The adapter already knew which scopes it lost; dropping that
+                # here left a parse/write failure looking like a source that had
+                # never been asked for anything.
+                scopes_requested=scopes_requested,
+                scopes_failed=scopes_failed,
+                truncated_scopes=truncated_scopes,
+                failed_scopes=failed_scopes,
                 error_kind="raw_write_failed",
                 error_message=f"{type(exc).__name__}: {exc}",
             ),
@@ -973,6 +983,10 @@ def _collect_source(
                 raw_bytes=sum(raw.byte_size for raw in raws),
                 latency_ms=latency_ms,
                 unchanged_payloads=unchanged_payloads,
+                scopes_requested=scopes_requested,
+                scopes_failed=scopes_failed,
+                truncated_scopes=truncated_scopes,
+                failed_scopes=failed_scopes,
                 error_kind=getattr(exc, "kind", "parse_error"),
                 error_message=f"{type(exc).__name__}: {exc}",
             ),
@@ -1014,6 +1028,8 @@ def _collect_source(
             error_kind=error_kind,
             error_message=error_message,
             scopes_requested=scopes_requested,
+            scopes_failed=scopes_failed,
+            truncated_scopes=truncated_scopes,
             failed_scopes=failed_scopes,
         ),
         outcome,
@@ -1239,14 +1255,31 @@ def _check_source_health(
         # weight a scope that returned nothing — its size is exactly what was not
         # collected — so the second clause asks the question that can be
         # answered: did what survived amount to a slate?
-        asked = entry.scopes_requested or len(entry.failed_scopes)
-        share_lost = len(entry.failed_scopes) / max(asked, 1)
+        # Counted in **distinct scopes**, both sides.  ``failed_scopes`` is a
+        # list of messages and one scope can raise twice — SX Bet's metadata
+        # half and its order-book half are one scope and two requests — which
+        # put the numerator above the denominator and printed "was refused 2 of
+        # the 1 scope(s) it asked for".
+        lost = entry.scopes_failed or len(entry.failed_scopes)
+        asked = max(entry.scopes_requested, lost)
+        share_lost = lost / max(asked, 1)
         collapsed = share_lost > (1 - MIN_PRODUCING_SHARE) or not entry.event_count
         report.add(
             Severity.ERROR if collapsed else Severity.WARNING,
             "scopes_refused",
-            f"{entry.source_key} was refused {len(entry.failed_scopes)} of the scopes it "
-            f"asked for and returned the rest: {'; '.join(entry.failed_scopes[:3])}"
+            f"{entry.source_key} was refused {lost} of the {asked} "
+            "scope(s) it asked for"
+            # "and returned the rest" was said unconditionally, including on the
+            # runs where there was no rest: a source whose every scope was
+            # refused read as one that had mostly worked.  The denominator is
+            # named for the same reason — "refused 2 scopes" and "refused 2 of
+            # 2" are different runs.
+            + (
+                " and returned none of the rest"
+                if lost >= asked
+                else " and returned the rest"
+            )
+            + f": {'; '.join(entry.failed_scopes[:3])}"
             + (" …" if len(entry.failed_scopes) > 3 else "")
             + (
                 " — most of what this source was asked for, which is a broken feed "
@@ -1254,6 +1287,34 @@ def _check_source_health(
                 if collapsed
                 else ""
             ),
+            source=entry.source_key,
+        )
+
+    # A scope that answered and then stopped short of its whole slate.
+    #
+    # Reported separately from a refusal, and never folded into the share above.
+    # Filing a cap as a refusal said something false in the direction that
+    # matters: Polymarket handing over 41 MLB events and stopping at its own
+    # two-page cap was reported as "refused 1 of the 1 scope(s) it asked for and
+    # returned none of the rest", graded ERROR, and failed a run that had
+    # collected 2,393 rows from ten venues.  A cap leaves behind a fraction of
+    # one scope, of unknown size; "one scope of one was lost" is not a reading
+    # the evidence supports.
+    #
+    # A warning, not an error, and not gradable on any share: the count of
+    # scopes cannot express how much of one scope is missing.  What it can do is
+    # name it, so that an operator deciding whether to act on the run knows the
+    # slate is short and where.
+    for entry in health:
+        if not entry.truncated_scopes:
+            continue
+        report.add(
+            Severity.WARNING,
+            "scopes_truncated",
+            f"{entry.source_key} stopped short on {len(entry.truncated_scopes)} "
+            f"scope(s) it did collect, so their slates are incomplete: "
+            + "; ".join(entry.truncated_scopes[:3])
+            + (" …" if len(entry.truncated_scopes) > 3 else ""),
             source=entry.source_key,
         )
 

@@ -272,18 +272,105 @@ class PolymarketAdapter:
             # invisible.  ``CoverageCappedError`` exists for exactly this: "a
             # bound on request volume is politeness and stays; reporting the run
             # as complete afterwards is not".  Pinnacle's league-index fallback
-            # was the only place that did it — and the committed fixtures for
-            # this adapter were captured *at* the cap, page 2 coming back full.
-            if self.last_fetch is not None:
-                self.last_fetch.failed(
-                    f"{route.slug}: stopped at the {MAX_PAGES_PER_TAG}-page cap",
-                    CoverageCappedError(
-                        f"{self._source_key}: {route.slug}'s last page came back full "
-                        f"at the {MAX_PAGES_PER_TAG}-page cap, so more events existed "
-                        f"upstream and were not collected"
-                    ),
-                )
+            # was the only place that did it.
+            #
+            # But the four sibling adapters can *know* they truncated, because
+            # their venues hand back a cursor that is still live.  Gamma's
+            # ``/events`` is offset-paged and returns no cursor, no total and no
+            # more-pages flag, so a last page that is exactly full is the same
+            # bytes whether ten events follow it or none.  Asserting truncation
+            # from that alone made the claim on essentially every run — the
+            # committed captures are 20 events against ``limit: 20`` — which
+            # spends the operator's attention on the runs that were complete and
+            # so buys nothing for the runs that were not.
+            #
+            # One row settles it.  The probe is a single extra request, made
+            # only on a scope that actually reached the cap, and it is kept
+            # rather than thrown away: it is a page of the slate that was paid
+            # for, and discarding it would be the "gathered locally, handed over
+            # only on success" mistake that ``into=`` exists to prevent.
+            self._probe_past_cap(route, offset, into=pages)
         return pages
+
+    def _probe_past_cap(
+        self, route: TagRoute, offset: int, *, into: list[RawResponse]
+    ) -> None:
+        """Ask for one event past the cap, and report the truncation only if it
+        is there."""
+        if self.last_fetch is None:
+            return
+        try:
+            probe = self._http.get(
+                f"{self.base_url}/events",
+                endpoint=events_endpoint(route.slug, MAX_PAGES_PER_TAG + 1),
+                params={
+                    "tag_slug": route.slug,
+                    "closed": "false",
+                    "active": "true",
+                    "limit": "1",
+                    "offset": str(offset),
+                    "order": "endDate",
+                    "ascending": "true",
+                },
+            )
+        except SourceError as exc:
+            # The probe is the only thing that can tell a truncated slate from
+            # one that ended on the boundary, so a refused probe leaves the
+            # question open — and an open question about missing events is
+            # reported, not assumed away.  Said in those words rather than as
+            # "more events existed", because that is not what was established.
+            self.last_fetch.truncated(
+                route.slug,
+                CoverageCappedError(
+                    f"{self._source_key}: {route.slug} filled all "
+                    f"{MAX_PAGES_PER_TAG} permitted pages and the request that "
+                    f"would have shown whether more events follow was refused "
+                    f"({exc}), so the slate cannot be called complete"
+                ),
+            )
+            return
+        try:
+            answer = probe.json()
+        except ValueError:
+            answer = None
+        if not isinstance(answer, list):
+            # A body that is not a list answers nothing.  ``_event_count`` reads
+            # one as zero events, which would take the all-clear branch below
+            # and record "the slate ended exactly on the cap boundary" on the
+            # strength of a response that established nothing — the same
+            # assuming-away this whole method exists to stop, reached through
+            # the one input it does not check.
+            #
+            # And it must not be handed to ``parse_polymarket``: that path runs
+            # ``require_list`` on every retained raw, so keeping the probe turned
+            # a usable partial slate into a source-wide parse failure.  The
+            # pages already collected stay; only the unusable probe is dropped.
+            self.last_fetch.truncated(
+                route.slug,
+                CoverageCappedError(
+                    f"{self._source_key}: {route.slug} filled all "
+                    f"{MAX_PAGES_PER_TAG} permitted pages and the request that "
+                    f"would have shown whether more events follow came back as "
+                    f"{type(answer).__name__}, not a list of events, so the "
+                    f"slate cannot be called complete"
+                ),
+            )
+            return
+        # Kept only once it is known to be a list of events — empty or not —
+        # so parse can read it the same way as every other page.
+        into.append(probe)
+        if not answer:
+            # The slate ended exactly on the cap boundary.  Nothing was lost, so
+            # nothing is reported.
+            return
+        self.last_fetch.truncated(
+            route.slug,
+            CoverageCappedError(
+                f"{self._source_key}: {route.slug} still had events past offset "
+                f"{offset} when the {MAX_PAGES_PER_TAG}-page cap was reached; "
+                f"the rest were not collected"
+            ),
+        )
 
     def parse(self, raws: Sequence[RawResponse]) -> ParseOutcome:
         return parse_polymarket(raws)

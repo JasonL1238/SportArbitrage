@@ -1012,6 +1012,16 @@ function unitFor(sport, period) {
 // How many priced outcomes a complete moneyline has in this window: three where
 // a draw is a real, backable outcome, two otherwise.  Read from the same
 // settlement table the pipeline settles on.
+/** Can this scoring window end level at all?  Read from the same table
+ * ``src/vocab.py`` states it in, because "or draw" is a claim about the sport
+ * and printing it where a tie cannot happen describes an outcome that does not
+ * exist. */
+function tiePossible(sport, period) {
+  const facts = SPORT_FACTS[sport];
+  const window = facts && facts.periods && facts.periods[period];
+  return !!(window && window.tie_possible);
+}
+
 function moneylineSides(sport, period) {
   const facts = SPORT_FACTS[sport];
   const window = facts && facts.periods && facts.periods[period];
@@ -1030,8 +1040,17 @@ function moneylineSides(sport, period) {
 // to lose" in the same strip where "problems found" said 0, and as
 // "smarkets keeps -23.3%" on the bet panel.  The committed capture holds 221
 // three-way moneylines; one suspended leg on any of them flips the headline.
+// The status half of that rule lived in one of the two call sites, not in here.
+// ``validation.py`` requires ``len(active) == len(rows)``: a price that is
+// showing is not being offered, so a market with a suspended leg is exactly as
+// unsummable as one with a missing leg. The quality strip filtered to active
+// rows before calling; the bet panel did not, and read a book "keeping −17.9%"
+// off a three-way whose draw was suspended — on the same page whose quality
+// strip had correctly excluded that market. One rule, in one place, so the two
+// panels cannot disagree about the same market again.
 function sumsToAMargin(rows) {
   if (rows.length < 2) return false;
+  if (rows.some((r) => str(r[COL.status]) !== 'active')) return false;
   const first = rows[0];
   if (str(first[COL.market]) !== 'moneyline') return rows.length >= 2;
   return rows.length >= moneylineSides(str(first[COL.sport]), str(first[COL.period]));
@@ -1101,6 +1120,30 @@ const quarterHalves = (n) => {
   return [lower, lower + 0.5];
 };
 
+/** Does the *backed* side half-win at the landing point, or half-lose?
+ *
+ * A quarter line splits the stake across the two neighbouring half-lines, so at
+ * the one score between them one half pushes and the other settles — and which
+ * one settles depends on which side of the quarter the line sits.  On the
+ * giving side (a negative spread, or an over) a ``.75`` line half-*wins* and a
+ * ``.25`` line half-*loses*; on the receiving side (a positive spread, or an
+ * under) it is the other way round.
+ *
+ * This was assumed rather than computed: both halves of every quarter line were
+ * told the middle outcome "pays half".  ``src/arb.py`` gives one side
+ * ``HALF_WIN`` and the other ``HALF_LOSE`` — never both — so on 127 of the 254
+ * quarter-line rows in the committed captures the page described a payout to
+ * the reader who was, at that score, losing half the stake.  The two sentences
+ * sat next to each other on the same fixture panel.
+ */
+const quarterHalfWins = (line, giving) => {
+  const quarter = Math.abs(Math.abs(line % 1) - 0.75) < 1e-9;
+  return giving ? quarter : !quarter;
+};
+
+/** The one score a quarter line lands on: always a whole number. */
+const quarterLanding = (line) => Math.abs(Math.round(line));
+
 /** One bet, as a sentence: "Reds win by 2 or more". */
 function describeBet(bet, homeRaw, awayRaw) {
   const home = nick(homeRaw), away = nick(awayRaw);
@@ -1132,12 +1175,36 @@ function describeBet(bet, homeRaw, awayRaw) {
     const size = Math.abs(bet.line);
     const margin = (n) => (n === 1 ? 'lose by 1' : `lose by ${n} or fewer`);
     if (isQuarter(bet.line)) {
-      // Half the stake on each neighbouring line, so the middle outcome pays
-      // half and the stake is only ever half at risk there.
-      const [lo, hi] = quarterHalves(Math.abs(bet.line));
-      text = bet.line < 0
-        ? `${picked} win by ${Math.ceil(hi)} or more; a ${Math.ceil(lo)}-${unit} win pays half`
-        : `${picked} win, or lose by fewer than ${lo}; a ${lo}-${unit} loss pays half`;
+      // Half the stake on each neighbouring line, so at the one score between
+      // them half the stake pushes and half settles.  Which way it settles is
+      // computed, not assumed — see ``quarterHalfWins``.
+      const [lo, hi] = quarterHalves(size);
+      const at = quarterLanding(bet.line);
+      const wins = quarterHalfWins(bet.line, bet.line < 0);
+      const verb = wins ? 'pays half' : 'loses half the stake';
+      if (bet.line < 0) {
+        // Full win needs to beat the *upper* half-line, so the threshold is one
+        // clear of it: at −0.75 the halves are −0.5 and −1.0, a one-goal win is
+        // the split, and only a two-goal win collects both.  This said "win by
+        // 1 or more" beside "a 1-goal win pays half" — two claims about the same
+        // score, one of them wrong.
+        // A "0-goal win" is a draw; say the word rather than describe it.
+        const landing = at === 0 ? 'a draw' : `a ${at}-${unit} win`;
+        text = `${picked} win by ${Math.floor(hi) + 1} or more; ${landing} ${verb}`;
+      } else {
+        // Mirror image: everything up to one short of the *lower* half-line is a
+        // full win, and ``at`` is a loss by that many — or a draw, when it is 0.
+        // ``room === 0`` means a level game is still a *full* win — both
+        // half-lines cover it — so the sentence has to say so where that can
+        // happen.  "AWAY win" alone silently dropped the draw from the winning
+        // set on every +0.75 and +1.25 line.
+        const room = Math.ceil(lo) - 1;
+        const core = room > 0 ? `${picked} win, or ${margin(room)}`
+          : room === 0 && tiePossible(bet.sport, bet.period) ? `${picked} win, or draw`
+          : `${picked} win`;
+        const landing = at === 0 ? 'a draw' : `a ${at}-${unit} loss`;
+        text = `${core}; ${landing} ${verb}`;
+      }
     } else if (bet.line < 0) {
       text = isHalf(size)
         ? `${picked} win by ${Math.ceil(size)} or more`
@@ -1155,10 +1222,15 @@ function describeBet(bet, homeRaw, awayRaw) {
       : 'Both sides together';
     const n = bet.line;
     if (isQuarter(n)) {
+      // Same split, same landing score, and the same rule for which half of the
+      // stake settles: an over is the giving side, an under the receiving one.
       const [lo, hi] = quarterHalves(n);
-      text = bet.selection === 'over'
-        ? `${scorer} score ${Math.ceil(hi)} ${units} or more; exactly ${Math.ceil(lo)} pays half`
-        : `${scorer} score ${Math.floor(lo)} ${units} or fewer; exactly ${Math.ceil(lo)} pays half`;
+      const at = quarterLanding(n);
+      const over = bet.selection === 'over';
+      const verb = quarterHalfWins(n, over) ? 'pays half' : 'loses half the stake';
+      text = over
+        ? `${scorer} score ${Math.floor(hi) + 1} ${units} or more; exactly ${at} ${verb}`
+        : `${scorer} score ${Math.ceil(lo) - 1} ${units} or fewer; exactly ${at} ${verb}`;
     } else if (bet.selection === 'over') {
       text = isHalf(n) ? `${scorer} score ${Math.ceil(n)} ${units} or more`
         : `${scorer} score ${n + 1} ${units} or more (exactly ${n} refunds)`;
@@ -1528,8 +1600,17 @@ function renderOverview() {
   const run = runById.get(currentRunId);
   const rows = currentRows();
   const hasRows = rowsByRun.has(currentRunId);
-  const events = new Set(rows.map((r) => str(r[COL.event_key])));
-  const groups = marketGroups(rows);
+  // Active only: a suspended price is showing, not offering, so it is not a
+  // "bet you could place" and cannot fill a side of a market the page claims
+  // is complete.  The Checks panel already filtered this way; the overview
+  // strip did not, and the two disagreed about the same collection —
+  // "separate bets 35 — each with every side priced" beside "bets fully
+  // priced 21".
+  const live = rows.filter((r) => str(r[COL.status]) === 'active');
+  const events = new Set(live.map((r) => str(r[COL.event_key])));
+  const groups = marketGroups(live);
+  let complete = 0;
+  for (const group of groups.values()) if (sumsToAMargin(group)) complete += 1;
   const health = run.sources;
   const producing = health.filter((h) => h.quote_count > 0);
 
@@ -1565,10 +1646,10 @@ function renderOverview() {
 
   const scoped = currentSport ? ` · ${sportLabel(currentSport)} only` : '';
   const stats = [
-    ['prices collected', (hasRows ? rows.length : run.quote_count).toLocaleString(),
+    ['prices collected', (hasRows ? live.length : run.quote_count).toLocaleString(),
       'one per bet you could place' + scoped],
     ['fixtures', hasRows ? events.size : run.event_count, `playing ${DATA.meta.slate_dates}`],
-    ['separate bets', hasRows ? groups.size.toLocaleString() : '—', 'each with every side priced'],
+    ['separate bets', hasRows ? complete.toLocaleString() : '—', 'each with every side priced'],
     ['sports', (run.sports || []).length,
       usableSports.length
         ? `${usableSports.length} comparable: ${usableSports.map((e) => sportLabel(e.sport)).join(', ')}`
@@ -1723,6 +1804,27 @@ function renderSports() {
 
 /* ── venues ──────────────────────────────────────────────────────────────── */
 
+/* How many distinct scopes a health row refused.
+
+ * Modern rows always set ``scopes_failed`` whenever they set refusals.  The
+ * additive migration that added the column backfills ``0`` onto older rows
+ * whose ``scopes_refused`` messages are still populated, and treating that
+ * zero as authoritative hid every pre-upgrade refusal behind a green
+ * "responded normally" pill.  A stated zero with messages is therefore read
+ * as "the distinct count was never written", not as "nothing was refused". */
+function scopesFailedOf(h) {
+  const messages = h.scopes_refused || [];
+  const stated = h.scopes_failed;
+  if (stated == null) return messages.length;
+  if (stated === 0 && messages.length) {
+    // ``"{scope}: {error}"`` — split on the first colon-space, not the first
+    // colon.  Pinnacle's fallback scopes are ``MLB:246`` / ``MLB:247``.
+    const names = new Set(messages.map((m) => String(m).split(': ', 1)[0]));
+    return names.size || messages.length;
+  }
+  return stated;
+}
+
 function renderSources() {
   const run = runById.get(currentRunId);
   const byKey = new Map(run.sources.map((h) => [h.key, h]));
@@ -1744,13 +1846,17 @@ function renderSources() {
     // not "responded normally", and said so nowhere on this page: the columns
     // reached the stored payload and stopped there, so a book that had lost
     // most of its leagues rendered byte-identically to a clean one.
-    const refused = (h.scopes_refused || []).length;
+    const refused = scopesFailedOf(h);
+    const truncated = (h.scopes_truncated || []).length;
     const pill = !h.ok
       ? `<span class="pill bad"><i></i>${escapeHtml(label(h.error_kind) || 'failed')}</span>`
       : refused
         ? `<span class="pill warn"><i></i>refused ${refused} of ${
             h.scopes_requested || refused} scopes</span>`
-        : '<span class="pill ok"><i></i>responded normally</span>';
+        : truncated
+          ? `<span class="pill warn"><i></i>cut short on ${truncated} scope${
+              truncated === 1 ? '' : 's'}</span>`
+          : '<span class="pill ok"><i></i>responded normally</span>';
     const cells = [
       ['prices published', h.quote_count.toLocaleString()],
       ...(h.stored_count === undefined || h.stored_count === h.quote_count ? []
@@ -1763,6 +1869,9 @@ function renderSources() {
     ];
     if (refused) {
       cells.push(['refused', `${refused} of ${h.scopes_requested || refused} scopes`]);
+    }
+    if (truncated) {
+      cells.push(['cut short', `${truncated} scope${truncated === 1 ? '' : 's'}`]);
     }
     // A link rather than a click handler, so the whole card is keyboard-reachable
     // and the browser's own back button returns here.
@@ -1946,7 +2055,14 @@ function selectEvent(key) {
         const best = live.length ? Math.max(...live.map(netOdds)) : null;
         const suspended = str(q[COL.status]) !== 'active';
         const isBest = !suspended && live.length > 1 && net === best;
-        const note = `${fmtAmerican(q[COL.american_odds])} · $100 returns ${fmtReturn(net)}${
+        // ``americanOf``, not the stored number: this tooltip prints the
+        // American odds directly beside the net return, and the stored value is
+        // the *gross* one. On every row from a commission venue the two
+        // disagreed — matchbook 2.34 read "+134 · $100 returns $231", and +134
+        // is $234 — while the bet panel one click away showed the net figure for
+        // the same row. It is the reason ``americanOf`` exists; two of its three
+        // call sites used it.
+        const note = `${fmtAmerican(americanOf(q))} · $100 returns ${fmtReturn(net)}${
           charges(s) ? ` · quoted ${fmtOdds(q[COL.decimal_odds])} before commission` : ''}${
           suspended ? ' · not taking bets right now' : ''}`;
         return html(`<span class="${isBest ? 'best' : ''}${suspended ? ' dim' : ''}">${
@@ -2035,7 +2151,14 @@ function fixtureBucket(r, anchors) {
   const key = str(r[COL.event_key]) + '|' + str(r[COL.league]);
   const window = fixtureWindowMs(str(r[COL.league]));
   const base = anchors.get(key);
-  return window > 0 && base !== undefined ? Math.floor((when - base) / window) : 0;
+  if (!(window > 0) || base === undefined) return 0;
+  // Inclusive of the window's far edge, matching ``betRows``
+  // (``Math.abs(when - anchor) > window``).  ``Math.floor(delta / window)``
+  // put a start *exactly* one window after the anchor in bucket 1, so the bet
+  // panel joined the price history and the Movement view split it.
+  const delta = when - base;
+  if (delta <= window) return 0;
+  return Math.floor(delta / window);
 }
 
 function betRows(key, reference) {
@@ -2102,11 +2225,7 @@ function renderBet(key) {
   // at one number now land here together, and the panel must show the one the
   // reported margin was built on.  Takeable first, then better price.
   const byBook = new Map();
-  for (const m of shown) {
-    const source = str(m.row[COL.source]);
-    const held = byBook.get(source);
-    if (!held || _betterPrice(m.row, held)) byBook.set(source, m.row);
-  }
+  for (const m of shown) keepBetter(byBook, str(m.row[COL.source]), m.row);
   // Best *takeable*, matching the fixture table and the detector: a suspended
   // price is showing, not offering.
   const live = [...byBook.values()].filter((r) => str(r[COL.status]) === 'active');
@@ -2214,8 +2333,16 @@ function renderBet(key) {
   // the same evidence as the movement table, narrowed to the one bet being looked at.
   const embedded = runs.slice().reverse().filter((r) => rowsByRun.has(r.id));
   const history = [...new Set(all.map((m) => str(m.row[COL.source])))].sort().map((source) => {
-    const byRun = new Map(all.filter((m) => str(m.row[COL.source]) === source)
-      .map((m) => [m.run.id, m.row]));
+    // Same rule as ``byBook`` above, not last-write-wins. The bet key drops
+    // ``is_alternate``, so a book's main and alternate row at one number both
+    // land here, and ``new Map(...)`` kept whichever the source order put last
+    // — so this column could disagree with the price column beside it, on the
+    // same book, in the same collection.
+    const byRun = new Map();
+    for (const m of all) {
+      if (str(m.row[COL.source]) !== source) continue;
+      keepBetter(byRun, m.run.id, m.row);
+    }
     const series = embedded.map((r) => byRun.get(r.id)).filter(Boolean)
       .map(netOdds);
     return { source, byRun, series };
@@ -2284,10 +2411,18 @@ function renderBook(key) {
     (note && note.settles) || '',
   ].filter(Boolean).join(' ');
   el('book-host').textContent = (note && note.host) || '';
+  const refusedNow = health ? scopesFailedOf(health) : 0;
+  const truncatedNow = health ? (health.scopes_truncated || []).length : 0;
   el('book-state').innerHTML = health
-    ? (health.ok
-        ? '<span class="pill ok"><i></i>responded normally</span>'
-        : `<span class="pill bad"><i></i>${escapeHtml(label(health.error_kind) || 'failed')}</span>`)
+    ? (!health.ok
+        ? `<span class="pill bad"><i></i>${escapeHtml(label(health.error_kind) || 'failed')}</span>`
+        : refusedNow
+          ? `<span class="pill warn"><i></i>refused ${refusedNow} of ${
+              health.scopes_requested || refusedNow} scopes</span>`
+          : truncatedNow
+            ? `<span class="pill warn"><i></i>cut short on ${truncatedNow} scope${
+                truncatedNow === 1 ? '' : 's'}</span>`
+            : '<span class="pill ok"><i></i>responded normally</span>')
     : '<span class="pill flat">nothing recorded for this collection</span>';
 
   const mine = currentRows().filter((r) => str(r[COL.source]) === key);
@@ -2304,9 +2439,11 @@ function renderBook(key) {
     ['same as last time', `${health.unchanged_payloads}/${health.request_count}`,
       'byte-for-byte identical replies'],
     ['left alone', (health.skipped_count || 0).toLocaleString(), 'seen but out of scope'],
-    ['refused', (health.scopes_refused || []).length + ' of ' +
+    ['refused', refusedNow + ' of ' +
       (health.scopes_requested || (health.scopes_refused || []).length || 0),
       'scopes it was asked for'],
+    ['cut short', truncatedNow,
+      'scopes that answered but stopped early'],
   ] : [['prices stored', mine.length.toLocaleString(), 'no health record for this collection']];
   el('book-stats').innerHTML = stats.map(([name, value, sub]) =>
     `<div class="stat"><span>${escapeHtml(name)}</span><b>${escapeHtml(String(value))}</b><small>${
@@ -2317,6 +2454,14 @@ function renderBook(key) {
     // Bundesliga, Ligue 1" says which prices are missing from the run.
     el('book-stats').innerHTML += `<div class="stat"><span>what it refused</span><small>${
       health.scopes_refused.map(escapeHtml).join('<br>')}</small></div>`;
+  }
+  if (health && (health.scopes_truncated || []).length) {
+    // A different claim from a refusal, and it has to read like one: these
+    // scopes answered. What is missing is the tail of each of them, which is why
+    // this is never counted into "refused N of M" — the whole scope was not
+    // lost, and saying it was failed a run that had collected ten venues' rows.
+    el('book-stats').innerHTML += `<div class="stat"><span>where it stopped early</span><small>${
+      health.scopes_truncated.map(escapeHtml).join('<br>')}</small></div>`;
   }
   if (health && health.error_message) {
     el('book-stats').innerHTML += `<div class="stat"><span>what it said</span><small>${
@@ -2643,6 +2788,37 @@ function movementCounts(series, movedCount) {
   return { comparable, once: series.size - comparable, stable: comparable - movedCount };
 }
 
+/** Identity of one price series across collections.
+ *
+ * The same list as ``Quote.dedup_key`` in Python, plus the fixture bucket, and
+ * it has to stay that way: anything ``dedup_key`` separates is two rows the
+ * store holds at once, so a key that merges them turns two simultaneous prices
+ * into a movement between them. ``is_alternate`` was the one left out — a book
+ * really does offer the same number twice, on its main market and on an
+ * alternate-line market — and the table sorts by swing, so the widest of those
+ * fabrications sorted to the top of the page.
+ */
+function movementKey(r, anchors) {
+  const bet = betOf(r);
+  return [str(r[COL.source]), str(r[COL.event_key]), bet.market, bet.period,
+    bet.side || '', bet.selection, bet.line, bet.is_alternate ? 'alt' : 'main',
+    fixtureBucket(r, anchors)].join('\x1f');
+}
+
+/** Keep the row a reader should be shown where a book has more than one.
+ *
+ * The bet key deliberately drops ``is_alternate`` — the detector ignores it too
+ * — so a book's main and alternate row at one number land under the same key,
+ * and something has to choose. Last-write-wins chose by source order, which
+ * meant the price column and the per-collection history column beside it could
+ * name different rows of the same book in the same collection.
+ */
+function keepBetter(map, key, row) {
+  const held = map.get(key);
+  if (!held || _betterPrice(row, held)) map.set(key, row);
+  return map;
+}
+
 function renderMovement() {
   svgRunsChart();
 
@@ -2654,15 +2830,13 @@ function renderMovement() {
   for (const run of ordered) {
     for (const r of rowsByRun.get(run.id)) {
       if (currentSport && str(r[COL.sport]) !== currentSport) continue;
-      const bet = betOf(r);
       // Keyed on the scheduled start as well, for the reason ``betRows`` is: the
       // doubleheader ordinal is a within-run rank, so once game one has started
       // and been dropped, game two inherits the bare key.  Without this, 97
       // series on the live slate spliced game one's price onto game two's and
       // drew the join as a price movement — one of them a "+29.63% change" with
       // a sparkline, between two different games.
-      const key = [str(r[COL.source]), str(r[COL.event_key]), bet.market, bet.period,
-        bet.side || '', bet.selection, bet.line, fixtureBucket(r, anchors)].join('\x1f');
+      const key = movementKey(r, anchors);
       if (!series.has(key)) series.set(key, { row: r, values: [] });
       const s = series.get(key);
       s.values.push(netOdds(r));

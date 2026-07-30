@@ -373,8 +373,13 @@ class SxBetAdapter:
             first = len(raws)
             hashes: set[str] = set()
             try:
-                pages = self._fetch_markets(sport, tier)
-                raws.extend(pages)
+                # ``into=raws``, not ``raws.extend(self._fetch_markets(...))``.
+                # The metadata half was still gathering locally and handing over
+                # only on success, so a refusal on page ten discarded the nine
+                # pages before it — the very shape the orders half was changed
+                # to stop, in the same method, one line down.
+                self._fetch_markets(sport, tier, into=raws)
+                pages = raws[first:]
                 # Only ask for the order book of markets a row could come from.
                 # Every hash is a share of a request, and the metadata already
                 # says which markets are out of scope, suspended, or on a game
@@ -393,8 +398,15 @@ class SxBetAdapter:
         tally.require_something(what="active market")
         return raws
 
-    def _fetch_markets(self, sport: Sport, tier: Tier) -> list[RawResponse]:
-        pages: list[RawResponse] = []
+    def _fetch_markets(
+        self, sport: Sport, tier: Tier, *, into: list[RawResponse] | None = None
+    ) -> list[RawResponse]:
+        """Every metadata page of one sport, appended to *into* as they arrive.
+
+        Appending as it goes rather than returning at the end is what lets a
+        failure part-way through keep the pages already fetched; see the caller.
+        """
+        pages: list[RawResponse] = [] if into is None else into
         pagination: str | None = None
         for page in range(1, MAX_PAGES_PER_SPORT + 1):
             params = {
@@ -430,8 +442,10 @@ class SxBetAdapter:
             # reporting the run as complete afterwards is not." Pinnacle's
             # league-index fallback was the only place doing it.
             if pagination and self.last_fetch is not None:
-                self.last_fetch.failed(
-                    f"{sport.value}: stopped at the {MAX_PAGES_PER_SPORT}-page cap",
+                # Filed under the scope's own name; a decorated one would be a
+                # scope the book was never asked for — see the sibling adapters.
+                self.last_fetch.truncated(
+                    sport.value,
                     CoverageCappedError(
                         f"{self._source_key}: {sport.value} still had pages when the "
                         f"{MAX_PAGES_PER_SPORT}-page cap was reached; the rest were not collected"

@@ -3163,7 +3163,9 @@ class TestAnExistingDatabaseSurvivesAnAddedColumn:
         # yesterday's database.
         expected = {
             ("source_health", "scopes_requested"),
+            ("source_health", "scopes_failed"),
             ("source_health", "scopes_refused"),
+            ("source_health", "scopes_truncated"),
             ("source_health", "repaired_count"),
             ("collection_run", "scope_sports"),
             ("collection_run", "scope_leagues"),
@@ -3200,14 +3202,20 @@ class TestAnExistingDatabaseSurvivesAnAddedColumn:
             run = store.start_run(FETCHED)
             store.save_health(run, SourceHealth(
                 source_key="book_a", ok=True, checked_at=FETCHED,
-                scopes_requested=6, failed_scopes=("EPL: blocked", "MLS: blocked"),
+                scopes_requested=6,
+                scopes_failed=2,
+                failed_scopes=("EPL: blocked", "MLS: blocked"),
+                truncated_scopes=("MLB: beyond the fallback cap",),
             ))
             row = store.query(
-                "SELECT scopes_requested, scopes_refused FROM source_health "
-                "WHERE run_id = ?", (run,),
+                "SELECT scopes_requested, scopes_failed, scopes_refused, "
+                "scopes_truncated FROM source_health WHERE run_id = ?",
+                (run,),
             )[0]
         assert row["scopes_requested"] == 6
+        assert row["scopes_failed"] == 2
         assert "EPL: blocked" in row["scopes_refused"]
+        assert "beyond the fallback cap" in row["scopes_truncated"]
 
         # Every registered column is back, on the table it belongs to.
         with Store(path) as store:
@@ -3763,8 +3771,13 @@ class TestTheDegradedPathIsInstrumentedToo:
         """
         source = self._adapter(listed=30, blocked=set(), cap=5)
         source.fetch_raw()
-        capped = [e for e in source.last_fetch.failed_scopes if "beyond the fallback cap" in e]
-        assert len(capped) == 1, source.last_fetch.failed_scopes
+        # A deliberate page/league cap is a truncation, not a refusal — see
+        # ``ScopeTally.truncated``.  Filing it under ``failed_scopes`` graded a
+        # run that collected five leagues as one that "returned none of the
+        # rest".
+        capped = [e for e in source.last_fetch.truncated_scopes if "beyond the fallback cap" in e]
+        assert len(capped) == 1, source.last_fetch.truncated_scopes
+        assert source.last_fetch.failed_scopes == []
         assert "25 league(s)" in capped[0]
 
     def test_a_fallback_that_covers_everything_reports_nothing(self) -> None:
@@ -4674,7 +4687,10 @@ class TestTheDashboardShowsWhatASourceWasRefused:
             store.save_health(run, SourceHealth(
                 source_key="book_a", ok=True, checked_at=FETCHED, quote_count=7,
                 scopes_requested=6,
-                failed_scopes=("EPL: blocked", "MLS: blocked"),
+                # Two messages, one distinct scope — the dashboard must print
+                # the distinct count, not ``len(scopes_refused)``.
+                scopes_failed=1,
+                failed_scopes=("mlb: metadata half", "mlb: order-book half"),
             ))
             store.save_quotes(run, [make_quote(source="book_a")])
             store.finish_run(
@@ -4684,7 +4700,70 @@ class TestTheDashboardShowsWhatASourceWasRefused:
 
         card = _health_card(data, "book_a")
         assert card["scopes_requested"] == 6
+        assert card["scopes_failed"] == 1
+        assert card["scopes_refused"] == [
+            "mlb: metadata half", "mlb: order-book half",
+        ]
+        assert card["scopes_failed"] != len(card["scopes_refused"])
+
+    def test_a_migrated_row_with_refusal_messages_is_not_shown_as_clean(
+        self, tmp_path
+    ) -> None:
+        """``scopes_failed`` defaults to 0 on additive upgrade.  A pre-upgrade
+        row that still names refusals must not render as having lost nothing.
+        """
+        from src.report import build_report
+        from src.sources.base import SourceHealth
+        from src.store import Store
+        from src.validation import ValidationReport
+
+        with Store(tmp_path / "db.sqlite3") as store:
+            run = store.start_run(FETCHED)
+            store.save_health(run, SourceHealth(
+                source_key="book_a", ok=True, checked_at=FETCHED, quote_count=7,
+                scopes_requested=2,
+                scopes_failed=0,
+                failed_scopes=("EPL: blocked", "MLS: blocked"),
+            ))
+            store.save_quotes(run, [make_quote(source="book_a")])
+            store.finish_run(
+                run, finished_at=FETCHED, report=ValidationReport()
+            )
+            data = build_report(store)
+
+        card = _health_card(data, "book_a")
+        assert card["scopes_failed"] == 2
         assert card["scopes_refused"] == ["EPL: blocked", "MLS: blocked"]
+
+    def test_colon_qualified_scope_names_are_not_collapsed(self, tmp_path) -> None:
+        """Pinnacle fallback scopes are ``MLB:246`` / ``MLB:247``.  Splitting
+        refusal messages on the first colon alone counted both as one.
+        """
+        from src.report import build_report
+        from src.sources.base import SourceHealth
+        from src.store import Store
+        from src.validation import ValidationReport
+
+        with Store(tmp_path / "db.sqlite3") as store:
+            run = store.start_run(FETCHED)
+            store.save_health(run, SourceHealth(
+                source_key="pinnacle", ok=True, checked_at=FETCHED, quote_count=7,
+                scopes_requested=3,
+                scopes_failed=0,
+                failed_scopes=(
+                    "MLB:246: HTTP 403: blocked",
+                    "MLB:247: HTTP 403: blocked",
+                ),
+            ))
+            store.save_quotes(run, [make_quote(source="pinnacle")])
+            store.finish_run(
+                run, finished_at=FETCHED, report=ValidationReport()
+            )
+            data = build_report(store)
+
+        card = _health_card(data, "pinnacle")
+        assert card["scopes_failed"] == 2, card
+        assert card["scopes_refused"][0].startswith("MLB:246:")
 
     def test_a_source_that_lost_nothing_carries_an_empty_list(self, tmp_path) -> None:
         from src.report import build_report
@@ -4844,6 +4923,30 @@ class TestTheWomensMarkerReachesEveryVenueThatNeedsIt:
 
         assert all(path.league for path in LEAGUE_PATHS)
         assert all(route.league for route in TAG_ROUTES)
+
+    def test_the_two_lists_account_for_every_registered_source(self) -> None:
+        """The lists above partition the registry, and nothing said so.
+
+        Both are hand-written, so a source added to the registry joined neither
+        — and the failure mode is silent in the direction that costs money: the
+        eleventh adapter maps unrecognised competitions to a catch-all, is on
+        neither list, and the marker test above simply never asks about it.  A
+        women's fixture then arrives under the men's league key and is joined to
+        the men's game across venues, which is the fault this whole class
+        exists to prevent.
+
+        Checked as a partition, in both directions: every registered key is on
+        exactly one list, and neither list names a key that is not registered.
+        """
+        from src.sources.registry import keys
+
+        registered = set(keys())
+        listed = [*self.NEEDS_MARKER, *self.IMMUNE]
+        assert len(listed) == len(set(listed)), "a source is on both lists"
+        assert set(listed) == registered, {
+            "on neither list": sorted(registered - set(listed)),
+            "not registered": sorted(set(listed) - registered),
+        }
 
 
 class TestTheWomensMarkerSpeaksMoreThanTwoLanguages:
@@ -5145,16 +5248,74 @@ class TestTheDashboardPageRendersWhatWasRefused:
         text = pathlib.Path(source).read_text()
         assert "scopes_refused" in text, "the page never mentions what was refused"
         assert "scopes_requested" in text
+        assert "scopes_failed" in text, "overview still counts messages, not scopes"
+        assert "scopes_truncated" in text, "overview never mentions a cut-short scope"
 
     def test_a_refused_source_does_not_render_as_normal(self) -> None:
-        """The pill is the thing an operator actually looks at."""
+        """The pill is the thing an operator actually looks at — on the overview
+        cards, not only the drill-down."""
         from src import report_assets
 
         text = pathlib.Path(report_assets.__file__).read_text()
-        pill = text[text.index("const pill = "): text.index("const pill = ") + 700]
-        assert "responded normally" in pill
-        assert "refused" in pill, "a refused source still renders as normal"
+        assert "function scopesFailedOf(" in text, "legacy refusal helper missing"
+        start = text.index("function renderSources()")
+        end = text.index("\nfunction ", start + 1)
+        block = text[start:end]
+        assert "scopesFailedOf" in block, "overview cards ignore the distinct count"
+        assert "scopes_truncated" in block, "overview cards ignore cut-short scopes"
+        assert "cut short" in block
+        assert "responded normally" in block
+        assert "refused" in block, "a refused source still renders as normal"
 
+    def test_overview_cards_carry_distinct_refusals_and_truncations(
+        self, tmp_path
+    ) -> None:
+        """``scopes_refused.length`` on the overview printed 'refused 2 of 1'
+        for one scope with two messages, and a page-cap-only source stayed
+        green as 'responded normally' because ``scopes_truncated`` was unread.
+        """
+        import shutil
+        import subprocess
+
+        from src.report import build_report, render_page
+        from src.sources.base import SourceHealth
+        from src.store import Store
+        from src.validation import ValidationReport
+
+        node = shutil.which("node")
+        if node is None:
+            pytest.skip("node is not installed")
+
+        with Store(tmp_path / "db.sqlite3") as store:
+            run = store.start_run(FETCHED)
+            store.save_health(run, SourceHealth(
+                source_key="book_a", ok=True, checked_at=FETCHED, quote_count=7,
+                event_count=1, request_count=2, raw_bytes=100, latency_ms=1.0,
+                scopes_requested=1, scopes_failed=1,
+                failed_scopes=("mlb: metadata half", "mlb: order-book half"),
+            ))
+            store.save_health(run, SourceHealth(
+                source_key="book_b", ok=True, checked_at=FETCHED, quote_count=3,
+                event_count=1, request_count=1, raw_bytes=50, latency_ms=1.0,
+                scopes_requested=1,
+                truncated_scopes=("mlb: beyond the page cap",),
+            ))
+            store.save_quotes(run, [
+                make_quote(source="book_a"),
+                make_quote(source="book_b", event_key="E2"),
+            ])
+            store.finish_run(run, finished_at=FETCHED, report=ValidationReport())
+            page = tmp_path / "dashboard.html"
+            page.write_text(render_page(build_report(store)), encoding="utf-8")
+
+        result = subprocess.run(
+            [node, str(pathlib.Path(__file__).parent / "dashboard_smoke.mjs"),
+             str(page)],
+            capture_output=True, text=True, timeout=60,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "overview cards use distinct refusals" in result.stdout
+        assert "overview cards name truncated scopes" in result.stdout
 
 class TestAWholeNumberStrikeIsADifferentContract:
     """``strike_type: "greater"`` is a strict inequality.
@@ -9592,6 +9753,116 @@ class TestARefusalCaptureCannotAbortThePass:
         assert health.error_kind == "blocked"
         assert isinstance(outcome, ParseOutcome)
 
+    def test_a_parse_failure_still_carries_the_scopes_the_adapter_lost(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """The tally is filled during fetch.  Dropping it on the parse-error
+        path left a source that had already recorded which leagues were refused
+        looking like one that had never been asked for anything."""
+        from src import collector
+        from src.collector import _collect_source
+        from src.raw_store import RawResponse, RawStore
+        from src.sources._common import ScopeTally
+        from src.sources.base import ParseOutcome
+        from src.sources.guards import CoverageCappedError
+
+        tally = ScopeTally("book_a")
+        tally.requested("mlb")
+        tally.failed("epl", CoverageCappedError("blocked"))
+        tally.truncated("mlb", CoverageCappedError("beyond the page cap"))
+
+        class _Partial:
+            source_key = "book_a"
+            last_fetch = tally
+
+            def fetch_raw(self):
+                return [
+                    RawResponse(
+                        source="book_a", endpoint="mlb", url="https://x",
+                        status_code=200, content_type="application/json",
+                        fetched_at=datetime.now(UTC), body="[]",
+                    )
+                ]
+
+            def parse(self, raws):
+                raise RuntimeError("boom")
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr(
+            collector, "_fetch", lambda source, tier: source.fetch_raw()
+        )
+        health, outcome = _collect_source(
+            _Partial(), raw_store=RawStore(tmp_path / "raw"), store=None,
+            run_id=None,
+        )
+        assert health.ok is False
+        assert health.error_kind == "parse_error"
+        assert health.scopes_requested == 2
+        assert health.scopes_failed == 1
+        assert health.failed_scopes == ("epl: blocked",)
+        assert health.truncated_scopes == ("mlb: beyond the page cap",)
+        assert isinstance(outcome, ParseOutcome)
+
+    def test_a_raw_write_failure_still_carries_the_scopes_the_adapter_lost(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """Same guarantee as the parse-error path, on the other early return.
+
+        Dropping the four telemetry fields from only the ``raw_write_failed``
+        branch left that path unpinned: the parse-error test stayed green.
+        """
+        from src import collector
+        from src.collector import _collect_source
+        from src.raw_store import RawResponse, RawStore
+        from src.sources._common import ScopeTally
+        from src.sources.base import ParseOutcome
+        from src.sources.guards import CoverageCappedError
+
+        tally = ScopeTally("book_a")
+        tally.requested("mlb")
+        tally.failed("epl", CoverageCappedError("blocked"))
+        tally.truncated("mlb", CoverageCappedError("beyond the page cap"))
+
+        class _Partial:
+            source_key = "book_a"
+            last_fetch = tally
+
+            def fetch_raw(self):
+                return [
+                    RawResponse(
+                        source="book_a", endpoint="mlb", url="https://x",
+                        status_code=200, content_type="application/json",
+                        fetched_at=datetime.now(UTC), body="[]",
+                    )
+                ]
+
+            def parse(self, raws):
+                raise AssertionError("parse must not run after a raw-write failure")
+
+            def close(self):
+                pass
+
+        def _explodes(*args, **kwargs):
+            raise PermissionError(13, "Permission denied")
+
+        monkeypatch.setattr(collector, "_persist_raw", _explodes)
+        monkeypatch.setattr(
+            collector, "_fetch", lambda source, tier: source.fetch_raw()
+        )
+        health, outcome = _collect_source(
+            _Partial(), raw_store=RawStore(tmp_path / "raw"), store=None,
+            run_id=None,
+        )
+        assert health.ok is False
+        assert health.error_kind == "raw_write_failed"
+        assert health.scopes_requested == 2
+        assert health.scopes_failed == 1
+        assert health.failed_scopes == ("epl: blocked",)
+        assert health.truncated_scopes == ("mlb: beyond the page cap",)
+        assert isinstance(outcome, ParseOutcome)
+
 
 class TestAPreUpgradeScopedRunKeepsItsScope:
     """The scope columns arrived by additive upgrade, which backfills ``''`` —
@@ -11102,6 +11373,39 @@ class TestATransientGatewayErrorKeepsItsRetry:
         assert len(seen) > 1, "a transient gateway error must be retried"
 
 
+def _grade_scope_refusals(source):
+    """Run the collector's own scope grading over one adapter's tally.
+
+    Built the way ``_collect_one`` builds it — ``failed_scopes`` and
+    ``scopes_requested`` read straight off ``last_fetch`` — so the arithmetic
+    under test is the arithmetic that runs.  ``event_count`` is deliberately
+    non-zero: the grade has a second clause for a source that went entirely
+    quiet, and leaving it at zero would make every one of these ERROR without
+    the share ever being consulted.
+    """
+    from src.collector import _check_source_health
+    from src.sources.base import SourceHealth
+    from src.validation import ValidationReport
+
+    tally = source.last_fetch
+    health = SourceHealth(
+        source_key=source.source_key,
+        ok=True,
+        checked_at=datetime.now(UTC),
+        event_count=1,
+        quote_count=1,
+        scopes_requested=int(tally.scopes_requested),
+        scopes_failed=int(tally.scopes_failed),
+        truncated_scopes=tuple(tally.truncated_scopes),
+        failed_scopes=tuple(tally.failed_scopes),
+    )
+    report = ValidationReport()
+    _check_source_health(
+        [health], report, configured=[source.source_key], expected=None
+    )
+    return report
+
+
 class TestASelfImposedPageCapIsReported:
     """Five adapters ended their paging loop by falling off ``range(1, CAP + 1)``
     with the venue's cursor still live and reported the scope as fully produced.
@@ -11113,25 +11417,387 @@ class TestASelfImposedPageCapIsReported:
     cap, page 2 holding 20 events against ``limit: 20``, so page 3 was never
     asked for.  Every unfetched page is an arb nobody can see, on a run that
     says OK.
+
+    Round 28 fixed that and reported it with a scope name it made up:
+    ``failed("mlb: stopped at the 2-page cap", …)``.  ``ScopeTally.failed``
+    *registers* the name it is handed — deliberately, so a scope that fails
+    before it is requested still counts — so every cap invented a scope the book
+    was never asked for and put it in the numerator and the denominator at once.
+    Polymarket with both of its scopes truncated then computed ``share_lost =
+    2/4 = 0.5`` and graded a WARNING reading "was refused 2 of the scopes it
+    asked for **and returned the rest**".  It returned none of the rest; the
+    share lost was 1.0 and the grade is ERROR.
+
+    Asserted by *running* the adapters against a transport that never stops
+    handing back pages.  The two tests these replace read the source text for
+    ``"CoverageCappedError"`` and for ``last_fetch.failed(`` within 600
+    characters of it — both of which the broken code matched.
     """
 
     PAGING_ADAPTERS = ("polymarket", "smarkets", "sxbet", "kalshi", "matchbook")
 
-    @pytest.mark.parametrize("module", PAGING_ADAPTERS)
-    def test_the_adapter_can_report_a_cap(self, module) -> None:
-        text = pathlib.Path(f"src/sources/{module}.py").read_text()
-        assert "CoverageCappedError" in text, (
-            f"{module} pages and cannot say when it stopped early"
+    @staticmethod
+    def _unpaced(source):
+        """Drop the politeness delay for one adapter instance.
+
+        These adapters share a process-wide :class:`HostPacer`, and Kalshi and
+        Smarkets raise it further still (0.6 s and 3.1 s per request), so a cap
+        of ten pages is half a minute of real sleeping for a test that asserts
+        accounting.  The pacing itself is asserted in ``test_source_client``,
+        against the pacer rather than through an adapter.
+        """
+        from src.sources._common import HostPacer
+
+        source._http.host_interval = 0.0
+        source._http._pacer = HostPacer(0.0)
+        return source
+
+    @staticmethod
+    def _endless(module: str):
+        """One adapter wired to a transport whose pages never run out, plus the
+        scope names the truncation must be filed under.
+
+        Page sizes are set to the smallest thing that still pages, so the caps
+        are reached in a few requests rather than a few hundred; the pacing
+        interval is dropped for the same reason — this asserts accounting, and
+        the politeness delay is asserted where it belongs, in
+        ``test_source_client``.
+        """
+        import httpx
+
+        future = int(
+            (datetime.now(UTC) + timedelta(days=2)).timestamp()
         )
-        assert "-page cap" in text
+
+        if module == "polymarket":
+            from src.sources.polymarket import PolymarketAdapter
+
+            def handler(request: httpx.Request) -> httpx.Response:
+                tag = request.url.params.get("tag_slug", "")
+                limit = int(request.url.params.get("limit", "2"))
+                # Always exactly full — including the one-row probe past the
+                # cap, which is what makes this a truncation and not a slate
+                # that happened to end on the boundary.
+                return httpx.Response(200, json=[
+                    {"id": f"{tag}{index}", "slug": f"{tag}-{index}", "title": "x",
+                     "startTime": "2026-08-01T18:00:00Z", "markets": []}
+                    for index in range(limit)
+                ])
+
+            source = PolymarketAdapter(
+                ["MLB", "NFL"], page_size=2,
+                client=httpx.Client(transport=httpx.MockTransport(handler)),
+            )
+            return TestASelfImposedPageCapIsReported._unpaced(source), {"mlb", "nfl"}
+
+        if module == "smarkets":
+            from src.sources.smarkets import SmarketsAdapter
+
+            def handler(request: httpx.Request) -> httpx.Response:
+                if not request.url.path.rstrip("/").endswith("events"):
+                    return httpx.Response(200, json={"markets": []})
+                return httpx.Response(200, json={
+                    "events": [
+                        {"id": str(1000 + index), "name": f"A{index} vs B{index}",
+                         "state": "upcoming", "bettable": True,
+                         "start_datetime": "2026-08-01T18:00:00Z",
+                         "full_slug": f"/sport/football/epl/2026/08/01/18-00/a{index}"}
+                        for index in range(2)
+                    ],
+                    "pagination": {"next_page": "?state=upcoming&pagination_last_id=9"},
+                })
+
+            source = SmarketsAdapter(
+                ["EPL"], page_size=2,
+                client=httpx.Client(transport=httpx.MockTransport(handler)),
+            )
+            return TestASelfImposedPageCapIsReported._unpaced(source), {"soccer"}
+
+        if module == "sxbet":
+            from src.sources.sxbet import SxBetAdapter
+
+            def handler(request: httpx.Request) -> httpx.Response:
+                if request.url.path.endswith("/orders"):
+                    return httpx.Response(200, json={"data": []})
+                return httpx.Response(200, json={"data": {
+                    "markets": [{
+                        "marketHash": f"0x{request.url.params.get('paginationKey', '0')}",
+                        "sportId": 3, "type": 226, "leagueLabel": "MLB",
+                        "status": "ACTIVE", "gameTime": future,
+                    }],
+                    "nextKey": "more",
+                }})
+
+            source = SxBetAdapter(
+                ["MLB"], client=httpx.Client(transport=httpx.MockTransport(handler)),
+            )
+            return TestASelfImposedPageCapIsReported._unpaced(source), {"baseball"}
+
+        if module == "kalshi":
+            from src.sources.kalshi import KalshiAdapter
+
+            def handler(request: httpx.Request) -> httpx.Response:
+                return httpx.Response(200, json={
+                    "markets": [{"ticker": f"T{index}"} for index in range(2)],
+                    "cursor": "more",
+                })
+
+            source = KalshiAdapter(
+                ["MLB"], page_size=2,
+                client=httpx.Client(transport=httpx.MockTransport(handler)),
+            )
+            return (
+                TestASelfImposedPageCapIsReported._unpaced(source),
+                {entry.ticker for entry in source.series},
+            )
+
+        from src.sources.matchbook import MatchbookAdapter
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path.endswith("/navigation"):
+                return httpx.Response(200, json=[{"id": 1, "name": "x"}])
+            return httpx.Response(200, json={
+                "events": [{"id": index, "name": f"A{index} vs B{index}"}
+                           for index in range(2)],
+                "total": 10_000,
+            })
+
+        source = MatchbookAdapter(
+            ["MLB"], per_page=2,
+            client=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+        return TestASelfImposedPageCapIsReported._unpaced(source), {"baseball"}
 
     @pytest.mark.parametrize("module", PAGING_ADAPTERS)
-    def test_the_cap_report_is_filed_as_a_refused_scope(self, module) -> None:
-        """Filed through ``last_fetch.failed``, which is what grades
-        ``scopes_refused`` — a log line reaches no report."""
-        text = pathlib.Path(f"src/sources/{module}.py").read_text()
-        index = text.index("CoverageCappedError(")
-        assert "last_fetch.failed(" in text[max(0, index - 600):index], module
+    def test_the_cap_is_filed_under_the_scope_that_was_actually_truncated(
+        self, module
+    ) -> None:
+        """The scope name, not a sentence about the scope.
+
+        Two assertions, and the second is the one that was wrong: the names
+        filed must be the *configured* scopes, and filing them must not have
+        changed how many scopes the book was asked for.
+        """
+        source, expected = self._endless(module)
+        try:
+            source.fetch_raw()
+        finally:
+            source.close()
+
+        tally = source.last_fetch
+        filed = {entry.split(":", 1)[0] for entry in tally.truncated_scopes}
+        assert filed == expected, tally.truncated_scopes
+
+    @pytest.mark.parametrize("module", PAGING_ADAPTERS)
+    def test_a_truncated_scope_is_not_reported_as_a_refused_one(self, module) -> None:
+        """A cap is a third state, and it must not be graded as the second.
+
+        Round 29 fixed the invented scope name by filing the cap under the real
+        one — through ``failed()``, which is what grades ``scopes_refused``.  But
+        every one of these adapters calls ``produced()`` on the same name a
+        moment later, so the scope landed in ``scopes_with_data`` *and* in
+        ``failed_scopes``, and only the second was graded.  Polymarket handing
+        over 41 MLB events and stopping at its own two-page cap was reported as
+
+            was refused 1 of the 1 scope(s) it asked for and returned none of
+            the rest … which is a broken feed rather than a quiet league
+
+        at ERROR, with ``report.ok = False`` and a non-zero exit code, on a run
+        that had collected 2,393 rows from ten venues.  Nothing was refused.
+
+        A cap leaves behind a fraction of *one* scope, of unknown size.  The
+        count of scopes cannot express that, so it does not try: the truncation
+        is reported on its own line and stays out of the share arithmetic.
+        """
+        from src.validation import Severity
+
+        source, expected = self._endless(module)
+        try:
+            source.fetch_raw()
+        finally:
+            source.close()
+
+        tally = source.last_fetch
+        assert tally.failed_scopes == [], "a cap is not a refusal"
+        assert tally.scopes_failed == 0
+
+        report = _grade_scope_refusals(source)
+        codes = [f.code for f in report.findings]
+        assert "scopes_refused" not in codes, codes
+        finding = next(f for f in report.findings if f.code == "scopes_truncated")
+        assert finding.severity is Severity.WARNING, finding.message
+        assert "refused" not in finding.message
+
+    @pytest.mark.parametrize("module", PAGING_ADAPTERS)
+    def test_a_cap_does_not_move_the_denominator(self, module) -> None:
+        """The round-28 defect this class was opened for, still fixed.
+
+        ``failed()`` registers the name it is handed, so a decorated one — "mlb:
+        stopped at the 2-page cap" — was a scope the book was never asked for,
+        in the numerator and the denominator at once.  ``truncated()`` registers
+        nothing at all, which is the same guarantee by a shorter route.
+        """
+        source, expected = self._endless(module)
+        try:
+            source.fetch_raw()
+        finally:
+            source.close()
+
+        tally = source.last_fetch
+        filed = {entry.split(":", 1)[0] for entry in tally.truncated_scopes}
+        assert filed == expected, tally.truncated_scopes
+        assert tally.scopes_requested == len(expected), (
+            f"{module} invented {tally.scopes_requested - len(expected)} scope(s) "
+            f"by reporting its cap"
+        )
+
+
+class TestPolymarketAsksWhetherItTruncatedRatherThanAssuming:
+    """The four other paging adapters can *know* they stopped early, because the
+    venue hands back a cursor and it is still live at the cap.  Gamma's
+    ``/events`` is offset-paged: no cursor, no total, no more-pages flag.  A last
+    page that comes back exactly full is the same bytes whether ten events follow
+    it or none.
+
+    Round 28 reported truncation there as fact anyway — "so more events existed
+    upstream and were not collected" — from evidence that cannot support it, and
+    the committed captures are exactly the ambiguous shape (20 events against
+    ``limit: 20``), so the claim fired on essentially every run.  A finding that
+    is wrong most of the time is a finding an operator learns to scroll past,
+    which costs the runs where it was right.
+
+    One row settles it: ask for a single event past the cap.  That is what these
+    three cases are — it is there, it is not there, and the question could not be
+    asked.
+    """
+
+    @staticmethod
+    def _adapter(handler):
+        import httpx
+
+        from src.sources.polymarket import PolymarketAdapter
+
+        source = PolymarketAdapter(
+            ["MLB"], page_size=2,
+            client=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+        return TestASelfImposedPageCapIsReported._unpaced(source)
+
+    @staticmethod
+    def _events(count: int):
+        return [
+            {"id": f"e{index}", "slug": f"mlb-{index}", "title": "x",
+             "startTime": "2026-08-01T18:00:00Z", "markets": []}
+            for index in range(count)
+        ]
+
+    def test_a_slate_that_ends_on_the_cap_boundary_is_not_a_truncation(self) -> None:
+        """Every permitted page exactly full and nothing after them.  Nothing was
+        lost, so nothing is reported — this is the run the old code faulted."""
+        import httpx
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            limit = int(request.url.params.get("limit", "2"))
+            offset = int(request.url.params.get("offset", "0"))
+            # Four events, in two pages of two, and the slate stops there.
+            return httpx.Response(200, json=self._events(max(0, min(limit, 4 - offset))))
+
+        source = self._adapter(handler)
+        try:
+            source.fetch_raw()
+        finally:
+            source.close()
+        assert source.last_fetch.truncated_scopes == []
+
+    def test_a_slate_with_one_more_event_past_the_cap_is_a_truncation(self) -> None:
+        """The same bytes for pages one and two, one event different past them,
+        and the opposite verdict.  Nothing except the probe distinguishes these
+        two tests, which is the point."""
+        import httpx
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            limit = int(request.url.params.get("limit", "2"))
+            return httpx.Response(200, json=self._events(limit))
+
+        source = self._adapter(handler)
+        try:
+            source.fetch_raw()
+        finally:
+            source.close()
+        cut = source.last_fetch.truncated_scopes
+        assert [s.split(":", 1)[0] for s in cut] == ["mlb"]
+        assert "still had events past offset 4" in cut[0]
+        assert source.last_fetch.failed_scopes == []
+
+    def test_the_probe_is_kept_rather_than_thrown_away(self) -> None:
+        """It is a page of the slate that was paid for.  Discarding it because it
+        was fetched for a different reason is the "gathered locally, handed over
+        only on success" mistake ``into=`` exists to prevent."""
+        import httpx
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            limit = int(request.url.params.get("limit", "2"))
+            return httpx.Response(200, json=self._events(limit))
+
+        source = self._adapter(handler)
+        try:
+            raws = source.fetch_raw()
+        finally:
+            source.close()
+        assert "events:mlb:03" in {raw.endpoint for raw in raws}
+
+    def test_a_refused_probe_leaves_the_question_open_and_says_so(self) -> None:
+        """The one thing that could settle it was refused, so the slate cannot be
+        called complete — and cannot be called truncated either.  Reported in
+        those words rather than as "more events existed", which is not what was
+        established."""
+        import httpx
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            limit = int(request.url.params.get("limit", "2"))
+            if limit == 1:
+                return httpx.Response(429, json={"error": "slow down"})
+            return httpx.Response(200, json=self._events(limit))
+
+        source = self._adapter(handler)
+        try:
+            source.fetch_raw()
+        finally:
+            source.close()
+        unresolved = source.last_fetch.truncated_scopes
+        assert [s.split(":", 1)[0] for s in unresolved] == ["mlb"]
+        assert "cannot be called complete" in unresolved[0]
+        assert "more events existed" not in unresolved[0]
+
+    def test_a_non_list_probe_is_not_handed_to_parse(self) -> None:
+        """The probe answered 200 with an error envelope.  That settles nothing
+        about whether more events follow, so the run is truncated — and the
+        envelope must not be kept among the pages ``parse_polymarket`` will
+        ``require_list`` over, or the two full pages already collected are
+        thrown away with the whole source.
+        """
+        import httpx
+
+        from src.sources.polymarket import parse_polymarket
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            limit = int(request.url.params.get("limit", "2"))
+            if limit == 1:
+                return httpx.Response(200, json={"error": "temporary upstream response"})
+            return httpx.Response(200, json=self._events(limit))
+
+        source = self._adapter(handler)
+        try:
+            raws = source.fetch_raw()
+            cut = source.last_fetch.truncated_scopes
+        finally:
+            source.close()
+        assert [s.split(":", 1)[0] for s in cut] == ["mlb"]
+        assert "not a list of events" in cut[0]
+        assert "events:mlb:03" not in {raw.endpoint for raw in raws}
+        # FormatChangeError is the pre-fix failure: require_list on the
+        # retained envelope.  Getting past parse at all is the pin.
+        parse_polymarket(raws)
 
 
 class TestARefusedSubRequestIsRecordedNotSwallowed:
@@ -11148,54 +11814,530 @@ class TestARefusedSubRequestIsRecordedNotSwallowed:
     ``core_market_absent``, whose message blames a renamed source label and sends
     an operator after a parser change; the partial loss surfaced as two warnings
     the code documents as firing on every normal run.
+
+    Round 28 recorded them, one scope per refused hop —
+    ``failed(f"{page_key}:event:{event_id}", …)`` — and ``ScopeTally.failed``
+    registers the name it is handed, so the denominator grew in step with the
+    numerator: 12 refusals among 126 optional hops became 12 of 18 scopes lost,
+    graded ERROR, ``report.ok = False``, on a pass that collected 99% of what it
+    asked for.  A check that cries wolf on a good run is not a stricter check.
+
+    ``page_key`` in that name was also a leaked loop variable from the slate
+    loop above, right only because ``"soccer"`` is last in ``PAGES``.
+
+    The hop is one scope, in the same unit as the slate pages beside it, and how
+    much of it was lost is stated in the message.  The two tests this replaces
+    were greps — one for ``"tally.failed("`` appearing somewhere before a
+    ``return``, one for the buggy f-string *verbatim*, which pinned the defect
+    rather than the behaviour.
     """
 
-    def test_only_the_benign_shape_is_swallowed(self) -> None:
-        text = pathlib.Path("src/sources/fanduel.py").read_text()
-        body = text[text.index("soccer detail for event"):]
-        # the benign clause names its own exception class
-        assert "except FormatChangeError as exc:" in text
-        # ...and everything else is filed
-        assert "tally.failed(" in text[: text.index("return raws", text.index("soccer detail"))]
+    @staticmethod
+    def _run(*, refuse: int = 0, postpone: int = 0, fixtures: int = 20):
+        """A whole FanDuel pass in which *refuse* of the soccer detail hops are
+        answered 403 and *postpone* of them come back without an ``events``
+        attachment, which is the shape of a fixture postponed between the slate
+        call and the detail call."""
+        import httpx
 
-    def test_the_recorded_scope_names_the_event(self) -> None:
-        text = pathlib.Path("src/sources/fanduel.py").read_text()
-        assert 'f"{page_key}:event:{event_id}"' in text
+        from src.sources._common import HostPacer, RetryPolicy
+        from src.sources.fanduel import FanDuelAdapter
+
+        seen: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path.endswith("event-page"):
+                event_id = request.url.params.get("eventId", "")
+                seen.append(event_id)
+                index = int(event_id.removeprefix("e"))
+                if index < refuse:
+                    return httpx.Response(403, json={"error": "blocked"})
+                if index < refuse + postpone:
+                    # No ``events`` attachment: a FormatChangeError, and the one
+                    # shape this loop is allowed to swallow.
+                    return httpx.Response(200, json={"attachments": {"markets": {}}})
+                return httpx.Response(200, json={"attachments": {"events": {
+                    event_id: {"name": "A v B", "openDate": "2026-08-01T18:00:00Z"}
+                }}})
+            if request.url.params.get("page") != "SPORT":
+                # A US league page: enough of a slate to pass _require_slate.
+                return httpx.Response(200, json={"attachments": {
+                    "events": {"u1": {"name": "Away @ Home"}},
+                    "markets": {"m1": {"eventId": "u1", "marketType": "MONEY_LINE"}},
+                }})
+            return httpx.Response(200, json={"attachments": {
+                "events": {
+                    f"e{index}": {
+                        "name": f"A{index} v B{index}",
+                        "competitionId": "c1",
+                        "openDate": f"2026-08-01T{index % 24:02d}:00:00Z",
+                    }
+                    for index in range(fixtures)
+                },
+                "competitions": {"c1": {"name": "English Premier League"}},
+                "markets": {
+                    f"m{index}": {"eventId": f"e{index}", "marketType": "WIN-DRAW-WIN"}
+                    for index in range(fixtures)
+                },
+            }})
+
+        source = FanDuelAdapter(
+            client=httpx.Client(transport=httpx.MockTransport(handler))
+        )
+        source._http._pacer = HostPacer(0.0)
+        source._http.retry = RetryPolicy(attempts=1)
+        try:
+            source.fetch_raw()
+        finally:
+            source.close()
+        return source, seen
+
+    def test_a_refused_hop_is_still_recorded(self) -> None:
+        """The guarantee round 28 added, kept: a 403 across this loop must not
+        leave the instrumentation empty.  Partial loss is a truncation — some
+        detail pages landed — not a refusal of the whole ``soccer:detail``
+        scope."""
+        source, seen = self._run(refuse=3)
+        assert seen, "no detail hop was attempted"
+        assert source.last_fetch.failed_scopes == []
+        assert len(source.last_fetch.truncated_scopes) == 1
+        assert "3 of 20" in source.last_fetch.truncated_scopes[0]
+
+    def test_losing_every_detail_hop_is_a_refusal(self) -> None:
+        """When nothing lands, the enrichment scope itself was refused."""
+        source, seen = self._run(refuse=20)
+        assert len(seen) == 20
+        assert len(source.last_fetch.failed_scopes) == 1
+        assert "all 20" in source.last_fetch.failed_scopes[0]
+        assert source.last_fetch.truncated_scopes == []
+
+    def test_a_postponed_fixture_is_still_not_a_refusal(self) -> None:
+        """The one benign shape the loop is allowed to swallow.  It is an
+        *addition* to a slate that already succeeded, so it costs that fixture's
+        handicaps and nothing else."""
+        source, _ = self._run(postpone=4)
+        assert source.last_fetch.failed_scopes == []
+        assert source.last_fetch.truncated_scopes == []
+
+    def test_every_detail_hop_unavailable_is_still_reported(self) -> None:
+        """Four postponed fixtures stay quiet; all twenty of them used to as
+        well, and FanDuel soccer then carried no handicaps with a clean health
+        row."""
+        source, seen = self._run(postpone=20)
+        assert len(seen) == 20
+        assert source.last_fetch.failed_scopes == []
+        assert len(source.last_fetch.truncated_scopes) == 1
+        assert "all 20" in source.last_fetch.truncated_scopes[0]
+        assert "without events" in source.last_fetch.truncated_scopes[0]
+
+    def test_a_mixed_unavailable_detail_slate_is_not_called_all_refused(self) -> None:
+        """One 403 and nineteen postponed pages is not ``all 20 were refused``.
+
+        ``refusals and not got`` treated any non-empty refusal list with zero
+        landings as a total refusal, so a single blocked hop among postponed
+        fixtures put ``soccer:detail`` in the share-lost numerator.
+        """
+        source, seen = self._run(refuse=1, postpone=19)
+        assert len(seen) == 20
+        assert source.last_fetch.failed_scopes == []
+        assert len(source.last_fetch.truncated_scopes) == 1
+        cut = source.last_fetch.truncated_scopes[0]
+        assert "1 of 20" in cut
+        assert "all 20" not in cut
+        assert "without events" in cut
+    def test_losing_a_tenth_of_the_hops_does_not_read_as_a_broken_feed(self) -> None:
+        """The finding, stated as the arithmetic it broke.
+
+        Two of twenty hops refused is 90% of the enrichment collected and all of
+        the slate.  Under one-scope-per-refusal that was 2 of 8 scopes — 25%,
+        which is a WARNING; twelve of a real 126-hop pass was 67%, which is an
+        ERROR and a failed run.  The denominator must count what was *asked
+        for*, and this loop asks for one thing.
+
+        Filing the partial loss as a refusal then put that one scope in the
+        share-lost numerator; it is a truncation, and must not grade
+        ``scopes_refused`` at all.
+        """
+        from src.validation import Severity
+
+        source, _ = self._run(refuse=2)
+        assert source.last_fetch.scopes_requested == len(source.page_keys) + 1
+        report = _grade_scope_refusals(source)
+        assert not [f for f in report.findings if f.code == "scopes_refused"]
+        finding = next(f for f in report.findings if f.code == "scopes_truncated")
+        assert finding.severity is Severity.WARNING, finding.message
+
+    def test_the_scope_is_named_for_the_page_and_not_for_a_loop_variable(self) -> None:
+        """``page_key`` there was the slate loop's variable, left over from the
+        iteration that happened to run last."""
+        source, _ = self._run(refuse=1)
+        assert source.last_fetch.truncated_scopes[0].startswith("soccer:detail:")
+        assert source.last_fetch.failed_scopes == []
+
+    def test_a_clean_pass_counts_the_hop_as_produced(self) -> None:
+        """Registered whether or not it fails, or the denominator would still
+        move with the numerator — just in the other direction."""
+        source, seen = self._run()
+        assert len(seen) == 20
+        assert source.last_fetch.failed_scopes == []
+        assert source.last_fetch.truncated_scopes == []
+        assert source.last_fetch.scopes_requested == len(source.page_keys) + 1
+        assert source.last_fetch.scopes_with_data == len(source.page_keys) + 1
 
 
-class TestSXBetKeepsTheResponsesItAlreadyPaidFor:
+class TestEveryPagingAdapterKeepsWhatItAlreadyPaidFor:
     """``_fetch_markets`` and ``_fetch_orders`` gathered into local lists and the
     caller only extended after *both* succeeded, so an order-book batch answering
     403 discarded every successful capture for that sport — 12 of 24 responses
     reached the parser and the raw store.  Five sibling adapters were changed to
     append into the caller's list for exactly this reason, each carrying the note
-    "4 of 6 requests thrown away on a run that reported OK"; this was the one
-    that still did it.  And because the refusal is swallowed rather than raised,
-    the collector's refusal-persisting path never ran either, so the sport left
-    nothing on disk to diagnose the 403 from."""
+    "4 of 6 requests thrown away on a run that reported OK"; SX Bet's metadata
+    half and Pinnacle's matchups/markets pair were the two that still did it.
+    And because the refusal is swallowed rather than raised, the collector's
+    refusal-persisting path never ran either, so the sport left nothing on disk
+    to diagnose the 403 from.
 
-    def test_the_scope_loop_appends_as_it_goes(self) -> None:
-        text = pathlib.Path("src/sources/sxbet.py").read_text()
-        body = text[text.index("tally.requested(sport.value)"):]
-        body = body[: body.index("tally.require_something")]
-        # markets are appended before the orders request is made
-        assert body.index("raws.extend(pages)") < body.index("_fetch_orders(")
-        # and orders append straight into the caller's list
-        assert "into=raws" in body
-        assert "raws.extend(orders)" not in body
+    Asserted by running each adapter against a transport that refuses one
+    request in the middle of one scope, and looking at what came back.  The
+    three tests these replace were greps: one required the literal
+    ``raws.extend(pages)`` — which is the *losing* shape, so the grep locked in
+    the defect it was written to prevent — one read a substring out of the
+    callee while the caller was what was wrong, and the third listed five
+    adapters by hand and omitted Pinnacle, which had the same defect and kept it
+    for four more rounds.  The list is now taken from the registry, so an
+    adapter cannot be left off it.
+    """
 
-    def test_the_orders_loop_can_append_into_the_callers_list(self) -> None:
-        text = pathlib.Path("src/sources/sxbet.py").read_text()
-        body = text[text.index("def _fetch_orders"):]
-        body = body[: body.index("\n    def ")]
-        assert "into: list[RawResponse] | None = None" in body
-        assert "[] if into is None else into" in body
+    #: How each adapter is made to fail one request part-way through one scope,
+    #: which scope survives it, and what must still be on disk afterwards.
+    #:
+    #: Two scopes each, deliberately: an adapter whose *only* scope fails raises
+    #: out of ``require_something`` before ``fetch_raw`` can return anything, so
+    #: a single-scope case cannot see what was kept.
+    @staticmethod
+    def _wounded(module: str):
+        import httpx
 
-    def test_every_paging_adapter_appends_as_it_goes(self) -> None:
-        """The shape all six now share, so the next one added inherits it."""
-        for name in ("polymarket", "smarkets", "sxbet", "kalshi", "matchbook"):
-            text = pathlib.Path(f"src/sources/{name}.py").read_text()
-            assert "[] if into is None else into" in text, name
+        from src.sources._common import HostPacer
+
+        future = int((datetime.now(UTC) + timedelta(days=2)).timestamp())
+
+        def wire(source):
+            from src.sources._common import RetryPolicy
+
+            source._http.host_interval = 0.0
+            source._http._pacer = HostPacer(0.0)
+            # One attempt, no backoff.  What a refusal is retried for is
+            # asserted in ``test_source_client`` against the policy itself;
+            # here the refusal is a premise, and sleeping through three
+            # exponential backoffs per adapter to reach it is dead time.
+            source._http.retry = RetryPolicy(attempts=1)
+            return source
+
+        if module == "polymarket":
+            from src.sources.polymarket import PolymarketAdapter
+
+            def handler(request: httpx.Request) -> httpx.Response:
+                tag = request.url.params.get("tag_slug", "")
+                offset = int(request.url.params.get("offset", "0"))
+                if tag == "mlb" and offset:
+                    return httpx.Response(500, json={"error": "boom"})
+                return httpx.Response(200, json=[
+                    {"id": f"{tag}{index}", "slug": f"{tag}-{index}", "title": "x",
+                     "startTime": "2026-08-01T18:00:00Z", "markets": []}
+                    for index in range(2)
+                ])
+
+            source = PolymarketAdapter(
+                ["MLB", "NFL"], page_size=2,
+                client=httpx.Client(transport=httpx.MockTransport(handler)),
+            )
+            return wire(source), "events:mlb:01"
+
+        if module == "smarkets":
+            from src.sources.smarkets import SmarketsAdapter
+
+            def handler(request: httpx.Request) -> httpx.Response:
+                url = str(request.url)
+                if not request.url.path.rstrip("/").endswith("events"):
+                    return httpx.Response(200, json={"markets": []})
+                if "basketball_match" in url and "pagination_last_id" in url:
+                    return httpx.Response(500, json={"error": "boom"})
+                kind = "basketball_match" if "basketball_match" in url else "football_match"
+                return httpx.Response(200, json={
+                    "events": [
+                        {"id": str(1000 + index), "name": f"A{index} vs B{index}",
+                         "state": "upcoming", "bettable": True,
+                         "start_datetime": "2026-08-01T18:00:00Z",
+                         "full_slug": f"/sport/x/y/2026/08/01/18-00/a{index}"}
+                        for index in range(2)
+                    ],
+                    "pagination": {
+                        "next_page": f"?state=upcoming&type={kind}&pagination_last_id=9"
+                    },
+                })
+
+            source = SmarketsAdapter(
+                ["NBA", "EPL"], page_size=2,
+                client=httpx.Client(transport=httpx.MockTransport(handler)),
+            )
+            return wire(source), "events:basketball"
+
+        if module == "sxbet":
+            from src.sources.sxbet import SxBetAdapter
+
+            def handler(request: httpx.Request) -> httpx.Response:
+                if request.url.path.endswith("/orders"):
+                    return httpx.Response(200, json={"data": []})
+                sport_id = int(request.url.params.get("sportIds", "0"))
+                if sport_id == 3 and request.url.params.get("paginationKey"):
+                    return httpx.Response(500, json={"error": "boom"})
+                return httpx.Response(200, json={"data": {
+                    "markets": [{
+                        "marketHash": f"0x{sport_id}",
+                        "sportId": sport_id, "type": 226,
+                        "leagueLabel": "MLB" if sport_id == 3 else "NBA",
+                        "status": "ACTIVE", "gameTime": future,
+                    }],
+                    "nextKey": "more",
+                }})
+
+            source = SxBetAdapter(
+                ["MLB", "NBA"],
+                client=httpx.Client(transport=httpx.MockTransport(handler)),
+            )
+            return wire(source), "markets:baseball:01"
+
+        if module == "kalshi":
+            from src.sources.kalshi import KalshiAdapter
+
+            def handler(request: httpx.Request) -> httpx.Response:
+                ticker = request.url.params.get("series_ticker", "")
+                if ticker == "KXMLBGAME" and request.url.params.get("cursor"):
+                    return httpx.Response(500, json={"error": "boom"})
+                return httpx.Response(200, json={
+                    "markets": [{"ticker": f"{ticker}-{index}"} for index in range(2)],
+                    "cursor": "more",
+                })
+
+            source = KalshiAdapter(
+                ["MLB"], page_size=2,
+                client=httpx.Client(transport=httpx.MockTransport(handler)),
+            )
+            return wire(source), "markets:KXMLBGAME:01"
+
+        if module == "matchbook":
+            from src.sources.matchbook import MatchbookAdapter
+
+            def handler(request: httpx.Request) -> httpx.Response:
+                if request.url.path.endswith("/navigation"):
+                    return httpx.Response(200, json=[{"id": 1, "name": "x"}])
+                sport_id = int(request.url.params.get("sport-ids", "0"))
+                if sport_id == 3 and int(request.url.params.get("offset", "0")):
+                    return httpx.Response(500, json={"error": "boom"})
+                return httpx.Response(200, json={
+                    "events": [{"id": index, "name": f"A{index} vs B{index}"}
+                               for index in range(2)],
+                    "total": 10_000,
+                })
+
+            source = MatchbookAdapter(
+                ["MLB", "NBA"], per_page=2,
+                client=httpx.Client(transport=httpx.MockTransport(handler)),
+            )
+            return wire(source), "events:baseball:01"
+
+        from src.sources.pinnacle import PinnacleAdapter
+
+        refused: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            path = request.url.path
+            if path.endswith("markets/straight"):
+                # The first league's markets call, and every retry of it — a
+                # transport that recovers on retry never reaches the failure
+                # path at all.  The second league is left whole so the source
+                # survives to return its pages.
+                if not refused:
+                    refused.append(path)
+                if path == refused[0]:
+                    return httpx.Response(500, json={"error": "boom"})
+                return httpx.Response(200, json=[])
+            return httpx.Response(200, json=[
+                {"id": 100 + index, "type": "matchup", "parentId": None,
+                 "participants": []}
+                for index in range(2)
+            ])
+
+        source = PinnacleAdapter(
+            ["MLB", "NBA"],
+            client=httpx.Client(transport=httpx.MockTransport(handler)),
+            request_pause=0.0,
+        )
+        return wire(source), None
+
+    @pytest.mark.parametrize(
+        "module",
+        ["polymarket", "smarkets", "sxbet", "kalshi", "matchbook", "pinnacle"],
+    )
+    def test_a_scope_that_fails_part_way_keeps_the_responses_before_it(
+        self, module
+    ) -> None:
+        source, kept = self._wounded(module)
+        try:
+            raws = source.fetch_raw()
+        finally:
+            source.close()
+
+        endpoints = [raw.endpoint for raw in raws]
+        # The refusal is still reported — keeping the pages must not have
+        # turned a broken scope into a healthy one.
+        assert source.last_fetch.failed_scopes, endpoints
+        if kept is None:
+            # Pinnacle names its scopes by league, and the response kept is the
+            # matchups half of the pair whose markets half was refused.
+            assert any(e.startswith("matchups:") and "MLB" in e for e in endpoints), endpoints
+        else:
+            assert kept in endpoints, endpoints
+
+    def test_pinnacle_still_knows_a_sport_produced_nothing(self) -> None:
+        """The guard that "did any league work?" is asked by.
+
+        It used to be asked as ``if not raws``, which was the same question only
+        while a failed league left nothing behind.  Now that a league refused on
+        its markets call keeps its matchups page, ``raws`` is non-empty for a
+        sport where *every single league* was refused — so the question has to be
+        asked of what was actually collected, or a wholly refused sport reports
+        as one that returned data.
+        """
+        import httpx
+
+        from src.sources._common import HostPacer, RetryPolicy, ScopeTally
+        from src.sources.guards import SourceError
+        from src.sources.pinnacle import PinnacleAdapter
+        from src.schema import Sport
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path.endswith("markets/straight"):
+                return httpx.Response(500, json={"error": "boom"})
+            return httpx.Response(200, json=[
+                {"id": 100, "type": "matchup", "parentId": None, "participants": []}
+            ])
+
+        source = PinnacleAdapter(
+            ["MLB"], client=httpx.Client(transport=httpx.MockTransport(handler)),
+            request_pause=0.0,
+        )
+        source._http._pacer = HostPacer(0.0)
+        source._http.retry = RetryPolicy(attempts=1)
+        tally = ScopeTally("pinnacle")
+        kept: list = []
+        try:
+            with pytest.raises(SourceError):
+                source._fetch_routed_leagues(Sport.BASEBALL, tally=tally, into=kept)
+        finally:
+            source.close()
+        # It raised *and* it kept the page it had already been given.
+        assert [raw.endpoint for raw in kept] == ["matchups:league:MLB:246"]
+        assert tally.scopes_with_data == 0
+
+    def test_one_scope_refused_twice_is_still_one_scope(self) -> None:
+        """"was refused 2 of the 1 scope(s) it asked for".
+
+        ``failed_scopes`` is a list of *messages* and ``requested`` de-duplicates
+        names, so a scope that raises twice put the numerator above the
+        denominator — the exact failure ``ScopeTally``'s docstring says the
+        design eliminates, reached by a different route.  SX Bet is the live
+        case: its metadata half and its order-book half are one scope and two
+        requests, so a cap on the first and a 403 on the second both name
+        ``baseball``.
+
+        Asserted on the count that grades, not on the messages, which are still
+        both kept — an operator wants to read both.
+        """
+        import httpx
+
+        from src.sources._common import HostPacer, RetryPolicy
+        from src.sources.guards import SourceError
+        from src.sources.sxbet import SxBetAdapter
+
+        future = int((datetime.now(UTC) + timedelta(days=2)).timestamp())
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path.endswith("/orders"):
+                return httpx.Response(403, json={"error": "blocked"})
+            return httpx.Response(200, json={"data": {
+                "markets": [{
+                    "marketHash": "0x1", "sportId": 3, "type": 226,
+                    "leagueLabel": "MLB", "status": "ACTIVE", "gameTime": future,
+                }],
+                "nextKey": "more",
+            }})
+
+        source = SxBetAdapter(
+            ["MLB"], client=httpx.Client(transport=httpx.MockTransport(handler))
+        )
+        source._http.host_interval = 0.0
+        source._http._pacer = HostPacer(0.0)
+        source._http.retry = RetryPolicy(attempts=1)
+        try:
+            with pytest.raises(SourceError):
+                source.fetch_raw()
+        finally:
+            source.close()
+
+        tally = source.last_fetch
+        assert tally.scopes_requested == 1
+        assert tally.scopes_failed == 1, tally.failed_scopes
+        assert len(tally.truncated_scopes) == 1
+        # Both messages survive; only the arithmetic was wrong.
+        assert len(tally.failed_scopes) == 1
+
+    def test_the_numerator_never_exceeds_the_denominator(self) -> None:
+        """Stated where it is graded, so no adapter can reintroduce it.
+
+        ``asked`` is now the larger of the two, so even a tally that somehow
+        reports more losses than requests cannot print a share above 1.0 or a
+        sentence that counts past its own denominator.
+        """
+        from src.sources._common import ScopeTally
+        from src.sources.guards import SourceError
+
+        tally = ScopeTally("sxbet")
+        tally.requested("baseball")
+        tally.failed("baseball", SourceError("first"))
+        tally.failed("baseball", SourceError("second"))
+        assert tally.scopes_failed == 1 and tally.scopes_requested == 1
+
+        source = type("S", (), {"source_key": "sxbet", "last_fetch": tally})()
+        report = _grade_scope_refusals(source)
+        message = next(f for f in report.findings if f.code == "scopes_refused").message
+        assert "refused 1 of the 1 scope(s)" in message, message
+
+    COVERED = frozenset(
+        {"polymarket", "smarkets", "sxbet", "kalshi", "matchbook", "pinnacle"}
+    )
+
+    def test_no_multi_request_adapter_is_left_off_that_list(self) -> None:
+        """The parametrize list above is hand-written, and a hand-written list is
+        exactly what let Pinnacle sit outside this guarantee for four rounds
+        while three tests asserted that "all six" adapters had it and named five.
+
+        So the list is checked against the source tree in both directions: an
+        adapter that grows a scope spanning more than one request grows an
+        ``into=`` helper to hold the responses, and the day it does, it has to
+        be exercised here too.
+        """
+        # Resolved against this file, not the working directory — the same
+        # correction this round made in ``test_report.py``, and it would have
+        # been a fresh instance of it.
+        sources = pathlib.Path(__file__).resolve().parent.parent / "src" / "sources"
+        found = {
+            path.stem
+            for path in sources.glob("*.py")
+            if "into: list[RawResponse] | None = None" in path.read_text()
+        }
+        assert found == self.COVERED, sorted(found ^ self.COVERED)
 
 
 class TestTheWiringIsTestedAndNotOnlyTheMechanism:

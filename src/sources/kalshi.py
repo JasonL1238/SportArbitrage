@@ -430,8 +430,10 @@ class KalshiAdapter:
             # bound on request volume is politeness and stays; reporting the run
             # as complete afterwards is not".
             if cursor and self.last_fetch is not None:
-                self.last_fetch.failed(
-                    f"{entry.ticker}: stopped at the {MAX_PAGES_PER_SERIES}-page cap",
+                # Filed under the series' own name; a decorated one would be a
+                # scope the venue was never asked for — see the sibling adapters.
+                self.last_fetch.truncated(
+                    entry.ticker,
                     CoverageCappedError(
                         f"{self._source_key}: {entry.ticker} still had a cursor when the "
                         f"{MAX_PAGES_PER_SERIES}-page cap was reached; the rest were "
