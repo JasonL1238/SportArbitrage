@@ -18,7 +18,7 @@ the rest of the page be read one sport at a time.
 
     python -m src.report                 # write data/dashboard.html
     python -m src.report --open          # ... and open it
-    python -m src.report --serve 8000    # serve it locally instead
+    python -m src.report --serve 8765 --open   # local UI with a Scrape button
 """
 from __future__ import annotations
 
@@ -26,6 +26,7 @@ import argparse
 import json
 import sqlite3
 import sys
+import threading
 import webbrowser
 from datetime import UTC, datetime
 from pathlib import Path
@@ -1512,21 +1513,226 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
 
     if args.serve:
-        return _serve(args.out, args.serve, open_browser=args.open)
+        return _serve(
+            args.out,
+            args.serve,
+            open_browser=args.open,
+            run_limit=args.runs,
+            quote_runs=args.quote_runs,
+            max_quote_rows=args.max_quote_rows,
+        )
     if args.open:
         webbrowser.open(args.out.resolve().as_uri())
     return 0
 
 
-def _serve(path: Path, port: int, *, open_browser: bool) -> int:
-    """Serve the report's directory on localhost, for browsers that dislike file://."""
+def _rebuild_dashboard(
+    out: Path,
+    *,
+    run_limit: int,
+    quote_runs: int,
+    max_quote_rows: int,
+) -> dict[str, Any]:
+    """Rewrite *out* from the current database and return a small status dict.
+
+    Replay is skipped here on purpose: a scrape-from-UI path should land on a
+    fresh page quickly, and the next ordinary ``python -m src.report`` still
+    runs the replay check.
+    """
+    with Store(settings.DB_PATH) as store:
+        latest = store.latest_run_id()
+        if latest is None:
+            raise LookupError(f"no finished collection runs recorded in {store.path}")
+        data = build_report(
+            store,
+            run_limit=run_limit,
+            quote_runs=quote_runs,
+            max_quote_rows=max_quote_rows,
+            replay_note="not checked (rebuilt after scrape)",
+            replay_run_id=latest,
+        )
+    out.parent.mkdir(parents=True, exist_ok=True)
+    markup = render_page(data)
+    out.write_text(markup, encoding="utf-8")
+    run = data["runs"][0]
+    return {
+        "run_id": run["id"],
+        "started_at": run["started_at"],
+        "quote_count": run["quote_count"],
+        "ok": run["ok"],
+        "bytes": len(markup),
+    }
+
+
+def _run_collect_from_ui(
+    *,
+    tier: str,
+    sport: str | None,
+    league: str | None,
+) -> dict[str, Any]:
+    """One collection pass, started from the dashboard's Scrape button."""
+    from src.collector import build_sources, collect_once, resolve_leagues
+    from src.raw_store import RawStore
+    from src.sources._common import Tier
+
+    try:
+        chosen_tier = Tier(tier)
+    except ValueError as exc:
+        raise ValueError(f"unknown tier {tier!r}; use 'core' or 'full'") from exc
+
+    sports = (sport,) if sport else None
+    leagues = (league,) if league else None
+    if sports:
+        unknown = [s for s in sports if s not in {member.value for member in Sport}]
+        if unknown:
+            raise ValueError(f"unknown sport(s): {unknown}")
+    try:
+        resolved = resolve_leagues(sports, leagues)
+        sources = build_sources(None, leagues=resolved)
+    except SystemExit as exc:
+        raise ValueError(str(exc) or "could not start collect") from None
+    store = Store(settings.DB_PATH)
+    raw_store = RawStore(settings.RAW_DIR)
+    try:
+        result = collect_once(
+            sources,
+            raw_store=raw_store,
+            store=store,
+            sports=sports,
+            leagues=leagues,
+            tier=chosen_tier,
+        )
+    finally:
+        for source in sources:
+            source.close()
+        store.close()
+    return {
+        "run_id": result.run_id,
+        "ok": result.ok,
+        "quote_count": len(result.quotes),
+        "error_count": len(result.report.errors),
+        "warning_count": len(result.report.warnings),
+        "tier": chosen_tier.value,
+        "sports": list(sports or ()),
+        "leagues": list(leagues or ()),
+    }
+
+
+def _serve(
+    path: Path,
+    port: int,
+    *,
+    open_browser: bool,
+    run_limit: int,
+    quote_runs: int,
+    max_quote_rows: int,
+) -> int:
+    """Serve the dashboard on localhost, with a Scrape endpoint for the UI button.
+
+    Static ``file://`` pages stay view-only.  The Scrape button only appears when
+    the page is loaded from this server, which is what can run a collect and
+    rewrite the HTML without violating that rule.
+    """
     import functools
     from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
-    handler = functools.partial(SimpleHTTPRequestHandler, directory=str(path.parent.resolve()))
+    root = path.parent.resolve()
+    out = path.resolve()
+    lock = threading.Lock()
+    state = {"busy": False, "last_error": None}
+
+    class Handler(SimpleHTTPRequestHandler):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, directory=str(root), **kwargs)
+
+        def log_message(self, fmt: str, *args) -> None:  # noqa: A003
+            # Keep scrape progress visible; silence routine GETs of the page.
+            if self.path.startswith("/api/"):
+                super().log_message(fmt, *args)
+
+        def _json(self, code: int, payload: Mapping[str, Any]) -> None:
+            body = json.dumps(payload).encode("utf-8")
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self) -> None:  # noqa: N802
+            route = self.path.split("?", 1)[0]
+            if route == "/api/status":
+                self._json(200, {
+                    "ok": True,
+                    "busy": state["busy"],
+                    "control": True,
+                    "dashboard": out.name,
+                })
+                return
+            return super().do_GET()
+
+        def do_POST(self) -> None:  # noqa: N802
+            route = self.path.split("?", 1)[0]
+            if route != "/api/collect":
+                self.send_error(404, "unknown endpoint")
+                return
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length) if length else b"{}"
+            try:
+                body = json.loads(raw.decode("utf-8") or "{}")
+            except json.JSONDecodeError:
+                self._json(400, {"ok": False, "error": "body must be JSON"})
+                return
+            if not isinstance(body, dict):
+                self._json(400, {"ok": False, "error": "body must be a JSON object"})
+                return
+
+            tier = str(body.get("tier") or "core")
+            sport = body.get("sport") or None
+            league = body.get("league") or None
+            if sport is not None:
+                sport = str(sport)
+            if league is not None:
+                league = str(league)
+
+            if not lock.acquire(blocking=False):
+                self._json(409, {
+                    "ok": False,
+                    "error": "a scrape is already running; wait for it to finish",
+                    "busy": True,
+                })
+                return
+            state["busy"] = True
+            try:
+                collected = _run_collect_from_ui(tier=tier, sport=sport, league=league)
+                rebuilt = _rebuild_dashboard(
+                    out,
+                    run_limit=run_limit,
+                    quote_runs=quote_runs,
+                    max_quote_rows=max_quote_rows,
+                )
+                state["last_error"] = None
+                self._json(200, {
+                    "ok": True,
+                    "collect": collected,
+                    "dashboard": rebuilt,
+                    "reload": True,
+                })
+            except Exception as exc:  # noqa: BLE001
+                state["last_error"] = f"{type(exc).__name__}: {exc}"
+                self._json(500, {
+                    "ok": False,
+                    "error": state["last_error"],
+                    "busy": False,
+                })
+            finally:
+                state["busy"] = False
+                lock.release()
+
     url = f"http://127.0.0.1:{port}/{path.name}"
-    with ThreadingHTTPServer(("127.0.0.1", port), handler) as httpd:
+    with ThreadingHTTPServer(("127.0.0.1", port), Handler) as httpd:
         print(f"serving {url} — ctrl-c to stop")
+        print("  Scrape button is live on this URL (not on file:// opens)")
         if open_browser:
             webbrowser.open(url)
         try:

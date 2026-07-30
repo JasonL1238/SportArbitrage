@@ -112,9 +112,16 @@ python -m src.collector replay                     # re-parse the last run's sto
 python -m src.collector lines --cross-book-only    # best price per market, across books
 python -m src.collector arb --verbose              # arbitrage, and why anything was refused
 python -m src.collector health                     # per-source success rate over time
-python -m src.report --open                        # browsable dashboard
+python -m src.report --open                        # browsable dashboard (view only)
+python -m src.report --serve 8765 --open           # dashboard + Scrape button on localhost
 python -m pytest -q                                # incl. tests over real captured payloads
 ```
+
+Open the dashboard with **`--serve`** if you want the **Scrape now** button. A plain
+`file://` open stays view-only on purpose: the page cannot run the collector
+without a local process. After each scrape the page reloads on the newest
+snapshot; the left rail lists every collection by time so you can flip between
+them (or click bars on **Price changes**).
 
 Everything lands under `data/` (gitignored): raw responses in `data/raw/`,
 normalized rows in `data/collector.sqlite3`. Override with `ODDS_DATA_DIR`,

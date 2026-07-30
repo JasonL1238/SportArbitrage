@@ -105,6 +105,7 @@ const required = ['stat-strip', 'flow', 'matrix', 'sports-grid', 'leagues-grid',
   'source-cards', 'skips', 'coverage', 'event-detail', 'odds-table', 'runs-chart',
   'move-table', 'quality-strip', 'findings', 'overround', 'rejections', 'raws',
   'schema-table', 'vocab', 'sport-pick', 'sport-meta',
+  'run-list', 'scrape-status',
   // The drill-down panels are rendered while off screen, so a link straight into one
   // opens on something. An empty one here means a reader would arrive at a blank page.
   'crumbs', 'event-title', 'event-sub',

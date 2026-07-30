@@ -136,6 +136,46 @@ select, input[type="search"], input[type="text"] {
   font: 400 12px/1.4 var(--sans);
 }
 .rail-foot { margin-top: auto; font: 400 11px/1.5 var(--mono); color: var(--muted); }
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}
+
+.scrape-btn {
+  width: 100%; margin-top: 8px; padding: 9px 10px; border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--line));
+  background: var(--accent); color: #fff; font: 700 12.5px/1.2 var(--sans);
+  cursor: pointer;
+}
+.scrape-btn:hover { filter: brightness(1.06); }
+.scrape-btn:disabled { opacity: 0.55; cursor: wait; filter: none; }
+.scrape-btn.is-file {
+  background: var(--surface-2); color: var(--muted);
+  border-color: var(--line); cursor: not-allowed;
+}
+
+.run-list {
+  display: flex; flex-direction: column; gap: 6px;
+  max-height: 280px; overflow: auto; padding-right: 2px;
+}
+.run-item {
+  display: flex; flex-direction: column; gap: 2px; text-align: left;
+  width: 100%; padding: 8px 9px; border-radius: 8px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--surface); color: inherit;
+  font: 400 11.5px/1.35 var(--sans);
+}
+.run-item:hover { border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); background: var(--surface-2); }
+.run-item.on {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+  background: var(--accent-soft);
+}
+.run-item b { font: 700 12px/1.3 var(--sans); }
+.run-item .when { font: 400 10.5px/1.3 var(--mono); color: var(--muted); }
+.run-item .bits { font: 400 10.5px/1.3 var(--sans); color: var(--ink-2); }
+.run-item.is-bad { border-color: color-mix(in srgb, var(--down) 35%, var(--line)); }
+.run-item.is-thin { opacity: 0.72; }
+
+#run-pick { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 
 main { min-width: 0; padding: 0 var(--pad) 96px; }
 
@@ -423,9 +463,22 @@ BODY = """
       <a href="#schema">Field reference</a>
     </nav>
 
+    <div class="rail-block" id="scrape-block">
+      <label>Collect a new snapshot</label>
+      <select id="scrape-scope" title="What to ask the venues for">
+        <option value="league:MLB" selected>MLB only (fast)</option>
+        <option value="sport:baseball">All baseball</option>
+        <option value="all">All sports (core)</option>
+      </select>
+      <button type="button" id="scrape-btn" class="scrape-btn">Scrape now</button>
+      <span class="rail-foot" id="scrape-status">Open via --serve to enable scraping.</span>
+    </div>
+
     <div class="rail-block">
-      <label for="run-pick">Which collection to show</label>
-      <select id="run-pick"></select>
+      <label>When it was scraped</label>
+      <div id="run-list" class="run-list" role="listbox" aria-label="Collections by time"></div>
+      <label for="run-pick" class="sr-only">Which collection to show</label>
+      <select id="run-pick" aria-hidden="true" tabindex="-1"></select>
       <span class="rail-foot" id="run-meta" style="margin:0"></span>
     </div>
 
@@ -1403,14 +1456,56 @@ const currentRows = () =>
 
 function buildRunPicker() {
   const pick = el('run-pick');
+  const list = el('run-list');
   pick.innerHTML = runs.map((r, i) => {
     const when = fmtClock(r.started_at);
     const flag = r.ok ? '' : '  — problems';
     const kept = rowsByRun.has(r.id) ? '' : '  — prices not in this page';
-    return `<option value="${r.id}">${i === 0 ? 'Latest: ' : ''}${when}${flag}${kept}</option>`;
+    const prices = (r.quote_count || 0).toLocaleString();
+    return `<option value="${r.id}">${i === 0 ? 'Latest · ' : ''}${when} · ${prices} prices${flag}${kept}</option>`;
   }).join('');
   pick.value = String(currentRunId);
-  pick.addEventListener('change', () => { currentRunId = +pick.value; buildSportPicker(); renderRunScoped(); });
+  // Bound once: rebuilding the options must not stack handlers.
+  if (!pick.dataset.bound) {
+    pick.dataset.bound = '1';
+    pick.addEventListener('change', () => selectRun(+pick.value));
+  }
+  list.innerHTML = runs.map((r, i) => {
+    const thin = !rowsByRun.has(r.id);
+    const secs = r.duration_ms != null ? (r.duration_ms / 1000).toFixed(1) + 's' : '—';
+    const prices = (r.quote_count || 0).toLocaleString() + ' prices';
+    const games = (r.event_count || 0) + ' games';
+    const flag = r.ok ? '' : ' · problems';
+    const kept = thin ? ' · prices not embedded' : '';
+    const cls = [
+      'run-item',
+      r.id === currentRunId ? 'on' : '',
+      r.ok ? '' : 'is-bad',
+      thin ? 'is-thin' : '',
+    ].filter(Boolean).join(' ');
+    return `<button type="button" role="option" class="${cls}" data-run-id="${r.id}"
+      aria-selected="${r.id === currentRunId ? 'true' : 'false'}">
+      <b>${i === 0 ? 'Latest · ' : ''}${fmtTime(r.started_at)}</b>
+      <span class="when">${fmtClock(r.started_at)} · ${ago(r.started_at)}</span>
+      <span class="bits">${prices} · ${games} · took ${secs}${flag}${kept}</span>
+    </button>`;
+  }).join('');
+  list.querySelectorAll('[data-run-id]').forEach((node) => {
+    node.addEventListener('click', () => selectRun(+node.getAttribute('data-run-id')));
+  });
+  el('run-meta').textContent = runs.length
+    ? `${runs.length} snapshot${runs.length === 1 ? '' : 's'} listed · newest at the top`
+    : 'no collections yet';
+}
+
+function selectRun(id) {
+  if (!runById.has(id)) return;
+  currentRunId = id;
+  const pick = el('run-pick');
+  if (pick.value !== String(id)) pick.value = String(id);
+  buildRunPicker();
+  buildSportPicker();
+  renderRunScoped();
 }
 
 /** Sports offered by the run being viewed, marked with whether they are usable. */
@@ -2711,11 +2806,11 @@ function svgRunsChart() {
   const barW = Math.min(46, slot * 0.62);
   const bars = ordered.map((r, i) => {
     const h = Math.max(1, (r.quote_count / maxQ) * plot);
-    return `<rect x="${(centre(i) - barW / 2).toFixed(1)}" y="${(floor - h).toFixed(1)}"
+    return `<rect class="run-bar" data-run-id="${r.id}" style="cursor:pointer"
+      x="${(centre(i) - barW / 2).toFixed(1)}" y="${(floor - h).toFixed(1)}"
       width="${barW.toFixed(1)}" height="${h.toFixed(1)}" rx="2"
       fill="${r.ok ? 'var(--accent)' : 'var(--down)'}" opacity="${r.id === currentRunId ? '1' : '0.55'}"
-      ><title>${fmtClock(r.started_at)}: ${r.quote_count.toLocaleString()} prices, ${r.event_count} games, ${
-        r.ok ? 'all checks passed' : 'checks found problems'}</title></rect>`;
+      ><title>${fmtClock(r.started_at)}: ${r.quote_count.toLocaleString()} prices — click to view</title></rect>`;
   }).join('');
 
   const pts = ordered.map((r, i) => [centre(i), floor - ((r.total_latency_ms || 0) / maxL) * plot]);
@@ -2749,8 +2844,11 @@ function svgRunsChart() {
     <div class="legend" style="margin-top:8px">
       <span><i class="swatch" style="background:var(--accent)"></i>prices collected — most was ${maxQ.toLocaleString()}</span>
       <span><i class="swatch" style="background:var(--warn)"></i>time spent fetching — most was ${(maxL / 1000).toFixed(1)}s</span>
-      <span>oldest on the left, newest on the right</span>
+      <span>oldest on the left, newest on the right · click a bar to open that scrape</span>
     </div>`;
+  el('runs-chart').querySelectorAll('.run-bar').forEach((node) => {
+    node.addEventListener('click', () => selectRun(+node.getAttribute('data-run-id')));
+  });
 }
 
 function sparkline(values) {
@@ -3200,4 +3298,53 @@ el('sport-pick').addEventListener('change', () => {
   buildSportPicker();
   renderRunScoped();
 });
+
+/* ── scrape from the UI (only when served on localhost) ──────────────────── */
+
+function scrapeScopePayload() {
+  const value = el('scrape-scope').value || 'league:MLB';
+  if (value === 'all') return { tier: 'core' };
+  if (value.startsWith('sport:')) return { tier: 'core', sport: value.slice(6) };
+  if (value.startsWith('league:')) return { tier: 'core', league: value.slice(7) };
+  return { tier: 'core', league: 'MLB' };
+}
+
+function wireScrapeButton() {
+  const btn = el('scrape-btn');
+  const status = el('scrape-status');
+  const served = typeof location !== 'undefined' && location.protocol === 'http:';
+  if (!served) {
+    btn.disabled = true;
+    btn.classList.add('is-file');
+    btn.title = 'Start the dashboard with: python -m src.report --serve 8765 --open';
+    status.textContent = 'View only. Run with --serve 8765 --open to scrape from here.';
+    return;
+  }
+  status.textContent = 'Ready — scrapes the venues, then reloads this page on the new snapshot.';
+  btn.addEventListener('click', async () => {
+    if (btn.disabled) return;
+    btn.disabled = true;
+    status.textContent = 'Scraping… this usually takes 15–40s for MLB core.';
+    try {
+      const res = await fetch('/api/collect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(scrapeScopePayload()),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || !body.ok) {
+        status.textContent = 'Scrape failed: ' + (body.error || res.statusText || res.status);
+        btn.disabled = false;
+        return;
+      }
+      const quotes = (body.collect && body.collect.quote_count) || 0;
+      status.textContent = `Got ${quotes.toLocaleString()} prices — reloading…`;
+      location.reload();
+    } catch (err) {
+      status.textContent = 'Scrape failed: ' + (err && err.message ? err.message : err);
+      btn.disabled = false;
+    }
+  });
+}
+wireScrapeButton();
 """

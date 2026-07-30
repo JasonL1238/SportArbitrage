@@ -541,8 +541,14 @@ def test_page_reaches_no_network(populated: Store) -> None:
         if not url.startswith("#")
     ]
     assert references == []
-    for forbidden in ("@import", "fetch(", "XMLHttpRequest", "WebSocket", "//fonts."):
+    for forbidden in ("@import", "XMLHttpRequest", "WebSocket", "//fonts."):
         assert forbidden not in page
+    # ``fetch('/api/collect')`` is the Scrape button's call to the local
+    # ``--serve`` control plane.  It is same-origin localhost only, and the
+    # button stays disabled on ``file://``.  Any other fetch is still banned.
+    assert page.count("fetch(") == 1
+    assert "fetch('/api/collect'" in page
+    assert "fetch('http" not in page and 'fetch("http' not in page
 
     # Then the script: it builds links at runtime, and every one of them must be
     # an in-page anchor.  A generated href is the one way an offline page could
@@ -844,6 +850,39 @@ def test_every_panel_can_be_routed_to(populated: Store, tmp_path) -> None:
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert "routing ok" in result.stdout
+
+
+def test_the_scrape_controls_are_on_the_page() -> None:
+    from src.report_assets import BODY, JS
+
+    for needle in ("scrape-btn", "scrape-scope", "scrape-status", "run-list", "/api/collect"):
+        assert needle in BODY or needle in JS, needle
+    assert "selectRun" in JS
+    assert "wireScrapeButton" in JS
+
+
+def test_rebuild_dashboard_writes_the_newest_run(populated: Store, tmp_path, monkeypatch) -> None:
+    from src import report as report_mod
+    from src import settings as settings_mod
+
+    out = tmp_path / "dashboard.html"
+    monkeypatch.setattr(settings_mod, "DB_PATH", populated.path)
+    monkeypatch.setattr(report_mod.settings, "DB_PATH", populated.path)
+    info = report_mod._rebuild_dashboard(
+        out, run_limit=10, quote_runs=2, max_quote_rows=50_000,
+    )
+    assert out.exists() and out.stat().st_size > 1000
+    assert info["run_id"] == populated.latest_run_id()
+    text = out.read_text(encoding="utf-8")
+    assert 'id="run-list"' in text
+    assert 'id="scrape-btn"' in text
+
+
+def test_run_collect_from_ui_rejects_a_bad_tier() -> None:
+    from src import report as report_mod
+
+    with pytest.raises(ValueError, match="unknown tier"):
+        report_mod._run_collect_from_ui(tier="turbo", sport=None, league="MLB")
 
 
 # ── the pieces this file deliberately stubs ──────────────────────────────────
