@@ -504,8 +504,19 @@ class TestDetection:
         assert report.comparable_group_count == 1
 
     def test_a_market_priced_exactly_fair_is_not_an_arb(self) -> None:
+        """Silently, too.  Asserting only that nothing is *reported* left the
+        primary margin gate's boundary pinned by nothing but its own duplicate
+        further down: flipping ``margin <= min_margin + _EPSILON`` to
+        ``< min_margin - _EPSILON`` passed all 2,248 tests, because the second
+        identical gate still filtered the position out.  What it did produce was a
+        fabricated refusal — ``stale_leg``, "legs observed 0:00:00 apart" — on
+        every exactly-fair market, and 2.00 against 2.00 is an ordinary pair of
+        real prices."""
         report = find_opportunities(_pair(home_odds=2.0, away_odds=2.0))
         assert report.opportunities == []
+        assert [d.code for d in report.diagnostics] == [], [
+            (d.code, d.detail) for d in report.diagnostics
+        ]
 
     def test_profit_is_identical_in_every_outcome(self) -> None:
         """The defining property: the payout does not depend on the result."""

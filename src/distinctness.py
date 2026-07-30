@@ -48,7 +48,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Iterable, Mapping, Sequence
 
-from src.schema import Market, Quote
+from src.schema import QuoteStatus, Market, Quote
 
 #: Agreement at or above this is a mirror.  Not 1.0: two tenants of one platform
 #: can differ on a handful of prices — a stale cache, a market suspended in one
@@ -184,7 +184,9 @@ class Agreement:
         return line
 
 
-def _priced(quotes: Iterable[Quote]) -> dict[str, dict[tuple, float]]:
+def _priced(
+    quotes: Iterable[Quote], *, tradeable_only: bool = True
+) -> dict[str, dict[tuple, float]]:
     """Best price per source per selection, over the compared markets.
 
     "Best" rather than "first" so the comparison does not depend on row order,
@@ -193,7 +195,9 @@ def _priced(quotes: Iterable[Quote]) -> dict[str, dict[tuple, float]]:
     """
     prices: dict[str, dict[tuple, float]] = defaultdict(dict)
     for quote in quotes:
-        if quote.market not in COMPARED_MARKETS:
+        if quote.market not in COMPARED_MARKETS or (
+            tradeable_only and not _tradeable(quote)
+        ):
             continue
         key = _selection_key(quote)
         current = prices[quote.source].get(key)
@@ -202,7 +206,39 @@ def _priced(quotes: Iterable[Quote]) -> dict[str, dict[tuple, float]]:
     return prices
 
 
-def _leagues(quotes: Iterable[Quote]) -> dict[tuple, str]:
+def _tradeable(quote: Quote) -> bool:
+    """Whether a row is one the detector would ever build a position from.
+
+    ``src.arb`` keeps only active prices, so measuring the mirror gate over
+    suspended ones compares rows no position can be taken at — and it does not
+    merely add noise, it *dilutes* the agreement rate with prices that are not
+    prices.  Two BetRivers tenants agreeing 20 of 20 on their live moneylines
+    read "20/40 identical (50.0%) — DISTINCT" once each tenant's suspensions
+    were counted, the gate stayed open, and the detector published ``margin
+    4.76%, guaranteed +5.00`` with both legs at BetRivers and no diagnostic.
+    The committed fixtures already hold 17 suspended moneylines, which move four
+    pairs' counts.
+
+    This is also exactly the case :data:`MIRROR_AGREEMENT_RATE`'s own comment
+    cites as the reason its cut is 0.95 rather than 1.0 — "a market suspended in
+    one jurisdiction and not another" — so the rate was being asked to absorb a
+    difference that should never have entered the sample.
+    """
+    return quote.status is QuoteStatus.ACTIVE
+
+
+def _has_untradeable(quotes: Iterable[Quote]) -> bool:
+    """Whether the slate holds any row the tradeable filter would drop.
+
+    Consulted before paying for a second derivation: with no suspended rows the
+    two samples are identical and the fallback cannot change anything.
+    """
+    return any(not _tradeable(quote) for quote in quotes)
+
+
+def _leagues(
+    quotes: Iterable[Quote], *, tradeable_only: bool = True
+) -> dict[tuple, str]:
     """Which competition each compared selection belongs to.
 
     Keyed on the selection rather than on the source, because the two sources
@@ -222,7 +258,9 @@ def _leagues(quotes: Iterable[Quote]) -> dict[tuple, str]:
     """
     votes: dict[tuple, Counter[str]] = defaultdict(Counter)
     for quote in quotes:
-        if quote.market not in COMPARED_MARKETS:
+        if quote.market not in COMPARED_MARKETS or (
+            tradeable_only and not _tradeable(quote)
+        ):
             continue
         votes[_selection_key(quote)][quote.league] += 1
     return {
@@ -238,6 +276,8 @@ def compare_sources(
     *,
     prices: Mapping[str, Mapping[tuple, float]] | None = None,
     league_of: Mapping[tuple, str] | None = None,
+    whole_prices: Mapping[str, Mapping[tuple, float]] | None = None,
+    whole_league_of: Mapping[tuple, str] | None = None,
 ) -> Agreement:
     """How closely two sources agree on the selections they both price.
 
@@ -249,6 +289,45 @@ def compare_sources(
     """
     prices = _priced(quotes) if prices is None else prices
     league_of = _leagues(quotes) if league_of is None else league_of
+    agreement = _agreement(prices, league_of, source_a, source_b)
+    # Filtering may strengthen the case against a pair; it must never weaken it.
+    #
+    # Restricting the sample to tradeable rows fixed a real dilution — see
+    # :func:`_tradeable` — but it also *shrinks* the sample, and a shrunken
+    # sample can fall under :data:`MIN_SHARED_SELECTIONS`, where the verdict
+    # becomes UNDECIDED and ``blocks_registration`` is False.  So the repair
+    # opened the gate on the very pairs it was meant to close it on: five
+    # selections suspended at one tenant took two BetRivers feeds agreeing 24 of
+    # 24 from "MIRROR" to "only 19 shared selection(s) — no verdict", and the
+    # detector then published ``margin 4.76%, guaranteed +5.00`` with both legs
+    # at BetRivers, where the unfiltered measurement had refused it.
+    #
+    # When the tradeable sample cannot decide, the unfiltered one is consulted
+    # and the stronger verdict wins.  A pair that looks like one book on all of
+    # its rows is one book; a suspension is not evidence of independence.
+    if not agreement.verdict.blocks_registration:
+        # Derived once per slate by ``compare_all`` and passed in, like the
+        # tradeable tables above: recomputing them inside a loop over
+        # ``sources²`` is a full rescan per pair, which at thirty sources took a
+        # detection pass from under a second to over one.
+        if whole_prices is None or whole_league_of is None:
+            if not _has_untradeable(quotes):
+                return agreement
+            whole_prices = _priced(quotes, tradeable_only=False)
+            whole_league_of = _leagues(quotes, tradeable_only=False)
+        whole = _agreement(whole_prices, whole_league_of, source_a, source_b)
+        if whole.verdict.blocks_registration:
+            return whole
+    return agreement
+
+
+def _agreement(
+    prices: Mapping[str, Mapping[tuple, float]],
+    league_of: Mapping[tuple, str],
+    source_a: str,
+    source_b: str,
+) -> Agreement:
+    """Score one pair against already-derived tables."""
     left, right = prices.get(source_a, {}), prices.get(source_b, {})
     shared = sorted(set(left) & set(right))
     identical = 0
@@ -289,8 +368,18 @@ def compare_all(quotes: Sequence[Quote]) -> list[Agreement]:
     # rescan of every row inside it makes the whole thing quadratic in rows too.
     prices = _priced(quotes)
     league_of = _leagues(quotes)
+    # The whole-slate tables for the strengthen-only fallback, derived here for
+    # the same reason and only when the slate actually holds untradeable rows —
+    # with none, the two samples are identical and the fallback cannot change
+    # anything.
+    untradeable = _has_untradeable(quotes)
+    whole_prices = _priced(quotes, tradeable_only=False) if untradeable else prices
+    whole_league_of = _leagues(quotes, tradeable_only=False) if untradeable else league_of
     pairs = [
-        compare_sources(quotes, first, second, prices=prices, league_of=league_of)
+        compare_sources(
+            quotes, first, second, prices=prices, league_of=league_of,
+            whole_prices=whole_prices, whole_league_of=whole_league_of,
+        )
         for index, first in enumerate(sources)
         for second in sources[index + 1 :]
     ]

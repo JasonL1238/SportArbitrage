@@ -448,8 +448,16 @@ def test_a_run_without_embedded_rows_still_carries_its_own_totals(populated: Sto
 
 def test_detail_tables_are_scoped_to_embedded_runs(populated: Store) -> None:
     data = build_report(populated, quote_runs=1)
+    # ``skipped`` is what carries the claim: it holds rows, and they are all run
+    # 2's, so nothing from the unembedded run leaked in.
+    assert data["skipped"], "an empty table proves nothing about which run it holds"
     assert {row["run_id"] for row in data["skipped"]} == {2}
-    assert all(row["run_id"] == 2 for row in data["raws"])
+    # ``raws`` used to carry an ``all(row["run_id"] == 2 ...)`` beside it, which
+    # said nothing: this fixture stores no raw responses for *either* run, so the
+    # subject was empty and the assertion would have held whatever leaked in.
+    # Stated as the fact it is, so a later fixture that does store them makes
+    # this fail rather than silently keeping a vacuous guarantee.
+    assert data["raws"] == [], "no raw responses in this fixture to scope"
 
 
 # ── the rendered page ────────────────────────────────────────────────────────

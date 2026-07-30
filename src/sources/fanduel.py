@@ -85,6 +85,7 @@ from src.sources._common import (
 )
 from src.sources.base import ParseOutcome
 from src.sources.guards import (
+    FormatChangeError,
     SourceError,
     require_keys,
     require_mapping,
@@ -726,13 +727,30 @@ class FanDuelAdapter:
                             require_markets=False,
                         )
                     )
-                except SourceError as exc:
+                except FormatChangeError as exc:
                     # A fixture postponed between the slate call and this one
                     # answers without an ``events`` attachment.  Its detail is an
                     # addition to a slate that already succeeded, so it costs
                     # that fixture's handicaps and nothing else.
                     log.info(
                         "%s: soccer detail for event %s unavailable: %s",
+                        self._source_key, event_id, exc,
+                    )
+                except SourceError as exc:
+                    # Every *other* refusal is recorded.  This clause used to
+                    # catch them all, and this hop is 126 of the 133 requests a
+                    # full pass makes — so a 403 or a rate limit across the whole
+                    # loop left ``ok=True``, ``failed_scopes`` empty and
+                    # ``scopes_refused`` silent, while ``capabilities(FULL)``
+                    # still declared spread and total.  The total loss then
+                    # surfaced only as ``core_market_absent``, whose message
+                    # blames a renamed source label and sends an operator after a
+                    # parser change; the *partial* loss surfaced as two warnings
+                    # the code documents as firing on every normal run, so half
+                    # of FanDuel's soccer handicaps could vanish with no signal.
+                    tally.failed(f"{page_key}:event:{event_id}", exc)
+                    log.warning(
+                        "%s: soccer detail for event %s refused: %s",
                         self._source_key, event_id, exc,
                     )
         return raws

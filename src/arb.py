@@ -2173,7 +2173,7 @@ def _build_opportunity(
         aimed = floor_maximising_split(
             [
                 [
-                    _return_multiplier(results.get(quote.selection, LOSE), net)
+                    _return_multiplier(results[quote.selection], net)
                     for quote, net in zip(legs_quotes, odds)
                 ]
                 for _, results in outcomes
@@ -2190,10 +2190,18 @@ def _build_opportunity(
         for label, results in outcomes:
             returned = 0.0
             for quote, stake, net in zip(legs_quotes, stakes, odds):
-                # A selection absent from an outcome's mapping contributes
-                # nothing, which is the right treatment for a leg that does not
-                # participate in that outcome.
-                result = results.get(quote.selection, LOSE)
+                # Indexed, not defaulted.  Every leg is drawn from the contract's
+                # own shape and ``settlement_outcomes`` maps every shape
+                # selection in every outcome — checked exhaustively over all 14
+                # ``(sport, period)`` pairs against every market and line
+                # granularity: **zero** outcomes omit one.  So the default was
+                # unreachable, and an unreachable default is worse than none
+                # here, because it hides which way the mistake would go: a
+                # mutation audit changed it from ``LOSE`` to ``PUSH`` — turning
+                # every non-participating leg into a refunded one, which
+                # overstates every profit floor — and all 2,248 tests passed.
+                # A missing key now raises where it can be seen.
+                result = results[quote.selection]
                 returned += stake * _return_multiplier(result, net)
             profits.append((label, returned - staked))
         return profits, min(profit for _, profit in profits)

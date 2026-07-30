@@ -863,10 +863,17 @@ class Store:
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON")
         self._conn.execute("PRAGMA journal_mode = WAL")
-        # A second writer waits instead of dying: without a busy timeout, two
-        # commands racing on one database handed the loser a raw
-        # ``sqlite3.OperationalError: database is locked`` traceback.  WAL
-        # readers never blocked; this is purely writer-vs-writer.
+        # A second writer waits instead of dying, rather than handing the loser a
+        # raw ``sqlite3.OperationalError: database is locked``.  WAL readers never
+        # blocked; this is purely writer-vs-writer.
+        #
+        # Stated explicitly even though it changes nothing: ``sqlite3.connect``'s
+        # own ``timeout=5.0`` default already sets exactly this value, so the
+        # line is a no-op today.  An earlier version of this comment claimed to
+        # *fix* the lock traceback, which was wrong — the default had always
+        # prevented it.  It stays because the guarantee should be visible at the
+        # point it is relied on rather than inherited from a default somebody
+        # could change, and it is named here so nobody reads it as load-bearing.
         self._conn.execute("PRAGMA busy_timeout = 5000")
         self._init_schema()
 

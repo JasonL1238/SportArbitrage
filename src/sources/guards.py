@@ -161,17 +161,38 @@ _CAPTCHA_MARKERS = (
     "__cf_chl",
 )
 
+#: Text that *says* the request was refused.  These outrank the status code,
+#: because a venue that has decided not to serve you often says so with a 200.
 _BLOCK_MARKERS = (
     "access denied",
     "access to this page has been denied",
     "attention required",
     "request blocked",
     "you have been blocked",
+    "perimeterx",
+    "datadome",
+)
+
+#: Text that merely names *who is in front of the venue*.  It appears in the
+#: footer of every page a CDN generates — including its 502, 503, 504 and 429
+#: interstitials — so it says nothing about why this particular request failed.
+#:
+#: These used to sit in :data:`_BLOCK_MARKERS`, and because the marker scan runs
+#: before the status check, every transient gateway error from a
+#: Cloudflare-fronted host was classified ``blocked``: not retried (one request
+#: where three were budgeted), a ``Retry-After`` ignored on 429s, and a health
+#: row saying the venue *denied access* — which is the reading that stops the
+#: source being asked at all — when it had merely had a bad minute or we were
+#: going too fast.  It is also the most common failure against public endpoints,
+#: and it contradicted the non-finite-JSON branch below, which already argues
+#: that "the status still decides first".
+#:
+#: So branding is consulted only when the status has nothing to say: a 200 or a
+#: 403 carrying nothing but a CDN footer really is a refusal.
+_CDN_BRANDING_MARKERS = (
     "cloudflare",
     "akamai reference",
     "reference #",
-    "perimeterx",
-    "datadome",
 )
 
 #: Markers that mean specifically "not from where you are", which is a different
@@ -280,6 +301,14 @@ def _marker_refusal(where: str, lowered: str, *, json_body: bool) -> SourceError
     return None
 
 
+def _branding_refusal(where: str, lowered: str) -> SourceError | None:
+    """A CDN footer and nothing else — consulted only after the status."""
+    for marker in _CDN_BRANDING_MARKERS:
+        if marker in lowered:
+            return BlockedError(f"{where}: access blocked (marker {marker!r})")
+    return None
+
+
 class _NonFiniteJson(ValueError):
     """A body carrying ``NaN``/``Infinity``, which no JSON specification allows."""
 
@@ -370,6 +399,22 @@ def check_http_response(
             raise refusal
         if status_code >= 500:
             raise ServerError(f"{where}: HTTP {status_code}")
+        # Branding **after** the status, never before it — see
+        # :data:`_CDN_BRANDING_MARKERS` for what putting it first cost.
+        #
+        # One consult, placed where everything the status could name has already
+        # been raised: ``_refusal_for_status`` covers 401/403 (blocked), 451
+        # (geo) and 429 (rate-limited), and the 5xx check above covers the rest of
+        # the retryable range.  What reaches here is a 2xx, or a 4xx like 400, 404
+        # or 410 — and for those the footer is the only evidence there is.
+        #
+        # There were briefly two consults, one here and one further down for the
+        # 2xx case.  The second was dead: this one is not inside the ``>= 400``
+        # branch, so it already sees every status that gets this far.  Deleting
+        # the second changed no behaviour, which is how it was found.
+        refusal = _branding_refusal(where, lowered)
+        if refusal is not None:
+            raise refusal
         if status_code >= 400:
             raise HttpStatusError(f"{where}: HTTP {status_code}")
         kind = "HTML" if _HTML_HINT.match(stripped) else f"content-type {content_type!r}"

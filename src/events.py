@@ -130,18 +130,45 @@ def cluster_start_times(
     can be listed anywhere inside a 30-hour window and no further, whatever the
     source count.  It costs nothing on real data — the widest cluster the live
     slate forms spans 26 hours, inside the same bound that permits it.
+
+    Where the split falls is decided by the **largest gap**, not by wherever a
+    left-to-right scan happens to exceed the bound.
+
+    A greedy scan put the break after the first moment that overflowed the span,
+    which is not where the fixtures actually separate.  Pinnacle routinely lists
+    a soccer fixture a day early — the tolerance table records gaps of 18 to 26
+    hours — so with one early listing and four books agreeing within a minute of
+    each other 30 hours later, the scan grouped the early listing with the
+    *first* of the four and broke off the remaining three: Bovada was split from
+    FanDuel, Matchbook and Smarkets, whom it agreed with to the minute, and
+    joined instead to a listing 30 hours away.  The two halves fell on different
+    scheduling dates, so no ``#2`` marker appeared either — the fixture was
+    silently counted twice and a four-book join became 2+3.  That is verbatim the
+    failure the 30-hour width was chosen to prevent, and the live slate already
+    forms a 26-hour cluster, four hours from the bound.
+
+    Splitting the widest gap first is the repair: it separates the two groups
+    that are actually far apart and leaves anything mutually close together.
+    Repeated while any group still spans more than the tolerance, so the span
+    guarantee above is unchanged.
     """
     ordered = sorted(times)
     if not ordered:
         return []
-    clusters: list[list[datetime]] = [[ordered[0]]]
-    for moment in ordered[1:]:
-        current = clusters[-1]
-        if moment - current[-1] <= tolerance and moment - current[0] <= tolerance:
-            current.append(moment)
-        else:
-            clusters.append([moment])
-    return clusters
+
+    groups: list[list[datetime]] = [ordered]
+    done: list[list[datetime]] = []
+    while groups:
+        group = groups.pop()
+        if len(group) < 2 or group[-1] - group[0] <= tolerance:
+            done.append(group)
+            continue
+        # The widest gap between neighbours is where these listings disagree
+        # most; everything on either side of it is closer to its own side.
+        widest = max(range(1, len(group)), key=lambda i: group[i] - group[i - 1])
+        groups.append(group[:widest])
+        groups.append(group[widest:])
+    return sorted(done, key=lambda group: group[0])
 
 
 @dataclass(frozen=True)
@@ -220,11 +247,53 @@ def reconcile_event_keys(quotes: Sequence[Quote]) -> tuple[list[Quote], list[Rek
             base = f"{away}@{home}:{day.isoformat()}"
             key_for_cluster[index] = base if ordinal == 1 else f"{base}#{ordinal}"
 
+        # A source that presents two *different* event ids inside one cluster is
+        # telling us it sees two fixtures there, and it is the only witness that
+        # can: clustering reads the set of start times, so a book listing both
+        # games of a doubleheader at one nominal time collapses them onto one
+        # key.  Their rows then collide on ``dedup_key`` — which is a UNIQUE
+        # constraint over that source's whole transaction — so the fusion cost
+        # the book every unrelated fixture it had collected, and every later
+        # ``arb``/``lines``/``report`` read it as absent while real money sat in
+        # it, under a finding that blamed "two prices for one selection".
+        #
+        # Keeping them apart is the conservative direction this module is built
+        # on: a missed join costs a comparison, a false join invents a fixture.
+        #
+        # **Every** id in an ambiguous cluster is suffixed, not just the extras.
+        # Suffixing only the extras left the first-sorting id holding the bare
+        # key, so every *other* book in the cluster was joined to whichever of
+        # the two games happened to sort first at that source — a coin flip
+        # between two different fixtures, with nothing in the data to justify it.
+        # Measured: one book publishing both halves at one time against a second
+        # book listing only the later half reported ``margin 13.92%,
+        # guaranteed +15.50`` with zero diagnostics, pairing the second book's
+        # game 2 against the first book's game 1, while the true comparison of
+        # their matching games has no edge at all (1/1.55 + 1/2.70 = 1.015).
+        # That is strictly worse than what this branch replaced: before it, the
+        # rows collided on ``dedup_key`` — expensive, but loud.
+        #
+        # With every id suffixed, the other book sits alone on the bare key and
+        # no cross-source join is made inside an ambiguous cluster.  A cluster
+        # nobody can resolve produces no comparison, which is the honest answer.
+        ambiguous: dict[tuple[int, str, str], int] = {}
+        for index, cluster in enumerate(clusters):
+            in_cluster = [q for q in group if q.commence_time in cluster]
+            for source in sorted({q.source for q in in_cluster}):
+                ids = sorted({q.source_event_id for q in in_cluster if q.source == source})
+                if len(ids) < 2:
+                    continue
+                for rank, event_id in enumerate(ids, start=1):
+                    ambiguous[(index, source, event_id)] = rank
+
         for quote in group:
             index = next(
                 i for i, cluster in enumerate(clusters) if quote.commence_time in cluster
             )
             correct = key_for_cluster[index]
+            split = ambiguous.get((index, quote.source, quote.source_event_id))
+            if split is not None:
+                correct = f"{correct}~{quote.source}{split}"
             if quote.event_key == correct:
                 result.append(quote)
                 continue

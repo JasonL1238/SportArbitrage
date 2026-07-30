@@ -76,7 +76,7 @@ from src.sources._common import (
     parse_epoch_time,
 )
 from src.sources.base import ParseOutcome
-from src.sources.guards import FormatChangeError, SourceError, require_mapping
+from src.sources.guards import CoverageCappedError, FormatChangeError, SourceError, require_mapping
 
 log = logging.getLogger(__name__)
 
@@ -358,21 +358,37 @@ class SxBetAdapter:
         tally = self.last_fetch = ScopeTally(self._source_key)
         for sport in self.sports:
             tally.requested(sport.value)
+            # Appended into the caller's list as each request lands, not gathered
+            # locally and handed over only if the whole scope succeeds.
+            #
+            # Five sibling adapters were changed to do exactly this, each with the
+            # note "4 of 6 requests thrown away on a run that reported OK"; this
+            # was the one that still gathered locally.  Measured: an order-book
+            # batch answering 403 discarded all eleven of that sport's successful
+            # captures — 12 of 24 responses reached the parser and the raw store —
+            # and because the refusal is swallowed here rather than raised, the
+            # collector's refusal-persisting path never ran either, so the sport
+            # left nothing on disk to diagnose the 403 from.  Those pages are
+            # valid, already paid for, and inside the observation window.
+            first = len(raws)
+            hashes: set[str] = set()
             try:
                 pages = self._fetch_markets(sport, tier)
+                raws.extend(pages)
                 # Only ask for the order book of markets a row could come from.
                 # Every hash is a share of a request, and the metadata already
                 # says which markets are out of scope, suspended, or on a game
                 # that has started — fetching those is paid for in somebody
                 # else's bandwidth for data that is discarded on arrival.
-                hashes = sorted(_collectable_hashes(pages))
-                orders = self._fetch_orders(sport, hashes)
+                hashes = _collectable_hashes(pages)
+                self._fetch_orders(sport, sorted(hashes), into=raws)
             except SourceError as exc:
-                log.warning("%s: %s failed: %s", self._source_key, sport.value, exc)
+                log.warning(
+                    "%s: %s failed after %d response(s), which are kept: %s",
+                    self._source_key, sport.value, len(raws) - first, exc,
+                )
                 tally.failed(sport.value, exc)
                 continue
-            raws.extend(pages)
-            raws.extend(orders)
             tally.produced(sport.value, len(hashes))
         tally.require_something(what="active market")
         return raws
@@ -406,9 +422,30 @@ class SxBetAdapter:
             pagination = data.get("nextKey") or None
             if not pagination:
                 break
+        else:
+            # Falling off the cap with the venue's cursor still live is a
+            # truncated slate, and reporting the scope as fully produced makes it
+            # invisible.  ``CoverageCappedError`` exists for exactly this — see
+            # its docstring: "A bound on request volume is politeness and stays;
+            # reporting the run as complete afterwards is not." Pinnacle's
+            # league-index fallback was the only place doing it.
+            if pagination and self.last_fetch is not None:
+                self.last_fetch.failed(
+                    f"{sport.value}: stopped at the {MAX_PAGES_PER_SPORT}-page cap",
+                    CoverageCappedError(
+                        f"{self._source_key}: {sport.value} still had pages when the "
+                        f"{MAX_PAGES_PER_SPORT}-page cap was reached; the rest were not collected"
+                    ),
+                )
         return pages
 
-    def _fetch_orders(self, sport: Sport, hashes: Sequence[str]) -> list[RawResponse]:
+    def _fetch_orders(
+        self,
+        sport: Sport,
+        hashes: Sequence[str],
+        *,
+        into: list[RawResponse] | None = None,
+    ) -> list[RawResponse]:
         """One ``orders`` response per batch of market hashes, splitting a batch
         that comes back at the venue's page cap.
 
@@ -428,7 +465,10 @@ class SxBetAdapter:
         many orders rest on a market is not knowable in advance.  Extra requests
         are spent only where the cap was actually hit.
         """
-        raws: list[RawResponse] = []
+        # The caller's list when it gives one, so a batch that fails partway
+        # leaves the batches that already landed in the run rather than
+        # discarding them with a local accumulator.
+        raws: list[RawResponse] = [] if into is None else into
         pending: list[tuple[Sequence[str], int]] = [
             (hashes[index : index + ORDER_BATCH], index // ORDER_BATCH + 1)
             for index in range(0, len(hashes), ORDER_BATCH)

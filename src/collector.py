@@ -2144,9 +2144,15 @@ def _cmd_lines(args: argparse.Namespace) -> int:
         if run_id is None:
             print(note)
             return 1
-        quotes, _ = reconcile_event_keys(
-            store.load_quotes(run_id, sports=sports, leagues=leagues)
-        )
+        # Reconciled over the **whole run**, then narrowed.  Reconciliation
+        # clusters start times globally and numbers repeat fixtures over the
+        # slate, so filtering first can merge two clusters — by removing the
+        # member whose listing made a span exceed the tolerance — and can
+        # renumber a doubleheader ordinal.  Either makes this command key a
+        # fixture differently from ``arb`` on the same stored run, which is the
+        # one thing this command's own contract says must not happen.
+        everything, _ = reconcile_event_keys(store.load_quotes(run_id))
+        quotes = [quote for quote in everything if in_scope(quote, sports, leagues)]
         surface = best_prices(quotes)
         sport_of = {quote.event_key: (quote.sport.value, quote.league) for quote in quotes}
         # Measured on the whole run and unioned with the collection-time
@@ -2266,14 +2272,32 @@ def _cmd_mirrors(args: argparse.Namespace) -> int:
         if run_id is None:
             print(note)
             return 1
-        quotes, _ = reconcile_event_keys(
-            store.load_quotes(run_id, sports=sports, leagues=leagues)
-        )
-        pairs = compare_all(quotes)
+        # Measured on the **whole run**; the scope narrows only what is printed.
+        #
+        # This is the third place the same defect has had to be closed — the
+        # other two are ``_check_distinctness(unfiltered_quotes, ...)`` in
+        # ``collect_once`` and ``_cmd_arb``'s "measured on the whole run and the
+        # report is narrowed, not the other way round" — and
+        # ``counterparty_groups``' docstring calls it the most expensive defect
+        # this gate has had.  Measured narrowed, this command answered its own
+        # question two opposite ways on one run: unscoped, "rsiusil vs rsiusnj:
+        # 24/28 identical (85.7%) — MIRROR", exit 1; under ``--sport tennis``,
+        # "only 4 shared selection(s), fewer than the 20 needed to judge — no
+        # verdict", exit 0.  The exit code is a gate a person screens a candidate
+        # source with, so the narrowed answer is the dangerous one.
+        everything, _ = reconcile_event_keys(store.load_quotes(run_id))
+        pairs = compare_all(everything)
         if not pairs:
             print(f"run {run_id}: fewer than two sources stored, so nothing to compare")
             return 1
-        print(f"run {run_id}{_scope_label(sports, leagues)}: {len(pairs)} source pair(s)")
+        scope_note = (
+            " — measured on the whole run, because narrowing the evidence can "
+            "only weaken it" if sports or leagues else ""
+        )
+        print(
+            f"run {run_id}{_scope_label(sports, leagues)}: {len(pairs)} source "
+            f"pair(s){scope_note}"
+        )
         for pair in pairs:
             print(f"  {pair.summary()}")
         mirrors = [pair for pair in pairs if pair.verdict.blocks_registration]

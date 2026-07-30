@@ -3141,10 +3141,60 @@ class TestAnExistingDatabaseSurvivesAnAddedColumn:
                 source_key="book_a", ok=True, checked_at=FETCHED, quote_count=1,
             ))
 
-        # Simulate the older schema by dropping the columns back off.
+        # Simulate the older schema by dropping **every** additive column back
+        # off, derived from ``_ADDED_COLUMNS`` rather than named here.
+        #
+        # This used to list two of them by hand, so it caught deleting those two
+        # upgrade entries and nothing else: ``repaired_count``,
+        # ``excluded_count`` and ``counterparty_groups`` were each individually
+        # removable with the whole suite green, and an upgraded build then broke
+        # against yesterday's database with "table source_health has no column
+        # named repaired_count".  Deriving the list means the next column added is
+        # covered the moment it is registered.
+        from src.store import Store as _Store
+
+        # Written out, **not** derived from ``_ADDED_COLUMNS``.
+        #
+        # Deriving it meant the test checked whatever the code happened to list:
+        # removing an entry simply made the test drop one fewer column and pass.
+        # Spelled out here, removing an entry fails the comparison below, and
+        # adding a column requires saying so in both places — which is the point,
+        # because the cost of forgetting is an upgraded build breaking against
+        # yesterday's database.
+        expected = {
+            ("source_health", "scopes_requested"),
+            ("source_health", "scopes_refused"),
+            ("source_health", "repaired_count"),
+            ("collection_run", "scope_sports"),
+            ("collection_run", "scope_leagues"),
+            ("collection_run", "excluded_count"),
+            ("collection_run", "migrated_from"),
+            ("collection_run", "counterparty_groups"),
+        }
+        registered = {(table, column) for table, column, _ in _Store._ADDED_COLUMNS}
+        assert registered == expected, (
+            "a column was added to or removed from the in-place upgrade list; "
+            "update this set too, deliberately"
+        )
+        added = {}
+        for table, column in sorted(expected):
+            added.setdefault(table, []).append(column)
         with sqlite3.connect(path) as raw:
-            for column in ("scopes_requested", "scopes_refused"):
-                raw.execute(f"ALTER TABLE source_health DROP COLUMN {column}")
+            for table, columns in added.items():
+                # Rebuilt rather than ``ALTER TABLE ... DROP COLUMN``, which
+                # SQLite refuses on ``collection_run``: that table's DDL carries
+                # ``--`` comments, and DROP COLUMN rewrites the DDL, so it fails
+                # with "incomplete input".  Rebuilding works whatever the DDL
+                # looks like, and it is closer to what an older build's file
+                # actually is — a table that never had the columns.
+                keep = [
+                    entry[1] for entry in raw.execute(f"PRAGMA table_info({table})")
+                    if entry[1] not in columns
+                ]
+                names = ", ".join(keep)
+                raw.execute(f"CREATE TABLE _old AS SELECT {names} FROM {table}")
+                raw.execute(f"DROP TABLE {table}")
+                raw.execute(f"ALTER TABLE _old RENAME TO {table}")
 
         with Store(path) as store:
             run = store.start_run(FETCHED)
@@ -3158,6 +3208,15 @@ class TestAnExistingDatabaseSurvivesAnAddedColumn:
             )[0]
         assert row["scopes_requested"] == 6
         assert "EPL: blocked" in row["scopes_refused"]
+
+        # Every registered column is back, on the table it belongs to.
+        with Store(path) as store:
+            for table, column in sorted(expected):
+                present = {
+                    entry["name"]
+                    for entry in store.query(f"PRAGMA table_info({table})")
+                }
+                assert column in present, f"{table}.{column} was not re-added"
 
 
 class TestTheComparableWindowIsMeasuredBetweenTheLegs:
@@ -6349,17 +6408,31 @@ class TestARefusalNarrowsToTheBestRemainingPosition:
 
     def test_the_narrowing_does_not_re_select_the_fault(self) -> None:
         """Taking the *largest* surviving margin re-selects it: with an inverted
-        book present, the exclusion that keeps its long price looks best."""
+        book present, the exclusion that keeps its long price looks best.
+
+        The fourth argument of ``_q`` is ``minutes``, not a line — so passing
+        ``10`` put Pinnacle's legs ten minutes from everybody else's, past the
+        three-minute window, and the market was refused ``stale_leg``.
+        ``report.opportunities`` was empty and the loop below never ran: this
+        class's whole point was asserted over nothing, and it would have passed in
+        exactly the failure mode its sibling
+        ``test_an_impossible_edge_is_never_deleted_silently`` exists to prevent.
+        """
         report = self._report([
             self._q("fanduel", Selection.HOME, 1.10),
             self._q("fanduel", Selection.AWAY, 9.00),
-            self._q("pinnacle", Selection.HOME, 2.10, 10),
-            self._q("pinnacle", Selection.AWAY, 1.30, 10),
+            self._q("pinnacle", Selection.HOME, 2.10),
+            self._q("pinnacle", Selection.AWAY, 1.30),
             self._q("bovada", Selection.HOME, 1.30),
             self._q("bovada", Selection.AWAY, 2.05),
         ])
+        assert report.opportunities, [
+            (d.code, d.detail) for d in report.diagnostics
+        ]
         for opportunity in report.opportunities:
-            assert "fanduel" not in {l.source for l in opportunity.legs}
+            assert "fanduel" not in {l.source for l in opportunity.legs}, (
+                opportunity.describe()
+            )
 
     @pytest.mark.parametrize("third", [1.90, None])
     def test_an_impossible_edge_is_never_deleted_silently(self, third) -> None:
@@ -6640,9 +6713,20 @@ class TestABankrollBelowOneUnitIsRefused:
         with pytest.raises(ValueError, match="below one"):
             find_opportunities(rows, total_stake=0.5)
 
-    def test_one_whole_unit_is_still_accepted(self) -> None:
-        """The boundary is *below* one unit, not at it: a bankroll of exactly
-        one increment can hold a position and must not be refused."""
+    def test_one_whole_unit_is_refused_with_a_reason_not_a_traceback(self) -> None:
+        """Where the boundary actually is, corrected.
+
+        This test asserted that "a bankroll of exactly one increment can hold a
+        position and must not be refused", then looped over
+        ``report.opportunities`` — which is **empty**, because one whole unit
+        cannot cover two legs at all: whichever leg got the unit, the other would
+        be staked nothing, and that is not a position.  So the claim was false and
+        nothing checked it either way.
+
+        What must hold is the distinction the class is about: below one unit is an
+        argument the caller cannot mean and raises; at one unit is a real bankroll
+        that simply cannot buy this market, so it is *refused with a reason*.
+        """
         from src.arb import find_opportunities
 
         rows = [
@@ -6651,8 +6735,13 @@ class TestABankrollBelowOneUnitIsRefused:
         ]
         report = find_opportunities(rows, total_stake=1.0, as_of=None)
         assert report.comparable_group_count == 1
-        for opportunity in report.opportunities:
-            assert opportunity.total_stake >= 1.0
+        assert report.opportunities == []
+        assert [d.code for d in report.diagnostics] == ["rounding_destroys_edge"]
+
+        # Two units is the smallest bankroll this market can take, and it is taken.
+        wider = find_opportunities(rows, total_stake=2.0, as_of=None)
+        assert len(wider.opportunities) == 1
+        assert wider.opportunities[0].total_stake == 2.0
 
 
 class TestADoubleheaderTickerIsReadable:
@@ -9908,3 +9997,1410 @@ class TestASmallSampleCannotConvictAVenue:
         from src.validation import MIN_SUB_UNITY_MARKETS
 
         assert MIN_SUB_UNITY_MARKETS >= 20
+
+
+class TestTheCommandLineIsTestedAgainstARealPosition:
+    """Every CLI-level test was a smoke test, because the committed slate holds
+    no arbitrage: 7,372 quotes, 2,087 groups, **0 opportunities**.  So
+    ``main(["arb"])`` printed "0 opportunities from N cross-book markets" no
+    matter what its arguments were, and a suite-wide mutation audit found the two
+    money-path arguments it passes were pinned by nothing at all:
+
+    * ``as_of=None if args.include_started else datetime.now(UTC)`` could be
+      replaced by ``as_of=None`` — every game treated as still open — and all
+      2,248 tests passed.  ``include_started`` appeared nowhere in the suite.
+    * ``one_counterparty=measured_counterparties`` could be replaced by ``None``
+      and all 2,248 passed, even though the comment above it records the cost:
+      "published a guaranteed +3.00 with both legs at one operator".  The
+      identical wiring in ``collect_once`` *is* pinned; only the re-analysis path
+      was not.
+
+    So this class stores a run that does contain a position — one leg per side at
+    two genuinely distinct books, one fixture in the future and one already
+    started — and asserts the numbers the CLI prints about it.
+    """
+
+    # Relative to the wall clock, not to a fixed date: the started-game gate is
+    # a comparison against ``now``, so a hardcoded 2026-07-28 kickoff is "future"
+    # only until the day it is not — which is precisely the trap that makes this
+    # gate hard to test and is why it went untested.
+    def _kickoff(self):
+        return datetime.now(UTC) + timedelta(hours=6)
+
+    def _started(self):
+        return datetime.now(UTC) - timedelta(hours=6)
+
+    def _rows(self):
+        """A future arb and a started arb, at two genuinely distinct books."""
+        rows = []
+        for tag, commence in (("FUT", self._kickoff()), ("OLD", self._started())):
+            key = f"MLB-{tag}A@MLB-{tag}B:2026-07-28"
+            for source, selection, odds in (
+                ("pinnacle", Selection.HOME, 2.10),
+                ("bovada", Selection.AWAY, 2.10),
+            ):
+                rows.append(make_quote(
+                    source=source, selection=selection, decimal_odds=odds,
+                    source_market_id=f"m{tag}", event_key=key,
+                    home_participant=f"MLB-{tag}B", away_participant=f"MLB-{tag}A",
+                    commence_time=commence,
+                ))
+        return rows
+
+    def _cli(self, tmp_path, monkeypatch, argv):
+        import src.collector
+        import src.settings
+        from src.store import Store
+        from src.validation import ValidationReport
+
+        monkeypatch.setattr(src.settings, "DATA_DIR", tmp_path)
+        monkeypatch.setattr(src.settings, "RAW_DIR", tmp_path / "raw")
+        monkeypatch.setattr(src.settings, "DB_PATH", tmp_path / "db.sqlite3")
+        rows = self._rows()
+        with Store(tmp_path / "db.sqlite3") as store:
+            run = store.start_run(datetime.now(UTC))
+            store.save_quotes_by_source(run, rows)
+            store.finish_run(
+                run, finished_at=datetime.now(UTC),
+                report=ValidationReport(quote_count=len(rows), event_count=2),
+                counterparties={},
+            )
+        return src.collector.main(argv)
+
+    def test_a_started_fixture_is_excluded_by_default(
+        self, tmp_path, monkeypatch, capsys
+    ) -> None:
+        """The started-game clock, on the *caller* that supplies it.  Both
+        fixtures carry the same 4.76% edge; only the one that has not kicked off
+        is a position anybody can take."""
+        assert self._cli(tmp_path, monkeypatch, ["arb"]) == 0
+        out = capsys.readouterr().out
+        assert "1 opportunities" in out or "1 opportunity" in out, out
+        assert "MLB-FUTA@MLB-FUTB" in out
+        assert "MLB-OLDA@MLB-OLDB" not in out, "a started game is not takeable"
+
+    def test_include_started_says_so_and_reports_both(
+        self, tmp_path, monkeypatch, capsys
+    ) -> None:
+        assert self._cli(tmp_path, monkeypatch, ["arb", "--include-started"]) == 0
+        out = capsys.readouterr().out
+        assert "2 opportunities" in out, out
+        assert "MLB-OLDA@MLB-OLDB" in out
+        assert "already started" in out, "the caveat has to be on the page"
+
+    def test_the_bankroll_asked_for_is_the_one_used(
+        self, tmp_path, monkeypatch, capsys
+    ) -> None:
+        """``total_stake=args.stake`` was pinned by nothing: dropped, ``arb
+        --stake 5000`` still printed ``stake 50.00`` and ``guaranteed +5.00 on
+        100``, and all 2,262 tests passed."""
+        assert self._cli(tmp_path, monkeypatch, ["arb", "--stake", "5000"]) == 0
+        out = capsys.readouterr().out
+        assert "on 5000" in out, out
+        assert "on 100" not in out
+
+    def test_the_margin_bar_is_read_as_a_percentage(
+        self, tmp_path, monkeypatch, capsys
+    ) -> None:
+        """``min_margin=args.min_margin / 100.0`` was pinned by nothing either.
+        Without the conversion ``--min-margin 3`` means 300%, and the two real
+        positions on this slate vanish — while the flag's own help says "in
+        percent"."""
+        assert self._cli(tmp_path, monkeypatch,
+                         ["arb", "--include-started", "--min-margin", "3"]) == 0
+        kept = capsys.readouterr().out
+        assert "2 opportunities" in kept, kept
+
+        # ...and a bar above the real edge does filter them out, so the number is
+        # genuinely being compared rather than ignored.
+        assert self._cli(tmp_path, monkeypatch,
+                         ["arb", "--include-started", "--min-margin", "6"]) == 0
+        gone = capsys.readouterr().out
+        assert "0 opportunities" in gone, gone
+
+    def test_the_scope_narrows_what_is_reported(
+        self, tmp_path, monkeypatch, capsys
+    ) -> None:
+        """``find_opportunities(quotes, ...)`` reads the *narrowed* rows; passing
+        the unfiltered set instead passed all 2,262 tests while printing an ATP
+        tennis position under a ``[sport=baseball]`` header."""
+        import src.collector
+        import src.settings
+        from src.store import Store
+        from src.validation import ValidationReport
+
+        monkeypatch.setattr(src.settings, "DATA_DIR", tmp_path)
+        monkeypatch.setattr(src.settings, "RAW_DIR", tmp_path / "raw")
+        monkeypatch.setattr(src.settings, "DB_PATH", tmp_path / "db.sqlite3")
+        rows = self._rows()  # baseball
+        rows += [
+            make_quote(source=source, selection=selection, decimal_odds=2.10,
+                       source_market_id="mT", sport=Sport.TENNIS, league="ATP",
+                       event_key="TENNIS-a@TENNIS-b:2026-07-28",
+                       home_participant="TENNIS-b", away_participant="TENNIS-a",
+                       commence_time=self._kickoff())
+            for source, selection in (("pinnacle", Selection.HOME),
+                                      ("bovada", Selection.AWAY))
+        ]
+        with Store(tmp_path / "db.sqlite3") as store:
+            run = store.start_run(datetime.now(UTC))
+            store.save_quotes_by_source(run, rows)
+            store.finish_run(
+                run, finished_at=datetime.now(UTC),
+                report=ValidationReport(quote_count=len(rows), event_count=3),
+                counterparties={},
+            )
+        assert src.collector.main(["arb", "--sport", "baseball"]) == 0
+        out = capsys.readouterr().out
+        assert "sport=baseball" in out
+        assert "TENNIS" not in out, out
+
+    def test_the_counterparty_gate_reaches_the_re_analysis_path(
+        self, tmp_path, monkeypatch, capsys
+    ) -> None:
+        """``_cmd_arb`` must apply the mirror gate, not just ``collect_once``.
+        Two Kambi tenants are one counterparty, so the edge between them is a
+        position nobody can hold — and this is the path that reads stored rows,
+        where the live pass's measurement is no longer in memory."""
+        import src.collector
+        import src.settings
+        from src.arb import EVERY_LEAGUE
+        from src.store import Store
+        from src.validation import ValidationReport
+
+        monkeypatch.setattr(src.settings, "DATA_DIR", tmp_path)
+        monkeypatch.setattr(src.settings, "RAW_DIR", tmp_path / "raw")
+        monkeypatch.setattr(src.settings, "DB_PATH", tmp_path / "db.sqlite3")
+        rows = [
+            make_quote(source=source, selection=selection, decimal_odds=2.10,
+                       source_market_id="m", commence_time=self._kickoff())
+            for source, selection in (("betrivers_kambi", Selection.HOME),
+                                      ("leovegas_kambi", Selection.AWAY))
+        ]
+        with Store(tmp_path / "db.sqlite3") as store:
+            run = store.start_run(datetime.now(UTC))
+            store.save_quotes_by_source(run, rows)
+            store.finish_run(
+                run, finished_at=datetime.now(UTC),
+                report=ValidationReport(quote_count=len(rows), event_count=1),
+                counterparties={
+                    EVERY_LEAGUE: [frozenset({"betrivers_kambi", "leovegas_kambi"})]
+                },
+            )
+        assert src.collector.main(["arb"]) == 0
+        out = capsys.readouterr().out
+        assert "0 opportunities" in out, out
+
+
+class TestClusteringSplitsAtTheWidestGap:
+    """``cluster_start_times`` walked ascending and broke the moment the span
+    bound was exceeded, so the split landed wherever the scan happened to be
+    rather than where the listings actually disagree.
+
+    Pinnacle routinely lists a soccer fixture a day early — the tolerance table
+    records 18 to 26 hour gaps — so with one early listing and four books
+    agreeing to within a minute 30 hours later, the early listing was grouped
+    with the *first* of the four and the other three were broken off.  Bovada was
+    split from FanDuel, Matchbook and Smarkets, whom it agreed with to the
+    minute, and joined to a listing 30 hours away; the halves fell on different
+    scheduling dates so no ``#2`` marker appeared either, and a four-book join
+    silently became 2+3.
+    """
+
+    TOL = timedelta(hours=30)
+
+    def _at(self, day, hour, minute=0):
+        return datetime(2026, 8, day, hour, minute, tzinfo=UTC)
+
+    def _clusters(self, times, tolerance=None):
+        from src.events import cluster_start_times
+
+        return [
+            [t.strftime("%d %H:%M") for t in group]
+            for group in cluster_start_times(times, tolerance or self.TOL)
+        ]
+
+    def test_the_early_listing_is_the_one_that_splits_off(self) -> None:
+        clusters = self._clusters([
+            self._at(15, 12), self._at(16, 18), self._at(16, 18, 1),
+            self._at(16, 18, 2), self._at(16, 18, 3),
+        ])
+        assert clusters == [
+            ["15 12:00"],
+            ["16 18:00", "16 18:01", "16 18:02", "16 18:03"],
+        ], clusters
+
+    def test_a_chain_is_still_bounded(self) -> None:
+        """The span guarantee the widest-gap rule must not weaken: three books
+        stepping along 29 hours at a time are not one fixture."""
+        clusters = self._clusters([self._at(15, 0), self._at(16, 5), self._at(17, 10)])
+        assert len(clusters) > 1, clusters
+        for group in self._clusters([self._at(15, 0), self._at(16, 5), self._at(17, 10)]):
+            first, last = group[0], group[-1]
+            assert first == last or len(group) <= 2, group
+
+    def test_the_widest_gap_is_found_wherever_it_sits(self) -> None:
+        """Not merely "split after the first moment" — which happens to be right
+        when the early listing comes first, and wrong the moment it does not.
+        Three books agreeing within two minutes, and a fourth 40 hours later:
+        breaking at the first gap fragments the three."""
+        clusters = self._clusters([
+            self._at(16, 18), self._at(16, 18, 1), self._at(16, 18, 2),
+            self._at(18, 10),
+        ])
+        assert clusters == [
+            ["16 18:00", "16 18:01", "16 18:02"],
+            ["18 10:00"],
+        ], clusters
+
+    def test_moments_inside_the_bound_stay_together(self) -> None:
+        assert self._clusters([self._at(16, 18), self._at(16, 19), self._at(16, 20)]) == [
+            ["16 18:00", "16 19:00", "16 20:00"]
+        ]
+
+
+class TestTheMirrorGateMeasuresOnlyTradeableRows:
+    """``src.arb`` keeps only active prices, and the distinctness tables did not
+    filter on status — so the gate compared rows no position can be taken at, and
+    the suspensions did not merely add noise, they *diluted* the agreement rate.
+
+    Two BetRivers tenants agreeing 20 of 20 on their live moneylines read
+    "20/40 identical (50.0%) — DISTINCT" once each tenant's suspensions were
+    counted; the gate stayed open and the detector published ``margin 4.76%,
+    guaranteed +5.00`` with both legs at BetRivers and no diagnostic.  It is the
+    very case ``MIRROR_AGREEMENT_RATE``'s comment cites as the reason its cut is
+    0.95 rather than 1.0.
+    """
+
+    def _pair(self, live, suspended):
+        from src.schema import QuoteStatus
+
+        rows = []
+        for index in range(live):
+            for source in ("rsiusil", "rsiusnj"):
+                rows.append(make_quote(
+                    source=source, selection=Selection.HOME, decimal_odds=2.10,
+                    source_market_id=f"m{index}",
+                    event_key=f"MLB-PHI@MLB-MI{index}:2026-07-28",
+                ))
+        for index in range(live, live + suspended):
+            for source, odds in (("rsiusil", 2.10), ("rsiusnj", 1.80)):
+                rows.append(make_quote(
+                    source=source, selection=Selection.HOME, decimal_odds=odds,
+                    source_market_id=f"m{index}", status=QuoteStatus.SUSPENDED,
+                    event_key=f"MLB-PHI@MLB-MI{index}:2026-07-28",
+                ))
+        return rows
+
+    def test_suspended_disagreement_does_not_hide_a_mirror(self) -> None:
+        from src.distinctness import compare_sources
+
+        agreement = compare_sources(self._pair(live=20, suspended=20),
+                                    "rsiusil", "rsiusnj")
+        assert agreement.compared == 20, agreement.summary()
+        assert agreement.identical == 20, agreement.summary()
+        assert agreement.verdict.blocks_registration, agreement.summary()
+
+    def test_the_gate_closes_on_the_same_rows(self) -> None:
+        from src.arb import counterparty_groups
+
+        groups = counterparty_groups(self._pair(live=20, suspended=20))
+        assert groups, "the mirror must reach the gate"
+        assert any(
+            {"rsiusil", "rsiusnj"} == set(group)
+            for entries in groups.values()
+            for group in entries
+        ), groups
+
+
+class TestASameTimeDoubleheaderDoesNotFuse:
+    """Clustering reads the *set* of start times, so a book listing both games of
+    a doubleheader at one nominal time collapsed them onto one key.  Their rows
+    then collided on ``dedup_key`` — a UNIQUE constraint over that source's whole
+    transaction — so the fusion cost the book every unrelated fixture it had
+    collected, and every later read command saw the book as absent while real
+    money sat in it, under a finding blaming "two prices for one selection".
+
+    A source presenting two different event ids is the only witness that there
+    are two fixtures there, so they are kept apart.
+    """
+
+    def _rows(self):
+        when = datetime(2026, 7, 28, 19, 10, tzinfo=UTC)
+        rows = []
+        for event_id in ("g1", "g2"):
+            for selection in (Selection.HOME, Selection.AWAY):
+                rows.append(make_quote(
+                    source="bookX", source_event_id=event_id, selection=selection,
+                    commence_time=when, source_market_id="m",
+                ))
+        rows.append(make_quote(
+            source="bookY", source_event_id="e9", selection=Selection.HOME,
+            commence_time=when, source_market_id="m",
+        ))
+        return rows
+
+    def test_the_two_games_keep_separate_keys(self) -> None:
+        from src.events import reconcile_event_keys
+
+        out, _ = reconcile_event_keys(self._rows())
+        by_id = {
+            (quote.source, quote.source_event_id): quote.event_key for quote in out
+        }
+        assert by_id[("bookX", "g1")] != by_id[("bookX", "g2")], by_id
+
+    def test_no_row_collides_on_its_dedup_key(self) -> None:
+        """The consequence that made this expensive."""
+        from src.events import reconcile_event_keys
+
+        out, _ = reconcile_event_keys(self._rows())
+        keys = [quote.dedup_key for quote in out]
+        assert len(set(keys)) == len(keys), "a collision costs the source its run"
+
+    def test_no_book_is_joined_to_a_coin_flip(self) -> None:
+        """This test previously asserted the opposite, and was wrong to.
+
+        Suffixing only the *extra* ids left the first-sorting id holding the bare
+        key, so every other book in the cluster was joined to whichever of the two
+        games happened to sort first at that source.  Nothing in the data supports
+        that pairing.  Measured on the shape below with the other book pricing
+        only the later game: ``margin 13.92%, guaranteed +15.50`` with zero
+        diagnostics, pairing game 2 against game 1, while the true comparison of
+        the matching games has no edge at all.  Strictly worse than the collision
+        this branch replaced — that was expensive but loud; this was invented
+        money.
+
+        So a cluster nobody can resolve produces no cross-source comparison, and
+        the test that once demanded one now forbids it.
+        """
+        from src.arb import find_opportunities
+        from src.events import reconcile_event_keys
+
+        when = datetime(2026, 7, 28, 19, 10, tzinfo=UTC)
+        rows = []
+        for event_id, home, away in (("111", 2.10, 1.80), ("222", 1.50, 2.70)):
+            for selection, odds in ((Selection.HOME, home), (Selection.AWAY, away)):
+                rows.append(make_quote(
+                    source="bookX", source_event_id=event_id, selection=selection,
+                    decimal_odds=odds, commence_time=when, source_market_id="m",
+                ))
+        for selection, odds in ((Selection.HOME, 1.55), (Selection.AWAY, 2.60)):
+            rows.append(make_quote(
+                source="bookY", source_event_id="z9", selection=selection,
+                decimal_odds=odds, commence_time=when, source_market_id="m",
+            ))
+        out, _ = reconcile_event_keys(rows)
+        by_key: dict[str, set[str]] = {}
+        for quote in out:
+            by_key.setdefault(quote.event_key, set()).add(quote.source)
+        assert all(len(sources) == 1 for sources in by_key.values()), by_key
+        report = find_opportunities(
+            out, as_of=datetime(2026, 7, 28, 12, 0, tzinfo=UTC)
+        )
+        assert report.opportunities == [], [
+            o.describe() for o in report.opportunities
+        ]
+
+
+class TestMirrorsAndLinesReadTheWholeRun:
+    """Third and fourth instances of a defect closed twice already: a gate
+    measured on narrowed evidence.  ``mirrors --sport tennis`` answered "only 4
+    shared selection(s) — no verdict", exit 0, on the same run whose unscoped
+    answer was "24/28 identical (85.7%) — MIRROR", exit 1 — and that exit code is
+    the gate a person screens a candidate source with.  ``lines`` reconciled
+    *after* filtering, so a scope could merge two clusters or renumber an ordinal
+    and key a fixture differently from ``arb`` on the same stored rows."""
+
+    def test_mirrors_compares_the_unfiltered_run(self) -> None:
+        text = pathlib.Path("src/collector.py").read_text()
+        body = text[text.index("def _cmd_mirrors"):]
+        body = body[: body.index("\ndef ")]
+        assert "reconcile_event_keys(store.load_quotes(run_id))" in body, body
+        assert "load_quotes(run_id, sports=sports, leagues=leagues)" not in body
+
+    def test_lines_reconciles_before_it_narrows(self) -> None:
+        text = pathlib.Path("src/collector.py").read_text()
+        body = text[text.index("def _cmd_lines"):]
+        body = body[: body.index("\ndef ")]
+        reconcile = body.index("reconcile_event_keys(store.load_quotes(run_id))")
+        narrow = body.index("in_scope(quote, sports, leagues)")
+        assert reconcile < narrow, "reconciliation is global; the scope comes after"
+
+
+class TestFilteringTheMirrorSampleOnlyStrengthensTheCase:
+    """Restricting the distinctness sample to tradeable rows fixed a real
+    dilution — and introduced the opposite failure, in the costly direction.
+
+    A shrunken sample can fall under ``MIN_SHARED_SELECTIONS``, where the verdict
+    becomes UNDECIDED and ``blocks_registration`` is False.  Five selections
+    suspended at one tenant took two BetRivers feeds agreeing 24 of 24 from
+    "MIRROR" to "only 19 shared selection(s) — no verdict", and the detector then
+    published ``margin 4.76%, guaranteed +5.00`` with both legs at BetRivers —
+    refused by the measurement this change replaced.  A suspension is not
+    evidence of independence.
+    """
+
+    def _tenants(self, live, suspended_one_side):
+        from src.schema import QuoteStatus
+
+        rows = []
+        for index in range(live):
+            for source in ("rsiusil", "rsiusnj"):
+                rows.append(make_quote(
+                    source=source, selection=Selection.HOME, decimal_odds=2.10,
+                    source_market_id=f"m{index}",
+                    event_key=f"MLB-PHI@MLB-MI{index}:2026-07-28",
+                ))
+        for index in range(live, live + suspended_one_side):
+            rows.append(make_quote(
+                source="rsiusil", selection=Selection.HOME, decimal_odds=2.10,
+                source_market_id=f"m{index}",
+                event_key=f"MLB-PHI@MLB-MI{index}:2026-07-28",
+            ))
+            rows.append(make_quote(
+                source="rsiusnj", selection=Selection.HOME, decimal_odds=2.10,
+                source_market_id=f"m{index}", status=QuoteStatus.SUSPENDED,
+                event_key=f"MLB-PHI@MLB-MI{index}:2026-07-28",
+            ))
+        return rows
+
+    def test_a_starved_sample_falls_back_to_the_whole_one(self) -> None:
+        from src.distinctness import compare_sources
+
+        # 19 tradeable shared selections is one under the floor
+        agreement = compare_sources(
+            self._tenants(live=19, suspended_one_side=5), "rsiusil", "rsiusnj"
+        )
+        assert agreement.verdict.blocks_registration, agreement.summary()
+        assert agreement.compared == 24, agreement.summary()
+
+    def test_the_gate_closes_and_no_phantom_is_published(self) -> None:
+        from src.arb import counterparty_groups, find_opportunities
+
+        rows = self._tenants(live=19, suspended_one_side=5)
+        groups = counterparty_groups(rows)
+        assert groups, "the mirror must reach the gate"
+        # and the position between the two tenants is refused
+        pair = [
+            make_quote(source="rsiusil", selection=Selection.OVER, decimal_odds=2.10,
+                       market=Market.TOTAL, line=8.5, source_market_id="t"),
+            make_quote(source="rsiusnj", selection=Selection.UNDER, decimal_odds=2.10,
+                       market=Market.TOTAL, line=8.5, source_market_id="t"),
+        ]
+        report = find_opportunities(
+            rows + pair, as_of=datetime(2026, 7, 28, 12, 0, tzinfo=UTC),
+            one_counterparty=groups,
+        )
+        assert report.opportunities == [], [
+            o.describe() for o in report.opportunities
+        ]
+
+    def test_dilution_is_still_fixed(self) -> None:
+        """The direction the filter was added for must still hold: suspended
+        *disagreement* cannot hide a mirror either."""
+        from src.distinctness import compare_sources
+        from src.schema import QuoteStatus
+
+        rows = self._tenants(live=20, suspended_one_side=0)
+        for index in range(20, 40):
+            for source, odds in (("rsiusil", 2.10), ("rsiusnj", 1.80)):
+                rows.append(make_quote(
+                    source=source, selection=Selection.HOME, decimal_odds=odds,
+                    source_market_id=f"m{index}", status=QuoteStatus.SUSPENDED,
+                    event_key=f"MLB-PHI@MLB-MI{index}:2026-07-28",
+                ))
+        agreement = compare_sources(rows, "rsiusil", "rsiusnj")
+        assert agreement.compared == 20, agreement.summary()
+        assert agreement.verdict.blocks_registration, agreement.summary()
+
+    def test_a_genuinely_distinct_pair_is_not_convicted_by_the_fallback(self) -> None:
+        """The fallback must not resurrect disagreement into agreement: two books
+        that differ on their live prices stay distinct however many suspended
+        rows they share."""
+        from src.distinctness import compare_sources
+        from src.schema import QuoteStatus
+
+        rows = []
+        for index in range(25):
+            for source, odds in (("bovada", 2.10), ("fanduel", 1.95)):
+                rows.append(make_quote(
+                    source=source, selection=Selection.HOME, decimal_odds=odds,
+                    source_market_id=f"m{index}",
+                    event_key=f"MLB-PHI@MLB-MI{index}:2026-07-28",
+                ))
+        for index in range(25, 30):
+            for source in ("bovada", "fanduel"):
+                rows.append(make_quote(
+                    source=source, selection=Selection.HOME, decimal_odds=2.10,
+                    source_market_id=f"m{index}", status=QuoteStatus.SUSPENDED,
+                    event_key=f"MLB-PHI@MLB-MI{index}:2026-07-28",
+                ))
+        agreement = compare_sources(rows, "bovada", "fanduel")
+        assert not agreement.verdict.blocks_registration, agreement.summary()
+
+
+class TestTheSplitSuffixDoesNotLeakIntoTheDate:
+    """``_slate_dates`` read the scheduling date off the tail of an event key and
+    stripped ``#n`` but not the same-time split suffix, so the page's own header
+    read "2026-07-28 … 2026-07-28~bookx2"."""
+
+    def test_the_header_holds_dates_only(self) -> None:
+        text = pathlib.Path("src/report.py").read_text()
+        block = text[text.index("def _slate_dates"):]
+        block = block[: block.index("\ndef ")]
+        assert 'split("~")[0]' in block, block
+
+
+class TestEachVenuesKindIsPinnedBecauseItPicksTheRule:
+    """A venue's ``kind`` decides which overround rule it is judged by, and it was
+    pinned by nothing at all.
+
+    Flipping Matchbook from ``EXCHANGE`` to ``SPORTSBOOK`` passed all 2,262
+    tests; so did deleting ``order_book_sources=_order_book_sources(sources)``
+    from ``collect_once``.  No test file mentioned ``SourceKind`` or
+    ``has_stated_liquidity``, every ``validate(...)`` call passed
+    ``order_book_sources`` as a hand-written literal, and the end-to-end fixture
+    holds three sportsbooks — so ``_order_book_sources()`` returned an empty set
+    in every integration test and the mapping was never read from the registry.
+
+    What the flag decides is money: on an exchange resting 2.02/2.02 against a
+    book at 1.60/2.30 the correct answer is one opportunity at 6.51% with no
+    diagnostics, and under the sportsbook rule the exchange is deleted from the
+    market as pricing itself to lose.  It also flips ``draw_leg_missing`` and
+    ``core_market_absent`` from WARNING to ERROR, failing the whole run.
+    """
+
+    #: What each venue is.  Written out rather than derived, because deriving it
+    #: from the registry is what left it unpinned in the first place.
+    EXPECTED = {
+        "betrivers_kambi": False,
+        "bovada": False,
+        "fanduel": False,
+        "leovegas_kambi": False,
+        "pinnacle": False,
+        "kalshi": True,
+        "matchbook": True,
+        "polymarket": True,
+        "smarkets": True,
+        "sxbet": True,
+    }
+
+    def test_every_registered_venue_is_the_kind_it_is(self) -> None:
+        from src.sources import registry
+
+        assert set(registry.keys()) == set(self.EXPECTED), (
+            "a venue was added or removed without saying which kind it is — and "
+            "the kind decides which overround rule judges its prices"
+        )
+        for key, stated_liquidity in sorted(self.EXPECTED.items()):
+            entry = registry.BY_KEY[key]
+            assert entry.kind.has_stated_liquidity is stated_liquidity, (
+                f"{key} is registered as {entry.kind.value}"
+            )
+
+    def test_the_collector_reads_the_mapping_off_the_registry(self) -> None:
+        """Not from a literal: the derivation ``collect_once`` uses must return
+        exactly the order-driven venues, for a mixed set of real adapters."""
+        from src.collector import _order_book_sources
+
+        class _Named:
+            def __init__(self, key):
+                self.source_key = key
+
+        mixed = [_Named(key) for key in ("pinnacle", "matchbook", "kalshi", "fanduel")]
+        assert _order_book_sources(mixed) == {"matchbook", "kalshi"}
+        # an unregistered source is treated as a sportsbook, the stricter reading
+        assert _order_book_sources([_Named("some_fake")]) == set()
+
+    def test_an_exchange_is_judged_by_the_exchange_rule_end_to_end(self) -> None:
+        """Driven through ``validate`` with the registry's own mapping rather than
+        a literal, so a wrong ``kind`` shows up here."""
+        from src.collector import _order_book_sources
+        from src.validation import Severity, validate
+
+        class _Named:
+            def __init__(self, key):
+                self.source_key = key
+
+        rows = [
+            make_quote(source="matchbook", selection=selection, decimal_odds=2.02,
+                       source_market_id="m")
+            for selection in (Selection.HOME, Selection.AWAY)
+        ]
+        order_driven = _order_book_sources([_Named("matchbook")])
+        report = validate(rows, order_book_sources=order_driven)
+        found = [f for f in report.findings if f.code == "negative_overround"]
+        assert found, [f.code for f in report.findings]
+        assert found[0].severity is Severity.WARNING, (
+            "an exchange resting a tight book is not pricing itself to lose"
+        )
+
+    def test_collect_once_actually_wires_the_mapping_through(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """The *wiring*, not the derivation.  Deleting
+        ``order_book_sources=_order_book_sources(sources)`` from ``collect_once``
+        passed all 2,262 tests — and my first attempt at pinning this tested the
+        helper and the validator separately, so the mutation survived that too.
+        This drives the real ``collect_once``."""
+        import src.collector
+        from src.raw_store import RawStore
+        from src.sources.base import ParseOutcome, SourceHealth
+        from src.validation import Severity
+
+        rows = [
+            make_quote(source="matchbook", selection=selection, decimal_odds=2.02,
+                       source_market_id="m")
+            for selection in (Selection.HOME, Selection.AWAY)
+        ]
+
+        class _Named:
+            source_key = "matchbook"
+            leagues = ("MLB",)
+
+            def close(self):
+                pass
+
+        def _collected(source, **kwargs):
+            return (
+                SourceHealth(source_key="matchbook", ok=True,
+                             checked_at=datetime.now(UTC), quote_count=len(rows),
+                             event_count=1),
+                ParseOutcome(quotes=rows),
+            )
+
+        monkeypatch.setattr(src.collector, "_collect_source", _collected)
+        result = src.collector.collect_once(
+            [_Named()], raw_store=RawStore(tmp_path / "raw"), store=None,
+        )
+        found = [
+            f for f in result.report.findings if f.code == "negative_overround"
+        ]
+        assert found, [f.code for f in result.report.findings]
+        assert found[0].severity is Severity.WARNING, (
+            "the exchange rule has to reach validation through collect_once"
+        )
+
+    def test_the_detector_keeps_an_exchange_the_sportsbook_rule_would_delete(self) -> None:
+        from src.arb import find_opportunities
+
+        rows = [
+            make_quote(source="matchbook", selection=Selection.HOME,
+                       decimal_odds=2.02, source_market_id="m"),
+            make_quote(source="matchbook", selection=Selection.AWAY,
+                       decimal_odds=2.02, source_market_id="m"),
+            make_quote(source="fanduel", selection=Selection.HOME,
+                       decimal_odds=1.60, source_market_id="m"),
+            make_quote(source="fanduel", selection=Selection.AWAY,
+                       decimal_odds=2.30, source_market_id="m"),
+        ]
+        report = find_opportunities(
+            rows, as_of=datetime(2026, 7, 28, 12, 0, tzinfo=UTC)
+        )
+        assert "source_prices_itself_to_lose" not in [
+            d.code for d in report.diagnostics
+        ], [d.detail for d in report.diagnostics]
+        assert len(report.opportunities) == 1, [d.code for d in report.diagnostics]
+
+
+class TestTheReadCommandsArgumentsAreObservedNotAsserted:
+    """A caller-mutation sweep found several command arguments that no test
+    observes, each guarded — if at all — only by a source-text assertion the
+    mutation slips straight past.
+
+    ``_cmd_mirrors`` was the costly one: narrowing the sample it compares turned
+    "24/28 identical (85.7%) — MIRROR", exit 1, into "only 4 shared selection(s)
+    — no verdict", exit 0, on the same run.  The existing guard asserts that the
+    string ``reconcile_event_keys(store.load_quotes(run_id))`` appears and the
+    scoped ``load_quotes`` does not; both stay true when the narrowing is applied
+    one line later.  And that exit code is the gate a person screens a candidate
+    source with.
+    """
+
+    def _database(self, tmp_path, monkeypatch, rows):
+        import src.settings
+        from src.store import Store
+        from src.validation import ValidationReport
+
+        monkeypatch.setattr(src.settings, "DATA_DIR", tmp_path)
+        monkeypatch.setattr(src.settings, "RAW_DIR", tmp_path / "raw")
+        monkeypatch.setattr(src.settings, "DB_PATH", tmp_path / "db.sqlite3")
+        with Store(tmp_path / "db.sqlite3") as store:
+            run = store.start_run(datetime.now(UTC))
+            store.save_quotes_by_source(run, rows)
+            store.finish_run(
+                run, finished_at=datetime.now(UTC),
+                report=ValidationReport(quote_count=len(rows), event_count=1),
+            )
+        return run
+
+    def _tenants(self):
+        """Two Kambi tenants identical on 24 baseball selections, differing on
+        four tennis ones — so a tennis-scoped sample cannot reach the floor."""
+        rows = []
+        for index in range(24):
+            for source in ("betrivers_kambi", "leovegas_kambi"):
+                rows.append(make_quote(
+                    source=source, selection=Selection.HOME, decimal_odds=2.10,
+                    source_market_id=f"m{index}",
+                    event_key=f"MLB-PHI@MLB-MI{index}:2026-07-28",
+                    # Participants per fixture: reconciliation rebuilds the event
+                    # key from these, so leaving the defaults collapses every row
+                    # onto one key and the sample never reaches the floor.
+                    away_participant="MLB-PHI", home_participant=f"MLB-MI{index}",
+                ))
+        for index in range(4):
+            for source, odds in (("betrivers_kambi", 2.10), ("leovegas_kambi", 1.80)):
+                rows.append(make_quote(
+                    source=source, selection=Selection.HOME, decimal_odds=odds,
+                    source_market_id=f"t{index}", sport=Sport.TENNIS, league="ATP",
+                    event_key=f"TENNIS-a{index}@TENNIS-b{index}:2026-07-28",
+                    home_participant=f"TENNIS-b{index}",
+                    away_participant=f"TENNIS-a{index}",
+                ))
+        return rows
+
+    def test_mirrors_gives_the_same_verdict_under_a_scope(
+        self, tmp_path, monkeypatch, capsys
+    ) -> None:
+        import src.collector
+
+        self._database(tmp_path, monkeypatch, self._tenants())
+        assert src.collector.main(["mirrors"]) == 1
+        unscoped = capsys.readouterr().out
+        assert src.collector.main(["mirrors", "--sport", "tennis"]) == 1, (
+            "the verdict, and the exit code that gates a registry decision, must "
+            "not depend on what the operator asked to see"
+        )
+        scoped = capsys.readouterr().out
+        for text in (unscoped, scoped):
+            assert "MIRROR" in text, text
+        assert "no verdict" not in scoped, scoped
+
+    def test_show_honours_its_row_limit(self, tmp_path, monkeypatch, capsys) -> None:
+        """``--limit`` was ignored and nothing noticed."""
+        import src.collector
+
+        rows = [
+            make_quote(source="pinnacle", selection=Selection.HOME, decimal_odds=2.10,
+                       source_market_id=f"m{index}",
+                       event_key=f"MLB-PHI@MLB-MI{index}:2026-07-28")
+            for index in range(8)
+        ]
+        self._database(tmp_path, monkeypatch, rows)
+        assert src.collector.main(["show", "--limit", "3"]) == 0
+        out = capsys.readouterr().out
+        assert "showing 3 rows" in out, out
+
+    def test_an_interrupted_run_is_marked_apart_from_a_failed_one(
+        self, tmp_path, monkeypatch, capsys
+    ) -> None:
+        """``state = "?" if finished_at is None else str(bool(ok))`` — collapsing
+        it to the verdict reinstates verbatim the regression its own comment says
+        was fixed: an interrupted pass reads as "the checks ran and found
+        problems"."""
+        import src.collector
+        import src.settings
+        from src.store import Store
+
+        monkeypatch.setattr(src.settings, "DATA_DIR", tmp_path)
+        monkeypatch.setattr(src.settings, "RAW_DIR", tmp_path / "raw")
+        monkeypatch.setattr(src.settings, "DB_PATH", tmp_path / "db.sqlite3")
+        with Store(tmp_path / "db.sqlite3") as store:
+            store.start_run(datetime.now(UTC))  # never finished
+        src.collector.main(["runs"])
+        out = capsys.readouterr().out
+        assert "never finished" in out, out
+        assert "?" in out.split("\n")[1], out
+
+    def test_the_coverage_bar_needs_two_books_on_one_fixture(
+        self, tmp_path, monkeypatch, capsys
+    ) -> None:
+        """``min_books=MIN_HEALTHY_SOURCES`` → 1 made two books on completely
+        disjoint slates read "usable".  The guard was an OR over three mutually
+        exclusive labels, which cannot fail while any row prints."""
+        import src.collector
+
+        rows = []
+        for index, source in enumerate(("pinnacle", "bovada")):
+            rows.append(make_quote(
+                source=source, selection=Selection.HOME, decimal_odds=2.10,
+                source_market_id="m", sport=Sport.HOCKEY, league="NHL",
+                event_key=f"NHL-a{index}@NHL-b{index}:2026-07-28",
+                home_participant=f"NHL-b{index}", away_participant=f"NHL-a{index}",
+            ))
+        self._database(tmp_path, monkeypatch, rows)
+        src.collector.main(["runs"])
+        out = capsys.readouterr().out
+        hockey = next(line for line in out.splitlines() if "hockey" in line)
+        assert "NO OVERLAP" in hockey, hockey
+        assert "usable" not in hockey, hockey
+
+
+class TestTheDefaultSubcommandAndTheReportEntryPointAreExecuted:
+    """``_cmd_collect`` — the default subcommand, the one an operator runs — was
+    executed by **no test**: a bare ``raise AssertionError`` as its first
+    statement left all 2,262 passing.  So ``build_sources``, ``resolve_leagues``
+    and the slow-source ordering were named by no test at all, and inverting that
+    ordering — which the registry records as having cost Kalshi and Polymarket
+    847 comparable markets between them — also passed.
+
+    ``src.report.main``'s render path was in the same state: reached only on two
+    failure paths, so the ``--runs``/``--quote-runs``/``--max-quote-rows``
+    wiring, ``_replay_note``, ``replay_run_id`` and ``--fragment`` were all
+    unobserved and a swapped keyword was invisible.
+    """
+
+    def test_slow_sources_are_ordered_last(self) -> None:
+        """Where a rate-limited source sits decides how many others it pushes out
+        of the comparison window."""
+        from src.collector import build_sources
+        from src.sources import registry
+
+        assert registry.SLOW_SOURCES, "the ordering means nothing with none named"
+        built = build_sources(None)
+        try:
+            keys = [source.source_key for source in built]
+        finally:
+            for source in built:
+                source.close()
+        slow_positions = [
+            index for index, key in enumerate(keys) if key in registry.SLOW_SOURCES
+        ]
+        fast_positions = [
+            index for index, key in enumerate(keys)
+            if key not in registry.SLOW_SOURCES
+        ]
+        assert slow_positions and fast_positions, keys
+        assert min(slow_positions) > max(fast_positions), keys
+
+    def test_collect_runs_end_to_end_without_the_network(
+        self, tmp_path, monkeypatch, capsys
+    ) -> None:
+        """``_cmd_collect`` itself, driven with ``--no-store`` and every fetch
+        replaced, so the command body — argument wiring, source construction,
+        summary — is executed rather than merely imported."""
+        import src.collector
+        import src.settings
+        from src.sources.base import ParseOutcome, SourceHealth
+
+        monkeypatch.setattr(src.settings, "DATA_DIR", tmp_path)
+        monkeypatch.setattr(src.settings, "RAW_DIR", tmp_path / "raw")
+        monkeypatch.setattr(src.settings, "DB_PATH", tmp_path / "db.sqlite3")
+
+        rows = [
+            make_quote(source="pinnacle", selection=Selection.HOME,
+                       decimal_odds=2.10, source_market_id="m"),
+            make_quote(source="bovada", selection=Selection.AWAY,
+                       decimal_odds=2.10, source_market_id="m"),
+        ]
+
+        def _collected(source, **kwargs):
+            key = source.source_key
+            mine = [row for row in rows if row.source == key]
+            return (
+                SourceHealth(source_key=key, ok=True, checked_at=datetime.now(UTC),
+                             quote_count=len(mine), event_count=1 if mine else 0),
+                ParseOutcome(quotes=mine),
+            )
+
+        monkeypatch.setattr(src.collector, "_collect_source", _collected)
+        code = src.collector.main(["collect", "--no-store", "--sport", "baseball"])
+        out = capsys.readouterr().out
+        assert code in (0, 1), out
+        assert "pinnacle" in out or "arbitrage" in out or "validation" in out, out
+
+    def test_the_report_entry_point_writes_a_page(self, tmp_path, monkeypatch) -> None:
+        """``src.report.main`` with its real argument wiring, on a stored run."""
+        import src.report
+        import src.settings
+        from src.store import Store
+        from src.validation import ValidationReport
+
+        monkeypatch.setattr(src.settings, "DATA_DIR", tmp_path)
+        monkeypatch.setattr(src.settings, "RAW_DIR", tmp_path / "raw")
+        monkeypatch.setattr(src.settings, "DB_PATH", tmp_path / "db.sqlite3")
+        with Store(tmp_path / "db.sqlite3") as store:
+            run = store.start_run(datetime.now(UTC))
+            store.save_quotes_by_source(run, [make_quote()])
+            store.finish_run(run, finished_at=datetime.now(UTC),
+                             report=ValidationReport(quote_count=1, event_count=1))
+        out = tmp_path / "dash.html"
+        code = src.report.main([
+            "--out", str(out), "--no-replay-check",
+            "--runs", "5", "--quote-runs", "1", "--max-quote-rows", "50",
+        ])
+        assert code == 0
+        page = out.read_text()
+        assert "report-data" in page
+        assert page.lstrip().startswith("<!"), "a whole document, not a fragment"
+
+    def test_the_fragment_flag_writes_a_fragment(self, tmp_path, monkeypatch) -> None:
+        import src.report
+        import src.settings
+        from src.store import Store
+        from src.validation import ValidationReport
+
+        monkeypatch.setattr(src.settings, "DATA_DIR", tmp_path)
+        monkeypatch.setattr(src.settings, "RAW_DIR", tmp_path / "raw")
+        monkeypatch.setattr(src.settings, "DB_PATH", tmp_path / "db.sqlite3")
+        with Store(tmp_path / "db.sqlite3") as store:
+            run = store.start_run(datetime.now(UTC))
+            store.save_quotes_by_source(run, [make_quote()])
+            store.finish_run(run, finished_at=datetime.now(UTC),
+                             report=ValidationReport(quote_count=1, event_count=1))
+        out = tmp_path / "fragment.html"
+        assert src.report.main(
+            ["--out", str(out), "--no-replay-check", "--fragment"]
+        ) == 0
+        assert not out.read_text().lstrip().startswith("<!")
+
+
+class TestTheRunTimingsOnThePageAreTheDatabasesOwn:
+    """``total_latency_ms`` and ``duration_ms`` both render on the page and
+    neither string appeared anywhere in the suite: ``sum(...)`` → ``max(...)``
+    passed all 2,262 tests.  A wrong total reads as a fast collection."""
+
+    def test_the_latency_total_is_a_sum_of_every_source(self, tmp_path) -> None:
+        from src.report import build_report
+        from src.sources.base import SourceHealth
+        from src.store import Store
+        from src.validation import ValidationReport
+
+        latencies = [120.0, 400.0, 35.5]
+        with Store(tmp_path / "db.sqlite3") as store:
+            run = store.start_run(datetime.now(UTC))
+            for index, latency in enumerate(latencies):
+                store.save_health(run, SourceHealth(
+                    source_key=f"book{index}", ok=True,
+                    checked_at=datetime.now(UTC), quote_count=1, event_count=1,
+                    latency_ms=latency,
+                ))
+            store.save_quotes_by_source(run, [make_quote()])
+            store.finish_run(run, finished_at=datetime.now(UTC),
+                             report=ValidationReport(quote_count=1, event_count=1))
+            data = build_report(store)
+        assert data["runs"][0]["total_latency_ms"] == pytest.approx(sum(latencies))
+
+    def test_the_duration_is_the_stored_span(self, tmp_path) -> None:
+        from src.report import build_report
+        from src.store import Store
+        from src.validation import ValidationReport
+
+        started = datetime(2026, 7, 28, 12, 0, tzinfo=UTC)
+        with Store(tmp_path / "db.sqlite3") as store:
+            run = store.start_run(started)
+            store.save_quotes_by_source(run, [make_quote()])
+            store.finish_run(run, finished_at=started + timedelta(seconds=42),
+                             report=ValidationReport(quote_count=1, event_count=1))
+            data = build_report(store)
+        assert data["runs"][0]["duration_ms"] == pytest.approx(42_000, abs=1)
+
+
+class TestATransientGatewayErrorKeepsItsRetry:
+    """``_BLOCK_MARKERS`` mixed real refusals with CDN *branding* —
+    ``cloudflare``, ``reference #``, ``akamai reference`` — and the marker scan
+    runs before the status check.  Those strings sit in the footer of every page
+    a CDN generates, including its 502/503/504/429 interstitials.
+
+    So every transient gateway error from a Cloudflare- or Akamai-fronted host was
+    classified ``blocked``: one request where three were budgeted, a
+    ``Retry-After`` ignored on 429s, and a health row saying the venue *denied
+    access* — the reading that stops the source being asked at all — when it had
+    merely had a bad minute or we were going too fast.  It is the most common
+    failure against public endpoints, and it contradicted the non-finite-JSON
+    branch, which already argues that "the status still decides first".
+    """
+
+    CF = ("<html><body><h1>502 Bad Gateway</h1><p>Reference #1.abc</p>"
+          "<footer>Cloudflare</footer></body></html>")
+    CF_RATE = ("<html><body>Error 1015 You are being rate limited"
+               "<footer>Cloudflare</footer></body></html>")
+    AKAMAI = ("<html><body>Service Unavailable<p>Akamai Reference #18.x</p>"
+              "</body></html>")
+    REFUSED = ("<html><body>You have been blocked<footer>Cloudflare</footer>"
+               "</body></html>")
+
+    def _raise(self, body, status, retry_after=None):
+        from src.sources.guards import check_http_response
+
+        try:
+            check_http_response(
+                source="x", endpoint="e", status_code=status, body=body,
+                content_type="text/html", retry_after=retry_after,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return exc
+        return None
+
+    @pytest.mark.parametrize("status", [500, 502, 503, 504])
+    def test_a_cdn_fronted_server_error_is_retryable(self, status) -> None:
+        error = self._raise(self.CF, status)
+        assert error is not None
+        assert error.kind == "server_error", f"{type(error).__name__}: {error}"
+        assert error.retryable is True
+
+    def test_an_akamai_server_error_is_retryable(self) -> None:
+        error = self._raise(self.AKAMAI, 503)
+        assert error.kind == "server_error"
+        assert error.retryable is True
+
+    def test_a_cdn_fronted_rate_limit_keeps_its_retry_after(self) -> None:
+        error = self._raise(self.CF_RATE, 429, retry_after="2")
+        assert error.kind == "rate_limited", f"{type(error).__name__}: {error}"
+        assert error.retryable is True
+        assert error.retry_after == pytest.approx(2.0)
+
+    def test_a_cdn_fronted_geo_block_is_still_geo(self) -> None:
+        assert self._raise(self.CF, 451).kind == "geo_restricted"
+
+    @pytest.mark.parametrize("status", [200, 400, 404, 410])
+    def test_branding_alone_is_a_refusal_when_the_status_is_silent(
+        self, status
+    ) -> None:
+        """The direction that must not regress.  ``_refusal_for_status`` names
+        only the statuses that mean something specific — 401/403 blocked, 451
+        geo, 429 rate-limited — so a 200, 400, 404 or 410 carrying nothing but a
+        CDN footer has the footer as its only evidence.
+
+        My first version of this test used 200 and 403, and 403 is decided by
+        status alone: deleting the 4xx branding consult entirely left it green.
+        These are the statuses that actually depend on it.
+        """
+        assert self._raise(self.CF, status).kind == "blocked"
+
+    def test_a_body_that_says_it_was_refused_is_still_blocked(self) -> None:
+        assert self._raise(self.REFUSED, 403).kind == "blocked"
+        assert self._raise(self.REFUSED, 200).kind == "blocked"
+
+    def test_the_client_still_retries_a_cdn_fronted_five_hundred(self) -> None:
+        """End to end through the real client, not just the classifier."""
+        import httpx
+
+        from src.sources._common import SourceClient
+        from src.sources.guards import SourceError
+
+        seen = []
+
+        def _handler(request):
+            seen.append(request.url)
+            return httpx.Response(502, text=self.CF,
+                                  headers={"content-type": "text/html"})
+
+        client = SourceClient(
+            "x",
+            client=httpx.Client(transport=httpx.MockTransport(_handler)),
+            host_interval=0.0,
+            sleep=lambda _seconds: None,
+        )
+        try:
+            with pytest.raises(SourceError) as raised:
+                client.get("https://example.invalid/a", endpoint="e")
+        finally:
+            client.close()
+        assert raised.value.kind == "server_error"
+        assert len(seen) > 1, "a transient gateway error must be retried"
+
+
+class TestASelfImposedPageCapIsReported:
+    """Five adapters ended their paging loop by falling off ``range(1, CAP + 1)``
+    with the venue's cursor still live and reported the scope as fully produced.
+    ``CoverageCappedError`` exists for exactly this — "a bound on request volume
+    is politeness and stays; reporting the run as complete afterwards is not" —
+    and only Pinnacle's league-index fallback used it.
+
+    Not hypothetical: the committed Polymarket fixtures were captured *at* the
+    cap, page 2 holding 20 events against ``limit: 20``, so page 3 was never
+    asked for.  Every unfetched page is an arb nobody can see, on a run that
+    says OK.
+    """
+
+    PAGING_ADAPTERS = ("polymarket", "smarkets", "sxbet", "kalshi", "matchbook")
+
+    @pytest.mark.parametrize("module", PAGING_ADAPTERS)
+    def test_the_adapter_can_report_a_cap(self, module) -> None:
+        text = pathlib.Path(f"src/sources/{module}.py").read_text()
+        assert "CoverageCappedError" in text, (
+            f"{module} pages and cannot say when it stopped early"
+        )
+        assert "-page cap" in text
+
+    @pytest.mark.parametrize("module", PAGING_ADAPTERS)
+    def test_the_cap_report_is_filed_as_a_refused_scope(self, module) -> None:
+        """Filed through ``last_fetch.failed``, which is what grades
+        ``scopes_refused`` — a log line reaches no report."""
+        text = pathlib.Path(f"src/sources/{module}.py").read_text()
+        index = text.index("CoverageCappedError(")
+        assert "last_fetch.failed(" in text[max(0, index - 600):index], module
+
+
+class TestARefusedSubRequestIsRecordedNotSwallowed:
+    """FanDuel's per-event soccer hop caught **every** ``SourceError`` and only
+    logged it.  The comment justified that for one benign case — a fixture
+    postponed between the slate call and the detail call answers without an
+    ``events`` attachment, a ``FormatChangeError`` — but the clause caught 403s,
+    rate limits and timeouts too, and this hop is 126 of the 133 requests a full
+    pass makes.
+
+    So a refusal across the whole loop left ``ok=True``, ``failed_scopes``
+    empty and ``scopes_refused`` silent, while ``capabilities(FULL)`` still
+    declared spread and total.  The total loss then surfaced only as
+    ``core_market_absent``, whose message blames a renamed source label and sends
+    an operator after a parser change; the partial loss surfaced as two warnings
+    the code documents as firing on every normal run.
+    """
+
+    def test_only_the_benign_shape_is_swallowed(self) -> None:
+        text = pathlib.Path("src/sources/fanduel.py").read_text()
+        body = text[text.index("soccer detail for event"):]
+        # the benign clause names its own exception class
+        assert "except FormatChangeError as exc:" in text
+        # ...and everything else is filed
+        assert "tally.failed(" in text[: text.index("return raws", text.index("soccer detail"))]
+
+    def test_the_recorded_scope_names_the_event(self) -> None:
+        text = pathlib.Path("src/sources/fanduel.py").read_text()
+        assert 'f"{page_key}:event:{event_id}"' in text
+
+
+class TestSXBetKeepsTheResponsesItAlreadyPaidFor:
+    """``_fetch_markets`` and ``_fetch_orders`` gathered into local lists and the
+    caller only extended after *both* succeeded, so an order-book batch answering
+    403 discarded every successful capture for that sport — 12 of 24 responses
+    reached the parser and the raw store.  Five sibling adapters were changed to
+    append into the caller's list for exactly this reason, each carrying the note
+    "4 of 6 requests thrown away on a run that reported OK"; this was the one
+    that still did it.  And because the refusal is swallowed rather than raised,
+    the collector's refusal-persisting path never ran either, so the sport left
+    nothing on disk to diagnose the 403 from."""
+
+    def test_the_scope_loop_appends_as_it_goes(self) -> None:
+        text = pathlib.Path("src/sources/sxbet.py").read_text()
+        body = text[text.index("tally.requested(sport.value)"):]
+        body = body[: body.index("tally.require_something")]
+        # markets are appended before the orders request is made
+        assert body.index("raws.extend(pages)") < body.index("_fetch_orders(")
+        # and orders append straight into the caller's list
+        assert "into=raws" in body
+        assert "raws.extend(orders)" not in body
+
+    def test_the_orders_loop_can_append_into_the_callers_list(self) -> None:
+        text = pathlib.Path("src/sources/sxbet.py").read_text()
+        body = text[text.index("def _fetch_orders"):]
+        body = body[: body.index("\n    def ")]
+        assert "into: list[RawResponse] | None = None" in body
+        assert "[] if into is None else into" in body
+
+    def test_every_paging_adapter_appends_as_it_goes(self) -> None:
+        """The shape all six now share, so the next one added inherits it."""
+        for name in ("polymarket", "smarkets", "sxbet", "kalshi", "matchbook"):
+            text = pathlib.Path(f"src/sources/{name}.py").read_text()
+            assert "[] if into is None else into" in text, name
+
+
+class TestTheWiringIsTestedAndNotOnlyTheMechanism:
+    """A deletion sweep — remove a whole mechanism rather than change an
+    expression — found three places with the same shape: the check is tested by
+    importing and calling it directly, while the one call that makes it *run* is
+    either uncovered, covered only by a source-text grep, or bypassed because
+    every test passes the argument explicitly.
+
+    Each of these deletions left the entire suite green.
+    """
+
+    def test_find_opportunities_measures_the_mirror_gate_by_default(self) -> None:
+        """``if one_counterparty is None: one_counterparty =
+        counterparty_groups(quotes)`` is deletable: all twelve tests that
+        exercise the gate pass ``one_counterparty=`` explicitly, so nothing
+        covered the default.  Both production callers pass it too, which makes
+        this the defence-in-depth layer — and the suite had already learned this
+        exact lesson one level up, for the CLI argument, and stopped there.
+
+        Called with no gate argument at all, on rows that *are* one book.
+        """
+        rows = []
+        for index in range(24):
+            for source in ("tenant_a", "tenant_b"):
+                rows.append(make_quote(
+                    source=source, selection=Selection.HOME, decimal_odds=2.10,
+                    source_market_id=f"m{index}",
+                    event_key=f"MLB-PHI@MLB-MI{index}:2026-07-28",
+                    away_participant="MLB-PHI", home_participant=f"MLB-MI{index}",
+                ))
+        # the market the phantom would be built from
+        rows += [
+            make_quote(source="tenant_a", selection=Selection.HOME,
+                       decimal_odds=2.20, source_market_id="z",
+                       event_key="MLB-PHI@MLB-ZZZ:2026-07-28",
+                       away_participant="MLB-PHI", home_participant="MLB-ZZZ"),
+            make_quote(source="tenant_b", selection=Selection.AWAY,
+                       decimal_odds=2.20, source_market_id="z",
+                       event_key="MLB-PHI@MLB-ZZZ:2026-07-28",
+                       away_participant="MLB-PHI", home_participant="MLB-ZZZ"),
+        ]
+        report = find_opportunities(rows, as_of=None)
+        assert report.opportunities == [], [
+            o.describe() for o in report.opportunities
+        ]
+
+    def test_collect_once_actually_runs_the_distinctness_check(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """``_check_distinctness(unfiltered_quotes, report)`` was defended only by
+        ``assert '_check_distinctness(unfiltered_quotes, report)' in text``.
+        Replacing the call with ``if False:`` keeps that substring and the whole
+        suite stays green — so a registry that gains a mirror stays green forever,
+        which is the regression the function's own docstring exists to prevent
+        ("Measuring without acting is the same as not measuring")."""
+        import src.collector
+        from src.raw_store import RawStore
+        from src.sources.base import ParseOutcome, SourceHealth
+
+        rows = []
+        for index in range(24):
+            for source in ("tenant_a", "tenant_b"):
+                rows.append(make_quote(
+                    source=source, selection=Selection.HOME, decimal_odds=2.10,
+                    source_market_id=f"m{index}",
+                    event_key=f"MLB-PHI@MLB-MI{index}:2026-07-28",
+                    away_participant="MLB-PHI", home_participant=f"MLB-MI{index}",
+                ))
+
+        class _Named:
+            def __init__(self, key):
+                self.source_key = key
+                self.leagues = ("MLB",)
+
+            def close(self):
+                pass
+
+        def _collected(source, **kwargs):
+            mine = [row for row in rows if row.source == source.source_key]
+            return (
+                SourceHealth(source_key=source.source_key, ok=True,
+                             checked_at=datetime.now(UTC), quote_count=len(mine),
+                             event_count=len(mine)),
+                ParseOutcome(quotes=mine),
+            )
+
+        monkeypatch.setattr(src.collector, "_collect_source", _collected)
+        result = src.collector.collect_once(
+            [_Named("tenant_a"), _Named("tenant_b")],
+            raw_store=RawStore(tmp_path / "raw"), store=None,
+        )
+        codes = [f.code for f in result.report.findings]
+        assert any("one_counterparty" in code for code in codes), codes
+
+    def test_validate_actually_runs_the_observation_window_check(self) -> None:
+        """``_check_observation_window(quotes, report)`` is deletable from
+        ``validate()`` with the suite green: both of its tests import the private
+        function and call it directly, so the public entry point was never
+        checked.  What it tells an operator is that the coverage number is
+        fiction — N sources on a fixture where no two can be legs of one
+        position."""
+        from src.validation import validate
+
+        # Grouped by *selection*, so the two sources have to price the same one:
+        # these are the two prices that would actually be the legs.
+        base = datetime(2026, 7, 28, 7, 0, tzinfo=UTC)
+        rows = []
+        for source, offset in (("pinnacle", timedelta(0)),
+                               ("bovada", timedelta(hours=3))):
+            for selection, odds in ((Selection.HOME, 2.10), (Selection.AWAY, 2.05)):
+                rows.append(make_quote(
+                    source=source, selection=selection, decimal_odds=odds,
+                    source_market_id="m", observed_at=base + offset,
+                ))
+        codes = [f.code for f in validate(rows).findings]
+        assert "collected_outside_the_comparable_window" in codes, codes
+
+        # ...and two sources read close together are not reported.
+        together = []
+        for source in ("pinnacle", "bovada"):
+            for selection, odds in ((Selection.HOME, 2.10), (Selection.AWAY, 2.05)):
+                together.append(make_quote(
+                    source=source, selection=selection, decimal_odds=odds,
+                    source_market_id="m", observed_at=base,
+                ))
+        assert "collected_outside_the_comparable_window" not in [
+            f.code for f in validate(together).findings
+        ]
+
+
+class TestTheChecksNobodyWasTesting:
+    """Three whole branches in ``validate()`` had zero references anywhere in
+    ``tests/`` and could each be deleted with the suite green."""
+
+    def _codes(self, rows, **kwargs):
+        from src.validation import validate
+
+        return [f.code for f in validate(rows, **kwargs).findings]
+
+    def test_an_extreme_overround_is_reported(self) -> None:
+        """A book keeping far more than any real margin is either a mispricing or
+        a parser reading the wrong field."""
+        rows = [
+            make_quote(source="pinnacle", selection=selection, decimal_odds=1.20,
+                       source_market_id="m")
+            for selection in (Selection.HOME, Selection.AWAY)
+        ]
+        assert "extreme_overround" in self._codes(rows)
+
+    def test_a_core_market_at_the_wrong_window_is_reported(self) -> None:
+        """"The market exists but at a window you cannot compare against" — the
+        partial-upstream-rename shape."""
+        rows = [
+            make_quote(source="pinnacle", selection=selection, decimal_odds=2.00,
+                       period=Period.FIRST_5_INNINGS, source_market_id="m")
+            for selection in (Selection.HOME, Selection.AWAY)
+        ]
+        assert "core_market_in_a_different_period" in self._codes(rows)
+
+    def test_a_long_stale_commence_time_is_reported(self) -> None:
+        """``commence_time_too_far``, the ``if`` arm above it, has eight test
+        references; this ``elif`` had none."""
+        rows = [
+            make_quote(source="pinnacle", selection=selection, decimal_odds=2.00,
+                       source_market_id="m",
+                       commence_time=datetime(2026, 6, 20, 18, 0, tzinfo=UTC))
+            for selection in (Selection.HOME, Selection.AWAY)
+        ]
+        assert "commence_time_stale" in self._codes(rows)
+
+
+class TestOrphanRowsCannotBeWritten:
+    """``PRAGMA foreign_keys = ON`` was deletable with the whole suite green.
+
+    SQLite disables foreign keys per connection by default, so without that line
+    a finding, health row or quote can be written against a ``run_id`` that does
+    not exist — and every read command joins on it.  ``migrate_database`` runs
+    ``PRAGMA foreign_key_check`` and refuses on a violation, which only means
+    something if violations cannot be written in the first place.
+    """
+
+    def test_the_connection_enforces_them(self, tmp_path) -> None:
+        from src.store import Store
+
+        with Store(tmp_path / "db.sqlite3") as store:
+            assert store.query("PRAGMA foreign_keys")[0][0] == 1
+
+    def test_a_finding_against_a_missing_run_is_refused(self, tmp_path) -> None:
+        import sqlite3
+
+        from src.store import Store
+
+        with Store(tmp_path / "db.sqlite3") as store:
+            with pytest.raises(sqlite3.IntegrityError):
+                store._conn.execute(
+                    "INSERT INTO finding (run_id, severity, code, message) "
+                    "VALUES (?, 'error', 'x', 'y')", (999_999,)
+                )
+
+    def test_a_quote_against_a_missing_run_is_refused(self, tmp_path) -> None:
+        import sqlite3
+
+        from src.store import Store
+
+        with Store(tmp_path / "db.sqlite3") as store:
+            with pytest.raises(sqlite3.IntegrityError):
+                store.save_quotes(999_999, [make_quote()])

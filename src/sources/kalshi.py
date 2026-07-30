@@ -84,7 +84,7 @@ from src.sources._common import (
     parse_iso_time,
 )
 from src.sources.base import ParseOutcome
-from src.sources.guards import FormatChangeError, SourceError, require_mapping
+from src.sources.guards import CoverageCappedError, FormatChangeError, SourceError, require_mapping
 
 log = logging.getLogger(__name__)
 
@@ -423,6 +423,21 @@ class KalshiAdapter:
             cursor = payload.get("cursor") or None
             if not cursor or len(markets) < self.page_size:
                 break
+        else:
+            # Falling off the cap with the venue's cursor still live is a
+            # truncated slate, and reporting the scope as fully produced makes it
+            # invisible.  ``CoverageCappedError`` exists for exactly this: "a
+            # bound on request volume is politeness and stays; reporting the run
+            # as complete afterwards is not".
+            if cursor and self.last_fetch is not None:
+                self.last_fetch.failed(
+                    f"{entry.ticker}: stopped at the {MAX_PAGES_PER_SERIES}-page cap",
+                    CoverageCappedError(
+                        f"{self._source_key}: {entry.ticker} still had a cursor when the "
+                        f"{MAX_PAGES_PER_SERIES}-page cap was reached; the rest were "
+                        f"not collected"
+                    ),
+                )
         return pages
 
     # ── parse ────────────────────────────────────────────────────────────────

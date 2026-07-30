@@ -86,7 +86,7 @@ from src.sources._common import (
     parse_iso_time,
 )
 from src.sources.base import ParseOutcome
-from src.sources.guards import FormatChangeError, SourceError, require_mapping
+from src.sources.guards import CoverageCappedError, FormatChangeError, SourceError, require_mapping
 
 log = logging.getLogger(__name__)
 
@@ -525,6 +525,21 @@ class SmarketsAdapter:
             # The cursor carries every parameter it needs, including the type
             # and page size; sending ours as well would replace its own query.
             params = None
+        else:
+            # Falling off the cap with the venue's cursor still live is a
+            # truncated slate, and reporting the scope as fully produced makes it
+            # invisible.  ``CoverageCappedError`` exists for exactly this: "a
+            # bound on request volume is politeness and stays; reporting the run
+            # as complete afterwards is not".
+            if nxt and self.last_fetch is not None:
+                self.last_fetch.failed(
+                    f"{sport.value}: stopped at the {MAX_PAGES_PER_SPORT}-page cap",
+                    CoverageCappedError(
+                        f"{self._source_key}: {sport.value} still had a cursor when "
+                        f"the {MAX_PAGES_PER_SPORT}-page cap was reached; the rest "
+                        f"were not collected"
+                    ),
+                )
         return pages, events
 
     def _batched(

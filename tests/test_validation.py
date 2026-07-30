@@ -32,7 +32,7 @@ from src.schema import (
     Sport,
     draw_is_priced,
 )
-from src.validation import Severity, validate
+from src.validation import Severity, ValidationReport, validate
 from tests.conftest import make_quote
 
 OBSERVED = datetime(2026, 7, 28, 7, 0, tzinfo=UTC)
@@ -476,10 +476,28 @@ def test_team_total_requires_a_side() -> None:
 
 
 def test_report_severity_split_and_summary() -> None:
-    report = validate(_full_slate("bookA") + _full_slate("bookB"))
-    assert report.ok
-    assert "PASS" in report.summary()
-    assert all(f.severity in (Severity.ERROR, Severity.WARNING) for f in report.findings)
+    """The ``errors``/``warnings`` partition, on a report that actually holds both.
+
+    This asserted ``all(f.severity in (ERROR, WARNING) for f in report.findings)``
+    over a clean slate — an empty list, and a membership test that cannot fail
+    because ``Severity`` has exactly those two members.  The name promised a
+    severity split and nothing checked one.
+    """
+    clean = validate(_full_slate("bookA") + _full_slate("bookB"))
+    assert clean.ok
+    assert "PASS" in clean.summary()
+
+    report = ValidationReport()
+    report.add(Severity.ERROR, "a_problem", "something is wrong")
+    report.add(Severity.WARNING, "worth_a_look", "something is odd")
+    report.add(Severity.WARNING, "worth_a_look", "something else is odd")
+    assert [f.code for f in report.errors] == ["a_problem"]
+    assert [f.code for f in report.warnings] == ["worth_a_look"] * 2
+    # the partition is exhaustive and disjoint
+    assert len(report.errors) + len(report.warnings) == len(report.findings)
+    assert not set(report.errors) & set(report.warnings)
+    assert not report.ok, "an error must fail the report"
+    assert "FAIL" in report.summary()
 
 
 # ── the sport-aware checks ───────────────────────────────────────────────────

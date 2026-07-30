@@ -215,16 +215,30 @@ class TestReconciliation:
             expected = KEY_1 if quote.commence_time == GAME_1 else KEY_2
             assert quote.event_key == expected
 
-    def test_a_book_reporting_both_games_at_one_time_collapses_loudly(self) -> None:
-        """When a feed repeats game 1's time for game 2 there is no information
-        left to separate them.  Collapsing both into one key produces duplicate
-        priced selections, which validation reports as an error — far better than
-        the silent cross-book swap that ordering by source id produced."""
+    def test_a_book_reporting_both_games_at_one_time_keeps_them_apart(self) -> None:
+        """When a feed repeats game 1's time for game 2, the *times* carry no
+        information that separates them — but the feed's own two event ids do,
+        and it is the only witness there is.
+
+        This used to collapse both onto one key and rely on validation reporting
+        the duplicate selections.  The storage consequence was not accounted for:
+        ``dedup_key`` is UNIQUE over that source's whole transaction, so the
+        collision discarded every *unrelated* fixture the book had collected, and
+        every later ``arb``/``lines``/``report`` read the book as absent while
+        real money sat in it — under a finding that blamed "two prices for one
+        selection".  Keeping them apart costs at most a cross-book join on the
+        second game, which is this module's stated bias: a missed join costs a
+        comparison, a false one invents a fixture.
+        """
         quotes = _slate("book_b", games=[("b1", GAME_1), ("b2", GAME_1)])
         reconciled, _ = reconcile_event_keys(quotes)
-        assert len({q.event_key for q in reconciled}) == 1
+        by_event = {}
+        for quote in reconciled:
+            by_event.setdefault(quote.source_event_id, set()).add(quote.event_key)
+        assert len(by_event) == 2, by_event
+        assert by_event["b1"] != by_event["b2"], by_event
         keys = [q.dedup_key for q in reconciled]
-        assert len(keys) != len(set(keys)), "the collision must be visible to validation"
+        assert len(keys) == len(set(keys)), "no collision, so the run survives"
 
     def test_a_cluster_straddling_eastern_midnight_is_not_split(self) -> None:
         before_midnight = datetime(2026, 7, 29, 3, 55, tzinfo=UTC)  # 23:55 ET on the 28th

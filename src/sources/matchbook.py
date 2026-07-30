@@ -107,7 +107,7 @@ from src.sources._common import (
     parse_iso_time,
 )
 from src.sources.base import ParseOutcome
-from src.sources.guards import FormatChangeError, SourceError, require_mapping
+from src.sources.guards import CoverageCappedError, FormatChangeError, SourceError, require_mapping
 
 log = logging.getLogger(__name__)
 
@@ -527,10 +527,26 @@ class MatchbookAdapter:
             if not isinstance(total, int) or offset >= total:
                 break
             if page == MAX_PAGES_PER_SPORT:
+                # The warning reached the log and no report, so the run said the
+                # scope was fully produced.  ``CoverageCappedError`` is what
+                # grades it: "a bound on request volume is politeness and stays;
+                # reporting the run as complete afterwards is not".  This one
+                # knows exactly how much it left behind, so it says so.
                 log.warning(
                     "%s: stopped at %d pages for %s with %d of %d events collected",
                     self._source_key, MAX_PAGES_PER_SPORT, sport.value, offset, total,
                 )
+                if self.last_fetch is not None:
+                    self.last_fetch.failed(
+                        f"{sport.value}: stopped at the "
+                        f"{MAX_PAGES_PER_SPORT}-page cap",
+                        CoverageCappedError(
+                            f"{self._source_key}: collected {offset} of {total} "
+                            f"{sport.value} events before the "
+                            f"{MAX_PAGES_PER_SPORT}-page cap; the rest were not "
+                            f"collected"
+                        ),
+                    )
         return pages
 
     # ── parse ────────────────────────────────────────────────────────────────

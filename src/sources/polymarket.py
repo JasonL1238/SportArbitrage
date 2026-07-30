@@ -75,7 +75,7 @@ from src.sources._common import (
     within_schedule_horizon,
 )
 from src.sources.base import ParseOutcome
-from src.sources.guards import FormatChangeError, SourceError, require_list
+from src.sources.guards import CoverageCappedError, FormatChangeError, SourceError, require_list
 
 log = logging.getLogger(__name__)
 
@@ -266,6 +266,23 @@ class PolymarketAdapter:
             offset += count
             if count < self.page_size:
                 break
+        else:
+            # Falling off the cap with more pages upstream is a truncated
+            # slate, and reporting the scope as fully produced makes it
+            # invisible.  ``CoverageCappedError`` exists for exactly this: "a
+            # bound on request volume is politeness and stays; reporting the run
+            # as complete afterwards is not".  Pinnacle's league-index fallback
+            # was the only place that did it — and the committed fixtures for
+            # this adapter were captured *at* the cap, page 2 coming back full.
+            if self.last_fetch is not None:
+                self.last_fetch.failed(
+                    f"{route.slug}: stopped at the {MAX_PAGES_PER_TAG}-page cap",
+                    CoverageCappedError(
+                        f"{self._source_key}: {route.slug}'s last page came back full "
+                        f"at the {MAX_PAGES_PER_TAG}-page cap, so more events existed "
+                        f"upstream and were not collected"
+                    ),
+                )
         return pages
 
     def parse(self, raws: Sequence[RawResponse]) -> ParseOutcome:

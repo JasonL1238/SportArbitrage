@@ -1229,7 +1229,13 @@ def _column(quotes: dict[str, Any], name: str) -> list[Any]:
 def _slate_dates(quotes: dict[str, Any], strings: Sequence[str]) -> str:
     """The scheduling dates covered, read straight off the event keys."""
     keys = {i for i in _column(quotes, "event_key") if i is not None}
-    dates = sorted({strings[i].split(":")[-1].split("#")[0] for i in keys})
+    # ``~`` as well as ``#``: an event key can carry a same-time split suffix
+    # (``…:2026-07-28~bookx2``) when one source publishes two fixtures at one
+    # nominal time, and reading the date off the tail without stripping it put
+    # "2026-07-28~bookx2" in the page's own slate-date header.
+    dates = sorted(
+        {strings[i].split(":")[-1].split("#")[0].split("~")[0] for i in keys}
+    )
     if not dates:
         return "no fixtures stored"
     return dates[0] if len(dates) == 1 else f"{dates[0]} … {dates[-1]}"
