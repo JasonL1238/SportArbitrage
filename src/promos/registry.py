@@ -2,9 +2,9 @@
 
 Promo sources are a **parallel** registry — never mixed into
 :data:`src.sources.registry.SOURCES`.  Keys match the stakeable sportsbook
-identity where possible (``fanduel``, ``betrivers_kambi``, …).  DraftKings /
-Caesars / Bet365 have no first-party odds adapter from this egress, so their
-promo keys are the brand names (``draftkings``, ``caesars``, ``bet365``).
+identity where possible (``fanduel``, ``draftkings``, …).  Books without a
+stable logged-out promo API are covered by TheLines ``tl_*`` tenants (same
+idea as Action Network ``an_*`` odds failovers).
 """
 from __future__ import annotations
 
@@ -18,7 +18,9 @@ from src.promos.cloudbet import CloudbetPromoAdapter
 from src.promos.draftkings import DraftKingsPromoAdapter
 from src.promos.fanduel import FanDuelPromoAdapter
 from src.promos.landing import LandingPromoAdapter, LandingTarget
+from src.promos.leovegas import LeoVegasPromoAdapter
 from src.promos.schema import PromoKind
+from src.promos.thelines import TheLinesPromoAdapter
 
 
 @dataclass(frozen=True)
@@ -42,8 +44,13 @@ def _landing(
     odds_keys: tuple[str, ...] = (),
     default_kind: PromoKind = PromoKind.OTHER,
     headers: Mapping[str, str] | None = None,
+    empty_is_ok: bool = False,
 ) -> PromoSourceDescriptor:
-    config: dict[str, Any] = {"targets": targets, "default_kind": default_kind}
+    config: dict[str, Any] = {
+        "targets": targets,
+        "default_kind": default_kind,
+        "empty_is_ok": empty_is_ok,
+    }
     if headers:
         config["headers"] = dict(headers)
     return PromoSourceDescriptor(
@@ -51,6 +58,20 @@ def _landing(
         adapter=LandingPromoAdapter,
         config=config,
         odds_source_keys=odds_keys or (key,),
+    )
+
+
+def _thelines(
+    key: str,
+    brand_key: str,
+    *,
+    odds_keys: tuple[str, ...] = (),
+) -> PromoSourceDescriptor:
+    return PromoSourceDescriptor(
+        key=key,
+        adapter=TheLinesPromoAdapter,
+        config={"brand_key": brand_key},
+        odds_source_keys=odds_keys or (brand_key,),
     )
 
 
@@ -76,24 +97,13 @@ PROMO_SOURCES: tuple[PromoSourceDescriptor, ...] = (
         adapter=CloudbetPromoAdapter,
         odds_source_keys=("cloudbet",),
     ),
-    _landing(
-        "betmgm",
-        (
-            LandingTarget(
-                "https://www.il.betmgm.com/en/mobileportal/promotions",
-                "promotions-portal",
-                "BetMGM Promotions",
-            ),
-            LandingTarget(
-                "https://www.betmgm.com/en/sports",
-                "marketing-sports",
-                "BetMGM Sports",
-            ),
-        ),
-        odds_keys=("betmgm", "an_betmgm"),
-        default_kind=PromoKind.SIGNUP_BONUS,
-        headers={"x-bwin-accessid": "ZTg4YWEwMTgtZTlhYy00MWRkLWIzYWYtZjMzODI5ZDE0Mjc5"},
+    PromoSourceDescriptor(
+        key="leovegas_kambi",
+        adapter=LeoVegasPromoAdapter,
+        odds_source_keys=("leovegas_kambi",),
     ),
+    # US majors without a stable logged-out promo JSON from this egress —
+    # covered by TheLines ``tl_*`` secondaries below (BetMGM / Caesars / bet365).
     _landing(
         "betrivers_kambi",
         (
@@ -105,47 +115,7 @@ PROMO_SOURCES: tuple[PromoSourceDescriptor, ...] = (
         ),
         odds_keys=("betrivers_kambi", "an_betrivers"),
         default_kind=PromoKind.SIGNUP_BONUS,
-    ),
-    _landing(
-        "leovegas_kambi",
-        (
-            LandingTarget(
-                "https://www.leovegas.com/en-row/promotions",
-                "promotions",
-                "LeoVegas Promotions",
-            ),
-            LandingTarget(
-                "https://www.leovegas.co.uk/promotions",
-                "promotions-uk",
-                "LeoVegas UK Promotions",
-            ),
-        ),
-        odds_keys=("leovegas_kambi",),
-        default_kind=PromoKind.SIGNUP_BONUS,
-    ),
-    _landing(
-        "caesars",
-        (
-            LandingTarget(
-                "https://www.caesars.com/sportsbook-and-casino",
-                "sportsbook-home",
-                "Caesars Sportsbook",
-            ),
-        ),
-        odds_keys=("an_caesars",),
-        default_kind=PromoKind.SIGNUP_BONUS,
-    ),
-    _landing(
-        "bet365",
-        (
-            LandingTarget(
-                "https://www.bet365.com/",
-                "home",
-                "bet365",
-            ),
-        ),
-        odds_keys=("an_bet365",),
-        default_kind=PromoKind.SIGNUP_BONUS,
+        empty_is_ok=True,
     ),
     _landing(
         "onexbet",
@@ -170,6 +140,7 @@ PROMO_SOURCES: tuple[PromoSourceDescriptor, ...] = (
         ),
         odds_keys=("pinnacle",),
         default_kind=PromoKind.OTHER,
+        empty_is_ok=True,
     ),
     _landing(
         "smarkets",
@@ -194,7 +165,16 @@ PROMO_SOURCES: tuple[PromoSourceDescriptor, ...] = (
         ),
         odds_keys=("matchbook",),
         default_kind=PromoKind.OTHER,
+        empty_is_ok=True,
     ),
+    # TheLines aggregator failover (Action Network–style secondaries).
+    _thelines("tl_fanduel", "fanduel", odds_keys=("fanduel", "an_fanduel")),
+    _thelines("tl_draftkings", "draftkings", odds_keys=("an_draftkings",)),
+    _thelines("tl_betmgm", "betmgm", odds_keys=("betmgm", "an_betmgm")),
+    _thelines("tl_caesars", "caesars", odds_keys=("an_caesars",)),
+    _thelines("tl_bet365", "bet365", odds_keys=("an_bet365",)),
+    _thelines("tl_hardrock", "hardrock", odds_keys=("hardrock", "an_hardrock")),
+    _thelines("tl_fanatics", "fanatics", odds_keys=("an_fanatics",)),
 )
 
 BY_KEY: dict[str, PromoSourceDescriptor] = {entry.key: entry for entry in PROMO_SOURCES}

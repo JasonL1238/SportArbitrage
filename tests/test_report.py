@@ -858,6 +858,8 @@ def test_the_scrape_controls_are_on_the_page() -> None:
     for needle in (
         "scrape-btn", "scrape-scope", "scrape-status", "scrape-progress",
         "run-list", "/api/collect", "/api/status", "paintScrapeProgress",
+        "promo-scrape-btn", "promo-scrape-status", "/api/promos/collect",
+        "/api/promos/status", "wirePromoScrapeButton", 'id="promos"',
     ):
         assert needle in BODY or needle in JS, needle
     assert 'id="history"' in BODY
@@ -866,6 +868,7 @@ def test_the_scrape_controls_are_on_the_page() -> None:
     assert "wireScrapeButton" in JS
     # Front door is arbitrage; past scrapes live under History, not the rail.
     assert BODY.index('href="#arb"') < BODY.index('href="#history"')
+    assert BODY.index('href="#promos"') < BODY.index('href="#history"')
     assert 'id="run-list"' in BODY
     assert "run-block" not in BODY
     assert "run-pick-screen" not in BODY
@@ -896,6 +899,61 @@ def test_run_collect_from_ui_rejects_a_bad_tier() -> None:
 
     with pytest.raises(ValueError, match="unknown tier"):
         report_mod._run_collect_from_ui(tier="turbo", sport=None, league="MLB")
+
+
+def test_promo_payload_and_build_report_include_promos(
+    populated: Store, tmp_path, monkeypatch,
+) -> None:
+    from src import report as report_mod
+    from src import settings as settings_mod
+    from src.promos.base import PromoSourceHealth
+    from src.promos.schema import PromoKind, PromoOffer
+    from src.promos.store import PromoStore
+
+    promo_db = tmp_path / "promos.sqlite3"
+    monkeypatch.setattr(settings_mod, "PROMO_DB_PATH", promo_db)
+    monkeypatch.setattr(report_mod.settings, "PROMO_DB_PATH", promo_db)
+
+    empty = report_mod._promo_payload()
+    assert empty["run"] is None
+    assert empty["offers"] == []
+
+    store = PromoStore(promo_db)
+    run_id = store.start_run()
+    store.finish_run(
+        run_id,
+        ok=True,
+        offers=[
+            PromoOffer(
+                source="draftkings",
+                offer_id="welcome",
+                kind=PromoKind.SIGNUP_BONUS,
+                title="Welcome Bonus",
+                observed_at=datetime.now(UTC),
+                url="https://example.test/promo",
+            )
+        ],
+        health=[
+            PromoSourceHealth(
+                source_key="draftkings",
+                ok=True,
+                checked_at=datetime.now(UTC),
+                offer_count=1,
+            )
+        ],
+    )
+    store.close()
+
+    payload = report_mod._promo_payload()
+    assert payload["run"]["id"] == run_id
+    assert payload["offers"][0]["title"] == "Welcome Bonus"
+    assert payload["health"][0]["source_key"] == "draftkings"
+
+    monkeypatch.setattr(settings_mod, "DB_PATH", populated.path)
+    monkeypatch.setattr(report_mod.settings, "DB_PATH", populated.path)
+    data = report_mod.build_report(populated, max_quote_rows=50)
+    assert "promos" in data
+    assert data["promos"]["offers"][0]["kind"] == "signup_bonus"
 
 
 # ── the pieces this file deliberately stubs ──────────────────────────────────

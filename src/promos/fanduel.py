@@ -191,6 +191,10 @@ class FanDuelPromoAdapter:
         source = envelope_source((raw,), fallback=self.source_key)
         title = page_title(raw.body) or "FanDuel Sportsbook"
         description = meta_description(raw.body) or ""
+        body_l = (raw.body or "").lower()
+        if "perimeterx" in body_l or "access to this page has been denied" in body_l:
+            outcome.reject(source, "bot_wall", "marketing page blocked by PerimeterX")
+            return
         blob = f"{title} {description}".lower()
         # Require a real offer word — bare "bet"/"promo" in chrome is not an offer.
         if not any(

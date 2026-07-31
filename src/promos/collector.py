@@ -12,11 +12,12 @@ import sys
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Callable, Sequence
+from typing import Callable, Mapping, Sequence
 
 from src import settings
 from src.promos import registry
 from src.promos.base import PromoParseOutcome, PromoSource, PromoSourceHealth
+from src.promos.redundancy import brand_coverage, prefer_primary_offers
 from src.promos.schema import PromoOffer
 from src.promos.store import PromoStore
 from src.raw_store import RawStore
@@ -36,6 +37,7 @@ _EMPTY_CATALOG_SKIPS = frozenset(
         "non_sports_product",
         "casino_other",
         "landing_redundant",
+        "no_public_catalog",
     }
 )
 
@@ -50,11 +52,13 @@ class PromoRunResult:
     ok: bool = False
 
     def summary_lines(self) -> list[str]:
+        ok_brands, total_brands, _ = brand_coverage(self.health)
         lines = [
             f"promo run {'OK' if self.ok else 'DEGRADED'} — "
             f"{len(self.offers)} offers from "
             f"{sum(1 for h in self.health if h.ok)}/"
-            f"{len(self.health)} sources"
+            f"{len(self.health)} sources "
+            f"({ok_brands}/{total_brands} brands covered)"
         ]
         for item in self.health:
             lines.append("  " + item.summary())
@@ -116,10 +120,15 @@ def _health_ok(outcome: PromoParseOutcome) -> tuple[bool, str | None, str | None
     if outcome.skipped.get("landing_without_promo_copy"):
         return False, "empty_after_parse", "marketing page had no promo copy"
     if outcome.rejections:
+        reason = outcome.rejections[0].reason
+        if reason in {"cookie_wall", "captcha", "bot_wall"}:
+            return False, reason, outcome.rejections[0].detail
         return False, "parse_rejections", outcome.rejections[0].detail
     skip_keys = set(outcome.skipped)
     if skip_keys & _EMPTY_CATALOG_SKIPS:
         return True, None, None
+    if outcome.skipped.get("no_brand_offers"):
+        return False, "empty_after_parse", "TheLines page had no offers for this brand"
     return False, "empty_after_parse", "no offers parsed"
 
 
@@ -211,6 +220,7 @@ def collect_promos_once(
     sources: Sequence[str] | None = None,
     store: bool = True,
     persist_raw: bool = True,
+    on_progress: Callable[[Mapping[str, object]], None] | None = None,
 ) -> PromoRunResult:
     started_at = datetime.now(UTC)
     built = build_sources(sources)
@@ -222,8 +232,39 @@ def collect_promos_once(
     health_rows: list[PromoSourceHealth] = []
     finished_at = started_at
     ok = False
+    total = len(built)
+
+    def _progress(payload: dict[str, object]) -> None:
+        if on_progress is None:
+            return
+        try:
+            on_progress(payload)
+        except Exception:  # noqa: BLE001 — UI callbacks must not abort collect
+            log.debug("promo progress callback failed", exc_info=True)
+
     try:
-        for source in built:
+        _progress(
+            {
+                "phase": "starting",
+                "message": f"Starting promo scrape of {total} book(s)",
+                "done": 0,
+                "total": total,
+                "offer_count": 0,
+                "kind": "promos",
+            }
+        )
+        for index, source in enumerate(built):
+            _progress(
+                {
+                    "phase": "fetching",
+                    "message": f"Fetching {source.source_key}…",
+                    "done": index,
+                    "total": total,
+                    "offer_count": len(offers),
+                    "source": source.source_key,
+                    "kind": "promos",
+                }
+            )
             try:
                 outcome, health, _ = _collect_source(source, raw_store=raw_store)
                 health_rows.append(health)
@@ -245,10 +286,25 @@ def collect_promos_once(
                     source.close()
                 except Exception:  # noqa: BLE001
                     log.debug("close failed for %s", source.source_key, exc_info=True)
+            _progress(
+                {
+                    "phase": "fetched",
+                    "message": f"{source.source_key}: {health_rows[-1].offer_count} offer(s)",
+                    "done": index + 1,
+                    "total": total,
+                    "offer_count": len(offers),
+                    "source": source.source_key,
+                    "kind": "promos",
+                }
+            )
 
-        offers = dedupe_offers(offers)
+        offers = prefer_primary_offers(dedupe_offers(offers))
+        ok_brands, total_brands, _ = brand_coverage(health_rows)
+        # Run health folds TheLines secondaries into brand coverage so a dead
+        # first-party landing does not fail the slate when tl_* covered the book.
         ok = bool(health_rows) and (
-            sum(1 for h in health_rows if h.ok) >= max(1, len(health_rows) // 2)
+            ok_brands >= max(1, total_brands // 2)
+            or sum(1 for h in health_rows if h.ok) >= max(1, len(health_rows) // 2)
         )
         finished_at = datetime.now(UTC)
         if promo_store is not None and run_id is not None:

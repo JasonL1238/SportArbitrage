@@ -40,6 +40,13 @@ class LandingTarget:
     label: str = ""
 
 
+_COOKIE_WALL = re.compile(
+    r"we got cookies|cookie (?:consent|settings)|accept all cookies|"
+    r"challenge-platform|cf-browser-verification|just a moment",
+    re.I,
+)
+
+
 class LandingPromoAdapter:
     """Fetch marketing/promo HTML pages and emit coarse PromoOffer rows."""
 
@@ -53,10 +60,12 @@ class LandingPromoAdapter:
         host_interval: float = 0.4,
         headers: dict[str, str] | None = None,
         default_kind: PromoKind = PromoKind.OTHER,
+        empty_is_ok: bool = False,
     ) -> None:
         self._source_key = source_key
         self.targets = tuple(targets)
         self.default_kind = default_kind
+        self.empty_is_ok = empty_is_ok
         self._http = SourceClient(
             source_key,
             timeout=timeout,
@@ -149,7 +158,17 @@ class LandingPromoAdapter:
                     )
                 )
             if len(outcome.offers) == before:
-                outcome.skipped["no_promo_signals"] += 1
+                if _COOKIE_WALL.search(raw.body or ""):
+                    outcome.reject(
+                        source,
+                        "cookie_wall",
+                        "page served a cookie/bot challenge instead of promo copy",
+                    )
+                elif self.empty_is_ok:
+                    # Exchanges / venues with no public retail catalog.
+                    outcome.skipped["no_public_catalog"] += 1
+                else:
+                    outcome.skipped["no_promo_signals"] += 1
         return outcome
 
     def close(self) -> None:

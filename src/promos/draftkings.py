@@ -30,7 +30,16 @@ DEFAULT_QUERY: dict[str, Any] = {
     "siteExperience": "US-SB",
 }
 ENDPOINT = "promotions-query"
-SPORTS_PRODUCTS = frozenset({"sportsbook", "sports", "racing", "predict"})
+SPORTS_PRODUCTS = frozenset({"sportsbook", "sports", "predict"})
+_NOISE_TITLE = (
+    "discord",
+    "budget builder",
+    "responsible gaming",
+    "watch live horse",
+    "my budget",
+    "it's more fun, when it's for fun",
+    "daily racing form",
+)
 
 
 class DraftKingsPromoAdapter:
@@ -111,11 +120,23 @@ class DraftKingsPromoAdapter:
                     outcome.skipped["unusable_promotion"] += 1
                     continue
                 if self.sports_only and offer.product and offer.product.lower() not in SPORTS_PRODUCTS:
-                    # Casino-only cards stay out of the sports free-EV board.
+                    # Casino / racing cards stay out of the sports free-EV board.
                     outcome.skipped["non_sports_product"] += 1
                     continue
                 if offer.kind.value == "other" and (offer.product or "").lower() == "casino":
                     outcome.skipped["casino_other"] += 1
+                    continue
+                title_l = offer.title.lower()
+                if any(noise in title_l for noise in _NOISE_TITLE):
+                    outcome.skipped["non_offer_chrome"] += 1
+                    continue
+                if "racing.draftkings.com" in (offer.url or "").lower():
+                    outcome.skipped["non_sports_product"] += 1
+                    continue
+                if offer.kind.value == "referral" and any(
+                    o.kind.value == "referral" for o in outcome.offers
+                ):
+                    outcome.skipped["duplicate_referral"] += 1
                     continue
                 outcome.offers.append(offer)
 

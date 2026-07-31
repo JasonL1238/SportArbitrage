@@ -1133,7 +1133,70 @@ def build_report(
             {"name": "status", "values": [s.value for s in QuoteStatus]},
         ],
         "strings": strings,
+        # Sibling DB — signup bonuses / boosts / free bets.  Never mixed into quotes.
+        "promos": _promo_payload(),
     }
+
+
+def _promo_payload() -> dict[str, Any]:
+    """Latest promo-collection snapshot for the dashboard Promos panel.
+
+    Reads the separate promo SQLite file.  A missing or empty store is a normal
+    state (operator has not scraped bonuses yet), not an error.
+    """
+    empty: dict[str, Any] = {"run": None, "offers": [], "health": [], "kinds": []}
+    try:
+        from src.promos.schema import PromoKind
+        from src.promos.store import PromoStore
+    except Exception:  # noqa: BLE001 — page must still render without promos package
+        return empty
+
+    empty["kinds"] = [kind.value for kind in PromoKind]
+    try:
+        store = PromoStore(settings.PROMO_DB_PATH)
+    except Exception:  # noqa: BLE001
+        return empty
+    try:
+        run_id = store.latest_run_id()
+        if run_id is None:
+            return empty
+        runs = store.list_runs(limit=1)
+        run = runs[0] if runs else None
+        if run is not None:
+            run = {
+                "id": run["id"],
+                "started_at": run["started_at"],
+                "finished_at": run["finished_at"],
+                "ok": bool(run["ok"]),
+                "offer_count": run["offer_count"],
+                "source_count": run["source_count"],
+            }
+        offers = []
+        for row in store.offers_for_run(run_id):
+            offers.append(
+                {
+                    "source": row["source"],
+                    "offer_id": row["offer_id"],
+                    "kind": row["kind"],
+                    "title": row["title"],
+                    "description": row["description"] or "",
+                    "url": row["url"],
+                    "ends_at": row["ends_at"],
+                    "product": row["product"] or "",
+                    "requires_login": bool(row["requires_login"]),
+                    "raw_kind": row["raw_kind"] or "",
+                    "metadata": row.get("metadata") or {},
+                }
+            )
+        health = store.health_for_run(run_id)
+        return {
+            "run": run,
+            "offers": offers,
+            "health": health,
+            "kinds": empty["kinds"],
+        }
+    finally:
+        store.close()
 
 
 def _blank_sport(sport: str) -> dict[str, Any]:
@@ -2097,6 +2160,35 @@ def _run_collect_from_ui(
     }
 
 
+def _run_promos_from_ui(
+    *,
+    sources: Sequence[str] | None = None,
+    on_progress: Any | None = None,
+) -> dict[str, Any]:
+    """One promo/bonus collection pass from the dashboard Promos scrape button."""
+    from src.promos.collector import collect_promos_once
+
+    result = collect_promos_once(
+        sources=sources,
+        store=True,
+        persist_raw=True,
+        on_progress=on_progress,
+    )
+    by_source: dict[str, int] = {}
+    for offer in result.offers:
+        by_source[offer.source] = by_source.get(offer.source, 0) + 1
+    return {
+        "run_id": result.run_id,
+        "ok": result.ok,
+        "offer_count": len(result.offers),
+        "source_ok": sum(1 for h in result.health if h.ok),
+        "source_count": len(result.health),
+        "by_source": by_source,
+        "started_at": result.started_at.isoformat(),
+        "finished_at": result.finished_at.isoformat(),
+    }
+
+
 def _serve(
     path: Path,
     port: int,
@@ -2106,9 +2198,9 @@ def _serve(
     quote_runs: int,
     max_quote_rows: int,
 ) -> int:
-    """Serve the dashboard on localhost, with a Scrape endpoint for the UI button.
+    """Serve the dashboard on localhost, with Scrape endpoints for the UI buttons.
 
-    Static ``file://`` pages stay view-only.  The Scrape button only appears when
+    Static ``file://`` pages stay view-only.  The Scrape buttons only appear when
     the page is loaded from this server, which is what can run a collect and
     rewrite the HTML without violating that rule.
     """
@@ -2119,6 +2211,7 @@ def _serve(
     lock = threading.Lock()
     state: dict[str, Any] = {
         "busy": False,
+        "busy_kind": None,
         "last_error": None,
         "progress": None,
         "started_at": None,
@@ -2135,12 +2228,30 @@ def _serve(
             return {
                 "ok": True,
                 "busy": state["busy"],
+                "busy_kind": state["busy_kind"],
                 "control": True,
                 "dashboard": out.name,
                 "last_error": state["last_error"],
                 "started_at": state["started_at"],
                 "progress": progress,
             }
+
+    def _begin(kind: str, starting: Mapping[str, Any]) -> bool:
+        if not lock.acquire(blocking=False):
+            return False
+        with state_lock:
+            state["busy"] = True
+            state["busy_kind"] = kind
+            state["last_error"] = None
+            state["started_at"] = datetime.now(UTC).isoformat()
+            state["progress"] = dict(starting)
+        return True
+
+    def _end() -> None:
+        with state_lock:
+            state["busy"] = False
+            state["busy_kind"] = None
+        lock.release()
 
     class Handler(SimpleHTTPRequestHandler):
         def __init__(self, *args, **kwargs):
@@ -2162,25 +2273,36 @@ def _serve(
 
         def do_GET(self) -> None:  # noqa: N802
             route = self.path.split("?", 1)[0]
-            if route == "/api/status":
+            if route in ("/api/status", "/api/promos/status"):
                 self._json(200, status_payload())
                 return
             return super().do_GET()
 
         def do_POST(self) -> None:  # noqa: N802
             route = self.path.split("?", 1)[0]
-            if route != "/api/collect":
-                self.send_error(404, "unknown endpoint")
+            if route == "/api/collect":
+                self._handle_odds_collect()
                 return
+            if route == "/api/promos/collect":
+                self._handle_promos_collect()
+                return
+            self.send_error(404, "unknown endpoint")
+
+        def _read_json_body(self) -> tuple[dict[str, Any] | None, str | None]:
             length = int(self.headers.get("Content-Length") or 0)
             raw = self.rfile.read(length) if length else b"{}"
             try:
                 body = json.loads(raw.decode("utf-8") or "{}")
             except json.JSONDecodeError:
-                self._json(400, {"ok": False, "error": "body must be JSON"})
-                return
+                return None, "body must be JSON"
             if not isinstance(body, dict):
-                self._json(400, {"ok": False, "error": "body must be a JSON object"})
+                return None, "body must be a JSON object"
+            return body, None
+
+        def _handle_odds_collect(self) -> None:
+            body, err = self._read_json_body()
+            if body is None:
+                self._json(400, {"ok": False, "error": err})
                 return
 
             tier = str(body.get("tier") or "core")
@@ -2191,25 +2313,22 @@ def _serve(
             if league is not None:
                 league = str(league)
 
-            if not lock.acquire(blocking=False):
+            if not _begin("odds", {
+                "phase": "starting",
+                "message": "Starting scrape…",
+                "done": 0,
+                "total": 0,
+                "quote_count": 0,
+                "kind": "odds",
+            }):
                 self._json(409, {
                     "ok": False,
                     "error": "a scrape is already running; wait for it to finish",
                     "busy": True,
+                    "busy_kind": status_payload().get("busy_kind"),
                     "progress": status_payload().get("progress"),
                 })
                 return
-            with state_lock:
-                state["busy"] = True
-                state["last_error"] = None
-                state["started_at"] = datetime.now(UTC).isoformat()
-                state["progress"] = {
-                    "phase": "starting",
-                    "message": "Starting scrape…",
-                    "done": 0,
-                    "total": 0,
-                    "quote_count": 0,
-                }
             try:
                 collected = _run_collect_from_ui(
                     tier=tier,
@@ -2223,6 +2342,7 @@ def _serve(
                     "done": 1,
                     "total": 1,
                     "quote_count": collected.get("quote_count") or 0,
+                    "kind": "odds",
                 })
                 rebuilt = _rebuild_dashboard(
                     out,
@@ -2238,6 +2358,7 @@ def _serve(
                             f"Got {collected.get('quote_count', 0):,} prices — reloading…"
                         ),
                         "quote_count": collected.get("quote_count") or 0,
+                        "kind": "odds",
                     }
                 self._json(200, {
                     "ok": True,
@@ -2252,6 +2373,7 @@ def _serve(
                     state["progress"] = {
                         "phase": "error",
                         "message": err,
+                        "kind": "odds",
                     }
                 self._json(500, {
                     "ok": False,
@@ -2259,14 +2381,105 @@ def _serve(
                     "busy": False,
                 })
             finally:
+                _end()
+
+        def _handle_promos_collect(self) -> None:
+            body, err = self._read_json_body()
+            if body is None:
+                self._json(400, {"ok": False, "error": err})
+                return
+
+            sources = body.get("sources")
+            if sources is not None:
+                if not isinstance(sources, list) or not all(
+                    isinstance(item, str) for item in sources
+                ):
+                    self._json(400, {
+                        "ok": False,
+                        "error": "sources must be a list of promo source keys",
+                    })
+                    return
+
+            if not _begin("promos", {
+                "phase": "starting",
+                "message": "Starting promo scrape…",
+                "done": 0,
+                "total": 0,
+                "offer_count": 0,
+                "kind": "promos",
+            }):
+                self._json(409, {
+                    "ok": False,
+                    "error": "a scrape is already running; wait for it to finish",
+                    "busy": True,
+                    "busy_kind": status_payload().get("busy_kind"),
+                    "progress": status_payload().get("progress"),
+                })
+                return
+            try:
+                collected = _run_promos_from_ui(
+                    sources=sources,
+                    on_progress=set_progress,
+                )
+                set_progress({
+                    "phase": "rebuilding",
+                    "message": "Rebuilding dashboard…",
+                    "done": 1,
+                    "total": 1,
+                    "offer_count": collected.get("offer_count") or 0,
+                    "kind": "promos",
+                })
+                try:
+                    rebuilt = _rebuild_dashboard(
+                        out,
+                        run_limit=run_limit,
+                        quote_runs=quote_runs,
+                        max_quote_rows=max_quote_rows,
+                    )
+                    reload = True
+                except LookupError:
+                    # Odds DB still empty — promo rows are stored; board comes later.
+                    rebuilt = None
+                    reload = False
                 with state_lock:
-                    state["busy"] = False
-                lock.release()
+                    state["last_error"] = None
+                    state["progress"] = {
+                        "phase": "done",
+                        "message": (
+                            f"Got {collected.get('offer_count', 0):,} promo offer(s)"
+                            + (" — reloading…" if reload else "")
+                        ),
+                        "offer_count": collected.get("offer_count") or 0,
+                        "kind": "promos",
+                    }
+                self._json(200, {
+                    "ok": True,
+                    "collect": collected,
+                    "dashboard": rebuilt,
+                    "reload": reload,
+                    "promos": _promo_payload(),
+                })
+            except Exception as exc:  # noqa: BLE001
+                err = f"{type(exc).__name__}: {exc}"
+                with state_lock:
+                    state["last_error"] = err
+                    state["progress"] = {
+                        "phase": "error",
+                        "message": err,
+                        "kind": "promos",
+                    }
+                self._json(500, {
+                    "ok": False,
+                    "error": err,
+                    "busy": False,
+                })
+            finally:
+                _end()
 
     url = f"http://127.0.0.1:{port}/{path.name}"
     with ThreadingHTTPServer(("127.0.0.1", port), Handler) as httpd:
         print(f"serving {url} — ctrl-c to stop")
-        print("  Scrape button is live on this URL (not on file:// opens)")
+        print("  Scrape buttons (odds + promos) are live on this URL (not on file:// opens)")
         if open_browser:
             webbrowser.open(url)
         try:

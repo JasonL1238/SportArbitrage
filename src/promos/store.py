@@ -212,14 +212,43 @@ class PromoStore:
         rows = self._conn.execute(
             """
             SELECT source, offer_id, kind, title, description, url, ends_at, product,
-                   requires_login, raw_kind
+                   requires_login, raw_kind, metadata_json
             FROM promo_offers
             WHERE run_id = ?
             ORDER BY source, kind, title
             """,
             (run_id,),
         ).fetchall()
-        return [dict(row) for row in rows]
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            try:
+                item["metadata"] = json.loads(item.pop("metadata_json") or "{}")
+            except ValueError:
+                item["metadata"] = {}
+                item.pop("metadata_json", None)
+            if not isinstance(item.get("metadata"), dict):
+                item["metadata"] = {}
+            out.append(item)
+        return out
+
+    def health_for_run(self, run_id: int) -> list[dict[str, Any]]:
+        rows = self._conn.execute(
+            """
+            SELECT source_key, ok, checked_at, request_count, raw_bytes, latency_ms,
+                   offer_count, rejection_count, skipped_count, error_kind, error_message
+            FROM promo_health
+            WHERE run_id = ?
+            ORDER BY source_key
+            """,
+            (run_id,),
+        ).fetchall()
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["ok"] = bool(item["ok"])
+            out.append(item)
+        return out
 
     def latest_run_id(self) -> int | None:
         row = self._conn.execute("SELECT MAX(id) AS id FROM promo_runs").fetchone()

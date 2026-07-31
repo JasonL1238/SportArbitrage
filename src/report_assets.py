@@ -188,6 +188,39 @@ select, input[type="search"], input[type="text"] {
   font: 400 10.5px/1.3 var(--mono); color: var(--muted);
 }
 
+.promo-toolbar {
+  display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: end;
+  margin: 0 0 12px;
+}
+.promo-toolbar label { display: flex; flex-direction: column; gap: 3px; min-width: 140px; }
+.promo-toolbar .eyebrow { margin: 0; }
+.promo-list { display: flex; flex-direction: column; gap: 8px; }
+.promo-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 14px;
+  padding: 10px 0; border-top: 1px solid var(--line-soft);
+}
+.promo-row:first-child { border-top: 0; padding-top: 0; }
+.promo-row .title { margin: 0; font: 600 13px/1.35 var(--sans); color: var(--ink); }
+.promo-row .meta {
+  margin: 3px 0 0; font: 400 11.5px/1.4 var(--sans); color: var(--ink-2);
+}
+.promo-row .desc {
+  margin: 5px 0 0; font: 400 12px/1.45 var(--sans); color: var(--muted);
+  max-width: 72ch;
+}
+.promo-row .side {
+  display: flex; flex-direction: column; align-items: flex-end; gap: 4px;
+  font: 400 11px/1.3 var(--mono); color: var(--muted); white-space: nowrap;
+}
+.promo-row a.promo-link {
+  color: var(--accent); text-decoration: none; font: 500 11.5px/1.3 var(--sans);
+}
+.promo-row a.promo-link:hover { text-decoration: underline; }
+.promo-health {
+  display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px;
+}
+.promo-health .pill { font-size: 11px; }
+
 .run-list {
   display: flex; flex-direction: column; gap: 4px;
   max-height: min(60vh, 480px); overflow: auto; padding-right: 2px;
@@ -630,6 +663,7 @@ BODY = """
     <nav class="nav" id="nav" aria-label="Sections">
       <a href="#arb">Arbitrage <i id="nav-arb"></i></a>
       <a href="#screen">Odds <i id="nav-screen"></i></a>
+      <a href="#promos">Promos <i id="nav-promos"></i></a>
       <a href="#events">Games <i id="nav-events"></i></a>
       <details class="nav-more" id="nav-more">
         <summary>More</summary>
@@ -650,7 +684,7 @@ BODY = """
     </nav>
 
     <div class="rail-block" id="scrape-block">
-      <label>Scrape</label>
+      <label>Scrape odds</label>
       <select id="scrape-scope" title="What to ask the venues for">
         <option value="league:MLB" selected>MLB baseball (fast)</option>
         <option value="sport:baseball">All baseball</option>
@@ -663,6 +697,17 @@ BODY = """
         <span class="scrape-meta" id="scrape-meta"></span>
       </div>
       <span class="rail-foot" id="scrape-status">Open via --serve to enable scraping.</span>
+    </div>
+
+    <div class="rail-block" id="promo-scrape-block">
+      <label>Scrape bonuses</label>
+      <button type="button" id="promo-scrape-btn" class="scrape-btn">Scrape promos</button>
+      <div class="scrape-progress" id="promo-scrape-progress" aria-live="polite">
+        <div class="scrape-bar" aria-hidden="true"><i id="promo-scrape-bar-fill"></i></div>
+        <span class="scrape-msg" id="promo-scrape-msg">Scraping promos…</span>
+        <span class="scrape-meta" id="promo-scrape-meta"></span>
+      </div>
+      <span class="rail-foot" id="promo-scrape-status">Open via --serve to scrape bonuses.</span>
     </div>
 
     <div class="rail-block">
@@ -739,6 +784,58 @@ BODY = """
           <div id="odds-screen" class="scroll"></div>
         </div>
       </div>
+    </section>
+
+    <section id="promos">
+      <header>
+        <h2>Promos</h2>
+        <p>Signup bonuses, free bets, boosts, and other public free-EV offers — separate from priced odds.</p>
+      </header>
+
+      <div class="card">
+        <div class="card-head">
+          <h3>Latest promo scrape</h3>
+          <span class="eyebrow" id="promo-summary">no scrape yet</span>
+        </div>
+        <div class="card-body flush">
+          <div class="stats" id="promo-stats"></div>
+        </div>
+      </div>
+
+      <div class="promo-toolbar">
+        <label>
+          <span class="eyebrow" for="promo-kind">Kind</span>
+          <select id="promo-kind" aria-label="Filter by promo kind">
+            <option value="">every kind</option>
+          </select>
+        </label>
+        <label>
+          <span class="eyebrow" for="promo-source">Book</span>
+          <select id="promo-source" aria-label="Filter by book">
+            <option value="">every book</option>
+          </select>
+        </label>
+        <label style="flex:1; min-width:180px">
+          <span class="eyebrow" for="promo-q">Search</span>
+          <input type="search" id="promo-q" placeholder="title or description" autocomplete="off"/>
+        </label>
+        <span class="eyebrow" id="promo-note">latest promo scrape</span>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h3>Offers</h3>
+          <span class="eyebrow" id="promo-list-note"></span>
+        </div>
+        <div class="card-body" id="promo-list"></div>
+      </div>
+
+      <details class="fold" id="promo-health-fold">
+        <summary>Per-book promo health <span class="eyebrow">last scrape</span></summary>
+        <div class="card-body">
+          <div class="promo-health" id="promo-health"></div>
+        </div>
+      </details>
     </section>
 
     <section id="history">
@@ -1272,6 +1369,7 @@ const Q = DATA.quotes;              // { columns, rows } — rows across several
 const COL = {};
 Q.columns.forEach((name, i) => { COL[name] = i; });
 const NET_ODDS = 'net_decimal_odds';
+let PROMOS = DATA.promos || { run: null, offers: [], health: [], kinds: [] };
 
 const el = (id) => document.getElementById(id);
 const txt = (v) => (v === null || v === undefined ? '' : String(v));
@@ -1858,6 +1956,7 @@ function buildSportPicker() {
 const PANELS = {
   arb:       { title: 'Arbitrage' },
   screen:    { title: 'Odds' },
+  promos:    { title: 'Promos' },
   events:    { title: "Today's games" },
   history:   { title: 'History' },
   overview:  { title: 'How to use' },
@@ -1876,7 +1975,7 @@ const PANELS = {
 };
 
 /** Primary panels always show the newest scrape; History and niche panels may pin an older one. */
-const PRIMARY_PANELS = new Set(['arb', 'screen', 'events', 'fixture', 'bet']);
+const PRIMARY_PANELS = new Set(['arb', 'screen', 'promos', 'events', 'fixture', 'bet']);
 const LATEST_RUN_ID = DATA.meta.latest_run_id ?? (runs[0] && runs[0].id);
 
 let here = { panel: 'arb', arg: null };
@@ -1961,7 +2060,7 @@ function applyRoute() {
   }
   const inRail = PANELS[panel].parent || panel;
   const more = el('nav-more');
-  const primaryHrefs = new Set(['#arb', '#screen', '#events']);
+  const primaryHrefs = new Set(['#arb', '#screen', '#promos', '#events']);
   if (more && !primaryHrefs.has('#' + inRail)) more.open = true;
   for (const link of navLinks()) {
     link.setAttribute('aria-current', String(link.getAttribute('href') === '#' + inRail));
@@ -2501,6 +2600,207 @@ function renderBrowseGames(node, noteNode, events) {
       <span class="cta">Open game &rarr;</span>
     </a>`;
   }).join('');
+}
+
+/* ── promos / bonuses ────────────────────────────────────────────────────── */
+
+const PROMO_KIND_LABEL = {
+  signup_bonus: 'Signup bonus',
+  deposit_match: 'Deposit match',
+  bonus_bet: 'Bonus bet',
+  free_bet: 'Free bet',
+  no_sweat: 'No sweat',
+  odds_boost: 'Odds boost',
+  profit_boost: 'Profit boost',
+  parlay_boost: 'Parlay boost',
+  referral: 'Referral',
+  loyalty: 'Loyalty',
+  risk_free: 'Risk free',
+  other: 'Other',
+};
+
+function promoKindLabel(kind) {
+  return PROMO_KIND_LABEL[kind] || String(kind || 'other').replace(/_/g, ' ');
+}
+
+const PROMO_BRAND_LABEL = {
+  fanduel: 'FanDuel',
+  draftkings: 'DraftKings',
+  betmgm: 'BetMGM',
+  caesars: 'Caesars',
+  bet365: 'bet365',
+  hardrock: 'Hard Rock',
+  fanatics: 'Fanatics',
+  bovada: 'Bovada',
+  cloudbet: 'Cloudbet',
+  leovegas_kambi: 'LeoVegas',
+  betrivers_kambi: 'BetRivers',
+  onexbet: '1xBet',
+  pinnacle: 'Pinnacle',
+  smarkets: 'Smarkets',
+  matchbook: 'Matchbook',
+};
+
+function promoBrandKey(key) {
+  const k = String(key || '');
+  return k.startsWith('tl_') ? k.slice(3) : k;
+}
+
+function promoBookLabel(key) {
+  const k = String(key || '');
+  const brand = promoBrandKey(k);
+  const base = PROMO_BRAND_LABEL[brand]
+    || (book(brand) !== brand ? book(brand) : null)
+    || (book(k) !== k ? book(k) : null)
+    || brand.replace(/_/g, ' ');
+  return k.startsWith('tl_') ? `${base} (via TheLines)` : base;
+}
+
+function promoBrandCoverage(healthRows) {
+  const byBrand = new Map();
+  for (const h of (healthRows || [])) {
+    const brand = promoBrandKey(h.source_key);
+    byBrand.set(brand, !!(byBrand.get(brand) || h.ok));
+  }
+  let ok = 0;
+  for (const v of byBrand.values()) if (v) ok += 1;
+  return { ok, total: byBrand.size };
+}
+
+function ensurePromoFilters() {
+  const kindSel = el('promo-kind');
+  const sourceSel = el('promo-source');
+  if (!kindSel || !sourceSel) return;
+  const kinds = new Set((PROMOS.kinds || []).concat((PROMOS.offers || []).map((o) => o.kind)));
+  const sources = new Set((PROMOS.offers || []).map((o) => o.source));
+  for (const h of (PROMOS.health || [])) sources.add(h.source_key);
+  const kindVal = kindSel.value;
+  const sourceVal = sourceSel.value;
+  kindSel.innerHTML = '<option value="">every kind</option>' +
+    [...kinds].filter(Boolean).sort().map((k) =>
+      `<option value="${escapeHtml(k)}">${escapeHtml(promoKindLabel(k))}</option>`).join('');
+  sourceSel.innerHTML = '<option value="">every book</option>' +
+    [...sources].filter(Boolean).sort().map((k) =>
+      `<option value="${escapeHtml(k)}">${escapeHtml(promoBookLabel(k))}</option>`).join('');
+  if ([...kinds].includes(kindVal)) kindSel.value = kindVal;
+  if ([...sources].includes(sourceVal)) sourceSel.value = sourceVal;
+}
+
+function renderPromos() {
+  const nav = el('nav-promos');
+  const summary = el('promo-summary');
+  const stats = el('promo-stats');
+  const list = el('promo-list');
+  const listNote = el('promo-list-note');
+  const health = el('promo-health');
+  const note = el('promo-note');
+  if (!list || !stats) return;
+
+  ensurePromoFilters();
+  const run = PROMOS.run;
+  const offers = PROMOS.offers || [];
+  const healthRows = PROMOS.health || [];
+  const brands = promoBrandCoverage(healthRows);
+
+  if (nav) {
+    nav.textContent = String(offers.length);
+  }
+  if (summary) {
+    summary.textContent = run
+      ? `${offers.length.toLocaleString()} offer${offers.length === 1 ? '' : 's'}`
+      : 'no scrape yet';
+  }
+  if (note) {
+    note.textContent = run
+      ? `promo run #${run.id}${run.ok ? '' : ' (degraded)'} · ${brands.ok}/${brands.total} brands`
+      : 'hit Scrape promos';
+  }
+
+  if (!run) {
+    stats.innerHTML = `
+      <div class="stat"><b>0</b><span>offers</span></div>
+      <div class="stat"><b>—</b><span>last scrape</span></div>
+      <div class="stat"><b>0</b><span>brands ok</span></div>`;
+    list.innerHTML = `<div class="empty">No promo scrape yet. Use <b>Scrape promos</b> in the left rail
+      (via <code>--serve</code>) to pull signup bonuses, boosts, and free bets
+      (first-party catalogs + TheLines failover).</div>`;
+    if (listNote) listNote.textContent = 'no scrape yet';
+    if (health) health.innerHTML = '<span class="dim">No promo scrape yet.</span>';
+    return;
+  }
+
+  stats.innerHTML = `
+    <div class="stat"><b>${offers.length.toLocaleString()}</b><span>offers</span></div>
+    <div class="stat"><b>${escapeHtml(fmtClock(run.started_at))}</b><span>scraped</span></div>
+    <div class="stat"><b>${brands.ok}/${brands.total || 0}</b><span>brands ok</span></div>`;
+
+  const kindFilter = (el('promo-kind') && el('promo-kind').value) || '';
+  const sourceFilter = (el('promo-source') && el('promo-source').value) || '';
+  const q = ((el('promo-q') && el('promo-q').value) || '').trim().toLowerCase();
+  const filtered = offers.filter((o) => {
+    if (kindFilter && o.kind !== kindFilter) return false;
+    if (sourceFilter && o.source !== sourceFilter) return false;
+    if (!q) return true;
+    const code = (o.metadata && o.metadata.promo_code) || '';
+    const hay = `${o.title} ${o.description || ''} ${o.raw_kind || ''} ${code}`.toLowerCase();
+    return hay.includes(q);
+  });
+
+  if (listNote) {
+    listNote.textContent = filtered.length === offers.length
+      ? `${offers.length} total`
+      : `${filtered.length} of ${offers.length}`;
+  }
+
+  if (!filtered.length) {
+    list.innerHTML = `<div class="empty">${offers.length
+      ? 'Nothing matches these filters.'
+      : 'This promo scrape stored no offers.'}</div>`;
+  } else {
+    list.innerHTML = `<div class="promo-list">${filtered.map((o) => {
+      const end = o.ends_at
+        ? `ends ${escapeHtml(fmtClock(o.ends_at))}`
+        : 'no end date';
+      const link = o.url
+        ? `<a class="promo-link" href="${escapeHtml(o.url)}" target="_blank" rel="noopener noreferrer">Open offer</a>`
+        : '';
+      const desc = o.description
+        ? `<p class="desc">${escapeHtml(o.description.slice(0, 280))}${o.description.length > 280 ? '…' : ''}</p>`
+        : '';
+      const login = o.requires_login ? ' · login for details' : '';
+      const code = o.metadata && o.metadata.promo_code
+        ? ` · code ${escapeHtml(o.metadata.promo_code)}`
+        : '';
+      const via = (o.metadata && o.metadata.feed === 'thelines') || String(o.source || '').startsWith('tl_')
+        ? ' · via TheLines'
+        : '';
+      return `<article class="promo-row">
+        <div>
+          <p class="title">${escapeHtml(o.title)}</p>
+          <p class="meta">${escapeHtml(promoBookLabel(o.source))} · ${escapeHtml(promoKindLabel(o.kind))}${
+            o.product ? ` · ${escapeHtml(o.product)}` : ''}${login}${code}${via}</p>
+          ${desc}
+        </div>
+        <div class="side">
+          <span>${end}</span>
+          ${link}
+        </div>
+      </article>`;
+    }).join('')}</div>`;
+  }
+
+  if (health) {
+    health.innerHTML = healthRows.length
+      ? healthRows.map((h) => {
+        const cls = h.ok ? 'pill flat' : 'pill bad';
+        const detail = h.ok
+          ? `${h.offer_count} offer${h.offer_count === 1 ? '' : 's'}`
+          : (h.error_kind || 'failed');
+        return `<span class="${cls}" title="${escapeHtml(h.error_message || '')}">${
+          escapeHtml(promoBookLabel(h.source_key))}: ${escapeHtml(String(detail))}</span>`;
+      }).join('')
+      : '<span class="dim">No per-book health for this run.</span>';
+  }
 }
 
 /* ── arbitrage ───────────────────────────────────────────────────────────── */
@@ -4138,6 +4438,7 @@ function renderRunScoped() {
   renderOverview();
   renderOddsScreen();
   renderArb();
+  renderPromos();
   renderSports();
   renderSources();
   renderEvents();            // also fills the fixture panel with a default
@@ -4260,10 +4561,13 @@ function wireScrapeButton() {
       try {
         const res = await fetch('/api/status', { cache: 'no-store' });
         const body = await res.json().catch(() => ({}));
-        paintScrapeProgress(body.progress, !!body.busy);
-        if (body.busy) {
+        const mine = !body.busy_kind || body.busy_kind === 'odds';
+        if (mine) paintScrapeProgress(body.progress, !!body.busy && mine);
+        if (body.busy && body.busy_kind === 'odds') {
           btn.disabled = true;
           status.textContent = 'Scraping in progress…';
+        } else if (body.busy && body.busy_kind === 'promos') {
+          status.textContent = 'Promo scrape running — odds scrape waits until it finishes.';
         }
       } catch (_) { /* keep last paint */ }
     };
@@ -4275,7 +4579,7 @@ function wireScrapeButton() {
   fetch('/api/status', { cache: 'no-store' })
     .then((r) => r.json())
     .then((body) => {
-      if (body && body.busy) {
+      if (body && body.busy && body.busy_kind === 'odds') {
         btn.disabled = true;
         status.textContent = 'Scraping in progress…';
         startPoll();
@@ -4334,4 +4638,158 @@ function wireScrapeButton() {
   });
 }
 wireScrapeButton();
+
+/* ── promo / bonus scrape from the UI ─────────────────────────────────────── */
+
+function paintPromoScrapeProgress(progress, busy) {
+  const box = el('promo-scrape-progress');
+  const fill = el('promo-scrape-bar-fill');
+  const msg = el('promo-scrape-msg');
+  const meta = el('promo-scrape-meta');
+  if (!box || !fill || !msg || !meta) return;
+  if (!busy && !(progress && progress.phase === 'done')) {
+    box.classList.remove('on', 'is-indeterminate');
+    return;
+  }
+  box.classList.add('on');
+  const done = Number(progress && progress.done) || 0;
+  const total = Number(progress && progress.total) || 0;
+  const phase = (progress && progress.phase) || '';
+  const known = total > 0 && (phase === 'fetching' || phase === 'fetched' || phase === 'starting');
+  box.classList.toggle('is-indeterminate', busy && !known);
+  if (known) {
+    fill.style.width = Math.max(4, Math.min(100, Math.round((done / total) * 100))) + '%';
+  } else if (phase === 'rebuilding' || phase === 'done') {
+    fill.style.width = '100%';
+    box.classList.remove('is-indeterminate');
+  } else {
+    fill.style.width = '35%';
+  }
+  msg.textContent = (progress && progress.message) || (busy ? 'Scraping promos…' : '');
+  const bits = [];
+  if (total > 0) bits.push(`${done}/${total} books`);
+  if (progress && progress.offer_count != null) {
+    bits.push(`${Number(progress.offer_count).toLocaleString()} offers`);
+  }
+  if (phase && phase !== 'fetching' && phase !== 'fetched') bits.push(phase);
+  meta.textContent = bits.join(' · ');
+}
+
+function wirePromoScrapeButton() {
+  const btn = el('promo-scrape-btn');
+  const status = el('promo-scrape-status');
+  if (!btn || !status) return;
+  const served = typeof location !== 'undefined' && location.protocol === 'http:';
+  if (!served) {
+    btn.disabled = true;
+    btn.classList.add('is-file');
+    btn.title = 'Start the dashboard with: python -m src.report --serve 8765 --open';
+    status.textContent = 'View only. Run with --serve 8765 --open to scrape bonuses here.';
+    return;
+  }
+  status.textContent = 'Ready — scrapes public bonuses/promos, then reloads this page.';
+
+  let pollTimer = null;
+  const stopPoll = () => {
+    if (pollTimer != null) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+  };
+  const startPoll = () => {
+    stopPoll();
+    const tick = async () => {
+      try {
+        const res = await fetch('/api/promos/status', { cache: 'no-store' });
+        const body = await res.json().catch(() => ({}));
+        const mine = !body.busy_kind || body.busy_kind === 'promos';
+        if (mine) paintPromoScrapeProgress(body.progress, !!body.busy && mine);
+        if (body.busy && body.busy_kind === 'promos') {
+          btn.disabled = true;
+          status.textContent = 'Promo scrape in progress…';
+        }
+      } catch (_) { /* keep last paint */ }
+    };
+    tick();
+    pollTimer = setInterval(tick, 500);
+  };
+
+  fetch('/api/promos/status', { cache: 'no-store' })
+    .then((r) => r.json())
+    .then((body) => {
+      if (body && body.busy && body.busy_kind === 'promos') {
+        btn.disabled = true;
+        status.textContent = 'Promo scrape in progress…';
+        startPoll();
+      }
+    })
+    .catch(() => {});
+
+  btn.addEventListener('click', async () => {
+    if (btn.disabled) return;
+    btn.disabled = true;
+    status.textContent = 'Scraping promos…';
+    paintPromoScrapeProgress({
+      phase: 'starting',
+      message: 'Starting promo scrape…',
+      done: 0,
+      total: 0,
+      offer_count: 0,
+      kind: 'promos',
+    }, true);
+    startPoll();
+    try {
+      const res = await fetch('/api/promos/collect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const body = await res.json().catch(() => ({}));
+      stopPoll();
+      if (!res.ok || !body.ok) {
+        const err = body.error || res.statusText || res.status;
+        status.textContent = 'Promo scrape failed: ' + err;
+        paintPromoScrapeProgress({ phase: 'error', message: String(err) }, false);
+        el('promo-scrape-progress').classList.add('on');
+        btn.disabled = false;
+        return;
+      }
+      const offers = (body.collect && body.collect.offer_count) || 0;
+      if (body.promos) PROMOS = body.promos;
+      status.textContent = `Got ${offers.toLocaleString()} promo offer(s)`
+        + (body.reload ? ' — reloading…' : '.');
+      paintPromoScrapeProgress({
+        phase: 'done',
+        message: `Got ${offers.toLocaleString()} promo offer(s)`,
+        offer_count: offers,
+        done: 1,
+        total: 1,
+        kind: 'promos',
+      }, false);
+      if (body.reload) {
+        location.hash = '#promos';
+        location.reload();
+        return;
+      }
+      renderPromos();
+      go('#promos');
+      btn.disabled = false;
+    } catch (err) {
+      stopPoll();
+      status.textContent = 'Promo scrape failed: ' + (err && err.message ? err.message : err);
+      paintPromoScrapeProgress({
+        phase: 'error',
+        message: String(err && err.message ? err.message : err),
+      }, false);
+      el('promo-scrape-progress').classList.add('on');
+      btn.disabled = false;
+    }
+  });
+}
+wirePromoScrapeButton();
+
+['promo-kind', 'promo-source', 'promo-q'].forEach((id) => {
+  const node = el(id);
+  if (node) node.addEventListener('input', renderPromos);
+});
 """
