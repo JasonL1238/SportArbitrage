@@ -63,6 +63,7 @@ from src.distinctness import (
     compare_all,
     find_mirrors,
 )
+from src.redundancy import check_redundancy, is_redundant_pair
 from src.events import reconcile_event_keys
 from src.leagues import LEAGUES, LEAGUES_BY_SPORT, is_known
 from src.leagues import league as get_league
@@ -742,6 +743,11 @@ def _check_distinctness(quotes: Sequence[Quote], report: ValidationReport) -> li
     """
     mirrors = find_mirrors(quotes)
     for pair in mirrors:
+        # Intentional Action Network failover pairs are supposed to agree.
+        # :func:`check_redundancy` flags drift and outages for those; treating
+        # them as a registration error would delete the durability path.
+        if is_redundant_pair(pair.source_a, pair.source_b):
+            continue
         whole_book = pair.rate >= MIRROR_AGREEMENT_RATE
         if whole_book:
             report.add(
@@ -769,6 +775,7 @@ def _check_distinctness(quotes: Sequence[Quote], report: ValidationReport) -> li
             "no position between them is reported",
             source=pair.source_b,
         )
+    check_redundancy(quotes, report)
     return mirrors
 
 

@@ -172,12 +172,6 @@ SOURCE_NOTES: dict[str, dict[str, str]] = {
         "kind": "sportsbook",
         "what": "Bet365 prices from Action Network's public scoreboard.",
     },
-    "an_open": {
-        "label": "Open (Action Network)",
-        "host": "api.actionnetwork.com",
-        "kind": "sportsbook",
-        "what": "Action Network's \"open\" consensus book on the public scoreboard.",
-    },
     "an_fanduel": {
         "label": "FanDuel (Action Network)",
         "host": "api.actionnetwork.com",
@@ -198,6 +192,20 @@ SOURCE_NOTES: dict[str, dict[str, str]] = {
         "kind": "sportsbook",
         "what": "BetMGM prices as Action Network publishes them — a redundant secondary "
                 "feed beside the Entain CDS adapter, kept for durability.",
+    },
+    "an_bovada": {
+        "label": "Bovada (Action Network)",
+        "host": "api.actionnetwork.com",
+        "kind": "sportsbook",
+        "what": "Bovada prices as Action Network publishes them — a redundant secondary "
+                "feed beside the primary Bovada adapter, kept for durability.",
+    },
+    "an_onexbet": {
+        "label": "1xBet (Action Network)",
+        "host": "api.actionnetwork.com",
+        "kind": "sportsbook",
+        "what": "1xBet prices as Action Network publishes them — a redundant secondary "
+                "feed beside the primary 1xBet adapter, kept for durability.",
     },
     "matchbook": {
         "label": "Matchbook",
@@ -1887,20 +1895,21 @@ def _empty_scrape_shell() -> str:
 <meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>Line shop — scrape to begin</title>
 <style>
-  :root { color-scheme: dark; --ground:#0c1118; --surface:#121821; --ink:#e8eef6;
-    --muted:#8796a8; --accent:#5b8cff; --line:#283140; }
+  :root { color-scheme: dark; --ground:#141414; --surface:#1a1a1a; --ink:#ecece8;
+    --muted:#8a8a82; --line:#333; }
   body { margin:0; min-height:100vh; display:grid; place-items:center;
     background:var(--ground); color:var(--ink);
-    font:400 15px/1.5 "IBM Plex Sans", "Segoe UI", system-ui, sans-serif; }
-  .card { width:min(440px, 92vw); padding:28px; border:1px solid var(--line);
-    border-radius:12px; background:var(--surface); }
-  h1 { margin:0 0 8px; font:800 22px/1.2 system-ui; }
-  p { margin:0 0 16px; color:var(--muted); }
-  select, button { width:100%; padding:10px 12px; border-radius:8px; border:1px solid var(--line);
-    font:650 13px/1.2 system-ui; margin-top:8px; }
-  button { background:var(--accent); color:#fff; border-color:var(--accent); cursor:pointer; }
+    font:400 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .card { width:min(400px, 92vw); padding:22px; border:1px solid var(--line);
+    border-radius:4px; background:var(--surface); }
+  h1 { margin:0 0 6px; font:600 18px/1.25 system-ui; }
+  p { margin:0 0 14px; color:var(--muted); font-size:13px; }
+  select, button { width:100%; padding:8px 10px; border-radius:3px; border:1px solid var(--line);
+    font:500 13px/1.2 system-ui; margin-top:6px; background:var(--surface); color:var(--ink); }
+  button { background:#222; cursor:pointer; }
+  button:hover { border-color:var(--muted); }
   button:disabled { opacity:0.55; cursor:wait; }
-  #status { margin-top:12px; font:400 12.5px/1.4 ui-monospace, monospace; color:var(--muted); }
+  #status { margin-top:10px; font:400 12px/1.4 ui-monospace, monospace; color:var(--muted); }
 </style></head><body>
 <div class="card">
   <h1>Line shop</h1>

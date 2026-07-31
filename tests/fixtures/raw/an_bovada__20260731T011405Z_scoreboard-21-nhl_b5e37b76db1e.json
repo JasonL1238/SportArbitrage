@@ -1,0 +1,29 @@
+{
+ "envelope_version": 3,
+ "source": "an_bovada",
+ "endpoint": "scoreboard:21:nhl",
+ "url": "https://api.actionnetwork.com/web/v1/scoreboard/nhl?bookIds=21%2C35%2C2495",
+ "status_code": 200,
+ "content_type": "application/json; charset=utf-8",
+ "fetched_at": "2026-07-31T01:14:05.914406+00:00",
+ "request_params": {
+  "bookIds": "21,35,2495"
+ },
+ "headers": {
+  "content-type": "application/json; charset=utf-8",
+  "date": "Fri, 31 Jul 2026 01:14:01 GMT",
+  "cache-control": "max-age=30, must-revalidate, public",
+  "content-encoding": "gzip",
+  "access-control-allow-origin": "https://www.actionnetwork.com",
+  "access-control-expose-headers": "WWW-Authenticate,Server-Authorization",
+  "vary": "accept-encoding",
+  "x-cache": "Miss from cloudfront",
+  "via": "1.1 22922394e3534f85930c1603d51f2156.cloudfront.net (CloudFront)",
+  "x-amz-cf-pop": "SFO53-P10",
+  "x-amz-cf-id": "34MKXq9JsoOneBx9piJgnF0Y0qNCuokklvkXTSW0qoomwqKNW9eqOQ=="
+ },
+ "capture_id": "",
+ "sha256": "b5e37b76db1eefd8a52c5efa6bb52282c5d2c610f12ed3a9ea6649df96de0efb",
+ "byte_size": 2950,
+ "body": "{\"league\":{\"id\":3,\"sport\":\"hockey\",\"name\":\"nhl\",\"description\":\"National Hockey League\",\"logo\":\"https://static.sprtactn.co/leagues/500/nhl.png\",\"current_season\":\"2025\",\"current_season_type\":\"post\",\"pre_season_start\":\"2025-09-20T07:00:00.000Z\",\"pre_season_end\":\"2025-10-09T06:59:59.000Z\",\"reg_season_start\":\"2025-10-07T07:00:00.000Z\",\"reg_season_end\":\"2026-04-18T06:59:59.000Z\",\"post_season_start\":\"2026-04-18T07:00:00.000Z\",\"post_season_end\":\"2026-07-16T06:59:59.000Z\",\"blacklist_dates\":[\"2025-10-05T07:00:00.000Z\",\"2025-10-06T07:00:00.000Z\",\"2025-10-10T07:00:00.000Z\",\"2025-11-27T08:00:00.000Z\",\"2025-12-24T08:00:00.000Z\",\"2025-12-25T08:00:00.000Z\",\"2025-12-26T08:00:00.000Z\",\"2026-02-06T08:00:00.000Z\",\"2026-02-07T08:00:00.000Z\",\"2026-02-08T08:00:00.000Z\",\"2026-02-09T08:00:00.000Z\",\"2026-02-10T08:00:00.000Z\",\"2026-02-11T08:00:00.000Z\",\"2026-02-12T08:00:00.000Z\",\"2026-02-13T08:00:00.000Z\",\"2026-02-14T08:00:00.000Z\",\"2026-02-15T08:00:00.000Z\",\"2026-02-16T08:00:00.000Z\",\"2026-02-17T08:00:00.000Z\",\"2026-02-18T08:00:00.000Z\",\"2026-02-19T08:00:00.000Z\",\"2026-02-20T08:00:00.000Z\",\"2026-02-21T08:00:00.000Z\",\"2026-02-22T08:00:00.000Z\",\"2026-02-23T08:00:00.000Z\",\"2026-02-24T08:00:00.000Z\",\"2026-04-10T07:00:00.000Z\",\"2026-04-17T07:00:00.000Z\",\"2026-05-15T07:00:00.000Z\",\"2026-05-17T07:00:00.000Z\",\"2026-05-19T07:00:00.000Z\",\"2026-05-28T07:00:00.000Z\",\"2026-05-30T07:00:00.000Z\",\"2026-05-31T07:00:00.000Z\",\"2026-06-01T07:00:00.000Z\",\"2026-06-03T07:00:00.000Z\",\"2026-06-05T07:00:00.000Z\",\"2026-06-07T07:00:00.000Z\",\"2026-06-08T07:00:00.000Z\",\"2026-06-10T07:00:00.000Z\",\"2026-06-12T07:00:00.000Z\",\"2026-06-13T07:00:00.000Z\",\"2026-06-15T07:00:00.000Z\",\"2026-06-16T07:00:00.000Z\",\"2026-06-18T07:00:00.000Z\",\"2026-06-19T07:00:00.000Z\",\"2026-06-20T07:00:00.000Z\",\"2026-06-21T07:00:00.000Z\",\"2026-06-22T07:00:00.000Z\",\"2026-06-23T07:00:00.000Z\",\"2026-06-24T07:00:00.000Z\",\"2026-06-25T07:00:00.000Z\",\"2026-06-26T07:00:00.000Z\",\"2026-06-27T07:00:00.000Z\",\"2026-06-28T07:00:00.000Z\",\"2026-06-29T07:00:00.000Z\",\"2026-06-30T07:00:00.000Z\",\"2026-07-01T07:00:00.000Z\",\"2026-07-02T07:00:00.000Z\",\"2026-07-03T07:00:00.000Z\",\"2026-07-04T07:00:00.000Z\",\"2026-07-05T07:00:00.000Z\",\"2026-07-06T07:00:00.000Z\",\"2026-07-07T07:00:00.000Z\",\"2026-07-08T07:00:00.000Z\",\"2026-07-09T07:00:00.000Z\",\"2026-07-10T07:00:00.000Z\",\"2026-07-11T07:00:00.000Z\",\"2026-07-12T07:00:00.000Z\",\"2026-07-13T07:00:00.000Z\",\"2026-07-14T07:00:00.000Z\",\"2026-07-15T07:00:00.000Z\",\"2026-07-16T07:00:00.000Z\"],\"calendar_info\":{},\"current_week\":-1,\"updated_at\":\"2026-04-18T14:14:21.947Z\",\"is_active\":true,\"conferences\":[{\"id\":\"EASTERN\",\"display\":\"EAST\"},{\"id\":\"WESTERN\",\"display\":\"WEST\"}],\"divisions\":[{\"id\":\"ATLANTIC\",\"display\":\"Atlantic\",\"conference_id\":\"EASTERN\"},{\"id\":\"METROPOLITAN\",\"display\":\"Metropolitan\",\"conference_id\":\"EASTERN\"},{\"id\":\"CENTRAL\",\"display\":\"Central\",\"conference_id\":\"WESTERN\"},{\"id\":\"PACIFIC\",\"display\":\"Pacific\",\"conference_id\":\"WESTERN\"}]},\"games\":[],\"content_live_count\":0}"
+}

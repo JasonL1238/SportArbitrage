@@ -3,15 +3,20 @@
 ``api.actionnetwork.com/web/v1/scoreboard/{sport}`` is the same payload the
 Action Network site renders for a league's slate.  No authentication is
 involved.  One response carries every book Action Network aggregates; this
-adapter is parameterized by ``book_id`` so seven registered sources share one
+adapter is parameterized by ``book_id`` so many registered sources share one
 parser and filter to one counterparty.
 
 Some books only appear when their id is named on the request.  Caesars
 (``book_id=123``) is the live case: without ``?bookIds=123`` the scoreboard
 omits it.  Bet365 (``79``) is worse — requesting ``79`` alone still omits it,
-and requesting ``123`` is what surfaces both.  ``fetch_book_ids`` exists so a
-tenant can ask for the id that expands the payload while still filtering rows
-to its own ``book_id``.
+and requesting ``123`` is what surfaces both.  Offshore ids (Bovada ``21``,
+1xBet ``2495``) likewise need an explicit ask.  Asking for BetRivers/BetMGM
+ids (``71``, ``75``) can *remove* them from the payload.  ``fetch_book_ids``
+names the expand set while parse still filters to this tenant's ``book_id``.
+
+Do **not** send ``period=game`` on every request: that matches the site's
+moneyline view but strips baseball ``firstfiveinnings`` / ``firstinning``
+rows from the JSON, silently deleting F5/F1 coverage for every AN tenant.
 
 Field traps this parser exists to get right
 -------------------------------------------
@@ -83,9 +88,16 @@ log = logging.getLogger(__name__)
 SOURCE_KEY = "an_draftkings"
 DEFAULT_BASE_URL = "https://api.actionnetwork.com/web/v1/scoreboard"
 
-#: Action Network answers freely but a burst of seven tenants × six sports is
+#: Action Network answers freely but a burst of many tenants × six sports is
 #: enough to look rude; half a second keeps a full pass under a minute.
 HOST_INTERVAL = 0.5
+
+#: Matches the odds-board browser request.  Without these the scoreboard is more
+#: likely to answer with a thinner book set.
+AN_HEADERS: dict[str, str] = {
+    "Referer": "https://www.actionnetwork.com/",
+    "Origin": "https://www.actionnetwork.com",
+}
 
 _GAME_TYPE = "game"
 _LIVE_TYPE = "live"
@@ -223,11 +235,16 @@ class ActionNetworkAdapter:
         self._source_key = source_key
         self.book_id = int(book_id)
         # ``None`` omits the query param.  Asking for some book ids (71, 75)
-        # removes them from the payload; Caesars/Bet365 need an explicit ask.
+        # removes them from the payload; Caesars/Bet365 and the offshore shelf
+        # need an explicit ask.
         self.fetch_book_ids = fetch_book_ids
         self.base_url = base_url.rstrip("/")
         self._http = SourceClient(
-            source_key, timeout=timeout, client=client, host_interval=HOST_INTERVAL
+            source_key,
+            timeout=timeout,
+            client=client,
+            host_interval=HOST_INTERVAL,
+            headers=AN_HEADERS,
         )
 
     @property
@@ -267,6 +284,8 @@ class ActionNetworkAdapter:
         del tier
         raws: list[RawResponse] = []
         tally = self.last_fetch = ScopeTally(self._source_key)
+        # ``None`` omits the query string entirely so baseball period markets
+        # stay in the default payload.  Expand tenants pass bookIds only.
         params = {"bookIds": self.fetch_book_ids} if self.fetch_book_ids else None
         for path in self._paths:
             tally.requested(path)

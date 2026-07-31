@@ -29,9 +29,10 @@ broken and expensive afterwards:
    would come from a module constant and two instances of one class would be
    indistinguishable in the data.
 
-What is deliberately *not* here: whether a source is a mirror of another. That is
-a fact about prices, not about configuration, and it is measured against a live
-slate by :mod:`src.distinctness` rather than asserted in a table.
+Accidental mirrors (two Kambi licences of one book) are still measured against a
+live slate by :mod:`src.distinctness`.  Intentional Action Network failover
+pairs are declared in :mod:`src.redundancy` — agreement there is expected, and
+disagreement is the finding.
 """
 from __future__ import annotations
 
@@ -220,10 +221,12 @@ SOURCES: tuple[SourceDescriptor, ...] = (
     ),
     # ── Action Network multi-book scoreboard ─────────────────────────────────
     #
-    # One public JSON feed carrying many books.  Redundant keys (FanDuel /
-    # BetRivers / BetMGM) are intentional secondary feeds for when a book's own
-    # edge is unreachable; distinctness still has to clear them against the
-    # primary adapter on a live slate.
+    # One public JSON feed carrying many books.  Keys that pair with a
+    # first-party adapter (FanDuel, BetRivers, BetMGM, Bovada, 1xBet) are
+    # intentional failover feeds — see :mod:`src.redundancy`.  DraftKings /
+    # Caesars / Bet365 have no first-party adapter from this egress; AN is the
+    # only path until a licensed-state proxy lands.  LeoVegas Ontario on AN is
+    # not paired with ``leovegas_kambi`` (Kambi GB) — different licence.
     SourceDescriptor(
         key="an_draftkings",
         adapter=ActionNetworkAdapter,
@@ -246,12 +249,6 @@ SOURCES: tuple[SourceDescriptor, ...] = (
         config={"book_id": 79, "fetch_book_ids": "123"},
     ),
     SourceDescriptor(
-        key="an_open",
-        adapter=ActionNetworkAdapter,
-        kind=SourceKind.SPORTSBOOK,
-        config={"book_id": 30},
-    ),
-    SourceDescriptor(
         key="an_fanduel",
         adapter=ActionNetworkAdapter,
         kind=SourceKind.SPORTSBOOK,
@@ -268,6 +265,21 @@ SOURCES: tuple[SourceDescriptor, ...] = (
         adapter=ActionNetworkAdapter,
         kind=SourceKind.SPORTSBOOK,
         config={"book_id": 75},
+    ),
+    # Offshore shelf: these book ids are absent from the default US payload and
+    # only appear when named.  Asking for BetRivers/BetMGM ids here would strip
+    # those books, so the expand set stays offshore-only.
+    SourceDescriptor(
+        key="an_bovada",
+        adapter=ActionNetworkAdapter,
+        kind=SourceKind.SPORTSBOOK,
+        config={"book_id": 21, "fetch_book_ids": "21,35,2495"},
+    ),
+    SourceDescriptor(
+        key="an_onexbet",
+        adapter=ActionNetworkAdapter,
+        kind=SourceKind.SPORTSBOOK,
+        config={"book_id": 2495, "fetch_book_ids": "21,35,2495"},
     ),
     SourceDescriptor(
         key="sxbet",

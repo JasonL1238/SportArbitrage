@@ -89,6 +89,7 @@ from datetime import datetime, timedelta
 from typing import Callable, Collection, Iterable, Mapping, Sequence
 
 from src.commission import Commission, commission_for
+from src.redundancy import REDUNDANT_PAIRS, is_redundant_pair
 from src.settlement import mismatch as settlement_mismatch
 from src.schema import (
     Market,
@@ -101,6 +102,13 @@ from src.schema import (
     draw_is_priced,
     scoring_unit,
     tie_possible,
+)
+
+#: Source keys that participate in an intentional failover pair.  Used to keep
+#: the hot assignment path at the old ``len({who(s)})`` cost when no failover
+#: key is present.
+_FAILOVER_KEYS: frozenset[str] = frozenset(
+    key for pair in REDUNDANT_PAIRS for key in pair
 )
 
 #: Only report an edge above this. Zero means "any strictly positive edge", but
@@ -835,12 +843,21 @@ def merge_counterparty_groups(
     under ``--sport tennis`` stores none of the MLB rows the mirror was measured
     on, so re-measuring from the stored rows alone reopened the gate and
     published a "guaranteed" position with both legs at one operator.
+
+    Intentional failover pairs (:mod:`src.redundancy`) are dropped even when a
+    pre-fix run recorded them: re-introducing ``{primary, an_*}`` into the
+    transitive union-find next to a measured ``{an_*, third}`` mirror collapses
+    the primary with the third book on re-analysis.
     """
     merged: dict[str, list[frozenset[str]]] = {}
     for table in tables:
         for league, groups in (table or {}).items():
             bucket = merged.setdefault(league, [])
             for group in groups:
+                if len(group) == 2:
+                    a, b = tuple(group)
+                    if is_redundant_pair(a, b):
+                        continue
                 if group not in bucket:
                     bucket.append(group)
     return merged
@@ -882,11 +899,21 @@ def counterparty_groups(
     mirror found anywhere stands, because the evidence for it does not stop
     being evidence when other markets disagree".  The verdict implemented it;
     the gate did not.
+
+    Intentional failover pairs from :mod:`src.redundancy` are **not** filed
+    here, even when distinctness measures them as mirrors.  Union-find is
+    transitive: filing ``{betrivers, an_betrivers}`` next to a measured
+    ``{an_betrivers, leovegas}`` tennis mirror would collapse BetRivers and
+    LeoVegas into one counterparty on every sport.  Those pairs are enforced
+    as non-transitive "cannot trade against" edges in
+    :func:`_independent_source_count` instead.
     """
     from src.distinctness import find_mirrors
 
     groups: dict[str, list[frozenset[str]]] = defaultdict(list)
     for pair in find_mirrors(quotes):
+        if is_redundant_pair(pair.source_a, pair.source_b):
+            continue
         groups[EVERY_LEAGUE].append(frozenset({pair.source_a, pair.source_b}))
     return dict(groups)
 
@@ -1099,6 +1126,99 @@ def _counterparties(
                 parent[high] = low
                 first = low
     return {source: find(source) for source in parent}
+
+
+def _uses_both_failover_feeds(sources: Sequence[str]) -> bool:
+    """True if an assignment takes legs from both feeds of one failover pair.
+
+    Merging the pair into one counterparty for the *count* still allows each
+    key to supply a different leg, which stitches disagreeing dual-feed prices
+    into a synthetic book.  Failover must pick one feed per position.
+    """
+    present = set(sources)
+    for primary, secondary in REDUNDANT_PAIRS:
+        if primary in present and secondary in present:
+            return True
+    return False
+
+
+def _brute_best_assignment(
+    *,
+    needed: frozenset[Selection],
+    eligible: Sequence[str],
+    best: dict[str, dict[Selection, Quote]],
+    require_distinct_sources: bool,
+    commissions: Mapping[str, Commission] | None = None,
+    counterparties: Mapping[str, str] | None = None,
+) -> tuple[dict[Selection, Quote], float] | None:
+    """Exhaustive fallback when the linear switch cannot see a failover escape."""
+    selections = sorted(needed, key=lambda s: s.value)
+    options = [
+        [source for source in eligible if selection in best[source]]
+        for selection in selections
+    ]
+    if any(not sources for sources in options):
+        return None
+    min_books = 2 if require_distinct_sources else 1
+    winner: tuple[dict[Selection, Quote], float] | None = None
+    for combination in itertools.product(*options):
+        if _uses_both_failover_feeds(combination):
+            continue
+        if _independent_source_count(combination, counterparties) < min_books:
+            continue
+        assignment = {
+            selection: best[source][selection]
+            for source, selection in zip(combination, selections)
+        }
+        total = sum(
+            _net_implied(assignment[selection], commissions) for selection in selections
+        )
+        if winner is None or total < winner[1]:
+            winner = (assignment, total)
+    return winner
+
+
+def _independent_source_count(
+    sources: Sequence[str],
+    counterparties: Mapping[str, str] | None = None,
+) -> int:
+    """How many distinct books an assignment actually spans.
+
+    Measured mirrors come from *counterparties*.  Intentional failover pairs
+    (:mod:`src.redundancy`) are merged **only among the sources in this
+    assignment**, so declaring ``{betrivers, an_betrivers}`` cannot transitively
+    collapse BetRivers with LeoVegas through a measured AN tennis mirror.
+    """
+    if not sources:
+        return 0
+    behind = counterparties or {}
+    # Fast path: no failover key in the assignment — same as the old
+    # ``len({who(s)})`` check, which the thirty-source scaling budget assumes.
+    if not any(source in _FAILOVER_KEYS for source in sources):
+        return len({behind.get(source, source) for source in sources})
+
+    parent: dict[str, str] = {source: source for source in sources}
+
+    def find(source: str) -> str:
+        while parent[source] != source:
+            parent[source] = parent[parent[source]]
+            source = parent[source]
+        return source
+
+    def union(left: str, right: str) -> None:
+        a, b = find(left), find(right)
+        if a != b:
+            low, high = sorted((a, b))
+            parent[high] = low
+
+    ordered = list(sources)
+    for index, source in enumerate(ordered):
+        for other in ordered[index + 1 :]:
+            if behind.get(source, source) == behind.get(other, other):
+                union(source, other)
+            elif is_redundant_pair(source, other):
+                union(source, other)
+    return len({find(source) for source in ordered})
 
 
 def _examine_group(
@@ -1337,6 +1457,26 @@ def _examine_group(
         del best[source]
         del shapes[source]
 
+    # Action Network failover feeds are backups.  When the first-party adapter
+    # offers the **same complete contract** as the republisher, drop the
+    # republisher so it cannot win best-price selection or — via a measured AN
+    # mirror of a third book — suppress a real primary-vs-third arb.  A smaller
+    # primary shape (soccer two-way vs AN three-way) or a one-sided primary must
+    # leave the secondary in play.
+    if any(source in _FAILOVER_KEYS for source in best):
+        for primary, secondary in REDUNDANT_PAIRS:
+            if primary not in best or secondary not in best:
+                continue
+            primary_shape = shapes.get(primary)
+            secondary_shape = shapes.get(secondary)
+            if (
+                primary_shape is not None
+                and primary_shape == secondary_shape
+                and set(best[primary]) >= set(primary_shape)
+            ):
+                del best[secondary]
+                shapes.pop(secondary, None)
+
     # A single book cannot be arbitraged against itself: the check above has
     # already refused the only case where its own prices would allow it.
     if require_distinct_sources and len({who(source) for source in best}) < 2:
@@ -1428,6 +1568,18 @@ def _examine_group(
             commissions=commissions,
             counterparties=behind,
         )
+        # One-leg switch cannot always escape a measured AN↔third mirror once a
+        # partial primary left the secondary in play.  Brute force only when a
+        # failover key is eligible — the thirty-source scaling path never hits it.
+        if candidates is None and any(source in _FAILOVER_KEYS for source in eligible):
+            candidates = _brute_best_assignment(
+                needed=needed,
+                eligible=eligible,
+                best=best,
+                require_distinct_sources=require_distinct_sources,
+                commissions=commissions,
+                counterparties=behind,
+            )
         if candidates is None:
             continue
         chosen, sum_implied = candidates
@@ -1613,11 +1765,17 @@ def _examine_group(
         # blocked it.
         clashed_in_window = False
 
+        failover_in_play = any(source in _FAILOVER_KEYS for source in eligible)
+        min_books = 2 if require_distinct_sources else 1
         for combination in itertools.product(*options):
-            if len({who(source) for source in combination}) < (
-                2 if require_distinct_sources else 1
-            ):
-                continue  # one counterparty on both sides is not a position
+            # one counterparty on both sides is not a position
+            if failover_in_play and _uses_both_failover_feeds(combination):
+                continue
+            if failover_in_play:
+                if _independent_source_count(combination, behind) < min_books:
+                    continue
+            elif len({who(source) for source in combination}) < min_books:
+                continue
             attempt_legs = [
                 best[source][selection]
                 for source, selection in zip(combination, ordered)
@@ -2069,16 +2227,41 @@ def _best_assignment(
 
     if not require_distinct_sources:
         return assemble(picked)
-    if len({who(options[k][index]) for k, index in enumerate(picked)}) >= 2:
-        return assemble(picked)
+    picked_sources = [options[k][index] for k, index in enumerate(picked)]
+    failover_in_play = any(source in _FAILOVER_KEYS for source in picked_sources) or any(
+        source in _FAILOVER_KEYS for row in options for source in row
+    )
+    dual_feed = failover_in_play and _uses_both_failover_feeds(picked_sources)
+    if not dual_feed:
+        if failover_in_play:
+            if _independent_source_count(picked_sources, behind) >= 2:
+                return assemble(picked)
+        elif len({who(source) for source in picked_sources}) >= 2:
+            return assemble(picked)
 
     # Step 2: every leg is at one counterparty, so exactly one leg has to move.
-    monopolist = who(options[0][picked[0]])
-    switch = _pick_switch(options, implied, picked, monopolist, who)
+    monopolist = who(picked_sources[0])
+    if failover_in_play:
+
+        def who_for_switch(source: str) -> str:
+            if _independent_source_count((picked_sources[0], source), behind) < 2:
+                return monopolist
+            return who(source)
+
+        switch_who = who_for_switch
+    else:
+        switch_who = who
+    switch = _pick_switch(options, implied, picked, monopolist, switch_who)
     if switch is None:
-        # Only one book offers anything here, so no legal position exists.
         return None
     leg, alternative = switch
+    if failover_in_play:
+        trial = list(picked_sources)
+        trial[leg] = options[leg][alternative]
+        if _uses_both_failover_feeds(trial):
+            return None
+        if _independent_source_count(trial, behind) < 2:
+            return None
     indices = list(picked)
     indices[leg] = alternative
     return assemble(indices)

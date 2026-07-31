@@ -156,10 +156,11 @@ COMMISSIONS: dict[str, Commission] = {
     "an_draftkings": NO_COMMISSION,
     "an_caesars": NO_COMMISSION,
     "an_bet365": NO_COMMISSION,
-    "an_open": NO_COMMISSION,
     "an_fanduel": NO_COMMISSION,
     "an_betrivers": NO_COMMISSION,
     "an_betmgm": NO_COMMISSION,
+    "an_bovada": NO_COMMISSION,
+    "an_onexbet": NO_COMMISSION,
     "unibet_au": NO_COMMISSION,
     # ── betting exchanges: a share of net winnings ────────────────────────────
     # CHECK AGAINST YOUR OWN ACCOUNT before staking a Matchbook leg.  Matchbook

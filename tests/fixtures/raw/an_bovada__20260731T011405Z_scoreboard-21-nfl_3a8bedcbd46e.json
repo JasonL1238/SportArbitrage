@@ -1,23 +1,26 @@
 {
  "envelope_version": 3,
- "source": "an_open",
- "endpoint": "scoreboard:30:nfl",
- "url": "https://api.actionnetwork.com/web/v1/scoreboard/nfl",
+ "source": "an_bovada",
+ "endpoint": "scoreboard:21:nfl",
+ "url": "https://api.actionnetwork.com/web/v1/scoreboard/nfl?bookIds=21%2C35%2C2495",
  "status_code": 200,
  "content_type": "application/json; charset=utf-8",
- "fetched_at": "2026-07-30T22:43:42.408466+00:00",
- "request_params": {},
+ "fetched_at": "2026-07-31T01:14:05.455887+00:00",
+ "request_params": {
+  "bookIds": "21,35,2495"
+ },
  "headers": {
   "content-type": "application/json; charset=utf-8",
-  "date": "Thu, 30 Jul 2026 22:43:37 GMT",
+  "date": "Fri, 31 Jul 2026 01:14:00 GMT",
   "cache-control": "max-age=30, must-revalidate, public",
   "content-encoding": "gzip",
+  "access-control-allow-origin": "https://www.actionnetwork.com",
   "access-control-expose-headers": "WWW-Authenticate,Server-Authorization",
   "vary": "accept-encoding",
   "x-cache": "Miss from cloudfront",
-  "via": "1.1 be5f0b3e2ee047b8d7bc8e476f28d828.cloudfront.net (CloudFront)",
-  "x-amz-cf-pop": "DFW57-P3",
-  "x-amz-cf-id": "GrN9BTZtYAOd8nadJADjCu9SFRzoDZDBp9qtHvEPQ57oVBYTJB0seA=="
+  "via": "1.1 22922394e3534f85930c1603d51f2156.cloudfront.net (CloudFront)",
+  "x-amz-cf-pop": "SFO53-P10",
+  "x-amz-cf-id": "G2fq6TjC75k9Ex6qcqQDbFvRplVe5pujJAWP-6-Vm-4ezQUBgQpB0A=="
  },
  "capture_id": "",
  "sha256": "3a8bedcbd46ee7126bef216b74805c21ae6626c85d0942d10acc8239656d9d1e",

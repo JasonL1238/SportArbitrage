@@ -1867,7 +1867,17 @@ def _check_coverage(
     handicaps.  Both used to be reported as *core_market_absent* — "a source
     label has probably changed" — which sends someone looking for a parsing fault
     that is not there.
+
+    Intentional Action Network failover feeds (:mod:`src.redundancy`) are held
+    to the same softer bar as order books: the republisher often omits a market
+    the first-party adapter prices, and that is thin upstream coverage rather
+    than a renamed label in *this* parser.
     """
+    from src.redundancy import REDUNDANT_PAIRS
+
+    soft_coverage = frozenset(order_book_sources) | {
+        secondary for _, secondary in REDUNDANT_PAIRS
+    }
     expected = _expected_markets(quotes, capabilities)
     by_source_sport: dict[tuple[str, Sport], set[tuple[Market, Period]]] = defaultdict(set)
     events_by_source_sport: dict[tuple[str, Sport], set[str]] = defaultdict(set)
@@ -1958,7 +1968,7 @@ def _check_coverage(
             # a renamed label, and grading it an error fails the run over the
             # state of somebody else's order book.
             report.add(
-                Severity.WARNING if source in order_book_sources else Severity.ERROR,
+                Severity.WARNING if source in soft_coverage else Severity.ERROR,
                 "core_market_absent",
                 f"no {sport.value} rows at all for "
                 + ", ".join(f"{m.value}/{p.value}" for m, p in entirely_absent)
