@@ -49,8 +49,11 @@ from src.sources.actionnetwork import ActionNetworkAdapter
 from src.sources.betrivers_kambi import BetRiversKambiAdapter
 from src.sources.betmgm import BetMgmAdapter
 from src.sources.bovada import BovadaAdapter
+from src.sources.caesars import CaesarsAdapter
 from src.sources.cloudbet import CloudbetAdapter
+from src.sources.draftkings import DraftKingsAdapter
 from src.sources.fanduel import FanDuelAdapter
+from src.sources.hardrock import HardRockAdapter
 from src.sources.kalshi import KalshiAdapter
 from src.sources.matchbook import MatchbookAdapter
 from src.sources.onexbet import OneXBetAdapter
@@ -216,6 +219,24 @@ SOURCES: tuple[SourceDescriptor, ...] = (
         adapter=BetMgmAdapter,
         kind=SourceKind.SPORTSBOOK,
     ),
+    # First-party DraftKings / Hard Rock.  From CA both need a licensed-state
+    # ODDS_HTTP_PROXY for live odds (DK is Akamai 403; Hard Rock's GraphQL
+    # returns an empty events list).  Parsers are pinned on captured fixtures.
+    SourceDescriptor(
+        key="draftkings",
+        adapter=DraftKingsAdapter,
+        kind=SourceKind.SPORTSBOOK,
+    ),
+    SourceDescriptor(
+        key="hardrock",
+        adapter=HardRockAdapter,
+        kind=SourceKind.SPORTSBOOK,
+    ),
+    SourceDescriptor(
+        key="caesars",
+        adapter=CaesarsAdapter,
+        kind=SourceKind.SPORTSBOOK,
+    ),
     SourceDescriptor(
         key="cloudbet",
         adapter=CloudbetAdapter,
@@ -246,6 +267,47 @@ SOURCES: tuple[SourceDescriptor, ...] = (
         adapter=ActionNetworkAdapter,
         kind=SourceKind.SPORTSBOOK,
         config={"book_id": 123, "fetch_book_ids": "123"},
+    ),
+    # Hard Rock / Fanatics / Fliff / Circa / Westgate(SuperBook) / Bally —
+    # Action Network catalog ids.  From CA the scoreboard often omits prices
+    # even when bookIds are named; first-party adapters are the real path once
+    # ODDS_HTTP_PROXY is set.  Fliff is sweepstakes-style in many states —
+    # treat legs with extra caution (still a sportsbook kind for schema).
+    SourceDescriptor(
+        key="an_hardrock",
+        adapter=ActionNetworkAdapter,
+        kind=SourceKind.SPORTSBOOK,
+        config={"book_id": 2724, "fetch_book_ids": "2724"},
+    ),
+    SourceDescriptor(
+        key="an_fanatics",
+        adapter=ActionNetworkAdapter,
+        kind=SourceKind.SPORTSBOOK,
+        config={"book_id": 2988, "fetch_book_ids": "2988,2990"},
+    ),
+    SourceDescriptor(
+        key="an_fliff",
+        adapter=ActionNetworkAdapter,
+        kind=SourceKind.SPORTSBOOK,
+        config={"book_id": 2292, "fetch_book_ids": "2292"},
+    ),
+    SourceDescriptor(
+        key="an_circa",
+        adapter=ActionNetworkAdapter,
+        kind=SourceKind.SPORTSBOOK,
+        config={"book_id": 78, "fetch_book_ids": "78"},
+    ),
+    SourceDescriptor(
+        key="an_superbook",
+        adapter=ActionNetworkAdapter,
+        kind=SourceKind.SPORTSBOOK,
+        config={"book_id": 14, "fetch_book_ids": "14"},
+    ),
+    SourceDescriptor(
+        key="an_bally",
+        adapter=ActionNetworkAdapter,
+        kind=SourceKind.SPORTSBOOK,
+        config={"book_id": 4693, "fetch_book_ids": "4693"},
     ),
     # Bet365 only appears when Caesars is named on the request; parse still
     # filters to book_id 79.

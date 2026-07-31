@@ -187,6 +187,7 @@ class SourceClient:
         params: Mapping[str, Any] | None = None,
         record_params: Mapping[str, str] | None = None,
         headers: Mapping[str, str] | None = None,
+        expect_json: bool = True,
     ) -> RawResponse:
         """Fetch one URL, capture it, and validate it.
 
@@ -197,26 +198,99 @@ class SourceClient:
         *record_params* overrides what is stored in the envelope's
         ``request_params``, which is how a static application key stays out of
         the capture while still being sent.
+
+        *expect_json* is True for odds payloads.  Promo pages are often HTML;
+        pass False there so a 200 HTML body is captured rather than refused as
+        :class:`~src.sources.guards.NotJsonError`.
         """
+        return self._request(
+            "GET",
+            url,
+            endpoint=endpoint,
+            params=params,
+            record_params=record_params,
+            headers=headers,
+            expect_json=expect_json,
+        )
+
+    def post(
+        self,
+        url: str,
+        *,
+        endpoint: str,
+        json_body: Mapping[str, Any] | Sequence[Any] | None = None,
+        params: Mapping[str, Any] | None = None,
+        record_params: Mapping[str, str] | None = None,
+        headers: Mapping[str, str] | None = None,
+        expect_json: bool = True,
+    ) -> RawResponse:
+        """POST one URL, capture it, and validate it.
+
+        Used by promo adapters whose public catalog is a JSON query (DraftKings).
+        Odds adapters stay on :meth:`get`.
+        """
+        return self._request(
+            "POST",
+            url,
+            endpoint=endpoint,
+            params=params,
+            record_params=record_params,
+            headers=headers,
+            expect_json=expect_json,
+            json_body=json_body,
+        )
+
+    def _request(
+        self,
+        method: str,
+        url: str,
+        *,
+        endpoint: str,
+        params: Mapping[str, Any] | None = None,
+        record_params: Mapping[str, str] | None = None,
+        headers: Mapping[str, str] | None = None,
+        expect_json: bool = True,
+        json_body: Mapping[str, Any] | Sequence[Any] | None = None,
+    ) -> RawResponse:
         last: SourceError | None = None
         for attempt in range(1, self.retry.attempts + 1):
             self._pacer.wait(url, minimum=self.host_interval)
             try:
-                response = self._client.get(
-                    url,
-                    # ``None`` and ``{}`` are different requests.  httpx treats any
-                    # non-None ``params`` as a *replacement* of the URL's own query,
-                    # so collapsing None to {} strips the query off a URL that
-                    # already carries one — which is exactly the shape of a cursor
-                    # a venue hands back.  Smarkets' ``pagination.next_page`` arrived
-                    # complete with ``type``, ``state``, ``limit`` and ``offset``,
-                    # and every one of them was deleted before the request went out:
-                    # the cursor never advanced, and the unfiltered reply pulled in
-                    # other sports' events, which were then paid for in contracts
-                    # and quotes batches.
-                    params=None if params is None else dict(params),
-                    headers={**self._headers, **(headers or {})},
-                )
+                request_headers = {**self._headers, **(headers or {})}
+                # ``None`` and ``{}`` are different requests.  httpx treats any
+                # non-None ``params`` as a *replacement* of the URL's own query,
+                # so collapsing None to {} strips the query off a URL that
+                # already carries one — which is exactly the shape of a cursor
+                # a venue hands back.  Smarkets' ``pagination.next_page`` arrived
+                # complete with ``type``, ``state``, ``limit`` and ``offset``,
+                # and every one of them was deleted before the request went out:
+                # the cursor never advanced, and the unfiltered reply pulled in
+                # other sports' events, which were then paid for in contracts
+                # and quotes batches.
+                request_params = None if params is None else dict(params)
+                if method.upper() == "POST":
+                    if json_body is None:
+                        payload: Any = None
+                    elif isinstance(json_body, Mapping):
+                        payload = dict(json_body)
+                    elif isinstance(json_body, (str, bytes)):
+                        raise TypeError(
+                            "json_body must be a mapping or list, not str/bytes"
+                        )
+                    else:
+                        payload = list(json_body)
+                    response = self._client.post(
+                        url,
+                        params=request_params,
+                        headers=request_headers,
+                        json=payload,
+                    )
+                else:
+                    response = self._client.get(
+                        url,
+                        params=request_params,
+                        headers=request_headers,
+                    )
             except Exception as exc:
                 # httpx, curl_cffi, and proxy stacks each raise their own
                 # hierarchy; anything that prevented a response is transport.
@@ -228,6 +302,22 @@ class SourceClient:
                 self._sleep(self.retry.delay_for(attempt, None))
                 continue
 
+            stored_params = dict(
+                record_params if record_params is not None else (params or {})
+            )
+            if json_body is not None:
+                import hashlib
+                import json as _json
+
+                # Fingerprint only — never store the full POST body in the
+                # envelope params (DraftKings catalogs are large).
+                blob = _json.dumps(json_body, sort_keys=True, default=str)
+                stored_params = {
+                    **stored_params,
+                    "method": method.upper(),
+                    "body_sha256": hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16],
+                }
+
             raw = RawResponse(
                 source=self.source_key,
                 endpoint=endpoint,
@@ -237,7 +327,7 @@ class SourceClient:
                 fetched_at=datetime.now(UTC),
                 content_type=response.headers.get("content-type"),
                 headers=RawResponse.clean_headers(response.headers),
-                request_params=dict(record_params if record_params is not None else (params or {})),
+                request_params=stored_params,
             )
             try:
                 check_http_response(
@@ -248,6 +338,7 @@ class SourceClient:
                     content_type=raw.content_type,
                     url=raw.url,
                     retry_after=response.headers.get("retry-after"),
+                    expect_json=expect_json,
                 )
             except SourceError as exc:
                 exc.raw = raw

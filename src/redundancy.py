@@ -40,6 +40,9 @@ REDUNDANT_PAIRS: tuple[tuple[str, str], ...] = (
     ("betmgm", "an_betmgm"),
     ("bovada", "an_bovada"),
     ("onexbet", "an_onexbet"),
+    ("draftkings", "an_draftkings"),
+    ("hardrock", "an_hardrock"),
+    ("caesars", "an_caesars"),
 )
 
 _PAIR_LOOKUP: dict[frozenset[str], tuple[str, str]] = {

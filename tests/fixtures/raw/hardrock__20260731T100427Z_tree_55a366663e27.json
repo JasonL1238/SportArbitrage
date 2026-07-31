@@ -1,0 +1,19 @@
+{
+ "envelope_version": 3,
+ "source": "hardrock",
+ "endpoint": "tree",
+ "url": "https://api.hardrocksportsbook.com/sportsbook/api/public/events/tree?segment=nj",
+ "status_code": 200,
+ "content_type": "application/json",
+ "fetched_at": "2026-07-31T10:04:27.251489+00:00",
+ "request_params": {
+  "segment": "nj"
+ },
+ "headers": {
+  "content-type": "application/json"
+ },
+ "capture_id": "",
+ "sha256": "55a366663e27a252ced9079cbf08de1eeed239c972ca8ed59c75a228a95a9c4c",
+ "byte_size": 1095,
+ "body": "{\"data\":{\"betSync\":{\"sports\":[{\"id\":\"8\",\"code\":\"BASEBALL\",\"numEvents\":71,\"numEventsInplay\":10,\"numEventsDisplayed\":70,\"numOutrightEvents\":28,\"weighting\":95.0,\"keyMarkets\":[{\"type\":\"BASEBALL:FTEI:SPRD\"},{\"type\":\"BASEBALL:FTEI:OU\"},{\"type\":\"BASEBALL:FTEI:ML\"}],\"categories\":[{\"id\":\"1339485987805069565\",\"name\":\"USA\",\"numEvents\":40,\"numEventsInplay\":0,\"numEventsDisplayed\":39,\"weighting\":999.0,\"competitions\":[{\"id\":\"2899138833758814469\",\"name\":\"MLB\",\"highlight\":false,\"weighting\":999.0,\"numEvents\":40,\"numEventsInplay\":0,\"numOutrightEvents\":25,\"numEventsDisplayed\":39,\"streamingAvailable\":false,\"prebuiltsAvailable\":true,\"playerPropsAvailable\":true,\"events\":{\"count\":40}}]},{\"id\":\"691030499110912003\",\"name\":\"USA\",\"numEvents\":18,\"numEventsInplay\":0,\"numEventsDisplayed\":18,\"weighting\":998.0,\"competitions\":[{\"id\":\"691030499319709699\",\"name\":\"MLB\",\"highlight\":false,\"weighting\":998.0,\"numEvents\":18,\"numEventsInplay\":0,\"numOutrightEvents\":3,\"numEventsDisplayed\":18,\"streamingAvailable\":false,\"prebuiltsAvailable\":true,\"playerPropsAvailable\":true,\"events\":{\"count\":18}}]}],\"events\":{\"count\":71}}]}}}"
+}

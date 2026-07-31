@@ -255,10 +255,21 @@ finding of any kind.
 
 ## What this leaves
 
-**Eleven registered sources** today. Expanding past that means opening the
-Akamai / CloudFront / Cloudflare books with impersonation and, when needed, a
-proxy — that work is in scope now.
+**DraftKings** and **Hard Rock Bet** first-party adapters are registered
+(`draftkings`, `hardrock`) with Action Network failovers (`an_draftkings`,
+`an_hardrock`). From Davis, CA:
 
-Four of the ten are exchanges or prediction markets, whose two-sided quotes and —
-for two of them — stated liquidity make a position *more* checkable than any
-sportsbook's posted price does.
+| Venue | Ladder / tree | Odds JSON | Lever |
+|---|---|---|---|
+| DraftKings | n/a | Akamai `403` | `ODDS_HTTP_PROXY` to IL/NJ |
+| Hard Rock | ladder + tree **200** | GraphQL `events.data=[]` | same proxy |
+| Caesars / Fanatics | — | still blocked / host moved | proxy + host discovery |
+| Bally (`ballybet` Kambi) | — | `429 No access` | proxy or `an_bally` |
+| Fliff / Circa / SuperBook (Westgate) | — | no stable first-party JSON from CA | AN book ids `2292` / `78` / `14` |
+
+Set `ODDS_HTTP_PROXY` to a licensed-state residential exit and re-run
+`python scripts/probe_sources.py --only blocked` / `--only hardrock`.
+
+Four of the venues are exchanges or prediction markets, whose two-sided quotes
+and — for two of them — stated liquidity make a position *more* checkable than
+any sportsbook's posted price does.

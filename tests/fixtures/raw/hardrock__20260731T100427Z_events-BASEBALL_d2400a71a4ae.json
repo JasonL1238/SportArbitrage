@@ -1,0 +1,17 @@
+{
+ "envelope_version": 3,
+ "source": "hardrock",
+ "endpoint": "events-BASEBALL",
+ "url": "https://api.hardrocksportsbook.com/java-graphql/graphql",
+ "status_code": 200,
+ "content_type": "application/json",
+ "fetched_at": "2026-07-31T10:04:27.252061+00:00",
+ "request_params": {},
+ "headers": {
+  "content-type": "application/json"
+ },
+ "capture_id": "",
+ "sha256": "a9433ca07030f4aac4fe93be901b67da89351e0c38a4c3eb0d5a5593bb299079",
+ "byte_size": 1279,
+ "body": "{\"data\":{\"betSync\":{\"events\":{\"count\":1,\"data\":[{\"id\":\"900001\",\"compId\":\"2899138833758814469\",\"compName\":\"MLB\",\"eventTime\":\"2026-08-15T23:10:00.000Z\",\"sport\":\"BASEBALL\",\"inplay\":false,\"outright\":false,\"name\":\"New York Yankees @ Boston Red Sox\",\"displayed\":true,\"markets\":[{\"id\":\"m1\",\"name\":\"Moneyline\",\"type\":\"BASEBALL:FTEI:ML\",\"subtype\":null,\"line\":null,\"displayed\":true,\"suspended\":false,\"state\":\"OPEN\",\"selection\":[{\"id\":\"s1\",\"name\":\"New York Yankees\",\"type\":\"A\",\"displayed\":true,\"suspended\":false,\"rootIdx\":78},{\"id\":\"s2\",\"name\":\"Boston Red Sox\",\"type\":\"B\",\"displayed\":true,\"suspended\":false,\"rootIdx\":61}]},{\"id\":\"m2\",\"name\":\"Run Line\",\"type\":\"BASEBALL:FTEI:SPRD\",\"subtype\":null,\"line\":1.5,\"displayed\":true,\"suspended\":false,\"state\":\"OPEN\",\"selection\":[{\"id\":\"s3\",\"name\":\"New York Yankees\",\"type\":\"A\",\"displayed\":true,\"suspended\":false,\"rootIdx\":70},{\"id\":\"s4\",\"name\":\"Boston Red Sox\",\"type\":\"B\",\"displayed\":true,\"suspended\":false,\"rootIdx\":69}]},{\"id\":\"m3\",\"name\":\"Total\",\"type\":\"BASEBALL:FTEI:OU\",\"subtype\":null,\"line\":8.5,\"displayed\":true,\"suspended\":false,\"state\":\"OPEN\",\"selection\":[{\"id\":\"s5\",\"name\":\"Over\",\"type\":\"OVER\",\"displayed\":true,\"suspended\":false,\"rootIdx\":70},{\"id\":\"s6\",\"name\":\"Under\",\"type\":\"UNDER\",\"displayed\":true,\"suspended\":false,\"rootIdx\":69}]}]}]}}}}"
+}

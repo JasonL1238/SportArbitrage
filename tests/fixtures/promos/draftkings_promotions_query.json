@@ -1,0 +1,960 @@
+{
+  "lastUpdatedTime": "2026-07-31T10:02:33.7758422Z",
+  "zones": [
+    {
+      "zoneName": "UniversalPromoPage",
+      "zoneType": "",
+      "promotions": [
+        {
+          "promotionId": 916268,
+          "publicPromotionId": "X4JE3W",
+          "startDate": "2026-03-30T20:21:15.0000000Z",
+          "expirationDate": "2027-02-01T18:26:00.0000000Z",
+          "productName": "Sportsbook",
+          "category": "DK Horse",
+          "merchandisingData": {
+            "promotionHeadline": "DRAFTKINGS RACING IS LIVE",
+            "promotionDescription": "There\u2019s a brand-new way to bet on horse racing\u2014right inside DraftKings Sportsbook! Are you ready to ride?",
+            "promotionImage": "https://sportsbook.draftkings.com/static/promos/images/20260330T044825_DKH_None_Updated%20Look_CRM_240x200_PromoPg_xVert.webp",
+            "autoRefreshBackgroundImage": false,
+            "promotionDetailsImage": "https://sportsbook.draftkings.com/static/promos/images/20260330T044835_DKH_None_Updated%20Look_CRM_900x300_PromoPg_xVert.webp",
+            "terms": "Gambling Problem? Call 1-800-GAMBLER.\n18+ (21+ in certain states) to open, own, or access an advance deposit wagering account and resident of state where DraftKings Racing is available. Eligibility restrictions apply. Void where prohibited. See terms at [racing.draftkings.com](http://racing.draftkings.com). ",
+            "termsHighlights": "Gambling Problem? Call 1-800-GAMBLER.\n18+ (21+ in certain states) to open, own, or access an advance deposit wagering account and resident of state where DraftKings Racing is available. Eligibility restrictions apply. Void where prohibited. See terms at [racing.draftkings.com](http://racing.draftkings.com).",
+            "displayToLoggedOutUsers": false,
+            "useInformedOptIn": false,
+            "inlineDetails": {},
+            "isCarouselCtaButtonDisabled": false,
+            "imageCardHasTerms": false,
+            "promotionBackgroundImageHD": "https://sportsbook.draftkings.com/static/promos/images/20260603T063447_DKH_None_Updated%20Look_CRM_686x384_OfferCard_Cross%20Vertical.webp"
+          },
+          "userData": {
+            "statusId": 0,
+            "promotionDetailsButton": {
+              "text": "See Details",
+              "nativeDetailedViewUrl": "/mf/rewardcenter?view=PromotionDetailView&promotionId=916268&action=terms&callingZone=UniversalPromoPage"
+            },
+            "promotionActionButton": {
+              "text": "Bet Now",
+              "webRedirectUrl": "https://racing.draftkings.com",
+              "nativeRedirectUrl": "https://racing.draftkings.com"
+            },
+            "termsViewActionButton": {
+              "text": "Bet Now",
+              "webRedirectUrl": "https://racing.draftkings.com",
+              "nativeRedirectUrl": "https://racing.draftkings.com"
+            }
+          },
+          "promotionalContent": [
+            {
+              "contentType": "None",
+              "views": []
+            }
+          ],
+          "isOptInPromotion": false,
+          "promotionTags": [],
+          "promotionMetadata": {},
+          "language": "en",
+          "verticalGroup": "Sports"
+        },
+        {
+          "promotionId": 1051530,
+          "publicPromotionId": "3V2OK9",
+          "startDate": "2026-03-04T05:00:00.0000000Z",
+          "expirationDate": "2027-01-17T04:59:59.0000000Z",
+          "productName": "Casino",
+          "category": "Casino",
+          "merchandisingData": {
+            "promotionHeadline": "Sign Up Today To Reveal Your Bonus!",
+            "promotionDescription": "New users get an exclusive bonus to use on DraftKings Casino!",
+            "promotionImage": "https://sportsbook.draftkings.com/static/promos/images/20260304T091112_Thumbnail%20-%20NUO-%20240%20x%20203.webp",
+            "promotionBackgroundImage": "https://sportsbook.draftkings.com/static/promos/images/20240820T052609_CAS_ElectricPoker_Promo_335x175.png",
+            "autoRefreshBackgroundImage": false,
+            "promotionDetailsImage": "https://sportsbook.draftkings.com/static/promos/images/20260304T091116_Banner%20-%20NUO%20-%20900%20x%20303.webp",
+            "terms": "Please log in or sign up to view terms and conditions.",
+            "displayToLoggedOutUsers": true,
+            "loggedOutDescription": "New users get an exclusive bonus to use on DraftKings Casino!",
+            "useInformedOptIn": false,
+            "inlineDetails": {},
+            "isCarouselCtaButtonDisabled": true,
+            "imageCardHasTerms": false,
+            "promotionBackgroundImageHD": "https://sportsbook.draftkings.com/static/promos/images/20260511T050635_20260505T104107_Non-CT.webp"
+          },
+          "userData": {
+            "statusId": 0,
+            "promotionDetailsButton": {
+              "text": "See Details",
+              "nativeDetailedViewUrl": "/mf/rewardcenter?view=PromotionDetailView&promotionId=1051530&action=terms&callingZone=UniversalPromoPage"
+            },
+            "promotionActionButton": {
+              "text": "Log In!",
+              "webRedirectUrl": "https://myaccount.draftkings.com/login?returnPath=%2Flogin&intendedSiteExp=US-CS",
+              "nativeRedirectUrl": "https://myaccount.draftkings.com/login?returnPath=%2Flogin&intendedSiteExp=US-CS"
+            },
+            "termsViewActionButton": {
+              "text": "Log In!",
+              "webRedirectUrl": "https://myaccount.draftkings.com/login?returnPath=%2Flogin&intendedSiteExp=US-CS",
+              "nativeRedirectUrl": "https://myaccount.draftkings.com/login?returnPath=%2Flogin&intendedSiteExp=US-CS"
+            }
+          },
+          "promotionalContent": [],
+          "isOptInPromotion": false,
+          "promotionTags": [],
+          "promotionMetadata": {},
+          "language": "en",
+          "verticalGroup": "Casino"
+        },
+        {
+          "promotionId": 1051489,
+          "publicPromotionId": "2X2VQV",
+          "startDate": "2026-07-24T02:00:00.0000000Z",
+          "expirationDate": "2027-01-17T04:59:59.0000000Z",
+          "productName": "Casino",
+          "category": "Casino",
+          "merchandisingData": {
+            "promotionHeadline": "Lightning Link Is Here And So Are The Rewards!",
+            "promotionDescription": "Earn your share of 250,000,000 Spins through daily rewards, bonuses, and more! Log in to learn more",
+            "promotionImage": "https://sportsbook.draftkings.com/static/promos/images/20260722T055856_DK_CAS_NONE_Lightning%20Link_Onsite_Static_240x200_NonOffer.webp",
+            "promotionBackgroundImage": "https://sportsbook.draftkings.com/static/promos/images/20240820T052609_CAS_ElectricPoker_Promo_335x175.png",
+            "autoRefreshBackgroundImage": false,
+            "promotionDetailsImage": "https://sportsbook.draftkings.com/static/promos/images/20260724T041941_DK_CAS_NONE_Lightning%20Link_Onsite_Static_900x300_AUOv2.webp",
+            "terms": "Please log in or sign up to view terms and conditions.",
+            "displayToLoggedOutUsers": true,
+            "loggedOutDescription": "Earn your share of 250,000,000 Spins through daily rewards, bonuses, and more! Log in to learn more",
+            "useInformedOptIn": false,
+            "inlineDetails": {},
+            "isCarouselCtaButtonDisabled": true,
+            "imageCardHasTerms": false,
+            "promotionBackgroundImageHD": "https://sportsbook.draftkings.com/static/promos/images/20260729T062859_DK_CAS_NONE_Lightning%20Link_Onsite_Static_718x416_OfferCard_AUO%20(1).webp"
+          },
+          "userData": {
+            "statusId": 0,
+            "promotionDetailsButton": {
+              "text": "See Details",
+              "nativeDetailedViewUrl": "/mf/rewardcenter?view=PromotionDetailView&promotionId=1051489&action=terms&callingZone=UniversalPromoPage"
+            },
+            "promotionActionButton": {
+              "text": "Log In!",
+              "webRedirectUrl": "https://myaccount.draftkings.com/login?returnPath=%2Flogin&intendedSiteExp=US-CS",
+              "nativeRedirectUrl": "https://myaccount.draftkings.com/login?returnPath=%2Flogin&intendedSiteExp=US-CS"
+            },
+            "termsViewActionButton": {
+              "text": "Log In!",
+              "webRedirectUrl": "https://myaccount.draftkings.com/login?returnPath=%2Flogin&intendedSiteExp=US-CS",
+              "nativeRedirectUrl": "https://myaccount.draftkings.com/login?returnPath=%2Flogin&intendedSiteExp=US-CS"
+            }
+          },
+          "promotionalContent": [],
+          "isOptInPromotion": false,
+          "promotionTags": [],
+          "promotionMetadata": {},
+          "language": "en",
+          "verticalGroup": "Casino"
+        },
+        {
+          "promotionId": 1049901,
+          "publicPromotionId": "8WW1O5",
+          "startDate": "2026-07-22T13:00:00.0000000Z",
+          "expirationDate": "2027-01-17T04:59:59.0000000Z",
+          "productName": "Casino",
+          "category": "Casino",
+          "merchandisingData": {
+            "promotionHeadline": "Daily Rewards Rocket!",
+            "promotionDescription": "Your Daily Chance At Free Lightning Link Spins Awaits! Log In Now To Launch Your Rockets! Plus, Wager $50+ This Week To Power Up And Earn Turbo Rewards All Next Week!",
+            "promotionImage": "https://sportsbook.draftkings.com/static/promos/images/20260722T053356_DK_CAS_NONE_Lightning%20Link_Onsite_240x200.webp",
+            "promotionBackgroundImage": "https://sportsbook.draftkings.com/static/promos/images/20240820T052609_CAS_ElectricPoker_Promo_335x175.png",
+            "autoRefreshBackgroundImage": false,
+            "promotionDetailsImage": "https://sportsbook.draftkings.com/static/promos/images/20260729T071638_DK_CAS_NONE_Lightning%20Link_RevOps_DRR_900x300-1.webp",
+            "terms": "Please log in or sign up to view terms and conditions.",
+            "displayToLoggedOutUsers": true,
+            "loggedOutDescription": "Your Daily Chance At Free Lightning Link Spins Awaits! Log In Now To Launch Your Rockets! Plus, Wager $50+ This Week To Power Up And Earn Turbo Rewards All Next Week!",
+            "useInformedOptIn": false,
+            "inlineDetails": {},
+            "isCarouselCtaButtonDisabled": true,
+            "imageCardHasTerms": false,
+            "promotionBackgroundImageHD": "https://sportsbook.draftkings.com/static/promos/images/20260729T071645_DK_CAS_NONE_Lightning%20Link_RevOps_OfferCard.webp"
+          },
+          "userData": {
+            "statusId": 0,
+            "promotionDetailsButton": {
+              "text": "See Details",
+              "nativeDetailedViewUrl": "/mf/rewardcenter?view=PromotionDetailView&promotionId=1049901&action=terms&callingZone=UniversalPromoPage"
+            },
+            "promotionActionButton": {
+              "text": "Log In!",
+              "webRedirectUrl": "https://myaccount.draftkings.com/login?returnPath=%2Flogin&intendedSiteExp=US-CS",
+              "nativeRedirectUrl": "https://myaccount.draftkings.com/login?returnPath=%2Flogin&intendedSiteExp=US-CS"
+            },
+            "termsViewActionButton": {
+              "text": "Log In!",
+              "webRedirectUrl": "https://myaccount.draftkings.com/login?returnPath=%2Flogin&intendedSiteExp=US-CS",
+              "nativeRedirectUrl": "https://myaccount.draftkings.com/login?returnPath=%2Flogin&intendedSiteExp=US-CS"
+            }
+          },
+          "promotionalContent": [],
+          "isOptInPromotion": false,
+          "promotionTags": [],
+          "promotionMetadata": {},
+          "language": "en",
+          "verticalGroup": "Casino"
+        },
+        {
+          "promotionId": 888328,
+          "publicPromotionId": "4JPG0P",
+          "startDate": "2026-03-30T20:21:15.0000000Z",
+          "expirationDate": "2027-02-01T18:26:00.0000000Z",
+          "productName": "Predict",
+          "category": "DK Horse",
+          "merchandisingData": {
+            "promotionHeadline": "DRAFTKINGS RACING IS LIVE",
+            "promotionDescription": "There\u2019s a brand-new way to bet on horse racing\u2014right inside DraftKings Sports! Are you ready to ride?",
+            "promotionImage": "https://sportsbook.draftkings.com/static/promos/images/20260330T044825_DKH_None_Updated%20Look_CRM_240x200_PromoPg_xVert.webp",
+            "autoRefreshBackgroundImage": false,
+            "promotionDetailsImage": "https://sportsbook.draftkings.com/static/promos/images/20260330T044835_DKH_None_Updated%20Look_CRM_900x300_PromoPg_xVert.webp",
+            "terms": "Gambling Problem? Call 1-800-GAMBLER.\n18+ (21+ in certain states) to open, own, or access an advance deposit wagering account and resident of state where DraftKings Racing is available. Eligibility restrictions apply. Void where prohibited. See terms at [racing.draftkings.com](http://racing.draftkings.com). ",
+            "termsHighlights": "Gambling Problem? Call 1-800-GAMBLER.\n18+ (21+ in certain states) to open, own, or access an advance deposit wagering account and resident of state where DraftKings Racing is available. Eligibility restrictions apply. Void where prohibited. See terms at [racing.draftkings.com](http://racing.draftkings.com).",
+            "displayToLoggedOutUsers": false,
+            "useInformedOptIn": false,
+            "inlineDetails": {},
+            "isCarouselCtaButtonDisabled": false,
+            "imageCardHasTerms": false,
+            "promotionBackgroundImageHD": "https://sportsbook.draftkings.com/static/promos/images/20260603T063651_DKH_None_Updated%20Look_CRM_686x384_OfferCard_Cross%20Vertical.webp"
+          },
+          "userData": {
+            "statusId": 0,
+            "promotionDetailsButton": {
+              "text": "See Details",
+              "nativeDetailedViewUrl": "/mf/rewardcenter?view=PromotionDetailView&promotionId=888328&action=terms&callingZone=UniversalPromoPage"
+            },
+            "promotionActionButton": {
+              "text": "Get Started",
+              "webRedirectUrl": "https://racing.draftkings.com",
+              "nativeRedirectUrl": "https://racing.draftkings.com"
+            },
+            "termsViewActionButton": {
+              "text": "Get Started",
+              "webRedirectUrl": "https://racing.draftkings.com",
+              "nativeRedirectUrl": "https://racing.draftkings.com"
+            }
+          },
+          "promotionalContent": [
+            {
+              "contentType": "None",
+              "views": []
+            }
+          ],
+          "isOptInPromotion": false,
+          "promotionTags": [],
+          "promotionMetadata": {},
+          "language": "en",
+          "verticalGroup": "Predict"
+        },
+        {
+          "promotionId": 1049928,
+          "publicPromotionId": "4OOE71",
+          "startDate": "2026-07-31T10:00:00.0000000Z",
+          "expirationDate": "2026-08-01T03:59:00.0000000Z",
+          "productName": "Casino",
+          "category": "Casino",
+          "merchandisingData": {
+            "promotionHeadline": "New Games Friday!",
+            "promotionDescription": "Every Friday We Have New Games To Play! Click To Play! ",
+            "promotionImage": "https://sportsbook.draftkings.com/static/promos/images/20260522T013355_Thumbnail%20-%20NewGameFriday%20-%20240%20x%20200.webp",
+            "promotionBackgroundImage": "https://sportsbook.draftkings.com/static/promos/images/20240820T052609_CAS_ElectricPoker_Promo_335x175.png",
+            "autoRefreshBackgroundImage": false,
+            "promotionDetailsImage": "https://sportsbook.draftkings.com/static/promos/images/20260522T013359_Banner%20-%20NewGameFriday%20-%20900%20x%20300.webp",
+            "terms": "Please log in or sign up to view terms and conditions.",
+            "displayToLoggedOutUsers": true,
+            "useInformedOptIn": false,
+            "inlineDetails": {},
+            "isCarouselCtaButtonDisabled": true,
+            "imageCardHasTerms": false,
+            "promotionBackgroundImageHD": "https://sportsbook.draftkings.com/static/promos/images/20260701T082358_718x416_OfferCard_NGF.webp"
+          },
+          "userData": {
+            "statusId": 0,
+            "promotionDetailsButton": {
+              "text": "See Details",
+              "nativeDetailedViewUrl": "/mf/rewardcenter?view=PromotionDetailView&promotionId=1049928&action=terms&callingZone=UniversalPromoPage"
+            },
+            "promotionActionButton": {
+              "text": "Play!",
+              "webRedirectUrl": "https://casino.draftkings.com/category/new-games",
+              "nativeRedirectUrl": "https://casino.draftkings.com/category/new-games"
+            },
+            "termsViewActionButton": {
+              "text": "Play!",
+              "webRedirectUrl": "https://casino.draftkings.com/category/new-games",
+              "nativeRedirectUrl": "https://casino.draftkings.com/category/new-games"
+            }
+          },
+          "promotionalContent": [],
+          "isOptInPromotion": false,
+          "promotionTags": [],
+          "promotionMetadata": {},
+          "language": "en",
+          "verticalGroup": "Casino"
+        },
+        {
+          "promotionId": 1057284,
+          "publicPromotionId": "9YENK7",
+          "startDate": "2026-07-31T06:00:00.0000000Z",
+          "expirationDate": "2026-08-01T03:59:00.0000000Z",
+          "productName": "Sportsbook",
+          "category": "No Sweat",
+          "merchandisingData": {
+            "promotionHeadline": "MLB Home Run No Sweat",
+            "promotionDescription": "Get a No Sweat bet to use on MLB Home Run bets today!",
+            "promotionImage": "https://sportsbook.draftkings.com/static/promos/images/20260723T025229_OSB_MLB_25-_CRM-Promos_240x200_PromoPage%20(8).webp",
+            "promotionBackgroundImage": "https://sportsbook.draftkings.com/static/promos/images/20240902T034340_2024-08-13 21_11_39 OSB_CRMPromos_NBA NBA_WNBA No Sweat_335x175_Offer Card - Centered_WNBA No Sweat (1).png",
+            "autoRefreshBackgroundImage": false,
+            "promotionDetailsImage": "https://sportsbook.draftkings.com/static/promos/images/20260723T025233_OSB_MLB_25-_CRM-Promos_900x300_PromoPage%20(7).webp",
+            "terms": "Details:\n\n1. MLB games on Friday, July 31st\n2. Opt-In and apply your qualifying bet token to a MLB Home run Single, Parlay, SGP or SGPx bet. If the bet that you apply your Token to after opting in loses, we'll credit your bet back as a Bonus Bet.\n3. Max Rewards varies\n4. One qualifying bet per customer during the Promotional Period\n5. Wagering on this promotion must use funds from your cash balance or DK Dollars to qualify\n6. Qualifying token expires at the end of the final 7/31 MLB game\n7. Reward issued after qualifying bet settlement as non-withdrawable Bonus Bet that expires in 7 days after being received.\n8. Eligibility: Must be 21+ physically located in AR, AZ, CA-AB (18+), CA-ON (19+), CO, CT, DC (18+), IA, IL, IN, KS, KY, LA, MD, ME, MI, MO, NC, NH (18+), NJ, NY, OH, OR, PA, PR (18+), TN, VA, VT, WA, WV, or WY (18+)\n\nIneligible Bets:\n\nCash out bets, bonus bets, voided bets, profit boosts, and odds boosts\nWagers with legs on non-eligible games\n\n\n**FULL TERMS AND CONDITIONS**\n\nThank you for choosing to participate in this promotion (the \u201cPromotion\u201d) being offered by DraftKings. By entering or participating in the Promotion you hereby agree to be bound by these Promotion terms (the \u201cPromotion Terms\u201d). If you do not wish to be bound by the Promotion Terms, please do not enter or participate in the Promotion. If you have any questions regarding the Promotion or the Promotion Terms, or wish to cancel your participation in this Promotion, please contact [support@draftkings.com](mailto:support@draftkings.com) for more information.\n\n**PROMOTION REQUIREMENTS AND ELIGIBILITY**\n\nThe promotional offer is valid between 7/31/2026 at 02:00 AM Eastern Time (ET) and 7/31/2026 at 11:59 PM Eastern Time  (the \u201cPromotional Period\u201d). Must be physically located in AR, AZ, CO, CT, DC, IA, IL, IN, KS, KY, LA (select parishes), MD, ME, MI, MO, NC, NH, NY, NJ, OH, OR, PA, PR (residents only), TN, VA, VT, WA, WV, or WY (each an \"Eligible Jurisdiction\" or, collectively, the \"Eligible Jurisdictions\"). Must be 21+ years of age or older (18+ if in DC/NH/PR/WY) (19+ if in CA-ONT). Any customer who is found to be ineligible to play on DraftKings (i.e., by way of self-exclusion from gambling, restriction due to employment, or otherwise) may not participate in this Promotion and immediately forfeits any bonus rewards which have been awarded under this Promotion.\n\nIn addition to the eligibility requirements set forth above and in the DraftKings Terms of Use, to participate in the Promotion, customers must (1) be a registered DraftKings Sportsbook customer with an active account; (2) receive an offer to participate in this Promotion; and (3) opt-in by clicking the appropriate link/button within the Promotional Period each day when offered.\n\n**NO SWEAT BET REDEMPTION**\n\nUpon completion of the promotion requirements, eligible customers will be awarded one (1) No Sweat Bet (the \"Token\"). Token valid only for MLB Home run on 7/31 games (the \u201cQualifying Bet\u201d). All other bet types are excluded from this Promotion.\n\nCashed-out bets and voided bets will void this Promotion. Bets placed with bonus rewards (including but not limited to Bonus Bets, Odds Boosts/Surges, Profit Boosts, etc.) are not valid. Token expires at the end of the final 7/31 MLB game. Qualifying Bet must be placed using cash from your cash balance or DK Dollars.\n\nNo Sweat Bet Tokens are single-use, non-withdrawable, and have no cash value. Must meet Qualifying Bet criteria and select Token BEFORE placing Qualifying Bet. Token only applies to Qualifying Bet. Reward issued only if Qualifying Bet loses after applying Token. Reward issued as one (1) Bonus Bet based on the amount of losing Qualifying Bet. Maximum reward varies and will be clearly and conspicuously disclosed to customers prior to opting in. No Sweat Bets may not be combined with other bonus rewards and may not be eligible for use on all promotions and/or betting markets.\n\n**REWARD LIMITATIONS**\n\nBonus Bets are single-use, non-transferable, non-withdrawable, and have no cash value. Bonus Bets are valid for Single, Parlay, SGP, or SGPx bets on any sport. Customers can choose when to use Bonus Bets and must select the Bonus Bet in their betslip before placing a wager. Failure to use a Bonus Bet before expiration will void the reward. Payouts from Bonus Bet wagers will be transferred to the customer\u2019s cash balance and do not include the Bonus Bet stake. Ex: If a $10 bonus bet is placed at +100 odds and wins, only the profit of $10 will be credited to the customer\u2019s account. Bonus Bets may not be combined with other bonus rewards and may not be eligible for use on all promotions and/or betting markets.\n\n**GENERAL TERMS**\n\nLimit one (1) offer per customer per day when offered. Customers must opt-in to this Promotion each time it is offered. Opting-in to this Promotion during a single day is only valid during that day and does not opt the customer into future periods. Reward substitutions or changes will be made in DraftKings's sole discretion. See DraftKings Sportsbook Terms of Use for information and limitations on wagering. Each customer will be notified when they have received an award by (1) a bell notification (this is a notification that displays as a bell icon on the home page of the DraftKings Sportsbook app and website that can be clicked on to view short confirmation copy and terms) and/or (2) an automatically triggered email if the customer successfully entered the promotion and completed the promotion requirements. Whether a customer has committed abuse of this Promotion, violated the Promotion Terms or DraftKings Terms of Use, will be determined by DraftKings in its sole discretion, for any reason or no reason at all. Should you wish to cancel your participation in this promotion at any time, please contact customer experience at [sportsbook@draftkings.com](mailto:sportsbook@draftkings.com). Upon cancellation, you may withdraw any remaining funds deposited in connection with this promotion subject to DraftKings Terms of Use. Any wager placed on DraftKings Sportsbook in connection with the promotion cannot be rescinded once it has been placed. However, any applicable bonus rewards in your account shall be void, subject to forfeiture, and may not be transferred or withdrawn. All promotions are subject to the DraftKings Terms of Use and Privacy Policy. By accepting any bonus rewards, registered customers agree to abide by the terms and conditions of this Promotion. Promotional offer is subject to regulatory approval. Void where prohibited by law. DraftKings account holders are responsible for any and all local, state, or federal taxes. DraftKings is not liable for computer or program malfunctions, nor for errors in bonus rewards. DraftKings reserves the right to exclude or remove certain customers from this Promotion, as well as the right to withhold bonus rewards if you have violated or attempted to violate the Promotion Terms or DraftKings Terms of Use, including but not limited to sharing account credentials with other individuals, placing wagers on behalf of other individuals, circumventing DraftKings age and location verification procedures, and abusing the DraftKings Platform, the Services, or any bonuses, the refer-a-friend program, or any other offers or promotions, including this Promotion, in any way.\n\nIf physically located in PA, this Promotion will comply with subsection \u00a7813.3 regarding cancellation in this Promotion by a customer. If in NY, if a customer is dissatisfied with any resolution between the customer and DraftKings, the customer may then submit an inquiry with the New York State Gaming Commission.\n\nSee DraftKings Terms of Use for information on eligibility for creating, using, and funding an interactive gaming account. DraftKings reserves the right to suspend, modify, and/or cancel this Promotion for any reason in its sole discretion. If you or someone you know has a gambling problem, help is available. Call 1-800-GAMBLER.",
+            "displayToLoggedOutUsers": true,
+            "loggedOutDescription": "Get a No Sweat bet to use on MLB Home Run bets today!",
+            "additionalDetail": "MAX REWARD: $10",
+            "loggedOutTerms": "Details:\n\n1. MLB games on Friday, July 31st\n2. Opt-In and apply your qualifying bet token to a MLB Home run Single, Parlay, SGP or SGPx bet. If the bet that you apply your Token to after opting in loses, we'll credit your bet back as a Bonus Bet.\n3. Max Rewards varies\n4. One qualifying bet per customer during the Promotional Period\n5. Wagering on this promotion must use funds from your cash balance or DK Dollars to qualify\n6. Qualifying token expires at the end of the final 7/31 MLB game\n7. Reward issued after qualifying bet settlement as non-withdrawable Bonus Bet that expires in 7 days after being received.\n8. Eligibility: Must be 21+ physically located in AR, AZ, CA-AB (18+), CA-ON (19+), CO, CT, DC (18+), IA, IL, IN, KS, KY, LA, MD, ME, MI, MO, NC, NH (18+), NJ, NY, OH, OR, PA, PR (18+), TN, VA, VT, WA, WV, or WY (18+)\n\nIneligible Bets:\n\nCash out bets, bonus bets, voided bets, profit boosts, and odds boosts\nWagers with legs on non-eligible games\n\n\n**FULL TERMS AND CONDITIONS**\n\nThank you for choosing to participate in this promotion (the \u201cPromotion\u201d) being offered by DraftKings. By entering or participating in the Promotion you hereby agree to be bound by these Promotion terms (the \u201cPromotion Terms\u201d). If you do not wish to be bound by the Promotion Terms, please do not enter or participate in the Promotion. If you have any questions regarding the Promotion or the Promotion Terms, or wish to cancel your participation in this Promotion, please contact [support@draftkings.com](mailto:support@draftkings.com) for more information.\n\n**PROMOTION REQUIREMENTS AND ELIGIBILITY**\n\nThe promotional offer is valid between 7/31/2026 at 02:00 AM Eastern Time (ET) and 7/31/2026 at 11:59 PM Eastern Time  (the \u201cPromotional Period\u201d). Must be physically located in AR, AZ, CO, CT, DC, IA, IL, IN, KS, KY, LA (select parishes), MD, ME, MI, MO, NC, NH, NY, NJ, OH, OR, PA, PR (residents only), TN, VA, VT, WA, WV, or WY (each an \"Eligible Jurisdiction\" or, collectively, the \"Eligible Jurisdictions\"). Must be 21+ years of age or older (18+ if in DC/NH/PR/WY) (19+ if in CA-ONT). Any customer who is found to be ineligible to play on DraftKings (i.e., by way of self-exclusion from gambling, restriction due to employment, or otherwise) may not participate in this Promotion and immediately forfeits any bonus rewards which have been awarded under this Promotion.\n\nIn addition to the eligibility requirements set forth above and in the DraftKings Terms of Use, to participate in the Promotion, customers must (1) be a registered DraftKings Sportsbook customer with an active account; (2) receive an offer to participate in this Promotion; and (3) opt-in by clicking the appropriate link/button within the Promotional Period each day when offered.\n\n**NO SWEAT BET REDEMPTION**\n\nUpon completion of the promotion requirements, eligible customers will be awarded one (1) No Sweat Bet (the \"Token\"). Token valid only for MLB Home run on 7/31 games (the \u201cQualifying Bet\u201d). All other bet types are excluded from this Promotion.\n\nCashed-out bets and voided bets will void this Promotion. Bets placed with bonus rewards (including but not limited to Bonus Bets, Odds Boosts/Surges, Profit Boosts, etc.) are not valid. Token expires at the end of the final 7/31 MLB game. Qualifying Bet must be placed using cash from your cash balance or DK Dollars.\n\nNo Sweat Bet Tokens are single-use, non-withdrawable, and have no cash value. Must meet Qualifying Bet criteria and select Token BEFORE placing Qualifying Bet. Token only applies to Qualifying Bet. Reward issued only if Qualifying Bet loses after applying Token. Reward issued as one (1) Bonus Bet based on the amount of losing Qualifying Bet. Maximum reward varies and will be clearly and conspicuously disclosed to customers prior to opting in. No Sweat Bets may not be combined with other bonus rewards and may not be eligible for use on all promotions and/or betting markets.\n\n**REWARD LIMITATIONS**\n\nBonus Bets are single-use, non-transferable, non-withdrawable, and have no cash value. Bonus Bets are valid for Single, Parlay, SGP, or SGPx bets on any sport. Customers can choose when to use Bonus Bets and must select the Bonus Bet in their betslip before placing a wager. Failure to use a Bonus Bet before expiration will void the reward. Payouts from Bonus Bet wagers will be transferred to the customer\u2019s cash balance and do not include the Bonus Bet stake. Ex: If a $10 bonus bet is placed at +100 odds and wins, only the profit of $10 will be credited to the customer\u2019s account. Bonus Bets may not be combined with other bonus rewards and may not be eligible for use on all promotions and/or betting markets.\n\n**GENERAL TERMS**\n\nLimit one (1) offer per customer per day when offered. Customers must opt-in to this Promotion each time it is offered. Opting-in to this Promotion during a single day is only valid during that day and does not opt the customer into future periods. Reward substitutions or changes will be made in DraftKings's sole discretion. See DraftKings Sportsbook Terms of Use for information and limitations on wagering. Each customer will be notified when they have received an award by (1) a bell notification (this is a notification that displays as a bell icon on the home page of the DraftKings Sportsbook app and website that can be clicked on to view short confirmation copy and terms) and/or (2) an automatically triggered email if the customer successfully entered the promotion and completed the promotion requirements. Whether a customer has committed abuse of this Promotion, violated the Promotion Terms or DraftKings Terms of Use, will be determined by DraftKings in its sole discretion, for any reason or no reason at all. Should you wish to cancel your participation in this promotion at any time, please contact customer experience at [sportsbook@draftkings.com](mailto:sportsbook@draftkings.com). Upon cancellation, you may withdraw any remaining funds deposited in connection with this promotion subject to DraftKings Terms of Use. Any wager placed on DraftKings Sportsbook in connection with the promotion cannot be rescinded once it has been placed. However, any applicable bonus rewards in your account shall be void, subject to forfeiture, and may not be transferred or withdrawn. All promotions are subject to the DraftKings Terms of Use and Privacy Policy. By accepting any bonus rewards, registered customers agree to abide by the terms and conditions of this Promotion. Promotional offer is subject to regulatory approval. Void where prohibited by law. DraftKings account holders are responsible for any and all local, state, or federal taxes. DraftKings is not liable for computer or program malfunctions, nor for errors in bonus rewards. DraftKings reserves the right to exclude or remove certain customers from this Promotion, as well as the right to withhold bonus rewards if you have violated or attempted to violate the Promotion Terms or DraftKings Terms of Use, including but not limited to sharing account credentials with other individuals, placing wagers on behalf of other individuals, circumventing DraftKings age and location verification procedures, and abusing the DraftKings Platform, the Services, or any bonuses, the refer-a-friend program, or any other offers or promotions, including this Promotion, in any way.\n\nIf physically located in PA, this Promotion will comply with subsection \u00a7813.3 regarding cancellation in this Promotion by a customer. If in NY, if a customer is dissatisfied with any resolution between the customer and DraftKings, the customer may then submit an inquiry with the New York State Gaming Commission.\n\nSee DraftKings Terms of Use for information on eligibility for creating, using, and funding an interactive gaming account. DraftKings reserves the right to suspend, modify, and/or cancel this Promotion for any reason in its sole discretion. If you or someone you know has a gambling problem, help is available. Call 1-800-GAMBLER.",
+            "useInformedOptIn": false,
+            "inlineDetails": {
+              "eventGroupId": "84240",
+              "displayGroupId": "7",
+              "promotionSubHeadline": "Get a No Sweat for MLB Home Run bets today!"
+            },
+            "isCarouselCtaButtonDisabled": false,
+            "imageCardHasTerms": true,
+            "promotionBackgroundImageHD": "https://sportsbook.draftkings.com/static/promos/images/20260723T025237_OSB_MLB_25-07.18.webp"
+          },
+          "userData": {
+            "statusId": 0,
+            "promotionDetailsButton": {
+              "text": "See Details",
+              "nativeDetailedViewUrl": "/mf/rewardcenter?view=PromotionDetailView&promotionId=1057284&action=terms&callingZone=UniversalPromoPage"
+            },
+            "promotionActionButton": {
+              "text": "Opt In",
+              "webRedirectUrl": "https://sportsbook.draftkings.com/leagues/baseball/mlb?category=games&subcategory=batter&nav_1=home-runs",
+              "nativeRedirectUrl": "dksb://sb/sport/7/league/84240?nav=PZEOIML",
+              "actionUrl": "/api/promotions/v3/promotions/1057284/optin?zoneName=UniversalPromoPage"
+            },
+            "termsViewActionButton": {
+              "text": "Opt In",
+              "webRedirectUrl": "https://sportsbook.draftkings.com/leagues/baseball/mlb?category=games&subcategory=batter&nav_1=home-runs",
+              "nativeRedirectUrl": "dksb://sb/sport/7/league/84240?nav=PZEOIML",
+              "actionUrl": "/api/promotions/v3/promotions/1057284/optin?zoneName=UniversalPromoPage"
+            }
+          },
+          "promotionalContent": [],
+          "isOptInPromotion": true,
+          "promotionTags": [],
+          "promotionMetadata": {},
+          "language": "en",
+          "verticalGroup": "Sports"
+        },
+        {
+          "promotionId": 1058540,
+          "publicPromotionId": "YWEYV1",
+          "startDate": "2026-07-31T06:30:00.0000000Z",
+          "expirationDate": "2026-08-01T03:59:00.0000000Z",
+          "productName": "Sportsbook",
+          "category": "Click to Claim",
+          "merchandisingData": {
+            "promotionHeadline": "MLB SGP(x) Boost",
+            "promotionDescription": "Get an SGP(x) Profit Boost for MLB today!",
+            "promotionImage": "https://sportsbook.draftkings.com/static/promos/images/20260603T023044_OSB_MLB_25-_CRM-Promos_240x200_PromoPage_2.webp",
+            "promotionBackgroundImage": "https://sportsbook.draftkings.com/static/promos/images/20260603T021250_OSB_MLB_25-_CRM-Promos_686x384_OfferCard_50.webp",
+            "autoRefreshBackgroundImage": false,
+            "promotionDetailsImage": "https://sportsbook.draftkings.com/static/promos/images/20260603T023115_OSB_MLB_25-_CRM-Promos_900x300_PromoPage_4.webp",
+            "terms": "- Opt-in and get One (1) Profit Boost for all MLB games on 7/31/2026\n- Profit Boost percentage varies (Profit boost only applies to winnings, excluding original bet amount)\n- Profit Boost Token only applies to a MLB SGP or SGPx bet. All other bet types are excluded from this promotion.\n    - Parlays minimum legs vary\n    - Total bet odds must be +300 or longer.\n    - Max betting limits apply\n- Profit Boost Token expires at the end of the final MLB game on 7/31/2026\n- You must select the Profit Boost Token in your betslip BEFORE placing the Qualifying Bet to apply the promotion.\n- Wagering on this promotion must use funds from your cash balance or DK Dollars. Bets placed with other bonus rewards are void. Cashed out bets and voided bets will void this promotion.\n- Eligibility: Must be 21+ and physically located in AR, AZ, CO, CT, IA, IL, IN, KS, KY, LA (select parishes), MA, MD, ME, MI, MO, NC, NJ, NY, OH, OR, PA, TN, VA, VT, WA, or WV. 18+ and physically located in DC/NH/PR (residents only)/WY/CA-AB. 19+ and physically located in CA-ONT.\n\nThank you for choosing to participate in this promotion (the \"Promotion\") being offered by DraftKings. By entering or participating in the Promotion you hereby agree to be bound by these Promotion terms (the \"Promotion Terms\"). If you do not wish to be bound by the Promotion Terms, please do not enter or participate in the Promotion. If you have any questions regarding the Promotion or the Promotion Terms, or wish to cancel your participation in this Promotion, please contact [support@draftkings.com](mailto:support@draftkings.com) for more information.\n\n**PROMOTION REQUIREMENTS AND ELIGIBILITY**\n\nThe promotional offer is valid between 7/31/2026 at 02:00 AM Eastern Time (ET) and the end of the final MLB game on 7/31/2026 (the \"Promotional Period\"). Must be physically located in CA-AB, CA-ONT, AR, AZ, CO, CT, DC, IA, IL, IN, KS, KY, LA (select parishes), MA, MD, ME, MI, MO, NC, NH, NJ, NY, OH, OR, PA, PR (residents only), TN, VA, VT, WA, WV, or WY (each an \"Eligible Jurisdiction\" or, collectively, the \"Eligible Jurisdictions\"). Must be 21+ years of age or older (18+ if in DC/NH/PR/WY/CA-AB) (19+ if in CA-ONT). Any customer who is found to be ineligible to play on DraftKings (i.e., by way of self-exclusion from gambling, restriction due to employment, or otherwise) may not participate in this Promotion and immediately forfeits any bonus rewards which have been awarded under this Promotion.\n\nIn addition to the eligibility requirements set forth above and in the DraftKings Terms of Use, to participate in the Promotion, customers must (1) be a registered DraftKings Sportsbook customer with an active account; (2) receive an offer to participate in this Promotion; and (3) if required, opt-in by clicking the appropriate link/button within the Promotional Period. Customers must be invited to receive this Promotion. Promotion is only valid for the intended recipient - customers who receive this offer via an email forward, screenshot, or other means shall not be eligible.\n\n**PROFIT BOOST REDEMPTION**\n\nUpon completion of the promotion requirements, eligible customers will be awarded One (1) Profit Boost Token (the \"Token\"). Token will boost Qualifying Bet. Token valid only for a MLB SGP or SGPx bet (the \"Qualifying Bet\"). Parlays minimum legs vary. Only eligible legs of the Qualifying Bet will receive a profit boost; any ineligible legs (including legs from non-eligible leagues, games, or sports) will not receive a boost. Qualifying Bet must have minimum odds of +300 or longer (+310, +350, +400, etc.). All other bet types are excluded from this Promotion. Maximum bet limits will be clearly and conspicuously disclosed to the customer upon opting in. Cashed-out bets and voided bets will void this Promotion. Bets placed with bonus rewards (including but not limited to Bonus Bets, Odds Boosts/Surges, Profit Boosts, etc.) are not valid. Token expires at the end of the final MLB game on 7/31/2026. Qualifying Bet must be placed using cash from your cash balance or DK Dollars.\n\n**PROFIT BOOST LIMITATIONS**\n\nProfit Boost Tokens are single-use and have no cash value. Token must be applied BEFORE placing bet. Profit boost is calculated on and only applies to net winnings (total payout less Qualifying Bet amount). Subject to any maximum bet limitations, there are no restrictions on the funds a customer will receive if their bet wins. Profit Boosts may not be combined with other bonus rewards and may not be eligible for use on all promotions and/or betting markets.\n\n**GENERAL TERMS**\n\nLimit One (1) redemption per customer. Reward substitutions or changes will be made in DraftKings's sole discretion. See DraftKings Sportsbook Terms of Use for information and limitations on wagering. Each customer will be notified when they have received an award by (1) a bell notification (this is a notification that displays as a bell icon on the home page of the DraftKings Sportsbook app and website that can be clicked on to view short confirmation copy and terms) and/or (2) an automatically triggered email if the customer successfully entered the promotion and completed the promotion requirements. Whether a customer has committed abuse of this Promotion, violated the Promotion Terms or DraftKings Terms of Use, will be determined by DraftKings in its sole discretion, for any reason or no reason at all.  Should you wish to cancel your participation in this promotion at any time, please contact customer experience at [sportsbook@draftkings.com](mailto:sportsbook@draftkings.com). Upon cancellation, you may withdraw any remaining funds deposited in connection with this promotion subject to DraftKings Terms of Use. Any wager placed on DraftKings Sportsbook in connection with the promotion cannot be rescinded once it has been placed. However, any applicable bonus rewards in your account shall be void, subject to forfeiture, and may not be transferred or withdrawn. All promotions are subject to the DraftKings Terms of Use and Privacy Policy. By accepting any bonus rewards, registered customers agree to abide by the terms and conditions of this Promotion. Promotional offer is subject to regulatory approval. Void where prohibited by law. DraftKings account holders are responsible for any and all local, state, or federal taxes. DraftKings is not liable for computer or program malfunctions, nor for errors in bonus rewards. DraftKings reserves the right to exclude or remove certain customers from this Promotion, as well as the right to withhold bonus rewards if you have violated or attempted to violate the Promotion Terms or DraftKings Terms of Use, including but not limited to sharing account credentials with other individuals, placing wagers on behalf of other individuals, circumventing DraftKings age and location verification procedures, and abusing the DraftKings Platform, the Services, or any bonuses, the refer-a-friend program, or any other offers or promotions, including this Promotion, in any way.\n\nIf physically located in PA, this Promotion will comply with subsection \u00a7813.3 regarding cancellation in this Promotion by a customer.\n\nIf in NY, if a customer is dissatisfied with any resolution between the customer and DraftKings, the customer may then submit an inquiry with the New York State Gaming Commission.\n\nSee DraftKings Terms of Use for information on eligibility for creating, using, and funding an interactive gaming account. DraftKings reserves the right to suspend, modify, and/or cancel this Promotion for any reason in its sole discretion. If you or someone you know has a gambling problem, help is available, Call 1-800-GAMBLER. In Canada: Concerned about your Gambling? Call ConnexOntario 1-866-531-2600.",
+            "displayToLoggedOutUsers": true,
+            "loggedOutDescription": "Get an SGP(x) Profit Boost for MLB today!",
+            "additionalDetail": "BOOSTED UP TO MAX $20 WAGER",
+            "loggedOutTerms": "- Opt-in and get One (1) Profit Boost for all MLB games on 7/31/2026\n- Profit Boost percentage varies (Profit boost only applies to winnings, excluding original bet amount)\n- Profit Boost Token only applies to a MLB SGP or SGPx bet. All other bet types are excluded from this promotion.\n    - Parlays minimum legs vary\n    - Total bet odds must be +300 or longer.\n    - Max betting limits apply\n- Profit Boost Token expires at the end of the final MLB game on 7/31/2026\n- You must select the Profit Boost Token in your betslip BEFORE placing the Qualifying Bet to apply the promotion.\n- Wagering on this promotion must use funds from your cash balance or DK Dollars. Bets placed with other bonus rewards are void. Cashed out bets and voided bets will void this promotion.\n- Eligibility: Must be 21+ and physically located in AR, AZ, CO, CT, IA, IL, IN, KS, KY, LA (select parishes), MA, MD, ME, MI, MO, NC, NJ, NY, OH, OR, PA, TN, VA, VT, WA, or WV. 18+ and physically located in DC/NH/PR (residents only)/WY/CA-AB. 19+ and physically located in CA-ONT.\n\nThank you for choosing to participate in this promotion (the \"Promotion\") being offered by DraftKings. By entering or participating in the Promotion you hereby agree to be bound by these Promotion terms (the \"Promotion Terms\"). If you do not wish to be bound by the Promotion Terms, please do not enter or participate in the Promotion. If you have any questions regarding the Promotion or the Promotion Terms, or wish to cancel your participation in this Promotion, please contact [support@draftkings.com](mailto:support@draftkings.com) for more information.\n\n**PROMOTION REQUIREMENTS AND ELIGIBILITY**\n\nThe promotional offer is valid between 7/31/2026 at 02:00 AM Eastern Time (ET) and the end of the final MLB game on 7/31/2026 (the \"Promotional Period\"). Must be physically located in CA-AB, CA-ONT, AR, AZ, CO, CT, DC, IA, IL, IN, KS, KY, LA (select parishes), MA, MD, ME, MI, MO, NC, NH, NJ, NY, OH, OR, PA, PR (residents only), TN, VA, VT, WA, WV, or WY (each an \"Eligible Jurisdiction\" or, collectively, the \"Eligible Jurisdictions\"). Must be 21+ years of age or older (18+ if in DC/NH/PR/WY/CA-AB) (19+ if in CA-ONT). Any customer who is found to be ineligible to play on DraftKings (i.e., by way of self-exclusion from gambling, restriction due to employment, or otherwise) may not participate in this Promotion and immediately forfeits any bonus rewards which have been awarded under this Promotion.\n\nIn addition to the eligibility requirements set forth above and in the DraftKings Terms of Use, to participate in the Promotion, customers must (1) be a registered DraftKings Sportsbook customer with an active account; (2) receive an offer to participate in this Promotion; and (3) if required, opt-in by clicking the appropriate link/button within the Promotional Period. Customers must be invited to receive this Promotion. Promotion is only valid for the intended recipient - customers who receive this offer via an email forward, screenshot, or other means shall not be eligible.\n\n**PROFIT BOOST REDEMPTION**\n\nUpon completion of the promotion requirements, eligible customers will be awarded One (1) Profit Boost Token (the \"Token\"). Token will boost Qualifying Bet. Token valid only for a MLB SGP or SGPx bet (the \"Qualifying Bet\"). Parlays minimum legs vary. Only eligible legs of the Qualifying Bet will receive a profit boost; any ineligible legs (including legs from non-eligible leagues, games, or sports) will not receive a boost. Qualifying Bet must have minimum odds of +300 or longer (+310, +350, +400, etc.). All other bet types are excluded from this Promotion. Maximum bet limits will be clearly and conspicuously disclosed to the customer upon opting in. Cashed-out bets and voided bets will void this Promotion. Bets placed with bonus rewards (including but not limited to Bonus Bets, Odds Boosts/Surges, Profit Boosts, etc.) are not valid. Token expires at the end of the final MLB game on 7/31/2026. Qualifying Bet must be placed using cash from your cash balance or DK Dollars.\n\n**PROFIT BOOST LIMITATIONS**\n\nProfit Boost Tokens are single-use and have no cash value. Token must be applied BEFORE placing bet. Profit boost is calculated on and only applies to net winnings (total payout less Qualifying Bet amount). Subject to any maximum bet limitations, there are no restrictions on the funds a customer will receive if their bet wins. Profit Boosts may not be combined with other bonus rewards and may not be eligible for use on all promotions and/or betting markets.\n\n**GENERAL TERMS**\n\nLimit One (1) redemption per customer. Reward substitutions or changes will be made in DraftKings's sole discretion. See DraftKings Sportsbook Terms of Use for information and limitations on wagering. Each customer will be notified when they have received an award by (1) a bell notification (this is a notification that displays as a bell icon on the home page of the DraftKings Sportsbook app and website that can be clicked on to view short confirmation copy and terms) and/or (2) an automatically triggered email if the customer successfully entered the promotion and completed the promotion requirements. Whether a customer has committed abuse of this Promotion, violated the Promotion Terms or DraftKings Terms of Use, will be determined by DraftKings in its sole discretion, for any reason or no reason at all.  Should you wish to cancel your participation in this promotion at any time, please contact customer experience at [sportsbook@draftkings.com](mailto:sportsbook@draftkings.com). Upon cancellation, you may withdraw any remaining funds deposited in connection with this promotion subject to DraftKings Terms of Use. Any wager placed on DraftKings Sportsbook in connection with the promotion cannot be rescinded once it has been placed. However, any applicable bonus rewards in your account shall be void, subject to forfeiture, and may not be transferred or withdrawn. All promotions are subject to the DraftKings Terms of Use and Privacy Policy. By accepting any bonus rewards, registered customers agree to abide by the terms and conditions of this Promotion. Promotional offer is subject to regulatory approval. Void where prohibited by law. DraftKings account holders are responsible for any and all local, state, or federal taxes. DraftKings is not liable for computer or program malfunctions, nor for errors in bonus rewards. DraftKings reserves the right to exclude or remove certain customers from this Promotion, as well as the right to withhold bonus rewards if you have violated or attempted to violate the Promotion Terms or DraftKings Terms of Use, including but not limited to sharing account credentials with other individuals, placing wagers on behalf of other individuals, circumventing DraftKings age and location verification procedures, and abusing the DraftKings Platform, the Services, or any bonuses, the refer-a-friend program, or any other offers or promotions, including this Promotion, in any way.\n\nIf physically located in PA, this Promotion will comply with subsection \u00a7813.3 regarding cancellation in this Promotion by a customer.\n\nIf in NY, if a customer is dissatisfied with any resolution between the customer and DraftKings, the customer may then submit an inquiry with the New York State Gaming Commission.\n\nSee DraftKings Terms of Use for information on eligibility for creating, using, and funding an interactive gaming account. DraftKings reserves the right to suspend, modify, and/or cancel this Promotion for any reason in its sole discretion. If you or someone you know has a gambling problem, help is available, Call 1-800-GAMBLER. In Canada: Concerned about your Gambling? Call ConnexOntario 1-866-531-2600.",
+            "useInformedOptIn": false,
+            "inlineDetails": {
+              "eventGroupId": "84240",
+              "displayGroupId": "7",
+              "promotionSubHeadline": "Get an SGP(x) Profit Boost for MLB today!"
+            },
+            "isCarouselCtaButtonDisabled": false,
+            "imageCardHasTerms": true,
+            "promotionBackgroundImageHD": "https://sportsbook.draftkings.com/static/promos/images/20260721T025635_OSB_MLB_25-_CRM-Promos_686x384_OfferCard%20(9).webp"
+          },
+          "userData": {
+            "statusId": 0,
+            "promotionDetailsButton": {
+              "text": "See Details",
+              "nativeDetailedViewUrl": "/mf/rewardcenter?view=PromotionDetailView&promotionId=1058540&action=terms&callingZone=UniversalPromoPage"
+            },
+            "promotionActionButton": {
+              "text": "Opt In",
+              "webRedirectUrl": "https://sportsbook.draftkings.com/leagues/7/84240",
+              "nativeRedirectUrl": "https://sportsbook.draftkings.com/leagues/7/84240",
+              "actionUrl": "/api/promotions/v3/promotions/1058540/optin?zoneName=UniversalPromoPage"
+            },
+            "termsViewActionButton": {
+              "text": "Opt In",
+              "webRedirectUrl": "https://sportsbook.draftkings.com/leagues/7/84240",
+              "nativeRedirectUrl": "https://sportsbook.draftkings.com/leagues/7/84240",
+              "actionUrl": "/api/promotions/v3/promotions/1058540/optin?zoneName=UniversalPromoPage"
+            }
+          },
+          "promotionalContent": [],
+          "isOptInPromotion": true,
+          "promotionTags": [],
+          "promotionMetadata": {
+            "GameId": "880ddce5-b558-4bec-a3c4-8c87930f8352",
+            "GamePlayId": "eca58023-54f1-46c7-9b9f-b26ec81fa11e",
+            "GameplanId": "24efdf83-82f4-4e22-9efd-7831ccee027c"
+          },
+          "language": "en",
+          "verticalGroup": "Sports"
+        },
+        {
+          "promotionId": 1057751,
+          "publicPromotionId": "1P2043",
+          "startDate": "2026-07-31T06:30:00.0000000Z",
+          "expirationDate": "2026-08-01T03:45:00.0000000Z",
+          "productName": "Sportsbook",
+          "category": "Click to Claim",
+          "merchandisingData": {
+            "promotionHeadline": "WNBA SGP(x) Boost",
+            "promotionDescription": "Get a Profit Boost to use on a WNBA SGP or SGPx bet today!",
+            "promotionImage": "https://sportsbook.draftkings.com/static/promos/images/20260603T045854_240x200_DK_OSB_WNBA_26-Season_Long_STQ_Suite_CRM-Promos_Generic_3.webp",
+            "promotionBackgroundImage": "https://sportsbook.draftkings.com/static/promos/images/20260624T012558_WNBA_30_Eng.webp",
+            "autoRefreshBackgroundImage": false,
+            "promotionDetailsImage": "https://sportsbook.draftkings.com/static/promos/images/20260603T045854_900x300_DK_OSB_WNBA_26-Season_Long_STQ_Suite_CRM-Promos_Generic_4.webp",
+            "terms": "- Opt-in and get One (1) Profit Boost for all WNBA games on 7/31/2026\n- Profit Boost percentage varies: (Profit boost only applies to winnings, excluding original bet amount)\n- Profit Boost Token only applies to a WNBA SGP or SGPx bet. All other bet types are excluded from this promotion.\n- Parlays min. leg req. apply.\n- Total bet odds req. apply.\n- Max bet limits apply\n- Profit Boost Token expires at the end of the final WNBA game on 7/31/2026\n- You must select the Profit Boost Token in your betslip BEFORE placing the Qualifying Bet to apply the promotion.\n- Wagering on this promotion must use funds from your cash balance or DK Dollars. Bets placed with other bonus rewards are void. Cashed out bets and voided bets will void this promotion.\n- Eligibility: Must be 21+ and physically located in AR, AZ, CO, CT, IA, IL, IN, KS, KY, LA (select parishes), MA, MD, ME, MI, MO, NC, NJ, NY, OH, OR, PA, TN, VA, VT, WA, or WV. 18+ and physically located in CA-AB/DC/NH/PR(residents only)/WY. 19+ and physically located in CA-ONT.\n\n\nThank you for choosing to participate in this promotion (the \"Promotion\") being offered by DraftKings. By entering or participating in the Promotion you hereby agree to be bound by these Promotion terms (the \"Promotion Terms\"). If you do not wish to be bound by the Promotion Terms, please do not enter or participate in the Promotion. If you have any questions regarding the Promotion or the Promotion Terms, or wish to cancel your participation in this Promotion, please contact [support@draftkings.com](mailto:support@draftkings.com) for more information.\n\n**PROMOTION REQUIREMENTS AND ELIGIBILITY**\n\nThe promotional offer is valid between 7/31/2026 at 02:00 AM Eastern Time (ET) and the end of the final WNBA game on 7/31/2026 (the \"Promotional Period\"). Must be physically located in CA-AB, CA-ONT, AR, AZ, CO, CT, DC, IA, IL, IN, KS, KY, LA (select parishes), MA, MD, ME, MI, MO, NC, NH, NJ, NY, OH, OR, PA, PR (residents only), TN, VA, VT, WA, WV, or WY (each an \"Eligible Jurisdiction\" or, collectively, the \"Eligible Jurisdictions\"). Must be 21+ years of age or older (18+ if in CA-AB/DC/NH/PR/WY) (19+ if in CA-ONT). Any customer who is found to be ineligible to play on DraftKings (i.e., by way of self-exclusion from gambling, restriction due to employment, or otherwise) may not participate in this Promotion and immediately forfeits any bonus rewards which have been awarded under this Promotion.\n\nIn addition to the eligibility requirements set forth above and in the DraftKings Terms of Use, to participate in the Promotion, customers must (1) be a registered DraftKings Sportsbook customer with an active account; (2) receive an offer to participate in this Promotion; and (3) if required, opt-in by clicking the appropriate link/button within the Promotional Period. Customers must be invited to receive this Promotion. Promotion is only valid for the intended recipient - customers who receive this offer via an email forward, screenshot, or other means shall not be eligible.\n\n**PROFIT BOOST REDEMPTION**\n\nUpon completion of the promotion requirements, eligible customers will be awarded One (1) Profit Boost Token (the \"Token\"). Token will boost Qualifying Bet profit. Token valid only for a WNBA SGP or SGPx bet (the \"Qualifying Bet\"). Parlays min. leg req. apply. Only eligible legs of the Qualifying Bet will receive a profit boost; any ineligible legs (including legs from non-eligible leagues, games, or sports) will not receive a boost. All other bet types are excluded from this Promotion. Total bet odds req. apply. Maximum betting limits will be clearly and visibly disclosed to the customer when opting in. Cashed-out bets and voided bets will void this Promotion. Bets placed with bonus rewards (including but not limited to Bonus Bets, Odds Boosts/Surges, Profit Boosts, etc.) are not valid. Token expires at the end of the final WNBA game on 7/31/2026. Qualifying Bet must be placed using cash from your cash balance or DK Dollars.\n\n**PROFIT BOOST LIMITATIONS**\n\nProfit Boost Tokens are single-use and have no cash value. Token must be applied BEFORE placing bet. Profit boost is calculated on and only applies to net winnings (total payout less Qualifying Bet amount). Subject to any maximum bet limitations, there are no restrictions on the funds a customer will receive if their bet wins. Profit Boosts may not be combined with other bonus rewards and may not be eligible for use on all promotions and/or betting markets.\n\n**GENERAL TERMS**\n\nLimit One (1) redemption per customer. Reward substitutions or changes will be made in DraftKings's sole discretion. See DraftKings Sportsbook Terms of Use for information and limitations on wagering. Each customer will be notified when they have received an award by (1) a bell notification (this is a notification that displays as a bell icon on the home page of the DraftKings Sportsbook app and website that can be clicked on to view short confirmation copy and terms) and/or (2) an automatically triggered email if the customer successfully entered the promotion and completed the promotion requirements. Whether a customer has committed abuse of this Promotion, violated the Promotion Terms or DraftKings Terms of Use, will be determined by DraftKings in its sole discretion, for any reason or no reason at all.  Should you wish to cancel your participation in this promotion at any time, please contact customer experience at [sportsbook@draftkings.com](mailto:sportsbook@draftkings.com). Upon cancellation, you may withdraw any remaining funds deposited in connection with this promotion subject to DraftKings Terms of Use. Any wager placed on DraftKings Sportsbook in connection with the promotion cannot be rescinded once it has been placed. However, any applicable bonus rewards in your account shall be void, subject to forfeiture, and may not be transferred or withdrawn. All promotions are subject to the DraftKings Terms of Use and Privacy Policy. By accepting any bonus rewards, registered customers agree to abide by the terms and conditions of this Promotion. Promotional offer is subject to regulatory approval. Void where prohibited by law. DraftKings account holders are responsible for any and all local, state, or federal taxes. DraftKings is not liable for computer or program malfunctions, nor for errors in bonus rewards. DraftKings reserves the right to exclude or remove certain customers from this Promotion, as well as the right to withhold bonus rewards if you have violated or attempted to violate the Promotion Terms or DraftKings Terms of Use, including but not limited to sharing account credentials with other individuals, placing wagers on behalf of other individuals, circumventing DraftKings age and location verification procedures, and abusing the DraftKings Platform, the Services, or any bonuses, the refer-a-friend program, or any other offers or promotions, including this Promotion, in any way.\n\nIf physically located in PA, this Promotion will comply with subsection \u00a7813.3 regarding cancellation in this Promotion by a customer.\n\nIf in NY, if a customer is dissatisfied with any resolution between the customer and DraftKings, the customer may then submit an inquiry with the New York State Gaming Commission.\n\nSee DraftKings Terms of Use for information on eligibility for creating, using, and funding an interactive gaming account. DraftKings reserves the right to suspend, modify, and/or cancel this Promotion for any reason in its sole discretion. If you or someone you know has a gambling problem, help is available, Call 1-800-GAMBLER. In Canada: Concerned about your Gambling? Call ConnexOntario 1-866-531-2600.",
+            "displayToLoggedOutUsers": true,
+            "loggedOutDescription": "Get a Profit Boost to use on a WNBA SGP or SGPx bet today!",
+            "additionalDetail": "BOOSTED UP TO MAX $20 WAGER",
+            "loggedOutTerms": "- Opt-in and get One (1) Profit Boost for all WNBA games on 7/31/2026\n- Profit Boost percentage varies: (Profit boost only applies to winnings, excluding original bet amount)\n- Profit Boost Token only applies to a WNBA SGP or SGPx bet. All other bet types are excluded from this promotion.\n- Parlays min. leg req. apply.\n- Total bet odds req. apply.\n- Max bet limits apply\n- Profit Boost Token expires at the end of the final WNBA game on 7/31/2026\n- You must select the Profit Boost Token in your betslip BEFORE placing the Qualifying Bet to apply the promotion.\n- Wagering on this promotion must use funds from your cash balance or DK Dollars. Bets placed with other bonus rewards are void. Cashed out bets and voided bets will void this promotion.\n- Eligibility: Must be 21+ and physically located in AR, AZ, CO, CT, IA, IL, IN, KS, KY, LA (select parishes), MA, MD, ME, MI, MO, NC, NJ, NY, OH, OR, PA, TN, VA, VT, WA, or WV. 18+ and physically located in CA-AB/DC/NH/PR(residents only)/WY. 19+ and physically located in CA-ONT.\n\n\nThank you for choosing to participate in this promotion (the \"Promotion\") being offered by DraftKings. By entering or participating in the Promotion you hereby agree to be bound by these Promotion terms (the \"Promotion Terms\"). If you do not wish to be bound by the Promotion Terms, please do not enter or participate in the Promotion. If you have any questions regarding the Promotion or the Promotion Terms, or wish to cancel your participation in this Promotion, please contact [support@draftkings.com](mailto:support@draftkings.com) for more information.\n\n**PROMOTION REQUIREMENTS AND ELIGIBILITY**\n\nThe promotional offer is valid between 7/31/2026 at 02:00 AM Eastern Time (ET) and the end of the final WNBA game on 7/31/2026 (the \"Promotional Period\"). Must be physically located in CA-AB, CA-ONT, AR, AZ, CO, CT, DC, IA, IL, IN, KS, KY, LA (select parishes), MA, MD, ME, MI, MO, NC, NH, NJ, NY, OH, OR, PA, PR (residents only), TN, VA, VT, WA, WV, or WY (each an \"Eligible Jurisdiction\" or, collectively, the \"Eligible Jurisdictions\"). Must be 21+ years of age or older (18+ if in CA-AB/DC/NH/PR/WY) (19+ if in CA-ONT). Any customer who is found to be ineligible to play on DraftKings (i.e., by way of self-exclusion from gambling, restriction due to employment, or otherwise) may not participate in this Promotion and immediately forfeits any bonus rewards which have been awarded under this Promotion.\n\nIn addition to the eligibility requirements set forth above and in the DraftKings Terms of Use, to participate in the Promotion, customers must (1) be a registered DraftKings Sportsbook customer with an active account; (2) receive an offer to participate in this Promotion; and (3) if required, opt-in by clicking the appropriate link/button within the Promotional Period. Customers must be invited to receive this Promotion. Promotion is only valid for the intended recipient - customers who receive this offer via an email forward, screenshot, or other means shall not be eligible.\n\n**PROFIT BOOST REDEMPTION**\n\nUpon completion of the promotion requirements, eligible customers will be awarded One (1) Profit Boost Token (the \"Token\"). Token will boost Qualifying Bet profit. Token valid only for a WNBA SGP or SGPx bet (the \"Qualifying Bet\"). Parlays min. leg req. apply. Only eligible legs of the Qualifying Bet will receive a profit boost; any ineligible legs (including legs from non-eligible leagues, games, or sports) will not receive a boost. All other bet types are excluded from this Promotion. Total bet odds req. apply. Maximum betting limits will be clearly and visibly disclosed to the customer when opting in. Cashed-out bets and voided bets will void this Promotion. Bets placed with bonus rewards (including but not limited to Bonus Bets, Odds Boosts/Surges, Profit Boosts, etc.) are not valid. Token expires at the end of the final WNBA game on 7/31/2026. Qualifying Bet must be placed using cash from your cash balance or DK Dollars.\n\n**PROFIT BOOST LIMITATIONS**\n\nProfit Boost Tokens are single-use and have no cash value. Token must be applied BEFORE placing bet. Profit boost is calculated on and only applies to net winnings (total payout less Qualifying Bet amount). Subject to any maximum bet limitations, there are no restrictions on the funds a customer will receive if their bet wins. Profit Boosts may not be combined with other bonus rewards and may not be eligible for use on all promotions and/or betting markets.\n\n**GENERAL TERMS**\n\nLimit One (1) redemption per customer. Reward substitutions or changes will be made in DraftKings's sole discretion. See DraftKings Sportsbook Terms of Use for information and limitations on wagering. Each customer will be notified when they have received an award by (1) a bell notification (this is a notification that displays as a bell icon on the home page of the DraftKings Sportsbook app and website that can be clicked on to view short confirmation copy and terms) and/or (2) an automatically triggered email if the customer successfully entered the promotion and completed the promotion requirements. Whether a customer has committed abuse of this Promotion, violated the Promotion Terms or DraftKings Terms of Use, will be determined by DraftKings in its sole discretion, for any reason or no reason at all.  Should you wish to cancel your participation in this promotion at any time, please contact customer experience at [sportsbook@draftkings.com](mailto:sportsbook@draftkings.com). Upon cancellation, you may withdraw any remaining funds deposited in connection with this promotion subject to DraftKings Terms of Use. Any wager placed on DraftKings Sportsbook in connection with the promotion cannot be rescinded once it has been placed. However, any applicable bonus rewards in your account shall be void, subject to forfeiture, and may not be transferred or withdrawn. All promotions are subject to the DraftKings Terms of Use and Privacy Policy. By accepting any bonus rewards, registered customers agree to abide by the terms and conditions of this Promotion. Promotional offer is subject to regulatory approval. Void where prohibited by law. DraftKings account holders are responsible for any and all local, state, or federal taxes. DraftKings is not liable for computer or program malfunctions, nor for errors in bonus rewards. DraftKings reserves the right to exclude or remove certain customers from this Promotion, as well as the right to withhold bonus rewards if you have violated or attempted to violate the Promotion Terms or DraftKings Terms of Use, including but not limited to sharing account credentials with other individuals, placing wagers on behalf of other individuals, circumventing DraftKings age and location verification procedures, and abusing the DraftKings Platform, the Services, or any bonuses, the refer-a-friend program, or any other offers or promotions, including this Promotion, in any way.\n\nIf physically located in PA, this Promotion will comply with subsection \u00a7813.3 regarding cancellation in this Promotion by a customer.\n\nIf in NY, if a customer is dissatisfied with any resolution between the customer and DraftKings, the customer may then submit an inquiry with the New York State Gaming Commission.\n\nSee DraftKings Terms of Use for information on eligibility for creating, using, and funding an interactive gaming account. DraftKings reserves the right to suspend, modify, and/or cancel this Promotion for any reason in its sole discretion. If you or someone you know has a gambling problem, help is available, Call 1-800-GAMBLER. In Canada: Concerned about your Gambling? Call ConnexOntario 1-866-531-2600.",
+            "useInformedOptIn": false,
+            "inlineDetails": {
+              "eventGroupId": "94682",
+              "displayGroupId": "2",
+              "promotionSubHeadline": "Get a Profit Boost to use on a WNBA SGP or SGPx bet today!"
+            },
+            "isCarouselCtaButtonDisabled": false,
+            "imageCardHasTerms": true,
+            "promotionBackgroundImageHD": "https://sportsbook.draftkings.com/static/promos/images/20260624T062019_686x384_DK_OSB_WNBA_26-Season%20Long%20STQ%20Suite%20_CRM-Promos_Generic.webp"
+          },
+          "userData": {
+            "statusId": 0,
+            "promotionDetailsButton": {
+              "text": "See Details",
+              "nativeDetailedViewUrl": "/mf/rewardcenter?view=PromotionDetailView&promotionId=1057751&action=terms&callingZone=UniversalPromoPage"
+            },
+            "promotionActionButton": {
+              "text": "Opt In",
+              "webRedirectUrl": "https://sportsbook.draftkings.com/leagues/2/94682",
+              "nativeRedirectUrl": "https://sportsbook.draftkings.com/leagues/2/94682",
+              "actionUrl": "/api/promotions/v3/promotions/1057751/optin?zoneName=UniversalPromoPage"
+            },
+            "termsViewActionButton": {
+              "text": "Opt In",
+              "webRedirectUrl": "https://sportsbook.draftkings.com/leagues/2/94682",
+              "nativeRedirectUrl": "https://sportsbook.draftkings.com/leagues/2/94682",
+              "actionUrl": "/api/promotions/v3/promotions/1057751/optin?zoneName=UniversalPromoPage"
+            }
+          },
+          "promotionalContent": [],
+          "isOptInPromotion": true,
+          "promotionTags": [],
+          "promotionMetadata": {
+            "Source": "Orchestration Tool"
+          },
+          "language": "en",
+          "verticalGroup": "Sports"
+        },
+        {
+          "promotionId": 1049909,
+          "publicPromotionId": "0KK209",
+          "startDate": "2026-07-27T04:00:00.0000000Z",
+          "expirationDate": "2026-08-01T03:59:59.0000000Z",
+          "productName": "Racing",
+          "category": "Bet and Get",
+          "merchandisingData": {
+            "promotionHeadline": "Weekly Bankroll Builder",
+            "promotionDescription": "Opt-In and Bet $100+ between Monday and Friday to get $10 bonus in DK Dollars.\n\nOpt-in required.\nAll tracks eligible.\nBonus awarded upon completion of $100 cumulative settled wagers.\nEligible dates: 7/27 - 7/31/2026",
+            "promotionImage": "https://sportsbook.draftkings.com/static/promos/images/20260517T020428_DKH_None_Updated%20Look_CRM_240x200_PromoPg_BAU.webp",
+            "autoRefreshBackgroundImage": false,
+            "promotionDetailsImage": "https://sportsbook.draftkings.com/static/promos/images/20260517T020446_DKH_None_Updated%20Look_CRM_900x300_PromoPg_xVert.webp",
+            "terms": "Thank you for choosing to participate in this promotion (the \u201cPromotion\u201d) being offered by DK Racing (or \"DraftKings\"). By entering or participating in the Promotion you hereby agree to be bound by these Promotion terms (the \u201cPromotion Terms,\u201d together with the DraftKings Terms of Use and General Rules, the \u201cTerms\u201d). If you do not wish to be bound by the Terms, please do not enter or participate in the Promotion. If you have any questions regarding the Promotion or the Promotion Terms, or wish to cancel your participation in this Promotion, please contact [support@draftkings](mailto:support@draftkings) for more information.\n\nPROMOTION AND ELIGIBILITY REQUIREMENTS\n\nThe promotional offer will be offered periodically to select customers between 7/27/2026 at 12:00 AM Eastern Time (ET) and 7/31/2026 at 11:59 PM ET (the \u201cPromotional Period\u201d). Must be a Resident of a jurisdiction in which DK Racing operates: DE, FL, LA, MT, NH, NM, OH, OR, RI, CO, CA, MA, WY, IL, NY or ID. Must be 18+ years of age or older.\n\nIn addition to the eligibility requirements set forth above and in the Terms, to participate in the Promotion, customers must: (1) be a resident of a jurisdiction in which DK Racing operates and meet the minimum age requirements; (2) have a valid DK Racing account or signup for a new DK Racing account; (3) opt-in to the promotion during the Promotional Period by clicking on the appropriate link/button; (4) place a Qualifying Wager by 7/31/2026 at 11:59 PM ET (the \u201cWager Period\u201d) to receive a reward.\n\nQUALIFYING WAGERS\n\nQualifying Wagers are wagers totaling $100 or more placed and settled during the Wager Period. You can choose to wager the required minimum all at once or place multiple smaller wagers. Qualifying Wager must be placed during the Wager Period and must settle, meaning that the race has run and the results are official. If a wager settles after the end of the Wager Period, it will not count as a Qualifying Wager. Qualifying Wager(s) excludes future wagers, canceled wagers and scratched runners (which will return the wager). Qualifying Wagers must be placed using cash from your cash balance or DK Dollars.\n\nBONUS REWARD REDEMPTION\n\nUpon completion of Qualifying Wager(s), customers will receive $10 paid as DK Dollars. Once the Qualifying Wager has settled, your account will be credited within 1 business day, or up to 3 calendar days if there are technical difficulties.\n\nBONUS REWARD LIMITATIONS\n\nDK Dollars are site credits that are single-use, non-transferable, non-withdrawable, and have no cash value. DK Dollars are used prior to any cash in your balance. DK Dollars do not expire and must be played or wagered 1x prior to withdrawal of winnings. For example, if you place a wager with $5 DK Dollars at +100 odds and win, you will receive a total of $10 in cash. Your $5 DK Dollars stake will be converted to cash, and you will receive your winnings as $5 cash. For DFS, your DK Dollars entry fee is not returned to your account, just like if you paid your DFS entry fee in cash. DK Dollars may not be combined with other bonus rewards, may not be eligible for use on all promotions and/or betting markets and contests. There are no restrictions or play-through requirements on winnings earned from DK Dollars. To learn more see [https://help.draftkings.com/hc/en-us/articles/4405232411539-What-are-DK-Dollars-](https://help.draftkings.com/hc/en-us/articles/4405232411539-What-are-DK-Dollars-)\n\nGENERAL TERMS\n\nLimit one per DK Horse customer. This Promotion cannot be used in conjunction with any other offer or promotion. See DK Horse Terms and Conditions for information and limitations on wagering. Should you wish to cancel your participation in this Promotion at any time, please contact customer experience at [support@draftkings.com](mailto:support@draftkings.com). Upon cancellation, you may withdraw any funds deposited in connection with this Promotion subject to DK Horse Terms and Conditions. All promotions are subject to the DK Horse Terms and Conditions and Privacy Policy. By accepting any bonus rewards and participating in this Promotion, registered players agree to abide by the terms and conditions of this Promotion. Promotional offer is subject to regulatory approval. Void where prohibited by law. DK Horse account holders are responsible for any and all applicable local, state, or federal taxes. DK Horse is not liable for computer or program malfunctions, nor for errors in bonus rewards. DK Horse reserves the right to exclude certain registered players from this Promotion, as well as the right to withhold the bonus reward if there is reason to suspect that their actions are fraudulent or, at DK Horse's sole discretion, it is determined that their actions are in violation of DK Horse's Terms and Conditions. To be eligible for this Promotion, players must be eligible to wager on DK Horse and must be resident of a jurisdiction in which DK Horse operates. Any player who is found to be ineligible to play on DK Horse immediately forfeits any bonus rewards which have been awarded. See DK Horse's Terms and Conditions for information on eligibility for creating, using, and funding an advance deposit wagering account. DK Horse reserves the right to cancel or amend this Promotion at any time without prior notice.",
+            "termsHighlights": "Opt-In required.\nBet $100+ on DraftKings Racing and get $10 in DK Dollars.\nBonus Reward issued following completion of $100 cumulative settled Racing wagers.\nAll tracks eligible.\nEligible Dates: Monday 7/27/26 - Friday 7/31/26",
+            "displayToLoggedOutUsers": false,
+            "useInformedOptIn": false,
+            "inlineDetails": {},
+            "isCarouselCtaButtonDisabled": false,
+            "imageCardHasTerms": true,
+            "promotionBackgroundImageHD": "https://sportsbook.draftkings.com/static/promos/images/20260701T070247_Bet100Get10_686x384.jpg"
+          },
+          "userData": {
+            "statusId": 0,
+            "promotionDetailsButton": {
+              "text": "See Details",
+              "nativeDetailedViewUrl": "/mf/rewardcenter?view=PromotionDetailView&promotionId=1049909&action=terms&callingZone=UniversalPromoPage"
+            },
+            "promotionActionButton": {
+              "text": "Opt-In",
+              "webRedirectUrl": "https://racing.draftkings.com/",
+              "nativeRedirectUrl": "https://racing.draftkings.com/",
+              "actionUrl": "/api/promotions/v3/promotions/1049909/optin?zoneName=UniversalPromoPage"
+            },
+            "termsViewActionButton": {
+              "text": "Opt-In",
+              "webRedirectUrl": "https://racing.draftkings.com/",
+              "nativeRedirectUrl": "https://racing.draftkings.com/",
+              "actionUrl": "/api/promotions/v3/promotions/1049909/optin?zoneName=UniversalPromoPage"
+            }
+          },
+          "promotionalContent": [],
+          "isOptInPromotion": true,
+          "promotionTags": [],
+          "promotionMetadata": {},
+          "language": "en",
+          "verticalGroup": "Racing"
+        },
+        {
+          "promotionId": 1057077,
+          "publicPromotionId": "78QNQX",
+          "startDate": "2026-07-31T04:00:00.0000000Z",
+          "expirationDate": "2026-08-01T03:59:59.0000000Z",
+          "productName": "Racing",
+          "category": "Bet and Get",
+          "merchandisingData": {
+            "promotionHeadline": "Track Bet Bonus",
+            "promotionDescription": "Bet $30 on all racing at Saratoga & Del Mar this Friday and Get $5 in DK Dollars",
+            "promotionImage": "https://sportsbook.draftkings.com/static/promos/images/20260330T021917_DKH_None_Updated%20Look_CRM_240x200_PromoPg_BAU.webp",
+            "autoRefreshBackgroundImage": false,
+            "promotionDetailsImage": "https://sportsbook.draftkings.com/static/promos/images/20260617T075411_OSBLook_900x300_InEmailBanner_KD.webp",
+            "terms": "- Min. cumulative wager amount of $30+\n- Eligible Track: Saratoga & Del Mar (All Races)\n- Eligible Date/Time, 12am-11:59pm on Friday 7/31/26\n- Bonus awarded upon settlement of wagers totaling min. cumulative $30",
+            "termsHighlights": "PROMOTION TERMS\n\nThank you for choosing to participate in this promotion (the \u201cPromotion\u201d) being offered by DraftKings Racing (or \"DraftKings\"). By entering or participating in the Promotion you hereby agree to be bound by these Promotion terms (the \u201cPromotion Terms,\u201d together with the DraftKings Terms of Use and General Rules, the \u201cTerms\u201d). If you do not wish to be bound by the Terms, please do not enter or participate in the Promotion. If you have any questions regarding the Promotion or the Promotion Terms, or wish to cancel your participation in this Promotion, please contact [support@draftkings.com](mailto:support@draftkings.com) for more information.\n\nPROMOTION AND ELIGIBILITY REQUIREMENTS\n\nThe Bet & Get Promotion is valid between 07/31/2026 at 12:00 AM Eastern Time (ET) and 07/31/2026 at 11:59 PM Eastern Time (ET) (the \"Promotional Period\"). Must be a Resident of a jurisdiction in which DraftKings Racing operates: available in select US States, please see [https://racing.draftkings.com/where-is-draftkings-racing-available](https://racing.draftkings.com/where-is-draftkings-racing-available). Must be 18+ years of age or older.\n\nIn addition to the eligibility requirements set forth above and in the Terms, to participate in the Promotion, customers must: (1) be a resident of a jurisdiction in which DraftKings Racing operates and meet the minimum age requirements; (2) have a valid DraftKings Racing account or signup for a new DraftKings Racing account; (3) opt-in to the promotion during the Promotional Period by clicking on the appropriate link/button; (4) place a Qualifying Wager (defined below) after opt-in to receive a reward.\n\nQUALIFYING WAGERS\n\nQualifying Wagers are ANY wagers totaling $30 or more on Eligible Race(s). Eligible Race(s) for this Promotion are:\n\n-All races at Saratoga Race Course & Del Mar on 7/31/26\n\nYou can choose to wager the required minimum all at once or place multiple smaller wagers. Qualifying Wager must be placed during the Promotional Period and must settle, meaning that the race has run and the results are official. If a wager settles after the end of the Promotional Period, it will not count as a Qualifying Wager. Qualifying Wager(s) excludes future wagers, canceled wagers and scratched runners (which will return the wager). Qualifying Wagers must be placed using cash from your cash balance or DK Dollars.\n\nBONUS REWARD REDEMPTION\n\nUpon completion of a Qualifying Wager, customers will receive $5 paid as DK Dollars. Once the Qualifying Wager has settled, your account will be credited within 1 business day, or up to 3 calendar days if there are technical difficulties.\n\nBONUS REWARD LIMITATIONS\n\nDK Dollars are site credits that are single-use, non-transferable, non-withdrawable, and have no cash value. DK Dollars are used prior to any cash in your balance. DK Dollars do not expire and must be played or wagered 1x prior to withdrawal of winnings. For example, if you place a wager with $5 DK Dollars at +100 odds and win, you will receive a total of $10 in cash. Your $5 DK Dollars stake will be converted to cash, and you will receive your winnings as $5 cash. For DFS, your DK Dollars entry fee is not returned to your account, just like if you paid your DFS entry fee in cash. DK Dollars may not be combined with other bonus rewards, may not be eligible for use on all promotions and/or betting markets and contests. There are no restrictions or play-through requirements on winnings earned from DK Dollars. To learn more see [https://help.draftkings.com/hc/en-us/articles/4405232411539-What-are-DK-Dollars-](https://help.draftkings.com/hc/en-us/articles/4405232411539-What-are-DK-Dollars-)\n\nGENERAL TERMS\n\nLimit one per customer. This Promotion cannot be used in conjunction with any other offer or promotion. See the Terms for information and limitations on wagering. Excludes future wagers, canceled wagers and scratched runners (which will return the wager). Should you wish to cancel your participation in this Promotion at any time, please contact customer experience at [support@draftkings.com](mailto:support@draftkings.com). Upon cancellation, you may withdraw any funds deposited in connection with this Promotion subject to Terms. All promotions are subject to the Terms and Privacy Policy. By accepting any bonus rewards and participating in this Promotion, registered players agree to abide by the Terms. Promotional offer is subject to regulatory approval. Void where prohibited by law. DraftKings account holders are responsible for any and all applicable local, state, or federal taxes. DraftKings is not liable for computer or program malfunctions, nor for errors in bonus rewards. DraftKings reserves the right to exclude certain registered players from this Promotion, as well as the right to withhold the bonus reward if there is reason to suspect that their actions are fraudulent or, at DraftKings's sole discretion, it is determined that their actions are in violation of the Terms. To be eligible for this Promotion, players must be eligible to wager on DraftKings Racing and must be resident of a jurisdiction in which DraftKings Racing operates. Any player who is found to be ineligible to play on DraftKings Racing immediately forfeits any bonus rewards which have been awarded. See the Terms for information on eligibility for creating, using, and funding an advance deposit wagering account. DraftKings reserves the right to cancel or amend this Promotion at any time without prior notice.",
+            "displayToLoggedOutUsers": false,
+            "useInformedOptIn": false,
+            "inlineDetails": {},
+            "isCarouselCtaButtonDisabled": false,
+            "imageCardHasTerms": true,
+            "promotionBackgroundImageHD": "https://sportsbook.draftkings.com/static/promos/images/20260728T033651_SARDMR_7.31%20(2).webp"
+          },
+          "userData": {
+            "statusId": 0,
+            "promotionDetailsButton": {
+              "text": "See Details",
+              "nativeDetailedViewUrl": "/mf/rewardcenter?view=PromotionDetailView&promotionId=1057077&action=terms&callingZone=UniversalPromoPage"
+            },
+            "promotionActionButton": {
+              "text": "Opt-In",
+              "webRedirectUrl": "https://racing.draftkings.com/tracks",
+              "nativeRedirectUrl": "https://racing.draftkings.com/tracks",
+              "actionUrl": "/api/promotions/v3/promotions/1057077/optin?zoneName=UniversalPromoPage"
+            },
+            "termsViewActionButton": {
+              "text": "Opt-In",
+              "webRedirectUrl": "https://racing.draftkings.com/tracks",
+              "nativeRedirectUrl": "https://racing.draftkings.com/tracks",
+              "actionUrl": "/api/promotions/v3/promotions/1057077/optin?zoneName=UniversalPromoPage"
+            }
+          },
+          "promotionalContent": [],
+          "isOptInPromotion": true,
+          "promotionTags": [],
+          "promotionMetadata": {},
+          "language": "en",
+          "verticalGroup": "Racing"
+        },
+        {
+          "promotionId": 1040861,
+          "publicPromotionId": "N55Q46",
+          "startDate": "2026-07-14T16:30:00.0000000Z",
+          "expirationDate": "2026-08-01T03:59:59.0000000Z",
+          "productName": "Racing",
+          "category": "Bet and Get",
+          "merchandisingData": {
+            "promotionHeadline": "Daily Racing Form All Access Race Cards",
+            "promotionDescription": "Opt-In and Bet $50 and get 5 All Access DRF Past Performances.\n\nUpon completion of $50+ cumulative wagered after opt in, receive code to redeem 5 All Access race cards courtesy of Daily Racing Form, available through July 31st.",
+            "promotionImage": "https://sportsbook.draftkings.com/static/promos/images/20260630T045858_DRFgeneric_240x200.webp",
+            "autoRefreshBackgroundImage": false,
+            "promotionDetailsImage": "https://sportsbook.draftkings.com/static/promos/images/20260630T045912_DRFgeneric900x300.webp",
+            "terms": "Opt-in Required. 1 per customer.\nThank you for choosing to participate in this promotion (the \u201cPromotion\u201d) being offered by DraftKings. By entering or participating in the Promotion you hereby agree to be bound by these Promotion terms (the \u201cPromotion Terms,\u201d together with the DraftKings and DK Racing Terms of Use and General Rules, the \u201cTerms\u201d). If you do not wish to be bound by the Promotion Terms, please do not enter or participate in the Promotion. If you have any questions regarding the Promotion or the Terms, or wish to cancel your participation in this Promotion, please contact [support@draftkings.com](mailto:support@draftkings.com) for more information.\n\nPROMOTION AND ELIGIBILITY REQUIREMENTS\n\nThe Promotion is valid between 7/14/2026 at 12:00 AM Eastern Time (ET) and 7/31/2026 at 11:59 PM Eastern Time (ET) (the \"Promotional Period\"). Must be a Resident of a jurisdiction in which DK Racing operates: DE, NM, RI, FL, LA, NH, OH, OR, MT, ID, CO, CA, MA, WY, IL, NY. Must be 18+ years of age or older.\n\nIn addition to the eligibility requirements set forth above and in the DK Racing Terms & Conditions, to participate in the Promotion, customers must: (1) be a resident of a jurisdiction in which DK Racing operates and meet the minimum age requirements; (2) have a valid DK Racing account or signup for a new DK Racing account; (3) opt-in to the promotion within the Promotional Period; (4) place Qualifying Bet(s) (Defined below) after opt-in.\n\nQUALIFYING BET\n\nA Qualifying Bet is a minimum of $50 on any DK Racing Market. The minimum $50 threshold may be reached with one or multiple bets, provided they are placed and settled within the Promotional Period.\n\nBONUS REWARD REDEMPTION\n\nUpon Qualifying Bet settlement, customers will receive access to Five(5) Daily Racing Form All Access Past Performances (the \u201cBonus Reward\u201d). Delivery of the Bonus Reward may take up to 72 hours following settlement of the Qualifying Bet. The VIP Package includes:\n\n5 All Access Past Performance Race cards\nLinks expire after July 31st, 2026\n\nBONUS REWARD LIMITATIONS\n\nBonus Reward issued via a unique link and information on how to use the Reward will be sent to the email address associated with your DraftKings account. Via the unique link, customers will receive a promo code that can be applied at checkout on the Daily Racing Form website.\n\nReward is non-transferable, has no cash value, cannot be redeemed for cash, credit, or past purchases, and must be redeemed by the expiration date provided at the time of issuance. DraftKings is not responsible for lost, delayed, or misdirected emails or communications related to Reward delivery.\n\nDaily Racing Form is not under DraftKings\u2019 control, and DraftKings will not be responsible for the content, functionality, availability, or terms of, or any link contained on, the Daily Racing Form platforms. Use of the Daily Racing Form website and services is subject to its own terms and privacy policies.\n\nGENERAL TERMS\n\nLimit one redemption per customer. This Promotion cannot be used in conjunction with any other offer or promotion. See the Terms for information and limitations on wagering. Excludes show and future wagers, canceled wagers and scratched runners (which will return the wager). Should you wish to cancel your participation in this Promotion at any time, please contact customer experience at [support@draftkings.com](mailto:support@draftkings.com). Upon cancellation, you may withdraw any funds deposited in connection with this Promotion subject to the Terms. All promotions are subject to the Terms and DraftKings Privacy Policy. By accepting any bonus rewards and participating in this Promotion, registered players agree to abide by the Terms. Promotional offer is subject to regulatory approval. Void where prohibited by law. DraftKings account holders are responsible for any and all applicable local, state, or federal taxes. DraftKings is not liable for computer or program malfunctions, nor for errors in bonus rewards. DraftKings reserves the right to exclude certain registered players from this Promotion, as well as the right to withhold the bonus reward if there is reason to suspect that their actions are fraudulent or, at DraftKings's sole discretion, it is determined that their actions are in violation of the Terms. To be eligible for this Promotion, players must be eligible to wager on DK Racing and must be resident of a jurisdiction in which DK Racing operates. Any player who is found to be ineligible to play on DK Racing immediately forfeits any bonus rewards which have been awarded. See the Terms for information on eligibility for creating, using, and funding an advance deposit wagering account. DraftKings reserves the right to cancel or amend this Promotion at any time without prior notice.\n\nGambling Problem? Call 1-800-GAMBLER.",
+            "termsHighlights": "Opt-In required. One per customer.\nBet $50+ on DraftKings Racing and get access to Five (5) DRF All Access Past Performances.\nBonus Reward issued via a unique link and information on how to use the Reward will be sent to the email address associated with your DraftKings account. Via the unique link, customers will receive a promo code that can be applied at checkout on the Daily Racing Form website.",
+            "displayToLoggedOutUsers": false,
+            "useInformedOptIn": false,
+            "inlineDetails": {},
+            "isCarouselCtaButtonDisabled": false,
+            "imageCardHasTerms": true,
+            "promotionBackgroundImageHD": "https://sportsbook.draftkings.com/static/promos/images/20260630T050948_DRF_July_SARBetGet_686x384.jpg"
+          },
+          "userData": {
+            "statusId": 0,
+            "promotionDetailsButton": {
+              "text": "See Details",
+              "nativeDetailedViewUrl": "/mf/rewardcenter?view=PromotionDetailView&promotionId=1040861&action=terms&callingZone=UniversalPromoPage"
+            },
+            "promotionActionButton": {
+              "text": "Opt-In",
+              "webRedirectUrl": "https://racing.draftkings.com/",
+              "nativeRedirectUrl": "https://racing.draftkings.com/",
+              "actionUrl": "/api/promotions/v3/promotions/1040861/optin?zoneName=UniversalPromoPage"
+            },
+            "termsViewActionButton": {
+              "text": "Opt-In",
+              "webRedirectUrl": "https://racing.draftkings.com/",
+              "nativeRedirectUrl": "https://racing.draftkings.com/",
+              "actionUrl": "/api/promotions/v3/promotions/1040861/optin?zoneName=UniversalPromoPage"
+            }
+          },
+          "promotionalContent": [],
+          "isOptInPromotion": true,
+          "promotionTags": [],
+          "promotionMetadata": {},
+          "language": "en",
+          "verticalGroup": "Racing"
+        },
+        {
+          "promotionId": 1001646,
+          "publicPromotionId": "JGYNQ1",
+          "startDate": "2026-06-12T16:30:00.0000000Z",
+          "expirationDate": "2027-07-10T04:00:00.0000000Z",
+          "productName": "Racing",
+          "category": "Offer Card Messaging",
+          "merchandisingData": {
+            "promotionHeadline": "Watch Live Horse Racing and Track your Bets!",
+            "promotionDescription": "Place your bets on the days races and watch live with DraftKings Racing right in the app!",
+            "promotionImage": "https://sportsbook.draftkings.com/static/promos/images/20260612T060437_DKH_None_Updated%20Look_CRM_240x200_PromoPg_BAU.webp",
+            "autoRefreshBackgroundImage": false,
+            "promotionDetailsImage": "https://sportsbook.draftkings.com/static/promos/images/20260612T060513_DKH_None_Updated%20Look_CRM_900x300_PromoPg_xVert.webp",
+            "terms": "Place your bets on the days races and watch live with DraftKings Racing right in the app!",
+            "termsHighlights": "Place your bets on the days races and watch live with DraftKings Racing right in the app!",
+            "displayToLoggedOutUsers": false,
+            "useInformedOptIn": false,
+            "inlineDetails": {},
+            "isCarouselCtaButtonDisabled": false,
+            "imageCardHasTerms": false,
+            "promotionBackgroundImageHD": "https://sportsbook.draftkings.com/static/promos/images/20260613T052642_WatchLiveEG_hitext_686x384.jpg"
+          },
+          "userData": {
+            "statusId": 0,
+            "promotionDetailsButton": {
+              "text": "See Details",
+              "nativeDetailedViewUrl": "/mf/rewardcenter?view=PromotionDetailView&promotionId=1001646&action=terms&callingZone=UniversalPromoPage"
+            },
+            "promotionActionButton": {
+              "text": "Bet Now!",
+              "webRedirectUrl": "https://racing.draftkings.com/tracks",
+              "nativeRedirectUrl": "https://racing.draftkings.com/tracks"
+            },
+            "termsViewActionButton": {
+              "text": "Bet Now!",
+              "webRedirectUrl": "https://racing.draftkings.com/tracks",
+              "nativeRedirectUrl": "https://racing.draftkings.com/tracks"
+            }
+          },
+          "promotionalContent": [],
+          "isOptInPromotion": false,
+          "promotionTags": [],
+          "promotionMetadata": {},
+          "language": "en",
+          "verticalGroup": "Racing"
+        },
+        {
+          "promotionId": 1020206,
+          "publicPromotionId": "3VO42Z",
+          "startDate": "2026-06-12T16:30:00.0000000Z",
+          "expirationDate": "2027-07-10T04:00:00.0000000Z",
+          "productName": "Racing",
+          "category": "Offer Card Messaging",
+          "merchandisingData": {
+            "promotionHeadline": "It's More Fun, When It's For Fun",
+            "promotionDescription": "Click here to review Responsible Gaming guidelines and resources!",
+            "promotionImage": "https://sportsbook.draftkings.com/static/promos/images/20260612T060437_DKH_None_Updated%20Look_CRM_240x200_PromoPg_BAU.webp",
+            "autoRefreshBackgroundImage": false,
+            "promotionDetailsImage": "https://sportsbook.draftkings.com/static/promos/images/20260612T060513_DKH_None_Updated%20Look_CRM_900x300_PromoPg_xVert.webp",
+            "terms": "Click here to review Responsible Gaming guidelines and resources!",
+            "termsHighlights": "Click here to review Responsible Gaming guidelines and resources!",
+            "displayToLoggedOutUsers": false,
+            "useInformedOptIn": false,
+            "inlineDetails": {},
+            "isCarouselCtaButtonDisabled": false,
+            "imageCardHasTerms": false,
+            "promotionBackgroundImageHD": "https://sportsbook.draftkings.com/static/promos/images/20260626T064533_AllGreen_RG_686x384.jpg"
+          },
+          "userData": {
+            "statusId": 0,
+            "promotionDetailsButton": {
+              "text": "See Details",
+              "nativeDetailedViewUrl": "/mf/rewardcenter?view=PromotionDetailView&promotionId=1020206&action=terms&callingZone=UniversalPromoPage"
+            },
+            "promotionActionButton": {
+              "text": "Learn More",
+              "webRedirectUrl": "https://rg.draftkings.com/sa/?intendedSiteExp=RACING",
+              "nativeRedirectUrl": "https://rg.draftkings.com/sa/?intendedSiteExp=RACING"
+            },
+            "termsViewActionButton": {
+              "text": "Learn More",
+              "webRedirectUrl": "https://rg.draftkings.com/sa/?intendedSiteExp=RACING",
+              "nativeRedirectUrl": "https://rg.draftkings.com/sa/?intendedSiteExp=RACING"
+            }
+          },
+          "promotionalContent": [],
+          "isOptInPromotion": false,
+          "promotionTags": [],
+          "promotionMetadata": {},
+          "language": "en",
+          "verticalGroup": "Racing"
+        },
+        {
+          "promotionId": 882364,
+          "publicPromotionId": "Y7049E",
+          "startDate": "2026-03-30T14:00:00.0000000Z",
+          "expirationDate": "2027-06-30T14:00:59.0000000Z",
+          "productName": "Racing",
+          "category": "Refer a Friend",
+          "merchandisingData": {
+            "promotionHeadline": "Refer a Friend!",
+            "promotionDescription": "Refer a Friend to DraftKings Sportsbook to get them in on the action!",
+            "promotionImage": "https://sportsbook.draftkings.com/static/promos/images/20260326T044314_DKH_None_Updated%20Look_CRM_240x200_PromoPg_RAF.webp",
+            "promotionBackgroundImage": "https://sportsbook.draftkings.com/static/promos/images/20240820T072854_OSB_NFL_RAFNewSeason_CRM_Promos_OfferCard_335x175_KevinHart_BonusBetUpTo100_Audience2_OSBStates.png",
+            "autoRefreshBackgroundImage": false,
+            "promotionDetailsImage": "https://sportsbook.draftkings.com/static/promos/images/20260326T044320_DKH_None_Updated%20Look_CRM_900x300_PromoPg_RAF.webp",
+            "terms": "Please log in or sign up to view terms and conditions.",
+            "displayToLoggedOutUsers": true,
+            "loggedOutDescription": "Refer a Friend to DraftKings Sportsbook to get them in on the action!",
+            "useInformedOptIn": false,
+            "inlineDetails": {},
+            "isCarouselCtaButtonDisabled": true,
+            "imageCardHasTerms": true,
+            "promotionBackgroundImageHD": "https://sportsbook.draftkings.com/static/promos/images/20260326T044305_DKH_None_Updated%20Look_CRM_686x384_OfferCard_RAF.webp"
+          },
+          "userData": {
+            "statusId": 0,
+            "promotionDetailsButton": {
+              "text": "See Details",
+              "nativeDetailedViewUrl": "/mf/rewardcenter?view=PromotionDetailView&promotionId=882364&action=terms&callingZone=UniversalPromoPage"
+            },
+            "promotionActionButton": {
+              "text": "Refer Now",
+              "webRedirectUrl": "https://racing.draftkings.com/refer",
+              "nativeRedirectUrl": "https://racing.draftkings.com/refer"
+            },
+            "termsViewActionButton": {
+              "text": "Refer Now",
+              "webRedirectUrl": "https://racing.draftkings.com/refer",
+              "nativeRedirectUrl": "https://racing.draftkings.com/refer"
+            }
+          },
+          "promotionalContent": [],
+          "isOptInPromotion": false,
+          "promotionTags": [
+            {
+              "tagId": 8,
+              "tagName": "ReferAFriend"
+            }
+          ],
+          "promotionMetadata": {},
+          "language": "en",
+          "verticalGroup": "Racing"
+        },
+        {
+          "promotionId": 782037,
+          "publicPromotionId": "NY0W78",
+          "startDate": "2025-12-18T16:05:00.0000000Z",
+          "expirationDate": "2027-04-01T03:59:59.0000000Z",
+          "productName": "Sportsbook",
+          "category": "Refer a Friend",
+          "merchandisingData": {
+            "promotionHeadline": "Refer a Friend!",
+            "promotionDescription": "Refer a Friend to DraftKings Sportsbook to get them in on the action!",
+            "promotionImage": "https://sportsbook.draftkings.com/static/promos/images/20260720T033220_OSB_MLB_26-Season%20Opener_RAF_Static_PromoPage_240x200.webp",
+            "promotionBackgroundImage": "https://sportsbook.draftkings.com/static/promos/images/20240820T072854_OSB_NFL_RAFNewSeason_CRM_Promos_OfferCard_335x175_KevinHart_BonusBetUpTo100_Audience2_OSBStates.png",
+            "autoRefreshBackgroundImage": false,
+            "promotionDetailsImage": "https://sportsbook.draftkings.com/static/promos/images/20260720T033222_OSB_MLB_26-Season%20Opener_RAF_Static_900x300_PromoPageTerms.webp",
+            "terms": "Please log in or sign up to view terms and conditions.",
+            "displayToLoggedOutUsers": true,
+            "loggedOutDescription": "Refer a Friend to DraftKings Sportsbook to get them in on the action!",
+            "useInformedOptIn": false,
+            "inlineDetails": {},
+            "isCarouselCtaButtonDisabled": true,
+            "imageCardHasTerms": true,
+            "promotionBackgroundImageHD": "https://sportsbook.draftkings.com/static/promos/images/20260720T033230_OSB_MLB_26-Season%20Opener_RAF_Static_686x384_OfferCard_No%20Offer.webp"
+          },
+          "userData": {
+            "statusId": 0,
+            "promotionDetailsButton": {
+              "text": "See Details",
+              "nativeDetailedViewUrl": "/mf/rewardcenter?view=PromotionDetailView&promotionId=782037&action=terms&callingZone=UniversalPromoPage"
+            },
+            "promotionActionButton": {
+              "text": "Refer Now",
+              "webRedirectUrl": "https://sportsbook.draftkings.com/refer/",
+              "nativeRedirectUrl": "dksb://sb/referafriend"
+            },
+            "termsViewActionButton": {
+              "text": "Refer Now",
+              "webRedirectUrl": "https://sportsbook.draftkings.com/refer/",
+              "nativeRedirectUrl": "dksb://sb/referafriend"
+            }
+          },
+          "promotionalContent": [],
+          "isOptInPromotion": false,
+          "promotionTags": [
+            {
+              "tagId": 8,
+              "tagName": "ReferAFriend"
+            }
+          ],
+          "promotionMetadata": {},
+          "language": "en",
+          "verticalGroup": "Sports"
+        },
+        {
+          "promotionId": 600295,
+          "publicPromotionId": "67V9Q1",
+          "startDate": "2025-09-18T21:57:30.0000000Z",
+          "expirationDate": "2028-02-29T08:00:00.0000000Z",
+          "productName": "Sportsbook",
+          "category": "Exclusive",
+          "merchandisingData": {
+            "promotionHeadline": "Join our Sportsbook Discord",
+            "promotionDescription": "Unlock exclusive prizes and giveaways, early access to news and promotions, direct access to the DraftKings team and a community of fans to celebrate wins and talk sport by linking your account!",
+            "promotionImage": "https://sportsbook.draftkings.com/static/promos/images/20250918T101848_OSB_GEN_DiscordCommunityLaunch_CRM_Promos_Static_240x200_PromoPage.webp",
+            "autoRefreshBackgroundImage": false,
+            "promotionDetailsImage": "https://sportsbook.draftkings.com/static/promos/images/20250918T101843_OSB_GEN_DiscordCommunityLaunch_CRM_Promos_Static_900x300_PromoPageTerms.webp",
+            "displayToLoggedOutUsers": false,
+            "useInformedOptIn": false,
+            "inlineDetails": {
+              "eventGroupId": "88808",
+              "displayGroupId": "3"
+            },
+            "isCarouselCtaButtonDisabled": false,
+            "imageCardHasTerms": true,
+            "promotionBackgroundImageHD": "https://sportsbook.draftkings.com/static/promos/images/20250918T101824_dISOCRD.OSB.webp"
+          },
+          "userData": {
+            "statusId": 0,
+            "promotionDetailsButton": {
+              "text": "See Details",
+              "nativeDetailedViewUrl": "/mf/rewardcenter?view=PromotionDetailView&promotionId=600295&action=terms&callingZone=UniversalPromoPage"
+            },
+            "promotionActionButton": {
+              "text": "Link Now",
+              "webRedirectUrl": "https://myaccount.draftkings.com/accountcenter/linked-accounts",
+              "nativeRedirectUrl": "dksb://sb/account/linkedaccounts"
+            },
+            "termsViewActionButton": {
+              "text": "Link Now",
+              "webRedirectUrl": "https://myaccount.draftkings.com/accountcenter/linked-accounts",
+              "nativeRedirectUrl": "dksb://sb/account/linkedaccounts"
+            }
+          },
+          "promotionalContent": [
+            {
+              "contentType": "None",
+              "views": []
+            }
+          ],
+          "isOptInPromotion": false,
+          "promotionTags": [],
+          "promotionMetadata": {},
+          "language": "en",
+          "verticalGroup": "Sports"
+        },
+        {
+          "promotionId": 664047,
+          "publicPromotionId": "6E22O4",
+          "startDate": "2025-09-09T05:00:00.0000000Z",
+          "expirationDate": "2026-09-16T03:59:00.0000000Z",
+          "productName": "Sportsbook",
+          "category": "Responsible Gaming",
+          "merchandisingData": {
+            "promotionHeadline": "MY BUDGET BUILDER",
+            "promotionDescription": "Smart play starts with a solid budget.",
+            "promotionImage": "https://sportsbook.draftkings.com/static/promos/images/20251010T100614_PA_WNBA__RG_240x200_PromoPage.webp",
+            "promotionBackgroundImage": "https://sportsbook.draftkings.com/static/promos/images/20240820T072854_OSB_NFL_RAFNewSeason_CRM_Promos_OfferCard_335x175_KevinHart_BonusBetUpTo100_Audience2_OSBStates.png",
+            "autoRefreshBackgroundImage": false,
+            "promotionDetailsImage": "https://sportsbook.draftkings.com/static/promos/images/20251010T100622_PA_NFL__RG_900x300_PromoPage.webp",
+            "displayToLoggedOutUsers": false,
+            "useInformedOptIn": false,
+            "inlineDetails": {},
+            "isCarouselCtaButtonDisabled": true,
+            "imageCardHasTerms": true,
+            "promotionBackgroundImageHD": "https://sportsbook.draftkings.com/static/promos/images/20251010T100627_PA_NFL_Budget%20Builder_RG_686x384_OfferCard.webp"
+          },
+          "userData": {
+            "statusId": 0,
+            "promotionDetailsButton": {
+              "text": "See Details",
+              "nativeDetailedViewUrl": "/mf/rewardcenter?view=PromotionDetailView&promotionId=664047&action=terms&callingZone=UniversalPromoPage"
+            },
+            "promotionActionButton": {
+              "text": "SET A BUDGET",
+              "webRedirectUrl": "https://rg.draftkings.com/my-budget-builder?product=sportsbook",
+              "nativeRedirectUrl": "https://rg.draftkings.com/my-budget-builder?product=sportsbook"
+            },
+            "termsViewActionButton": {
+              "text": "SET A BUDGET",
+              "webRedirectUrl": "https://rg.draftkings.com/my-budget-builder?product=sportsbook",
+              "nativeRedirectUrl": "https://rg.draftkings.com/my-budget-builder?product=sportsbook"
+            }
+          },
+          "promotionalContent": [
+            {
+              "contentType": "None",
+              "views": []
+            }
+          ],
+          "isOptInPromotion": false,
+          "promotionTags": [],
+          "promotionMetadata": {},
+          "language": "en",
+          "verticalGroup": "Sports"
+        },
+        {
+          "promotionId": 820401,
+          "publicPromotionId": "86NR7P",
+          "startDate": "2026-02-02T05:00:00.0000000Z",
+          "expirationDate": "2027-01-01T04:59:00.0000000Z",
+          "productName": "Casino",
+          "category": "Casino",
+          "merchandisingData": {
+            "promotionHeadline": "Casino Education Hub",
+            "promotionDescription": "Learn the basics of all things casino, from bonus offers to game mechanics!",
+            "promotionImage": "https://sportsbook.draftkings.com/static/promos/images/20260202T092250_Thumbnail%20-%20Casino%20Education%20-%20240%20x%20200.webp",
+            "autoRefreshBackgroundImage": false,
+            "promotionDetailsImage": "https://sportsbook.draftkings.com/static/promos/images/20260202T092253_Banner%20-%20Casino%20Education%20-%20900%20x%20300.webp",
+            "terms": "Please log in or sign up to view terms and conditions.",
+            "displayToLoggedOutUsers": true,
+            "loggedOutDescription": "Learn the basics of all things casino, from bonus offers to game mechanics!",
+            "useInformedOptIn": false,
+            "inlineDetails": {},
+            "isCarouselCtaButtonDisabled": false,
+            "imageCardHasTerms": false,
+            "promotionBackgroundImageHD": "https://sportsbook.draftkings.com/static/promos/images/20251120T065601_718x416_OfferCard_NGF.webp"
+          },
+          "userData": {
+            "statusId": 0,
+            "promotionDetailsButton": {
+              "text": "See Details",
+              "nativeDetailedViewUrl": "/mf/rewardcenter?view=PromotionDetailView&promotionId=820401&action=terms&callingZone=UniversalPromoPage"
+            },
+            "promotionActionButton": {
+              "text": "Learn More",
+              "webRedirectUrl": "https://casino.draftkings.com/how-to-play-casino-games",
+              "nativeRedirectUrl": "https://casino.draftkings.com/how-to-play-casino-games"
+            },
+            "termsViewActionButton": {
+              "text": "Learn More",
+              "webRedirectUrl": "https://casino.draftkings.com/how-to-play-casino-games",
+              "nativeRedirectUrl": "https://casino.draftkings.com/how-to-play-casino-games"
+            }
+          },
+          "promotionalContent": [],
+          "isOptInPromotion": false,
+          "promotionTags": [],
+          "promotionMetadata": {},
+          "language": "en",
+          "verticalGroup": "Casino"
+        }
+      ],
+      "zoneIdentifierId": "1"
+    }
+  ]
+}

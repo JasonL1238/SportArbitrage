@@ -43,7 +43,7 @@ class _HttpResponse:
 
 
 class ImpersonatedSession:
-    """Chrome-fingerprinted session with an httpx-like ``get`` / ``close``."""
+    """Chrome-fingerprinted session with an httpx-like ``get`` / ``post`` / ``close``."""
 
     def __init__(
         self,
@@ -74,13 +74,42 @@ class ImpersonatedSession:
         params: Mapping[str, Any] | None = None,
         headers: Mapping[str, str] | None = None,
     ) -> _HttpResponse:
-        response = self._session.get(
-            url,
-            params=None if params is None else dict(params),
-            headers=dict(headers or {}),
-            timeout=self._timeout,
-            allow_redirects=True,
+        return self._request("GET", url, params=params, headers=headers)
+
+    def post(
+        self,
+        url: str,
+        *,
+        params: Mapping[str, Any] | None = None,
+        headers: Mapping[str, str] | None = None,
+        json: Any = None,
+        data: Any = None,
+    ) -> _HttpResponse:
+        return self._request(
+            "POST", url, params=params, headers=headers, json=json, data=data
         )
+
+    def _request(
+        self,
+        method: str,
+        url: str,
+        *,
+        params: Mapping[str, Any] | None = None,
+        headers: Mapping[str, str] | None = None,
+        json: Any = None,
+        data: Any = None,
+    ) -> _HttpResponse:
+        kwargs: dict[str, Any] = {
+            "params": None if params is None else dict(params),
+            "headers": dict(headers or {}),
+            "timeout": self._timeout,
+            "allow_redirects": True,
+        }
+        if json is not None:
+            kwargs["json"] = json
+        if data is not None:
+            kwargs["data"] = data
+        response = self._session.request(method.upper(), url, **kwargs)
         # curl_cffi may leave the request URL without the encoded query; rebuild
         # so envelopes store what was actually asked for.
         final_url = str(response.url)

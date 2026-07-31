@@ -498,8 +498,11 @@ td.wrap { white-space: normal; min-width: 22ch; }
   display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
   margin-bottom: 10px;
 }
-.screen-toolbar select { width: auto; min-width: 140px; }
+.screen-toolbar select,
+.screen-toolbar input[type="search"] { width: auto; min-width: 140px; }
+.screen-toolbar input[type="search"] { flex: 1 1 180px; min-width: 180px; }
 .screen-toolbar .eyebrow { margin-right: 2px; }
+.screen-toolbar .eyebrow.trail { margin-left: auto; }
 .oj-board { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 12.5px; }
 .oj-board thead th {
   position: sticky; top: 0; z-index: 2; background: var(--surface);
@@ -958,8 +961,20 @@ BODY = """
       <header>
         <h2>Games</h2>
         <p>Click a game for every market side by side. Prefer Odds for the full board.
-        Filter sport in the sidebar; filter league on Odds.</p>
+        Sport lives in the sidebar; use the filters below to narrow the slate.</p>
       </header>
+      <div class="screen-toolbar" id="events-toolbar">
+        <input type="search" id="events-q" placeholder="team or game&hellip;" aria-label="Filter games by team" />
+        <label class="eyebrow" for="events-league">League</label>
+        <select id="events-league" aria-label="Filter games by league">
+          <option value="">every league</option>
+        </select>
+        <label class="eyebrow" for="events-book">Book</label>
+        <select id="events-book" aria-label="Filter games by book">
+          <option value="">any book</option>
+        </select>
+        <span class="eyebrow trail" id="events-filter-note"></span>
+      </div>
       <div class="card">
         <div class="card-head">
           <h3>Pick a game</h3>
@@ -2299,8 +2314,6 @@ function priceCell(q, bestNet, comparable) {
 }
 
 function buildLeaguePicker() {
-  const pick = el('league-pick');
-  if (!pick) return;
   const leagues = [...new Set(runRows().map((r) => str(r[COL.league])).filter(Boolean))].sort();
   const sportFiltered = currentSport
     ? leagues.filter((lg) => runRows().some((r) =>
@@ -2309,17 +2322,26 @@ function buildLeaguePicker() {
   // Clear when the chosen league is not offered under the current sport filter —
   // otherwise the select shows "every league" while rows stay filtered empty.
   if (currentLeague && !sportFiltered.includes(currentLeague)) currentLeague = '';
-  pick.innerHTML = ['<option value="">every league</option>'].concat(
+  const html = ['<option value="">every league</option>'].concat(
     sportFiltered.map((lg) =>
       `<option value="${escapeHtml(lg)}">${escapeHtml(leagueLabel(lg))}</option>`)
   ).join('');
-  pick.value = currentLeague;
-  if (!pick.dataset.bound) {
-    pick.dataset.bound = '1';
-    pick.addEventListener('change', () => {
-      currentLeague = pick.value;
-      renderOddsScreen();
-    });
+  // Odds and Games share one league choice so narrowing the slate sticks when
+  // you flip between the two boards.
+  for (const id of ['league-pick', 'events-league']) {
+    const pick = el(id);
+    if (!pick) continue;
+    pick.innerHTML = html;
+    pick.value = currentLeague;
+    if (!pick.dataset.bound) {
+      pick.dataset.bound = '1';
+      pick.addEventListener('change', () => {
+        currentLeague = pick.value;
+        buildLeaguePicker();
+        renderOddsScreen();
+        renderEvents();
+      });
+    }
   }
 }
 
@@ -2438,20 +2460,23 @@ function renderOddsScreen() {
   });
 }
 
-function renderBrowseGames(node, noteNode) {
-  const events = eventSummaries(currentRows());
+function renderBrowseGames(node, noteNode, events) {
+  events = events || eventSummaries(currentRows());
   if (!events.length) {
     const run = runById.get(currentRunId);
     const thin = run && (run.quote_count || 0) > 0 && !detailLoaded(currentRunId);
+    const filteredOut = !thin && eventSummaries(currentRows()).length > 0;
     if (noteNode) {
       noteNode.textContent = thin
         ? 'prices not embedded in this page'
-        : 'scrape first, or pick a newer scrape';
+        : (filteredOut ? 'nothing matches these filters' : 'scrape first, or pick a newer scrape');
     }
     node.innerHTML = thin
       ? `<div class="empty">This scrape's ${(run.quote_count || 0).toLocaleString()} prices are not
          embedded here. Rebuild with a larger <code>--quote-runs</code>, or pick a newer scrape.</div>`
-      : `<div class="empty">No games in this scrape yet. Hit <b>Scrape now</b> in the left sidebar, then pick the newest scrape.</div>`;
+      : (filteredOut
+        ? `<div class="empty">No games match these filters. Clear the search, league, or book filter above.</div>`
+        : `<div class="empty">No games in this scrape yet. Hit <b>Scrape now</b> in the left sidebar, then pick the newest scrape.</div>`);
     return;
   }
   if (noteNode) {
@@ -2466,8 +2491,10 @@ function renderBrowseGames(node, noteNode) {
     };
     const lines = [line('away', nick(e.awayRaw)), line('home', nick(e.homeRaw)),
       line('draw', 'Draw')].filter(Boolean).join('');
+    const league = e.league ? leagueLabel(e.league) : '';
     return `<a class="game-card" href="${escapeHtml(href('fixture', e.key))}">
-      <span class="when">${escapeHtml(fmtClock(e.commence))} · ${escapeHtml(sportLabel(e.sport))}</span>
+      <span class="when">${escapeHtml(fmtClock(e.commence))} · ${escapeHtml(sportLabel(e.sport))}${
+        league ? ` · ${escapeHtml(league)}` : ''}</span>
       <b>${escapeHtml(nick(e.awayRaw))} <span class="dim">@</span> ${escapeHtml(nick(e.homeRaw))}</b>
       <span class="meta">${e.bySource.size} book${e.bySource.size === 1 ? '' : 's'} · ${e.rows.length} prices</span>
       ${lines ? `<div class="mlines">${lines}</div>` : ''}
@@ -2848,11 +2875,51 @@ function eventSummaries(rows) {
     (a.commence < b.commence ? -1 : a.commence > b.commence ? 1 : a.key < b.key ? -1 : 1));
 }
 
+/** Games on the Games tab after search / league / book filters. */
+function filteredGameEvents() {
+  const all = eventSummaries(currentRows());
+  const qNode = el('events-q');
+  const bookNode = el('events-book');
+  const q = ((qNode && qNode.value) || '').trim().toLowerCase();
+  const book = (bookNode && bookNode.value) || '';
+  return all.filter((e) => {
+    if (currentLeague && e.league !== currentLeague) return false;
+    if (book && !e.bySource.has(book)) return false;
+    if (!q) return true;
+    const hay = [e.key, nick(e.homeRaw), nick(e.awayRaw),
+      fullName(e.homeRaw), fullName(e.awayRaw),
+      e.league, leagueLabel(e.league), e.sport, sportLabel(e.sport)]
+      .join(' ').toLowerCase();
+    return hay.includes(q);
+  });
+}
+
+function buildEventsFilters() {
+  buildLeaguePicker();
+  const rows = currentRows();
+  const bookNode = el('events-book');
+  if (bookNode) {
+    fillSelect(bookNode,
+      [...new Set(rows.map((r) => str(r[COL.source])))].sort(),
+      'any book', book);
+  }
+}
+
 function renderEvents() {
   const rows = currentRows();
-  const events = eventSummaries(rows);
+  buildEventsFilters();
+  const all = eventSummaries(rows);
+  const events = filteredGameEvents();
   el('nav-events').textContent = events.length;
-  renderBrowseGames(el('events-games'), el('events-games-note'));
+  const note = el('events-filter-note');
+  if (note) {
+    const narrowing = currentLeague || (el('events-book') && el('events-book').value)
+      || ((el('events-q') && el('events-q').value.trim()));
+    note.textContent = narrowing && all.length
+      ? `showing ${events.length} of ${all.length}`
+      : '';
+  }
+  renderBrowseGames(el('events-games'), el('events-games-note'), events);
 
   const mode = el('cov-mode').value;
   const sources = [...new Set(rows.map((r) => str(r[COL.source])))].sort();
@@ -2885,7 +2952,9 @@ function renderEvents() {
     })),
     { band: 'totals', label: 'Books', num: true, cell: (e) => cell(e.bySource.size) },
     { band: 'totals', label: 'Prices', num: true, cell: (e) => cell(e.rows.length) },
-  ], events, { className: 'cov', empty: 'No prices stored for this scrape.',
+  ], events, { className: 'cov', empty: all.length
+      ? 'No games match these filters.'
+      : 'No prices stored for this scrape.',
                go: (e) => href('fixture', e.key) });
 
   // The fixture panel is kept populated even while it is off screen, so a link
@@ -4107,6 +4176,9 @@ applyRoute();
 
 ['q', 'f-source', 'f-league', 'f-market', 'f-period', 'f-alt'].forEach((id) => {
   el(id).addEventListener('input', renderOdds);
+});
+['events-q', 'events-book'].forEach((id) => {
+  el(id).addEventListener('input', renderEvents);
 });
 el('cov-mode').addEventListener('change', renderEvents);
 el('move-source').addEventListener('change', renderMovement);

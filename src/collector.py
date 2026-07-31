@@ -43,6 +43,7 @@ from typing import Any, Callable, Iterator, Mapping, Sequence
 from uuid import uuid4
 
 from src import settings
+from src.alerts import notify_opportunities
 from src.arb import (
     STAKE_INCREMENT,
     MAX_OBSERVATION_SPREAD,
@@ -515,6 +516,7 @@ def collect_once(
     leagues: Sequence[str] | None = None,
     tier: Tier = Tier.FULL,
     on_progress: Callable[[Mapping[str, Any]], None] | None = None,
+    alert: bool = True,
 ) -> RunResult:
     """Fetch, persist raw, parse, reconcile, validate, find arbitrage, persist.
 
@@ -781,6 +783,13 @@ def collect_once(
             excluded=excluded,
             counterparties=measured_counterparties,
         )
+
+    # Fail-soft: missing Twilio credentials skip; a Twilio error must not
+    # abort an otherwise good collect (especially ``--watch``).
+    if alert and arb_report.opportunities:
+        notified = notify_opportunities(arb_report.opportunities)
+        if notified:
+            log.info("texted %d arb(s) at >= %.1f%% ROI", len(notified), settings.ALERT_MIN_ROI * 100.0)
 
     return RunResult(
         run_id,
@@ -1735,6 +1744,7 @@ def _cmd_collect(args: argparse.Namespace) -> int:
                     sports=sports,
                     leagues=leagues,
                     tier=tier,
+                    alert=not args.no_alert,
                 )
             except Exception:  # noqa: BLE001
                 # Unattended operation is a requirement, and only the quote
@@ -2266,6 +2276,13 @@ def _cmd_arb(args: argparse.Namespace) -> int:
                 for diagnostic in report.diagnostics:
                     print(f"  [{diagnostic.code}] {diagnostic.event_key} "
                           f"{diagnostic.market.value}/{diagnostic.period.value}: {diagnostic.detail}")
+        if report.opportunities and not args.no_alert:
+            notified = notify_opportunities(report.opportunities)
+            if notified:
+                print(
+                    f"\ntexted {len(notified)} arb(s) "
+                    f"(>= {settings.ALERT_MIN_ROI * 100:.1f}% ROI) to {settings.ALERT_TO}"
+                )
         return 0
 
 
@@ -2683,6 +2700,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="0 means unlimited",
     )
     collect.add_argument("--no-store", action="store_true", help="skip the database, still store raw")
+    collect.add_argument(
+        "--no-alert",
+        action="store_true",
+        help="skip SMS even when Twilio is configured",
+    )
     _add_scope_arguments(collect)
     collect.set_defaults(func=_cmd_collect)
 
@@ -2721,6 +2743,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             "also report fixtures that have already begun. A historical study of "
             "what the stored prices implied — never a position that can be taken"
         ),
+    )
+    arb.add_argument(
+        "--no-alert",
+        action="store_true",
+        help="skip SMS even when Twilio is configured",
     )
     _add_scope_arguments(arb)
     arb.set_defaults(func=_cmd_arb)

@@ -114,6 +114,7 @@ const required = ['stat-strip', 'flow', 'matrix', 'sports-grid', 'leagues-grid',
   'schema-table', 'vocab', 'sport-pick', 'sport-meta',
   'run-list', 'run-pick', 'scrape-status', 'scrape-progress', 'scrape-msg', 'nav-history',
   'home-stats', 'browse-games', 'events-games',
+  'events-league', 'events-book',
   'odds-screen', 'screen-note', 'league-pick', 'market-tabs', 'nav-screen',
   'arb-list', 'arb-stats', 'arb-summary', 'arb-rejected', 'nav-arb',
   // The drill-down panels are rendered while off screen, so a link straight into one

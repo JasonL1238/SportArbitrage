@@ -151,6 +151,9 @@ COMMISSIONS: dict[str, Commission] = {
     "leovegas_kambi": NO_COMMISSION,
     "bovada": NO_COMMISSION,
     "betmgm": NO_COMMISSION,
+    "draftkings": NO_COMMISSION,
+    "hardrock": NO_COMMISSION,
+    "caesars": NO_COMMISSION,
     "cloudbet": NO_COMMISSION,
     "onexbet": NO_COMMISSION,
     "an_draftkings": NO_COMMISSION,
@@ -162,6 +165,12 @@ COMMISSIONS: dict[str, Commission] = {
     "an_betmgm": NO_COMMISSION,
     "an_bovada": NO_COMMISSION,
     "an_onexbet": NO_COMMISSION,
+    "an_hardrock": NO_COMMISSION,
+    "an_fanatics": NO_COMMISSION,
+    "an_fliff": NO_COMMISSION,
+    "an_circa": NO_COMMISSION,
+    "an_superbook": NO_COMMISSION,
+    "an_bally": NO_COMMISSION,
     # ── betting exchanges: a share of net winnings ────────────────────────────
     # CHECK AGAINST YOUR OWN ACCOUNT before staking a Matchbook leg.  Matchbook
     # has changed its standard commission more than once (it has been both above

@@ -328,6 +328,7 @@ def check_http_response(
     content_type: str | None = None,
     url: str | None = None,
     retry_after: Any = None,
+    expect_json: bool = True,
 ) -> Any:
     """Validate a raw HTTP response and return its decoded JSON payload.
 
@@ -335,6 +336,9 @@ def check_http_response(
     health reporting can distinguish "rate limited" from "geo-restricted" from
     "blocked" from "format changed" from "genuinely empty" — and so the fetch
     layer knows which of those is worth asking again about.
+
+    *expect_json* defaults True (odds payloads).  Promo HTML pages pass False so
+    a successful non-JSON body is accepted after the usual refusal checks.
     """
     where = _describe(source, endpoint)
     stripped = body.strip()
@@ -416,6 +420,8 @@ def check_http_response(
             raise refusal
         if status_code >= 400:
             raise HttpStatusError(f"{where}: HTTP {status_code}")
+        if not expect_json:
+            return None
         kind = "HTML" if _HTML_HINT.match(stripped) else f"content-type {content_type!r}"
         raise NotJsonError(
             f"{where}: expected JSON, got {kind} ({len(body)} bytes) from {url or 'unknown url'}"

@@ -16,6 +16,10 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 from urllib.parse import urlencode, urlsplit
 
+# Bound for the POST helper so a parameter named ``json`` cannot shadow the
+# stdlib module used to serialize the body.
+_json = json
+
 
 @dataclass(frozen=True)
 class BrowserResponse:
@@ -76,6 +80,31 @@ class BrowserSession:
         params: Mapping[str, Any] | None = None,
         headers: Mapping[str, str] | None = None,
     ) -> BrowserResponse:
+        return self._request("GET", url, params=params, headers=headers)
+
+    def post(
+        self,
+        url: str,
+        *,
+        params: Mapping[str, Any] | None = None,
+        headers: Mapping[str, str] | None = None,
+        json: Any = None,
+        data: Any = None,
+    ) -> BrowserResponse:
+        return self._request(
+            "POST", url, params=params, headers=headers, json=json, data=data
+        )
+
+    def _request(
+        self,
+        method: str,
+        url: str,
+        *,
+        params: Mapping[str, Any] | None = None,
+        headers: Mapping[str, str] | None = None,
+        json: Any = None,
+        data: Any = None,
+    ) -> BrowserResponse:
         final = url
         if params:
             parts = urlsplit(url)
@@ -87,12 +116,28 @@ class BrowserSession:
         # context.request shares the browser cookie jar but is not subject to
         # page CORS — in-page fetch() fails on sportsbook-nash.* from the www
         # origin even when a real XHR from the app would succeed.
-        response = self._context.request.get(
-            final,
-            headers=dict(headers or {}),
-            timeout=self._timeout_ms,
-            fail_on_status_code=False,
-        )
+        request_headers = dict(headers or {})
+        if method.upper() == "POST":
+            body: Any
+            if json is not None:
+                body = _json.dumps(json)
+                request_headers.setdefault("content-type", "application/json")
+            else:
+                body = data
+            response = self._context.request.post(
+                final,
+                headers=request_headers,
+                data=body,
+                timeout=self._timeout_ms,
+                fail_on_status_code=False,
+            )
+        else:
+            response = self._context.request.get(
+                final,
+                headers=request_headers,
+                timeout=self._timeout_ms,
+                fail_on_status_code=False,
+            )
         header_map = {str(k): str(v) for k, v in response.headers.items()}
         return BrowserResponse(
             status_code=int(response.status),

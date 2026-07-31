@@ -1,9 +1,10 @@
 """Local runtime paths and knobs.
 
 Everything the collector writes stays inside one directory so a run leaves no
-trace elsewhere and can be inspected or deleted wholesale.  There are no
-credentials, keys, or hosted services to configure — every source is a public
-endpoint of the sportsbook's own website.
+trace elsewhere and can be inspected or deleted wholesale.  Odds sources are
+public endpoints of each venue's own website — no book credentials.  Optional
+SMS alerts use Twilio (``ODDS_TWILIO_*``); without those variables the pipeline
+still collects and simply skips texting.
 
 Configuration is read from ``ODDS_*`` environment variables.  The names used to
 be ``MLB_*``, which stopped being true the moment the pipeline collected a
@@ -60,6 +61,17 @@ RAW_DIR = Path(_lookup("RAW_DIR", str(DATA_DIR / "raw"))).expanduser()
 
 #: SQLite database holding runs, quotes, health, rejections, and findings.
 DB_PATH = Path(_lookup("DB_PATH", str(DATA_DIR / "collector.sqlite3"))).expanduser()
+
+#: SQLite database for the parallel promotions / free-EV collector.
+PROMO_DB_PATH = Path(
+    _lookup("PROMO_DB_PATH", str(DATA_DIR / "promos.sqlite3"))
+).expanduser()
+
+#: Raw captures for promo scrapers — kept apart from odds ``RAW_DIR`` so a
+#: FanDuel promotions HTML file cannot be mistaken for an odds slate.
+PROMO_RAW_DIR = Path(
+    _lookup("PROMO_RAW_DIR", str(DATA_DIR / "raw_promos"))
+).expanduser()
 
 
 #: Every ``ODDS_*`` value that could not be honoured, as ready-to-print lines.
@@ -123,6 +135,17 @@ DEFAULT_INTERVAL_SECONDS = _number("INTERVAL_SECONDS", "300", whole=True, minimu
 
 #: Per-request timeout, seconds.
 HTTP_TIMEOUT = _number("HTTP_TIMEOUT", "20", whole=False, minimum=0.001)
+
+#: Minimum ideal-stake ROI (fraction) before an arb is texted.  Default 2.5%.
+ALERT_MIN_ROI = _number("ALERT_MIN_ROI", "0.025", whole=False, minimum=0.0)
+
+#: Destination mobile for arb SMS (E.164).  Override with ``ODDS_ALERT_TO``.
+ALERT_TO = _lookup("ALERT_TO", "+18479070871")
+
+#: Twilio credentials — empty means alerts are disabled (collect still runs).
+TWILIO_ACCOUNT_SID = _lookup("TWILIO_ACCOUNT_SID", "")
+TWILIO_AUTH_TOKEN = _lookup("TWILIO_AUTH_TOKEN", "")
+TWILIO_FROM_NUMBER = _lookup("TWILIO_FROM_NUMBER", "")
 
 
 def refuse_bad_settings() -> int | None:

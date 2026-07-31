@@ -106,6 +106,12 @@ python -m playwright install chromium              # for ODDS_FETCH_MODE=browser
 
 python -m src.collector collect                    # one pass over all venues and sports
 python -m src.collector collect --tier core        # slate endpoints only — a few requests per source
+python -m src.collector collect --tier core --watch   # poll forever (default every 300s)
+# Optional SMS when an arb clears 2.5% ROI (Twilio):
+#   export ODDS_TWILIO_ACCOUNT_SID=...
+#   export ODDS_TWILIO_AUTH_TOKEN=...
+#   export ODDS_TWILIO_FROM_NUMBER=+1...   # your Twilio number
+#   export ODDS_ALERT_TO=+18479070871      # optional; this is the default
 python scripts/probe_sources.py                    # curl_cffi Chrome impersonation
 python scripts/probe_sources.py --browser          # Playwright Chromium
 python scripts/probe_sources.py --only blocked     # DK / Caesars / Fanatics / bet365
@@ -413,4 +419,7 @@ tests/
 ## Scope
 
 This collects and normalizes odds and identifies arbitrage in the collected data.
-It does not place bets, serve a UI, or send alerts.
+It does not place bets.  Optional SMS alerts (Twilio) fire when a risk-free
+position clears ``ODDS_ALERT_MIN_ROI`` (default **2.5%**); without Twilio
+credentials the pipeline simply skips texting.  Use ``--no-alert`` to silence
+a run even when credentials are set.
