@@ -77,7 +77,6 @@ disappears and what is left is a one-sided bet for the whole stake.
 | `leovegas_kambi` | sportsbook | the same Kambi API under operator `leo` — a different book on one platform, [verified distinct](docs/SOURCE_FEASIBILITY.md) |
 | `bovada` | sportsbook | `www.bovada.lv/services/sports/event/coupon/events/A/description/{path}` — one request per league, states `competitors[].home` |
 | `betmgm` | sportsbook | `www.il.betmgm.com/cds-api/bettingoffer/fixtures` — public `x-bwin-accessid`, one paged request per sport |
-| `unibet_au` | sportsbook | `www.unibet.com.au/sportsbook-feeds/views/filter/{sport}/all/matches` — one request per sport, Kambi-shaped offers with stated home/away |
 | `matchbook` | exchange | `www.matchbook.com/edge/rest/{navigation,events}` — moneyline, totals and handicaps in one call, **with the money behind each price** |
 | `smarkets` | exchange | `api.smarkets.com/v3/{events,markets,contracts,quotes}` — fully typed; moneyline only, within the venue's 20/min limit |
 | `sxbet` | exchange | `api.sx.bet/{markets/active,orders}` — a resting order book; every price is one counterparty's offer, with its own size |
@@ -399,7 +398,7 @@ src/
     registry.py    which sources exist, and how to build one
     _common.py     shared fetch layer: pacing, retries, capture, scope tallies
     fanduel.py  pinnacle.py  betrivers_kambi.py  bovada.py  betmgm.py
-    unibet_au.py  matchbook.py  smarkets.py  sxbet.py  kalshi.py  polymarket.py
+    matchbook.py  smarkets.py  sxbet.py  kalshi.py  polymarket.py
 docs/
   INPUT_CONTRACT.md      what a scraper must deliver, executable as a test
   SOURCE_FEASIBILITY.md  what each venue actually serves, and what was measured

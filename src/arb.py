@@ -86,11 +86,15 @@ import math
 from collections import Counter, defaultdict
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
-from typing import Callable, Collection, Iterable, Mapping, Sequence
+from typing import TYPE_CHECKING, Callable, Collection, Iterable, Mapping, Sequence
 
 from src.commission import Commission, commission_for
 from src.redundancy import REDUNDANT_PAIRS, is_redundant_pair
+from src.sources.registry import VIEW_ONLY_SOURCES
 from src.settlement import mismatch as settlement_mismatch
+
+if TYPE_CHECKING:
+    from src.distinctness import Agreement
 from src.schema import (
     Market,
     Period,
@@ -865,6 +869,8 @@ def merge_counterparty_groups(
 
 def counterparty_groups(
     quotes: Sequence[Quote],
+    *,
+    mirrors: Sequence[Agreement] | None = None,
 ) -> dict[str, list[frozenset[str]]]:
     """``league -> source groups that are one book``, measured from the rows.
 
@@ -872,6 +878,10 @@ def counterparty_groups(
     into detection shares one answer: the collector reports the same pairs as
     findings, and a re-analysis of the stored rows reaches the same verdict
     without the caller doing anything.
+
+    *mirrors*, when supplied, is the already-measured :func:`src.distinctness.find_mirrors`
+    result for *quotes*.  The collector measures once and shares the list with
+    the filing check; recomputing it is a second full pairwise scan of the slate.
 
     A mirrored pair is filed under :data:`EVERY_LEAGUE`, **not** under the
     leagues the mirror was measured in.  Those are two different questions, and
@@ -908,10 +918,14 @@ def counterparty_groups(
     as non-transitive "cannot trade against" edges in
     :func:`_independent_source_count` instead.
     """
-    from src.distinctness import find_mirrors
+    if mirrors is None:
+        from src.distinctness import find_mirrors
 
+        pairs: Sequence[Agreement] = find_mirrors(quotes)
+    else:
+        pairs = mirrors
     groups: dict[str, list[frozenset[str]]] = defaultdict(list)
-    for pair in find_mirrors(quotes):
+    for pair in pairs:
         if is_redundant_pair(pair.source_a, pair.source_b):
             continue
         groups[EVERY_LEAGUE].append(frozenset({pair.source_a, pair.source_b}))
@@ -1007,6 +1021,11 @@ def find_opportunities(
             f"total_stake {total_stake:g} is below one {stake_increment:g}-unit stake, "
             "so every leg would round to zero and no position could be placed"
         )
+    # Consensus / opening columns (``an_open``) are on the board for context
+    # only — never a leg, never a counterparty in the measured gate.
+    if VIEW_ONLY_SOURCES:
+        quotes = [quote for quote in quotes if quote.source not in VIEW_ONLY_SOURCES]
+
     if one_counterparty is None:
         one_counterparty = counterparty_groups(quotes)
     if order_book_sources is None:
@@ -2110,6 +2129,19 @@ def _examine_group(
                 reported.guaranteed_profit
             ):
                 reported = opportunity
+            # Ranked best-margin first.  Once *this* survivor is placeable at
+            # the full asked bankroll, every later candidate has a worse margin
+            # at the same ceiling and cannot beat whatever ``reported`` now
+            # holds — including when ``reported`` is still a smaller capped
+            # position that happens to round to a few pence more.  A *capped*
+            # survivor below *total_stake* must keep searching: a thinner
+            # uncapped edge underneath can still win on money (see the
+            # 3.60%-at-12 vs 2.44%-at-100 case above).
+            if (
+                opportunity.max_total_stake is None
+                or opportunity.max_total_stake + _EPSILON >= total_stake
+            ):
+                break
 
         if reported is None:
             for code, detail in refusals[:1]:
@@ -2366,28 +2398,43 @@ def _build_opportunity(
         if aimed is not None and all(share > 0 for share in aimed):
             ideal = aimed
 
+    # Return multipliers are fixed for the (outcomes × legs) grid: only the
+    # stake vector changes across ``stake_candidates``.  Precomputing them is
+    # what keeps the sweep linear in candidates rather than in
+    # candidates × outcomes × legs × dict lookups — the hot path when many
+    # assignments clear the margin bar and each one builds a position.
+    #
+    # Indexed, not defaulted.  Every leg is drawn from the contract's own shape
+    # and ``settlement_outcomes`` maps every shape selection in every outcome —
+    # checked exhaustively over all 14 ``(sport, period)`` pairs against every
+    # market and line granularity: **zero** outcomes omit one.  So the default
+    # was unreachable, and an unreachable default is worse than none here,
+    # because it hides which way the mistake would go: a mutation audit changed
+    # it from ``LOSE`` to ``PUSH`` — turning every non-participating leg into a
+    # refunded one, which overstates every profit floor — and all 2,248 tests
+    # passed.  A missing key now raises where it can be seen.
+    outcome_multipliers = [
+        (
+            label,
+            [
+                _return_multiplier(results[quote.selection], net)
+                for quote, net in zip(legs_quotes, odds)
+            ],
+        )
+        for label, results in outcomes
+    ]
+
     def evaluate(stakes: Sequence[float]) -> tuple[list[tuple[str, float]], float]:
         """Profit in every settlement outcome, and the floor across them."""
         staked = sum(stakes)
         profits: list[tuple[str, float]] = []
-        for label, results in outcomes:
-            returned = 0.0
-            for quote, stake, net in zip(legs_quotes, stakes, odds):
-                # Indexed, not defaulted.  Every leg is drawn from the contract's
-                # own shape and ``settlement_outcomes`` maps every shape
-                # selection in every outcome — checked exhaustively over all 14
-                # ``(sport, period)`` pairs against every market and line
-                # granularity: **zero** outcomes omit one.  So the default was
-                # unreachable, and an unreachable default is worse than none
-                # here, because it hides which way the mistake would go: a
-                # mutation audit changed it from ``LOSE`` to ``PUSH`` — turning
-                # every non-participating leg into a refunded one, which
-                # overstates every profit floor — and all 2,248 tests passed.
-                # A missing key now raises where it can be seen.
-                result = results[quote.selection]
-                returned += stake * _return_multiplier(result, net)
-            profits.append((label, returned - staked))
-        return profits, min(profit for _, profit in profits)
+        floor = float("inf")
+        for label, multipliers in outcome_multipliers:
+            profit = sum(stake * mult for stake, mult in zip(stakes, multipliers)) - staked
+            profits.append((label, profit))
+            if profit < floor:
+                floor = profit
+        return profits, floor
 
     # Choose the whole-unit split by the profit floor it produces, because that
     # floor is what decides whether the position is risk-free. The split with the
@@ -2567,6 +2614,8 @@ def best_prices(
     surface: dict[MarketGroup, dict[Selection, Quote]] = defaultdict(dict)
     for quote in quotes:
         if quote.status is not QuoteStatus.ACTIVE:
+            continue
+        if quote.source in VIEW_ONLY_SOURCES:
             continue
         bucket = surface[group_key(quote)]
         existing = bucket.get(quote.selection)

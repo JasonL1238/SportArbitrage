@@ -77,21 +77,20 @@ for (const name of Object.keys(globalThis.__PANELS)) {
 
 // An unknown hash must land somewhere real rather than on a blank page.
 visit('#no-such-panel');
-if (on().join() !== 'screen') problems.push(`unknown hash showed [${on().join(', ')}]`);
+if (on().join() !== 'arb') problems.push(`unknown hash showed [${on().join(', ')}]`);
+
+// Empty hash is the front door — Arbitrage, latest scrape.
+visit('');
+if (on().join() !== 'arb') problems.push(`empty hash showed [${on().join(', ')}]`);
 
 // Real keys out of the payload: a fixture, a book, and a bet.
+// Primary panels always pin the latest scrape, so the sample row must come from it.
 const COL = globalThis.__COL;
-const row = data.quotes.rows[0];
+const latestId = data.meta.latest_run_id ?? (data.runs[0] && data.runs[0].id);
+const row = data.quotes.rows.find((r) => r[COL.run_id] === latestId) || data.quotes.rows[0];
 const fixtureKey = data.strings[row[COL.event_key]];
-const bookKey = data.runs[0].sources[0].key;
+const bookKey = (data.runs.find((r) => r.id === latestId) || data.runs[0]).sources[0].key;
 const betKey = globalThis.__betKeyOf(row);
-// Point the page at the run that owns the sample row.  The newest scrape may
-// be thin (summary only), and fixture drill-down only sees the selected run.
-const pick = nodes.get('run-pick');
-if (pick) {
-  pick.value = String(row[COL.run_id]);
-  pick.dispatch('change');
-}
 
 visit('#fixture/' + encodeURIComponent(fixtureKey));
 if (!text('event-detail')) problems.push('fixture panel rendered nothing');

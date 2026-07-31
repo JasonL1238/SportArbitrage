@@ -58,7 +58,6 @@ from src.sources.pinnacle import PinnacleAdapter
 from src.sources.polymarket import PolymarketAdapter
 from src.sources.smarkets import SmarketsAdapter
 from src.sources.sxbet import SxBetAdapter
-from src.sources.unibet_au import UnibetAuAdapter
 
 
 #: Sources that take much longer than the rest of the pass, because their own
@@ -71,6 +70,19 @@ from src.sources.unibet_au import UnibetAuAdapter
 #: each — eight minutes past the fast books, and **847 of their shared markets
 #: became uncomparable** for no reason but ordering.
 SLOW_SOURCES: frozenset[str] = frozenset({"smarkets"})
+
+#: Collected for the odds board only — never a counterparty you can bet against.
+#:
+#: Action Network's ``Open`` column (``book_id`` 30) is opening / consensus
+#: lines, not a sportsbook.  It stays on the page for line context, but must not
+#: win best-price highlighting, enter an arbitrage leg, or collapse two real
+#: books into one counterparty via distinctness (a consensus feed that agrees
+#: with A and with B would otherwise union-find A with B).
+VIEW_ONLY_SOURCES: frozenset[str] = frozenset({"an_open"})
+
+
+def is_view_only(key: str) -> bool:
+    return key in VIEW_ONLY_SOURCES
 
 
 class SourceKind(StrEnum):
@@ -214,11 +226,6 @@ SOURCES: tuple[SourceDescriptor, ...] = (
         adapter=OneXBetAdapter,
         kind=SourceKind.SPORTSBOOK,
     ),
-    SourceDescriptor(
-        key="unibet_au",
-        adapter=UnibetAuAdapter,
-        kind=SourceKind.SPORTSBOOK,
-    ),
     # ── Action Network multi-book scoreboard ─────────────────────────────────
     #
     # One public JSON feed carrying many books.  Keys that pair with a
@@ -247,6 +254,14 @@ SOURCES: tuple[SourceDescriptor, ...] = (
         adapter=ActionNetworkAdapter,
         kind=SourceKind.SPORTSBOOK,
         config={"book_id": 79, "fetch_book_ids": "123"},
+    ),
+    # Consensus / opening lines on the AN scoreboard — view-only; see
+    # :data:`VIEW_ONLY_SOURCES`.  Not a book you can stake at.
+    SourceDescriptor(
+        key="an_open",
+        adapter=ActionNetworkAdapter,
+        kind=SourceKind.SPORTSBOOK,
+        config={"book_id": 30},
     ),
     SourceDescriptor(
         key="an_fanduel",
@@ -379,9 +394,12 @@ _check_registry()
 __all__ = [
     "BY_KEY",
     "SOURCES",
+    "SLOW_SOURCES",
+    "VIEW_ONLY_SOURCES",
     "SourceDescriptor",
     "SourceKind",
     "accepts_leagues",
     "descriptor",
+    "is_view_only",
     "keys",
 ]

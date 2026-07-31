@@ -363,7 +363,13 @@ def find_mirrors(quotes: Sequence[Quote]) -> list[Agreement]:
 
 def compare_all(quotes: Sequence[Quote]) -> list[Agreement]:
     """Every source pair's agreement, ordered most-agreeing first."""
-    sources = sorted({quote.source for quote in quotes})
+    # View-only feeds (AN Open) are not counterparties.  A consensus column that
+    # agrees with A and with B would otherwise union-find A with B.
+    from src.sources.registry import VIEW_ONLY_SOURCES
+
+    sources = sorted(
+        {quote.source for quote in quotes if quote.source not in VIEW_ONLY_SOURCES}
+    )
     # Derived once and shared: the pair loop is quadratic in sources, and a
     # rescan of every row inside it makes the whole thing quadratic in rows too.
     prices = _priced(quotes)
@@ -403,7 +409,38 @@ def screen_candidate(
         raise ValueError(
             f"expected rows from exactly one candidate source, got {sorted(candidates)}"
         )
+    from src.sources.registry import VIEW_ONLY_SOURCES
+
     candidate = next(iter(candidates))
-    others = sorted({quote.source for quote in registered_quotes} - candidates)
-    results = [compare_sources(combined, candidate, other) for other in others]
+    if candidate in VIEW_ONLY_SOURCES:
+        return []
+    others = sorted(
+        {
+            quote.source
+            for quote in registered_quotes
+            if quote.source not in candidates and quote.source not in VIEW_ONLY_SOURCES
+        }
+    )
+    # Same once-per-slate derivation ``compare_all`` uses: without it each
+    # partner rescans every row, which is ``O(sources × rows)`` for a screen
+    # that is otherwise ``O(sources × shared selections)``.
+    prices = _priced(combined)
+    league_of = _leagues(combined)
+    untradeable = _has_untradeable(combined)
+    whole_prices = _priced(combined, tradeable_only=False) if untradeable else prices
+    whole_league_of = (
+        _leagues(combined, tradeable_only=False) if untradeable else league_of
+    )
+    results = [
+        compare_sources(
+            combined,
+            candidate,
+            other,
+            prices=prices,
+            league_of=league_of,
+            whole_prices=whole_prices,
+            whole_league_of=whole_league_of,
+        )
+        for other in others
+    ]
     return sorted(results, key=lambda pair: -pair.rate)

@@ -4529,6 +4529,7 @@ class TestTheChargeAndTheSettlementRuleArePinnedPerVenue:
         "an_draftkings": "no commission (the venue's margin is already in the price)",
         "an_fanduel": "no commission (the venue's margin is already in the price)",
         "an_onexbet": "no commission (the venue's margin is already in the price)",
+        "an_open": "no commission (the venue's margin is already in the price)",
         "betmgm": "no commission (the venue's margin is already in the price)",
         "betrivers_kambi": "no commission (the venue's margin is already in the price)",
         "bovada": "no commission (the venue's margin is already in the price)",
@@ -4542,7 +4543,6 @@ class TestTheChargeAndTheSettlementRuleArePinnedPerVenue:
         "polymarket": '0.05 × min(p, 1−p) per contract, charged on entry',
         "smarkets": '2.00% of net winnings',
         "sxbet": '5.00% of net winnings',
-        "unibet_au": "no commission (the venue's margin is already in the price)",
     }
 
     REGIMES = {
@@ -4554,6 +4554,7 @@ class TestTheChargeAndTheSettlementRuleArePinnedPerVenue:
         "an_draftkings": 'void_and_refund',
         "an_fanduel": 'void_and_refund',
         "an_onexbet": 'void_and_refund',
+        "an_open": 'void_and_refund',
         "betmgm": 'void_and_refund',
         "betrivers_kambi": 'void_and_refund',
         "bovada": 'void_and_refund',
@@ -4567,7 +4568,6 @@ class TestTheChargeAndTheSettlementRuleArePinnedPerVenue:
         "polymarket": 'resolve_fifty_fifty',
         "smarkets": 'void_and_refund',
         "sxbet": 'void_and_refund',
-        "unibet_au": 'void_and_refund',
     }
 
     def test_every_venues_charge_is_what_it_is(self) -> None:
@@ -4922,14 +4922,14 @@ class TestTheWomensMarkerReachesEveryVenueThatNeedsIt:
     NEEDS_MARKER = (
         "pinnacle", "fanduel", "betrivers_kambi", "leovegas_kambi",
         "smarkets", "matchbook", "sxbet",
-        "an_draftkings", "an_caesars", "an_bet365",
+        "an_draftkings", "an_caesars", "an_bet365", "an_open",
         "an_fanduel", "an_betrivers", "an_betmgm",
         "an_bovada", "an_onexbet",
     )
 
     #: The rest configure one named competition per route, so a women's fixture
     #: cannot arrive under a men's league key in the first place.
-    IMMUNE = ("betmgm", "bovada", "cloudbet", "kalshi", "onexbet", "polymarket", "unibet_au")
+    IMMUNE = ("betmgm", "bovada", "cloudbet", "kalshi", "onexbet", "polymarket")
 
     def test_every_catch_all_adapter_applies_the_marker(self) -> None:
         import importlib
@@ -9229,8 +9229,12 @@ class TestANarrowedRunStillFilesTheMirrorFinding:
 
     def test_the_filing_reads_the_unfiltered_rows(self) -> None:
         text = pathlib.Path("src/collector.py").read_text()
-        assert "_check_distinctness(unfiltered_quotes, report)" in text
-        measured = text.index("measured_counterparties = counterparty_groups(all_quotes)")
+        # Shares the slate's one ``find_mirrors`` pass with the gate — the call
+        # still names ``unfiltered_quotes``, which is the invariant this locks.
+        assert "_check_distinctness(unfiltered_quotes, report, mirrors=measured_mirrors)" in text
+        measured = text.index(
+            "measured_counterparties = counterparty_groups(all_quotes, mirrors=measured_mirrors)"
+        )
         kept = text.index("unfiltered_quotes = all_quotes")
         filtered = text.index("kept = [q for q in all_quotes if in_scope(q, sports, leagues)]")
         assert measured < kept < filtered, "the unfiltered binding must precede the filter"
@@ -10884,6 +10888,7 @@ class TestEachVenuesKindIsPinnedBecauseItPicksTheRule:
         "an_draftkings": False,
         "an_fanduel": False,
         "an_onexbet": False,
+        "an_open": False,
         "betmgm": False,
         "betrivers_kambi": False,
         "bovada": False,
@@ -10897,7 +10902,6 @@ class TestEachVenuesKindIsPinnedBecauseItPicksTheRule:
         "polymarket": True,
         "smarkets": True,
         "sxbet": True,
-        "unibet_au": False,
     }
 
     def test_every_registered_venue_is_the_kind_it_is(self) -> None:

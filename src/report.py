@@ -146,13 +146,6 @@ SOURCE_NOTES: dict[str, dict[str, str]] = {
         "what": "LineFeed Get1x2_VZip championship slates — short-key moneyline, handicap "
                 "and total selections filtered by the league label string.",
     },
-    "unibet_au": {
-        "label": "Unibet Australia",
-        "host": "www.unibet.com.au",
-        "kind": "sportsbook",
-        "what": "Australian sportsbook filter feed — one request per sport, Kambi-shaped "
-                "bet offers with stated home/away participants and decimal odds.",
-    },
     "an_draftkings": {
         "label": "DraftKings (Action Network)",
         "host": "api.actionnetwork.com",
@@ -171,6 +164,14 @@ SOURCE_NOTES: dict[str, dict[str, str]] = {
         "host": "api.actionnetwork.com",
         "kind": "sportsbook",
         "what": "Bet365 prices from Action Network's public scoreboard.",
+    },
+    "an_open": {
+        "label": "Open (Action Network)",
+        "host": "api.actionnetwork.com",
+        "kind": "sportsbook",
+        "what": "Action Network's Open column — opening / consensus lines for "
+                "context on the odds board. Not a book you can bet; excluded from "
+                "arbitrage and best-price highlighting.",
     },
     "an_fanduel": {
         "label": "FanDuel (Action Network)",
@@ -1172,13 +1173,16 @@ def _arb_payload(
             }
             continue
         everything, _ = reconcile_event_keys(quotes)
+        # Same rule as ``collector arb``: the recorded full-slate gate is the
+        # strong answer; re-measure only when a pre-column run left nothing.
+        recorded = store.recorded_counterparty_groups(run_id)
         report = find_opportunities(
             everything,
             total_stake=total_stake,
             as_of=as_of,
             one_counterparty=merge_counterparty_groups(
-                counterparty_groups(everything),
-                store.recorded_counterparty_groups(run_id),
+                {} if recorded else counterparty_groups(everything),
+                recorded,
             ),
         )
         rejected = {}
@@ -1320,10 +1324,18 @@ def _coverage_for_run(
                 {"source": row["source_key"], "league": row["league"], "sport": row["sport"]}
             )
 
+    from src.sources.registry import VIEW_ONLY_SOURCES
+
     result: list[dict[str, Any]] = []
     for sport in sorted(per_sport):
         entry = per_sport[sport]
-        books = sorted(key for key, count in entry["per_source"].items() if count)
+        # View-only feeds stay in ``per_source`` for the coverage grid, but do
+        # not count toward the comparability bar — Open + one book is not two books.
+        books = sorted(
+            key
+            for key, count in entry["per_source"].items()
+            if count and key not in VIEW_ONLY_SOURCES
+        )
         result.append(
             {
                 "sport": sport,
@@ -1598,10 +1610,13 @@ def _source_entry(key: str) -> dict[str, Any]:
     tables the arbitrage engine uses means the page cannot describe a venue in
     terms the pipeline does not price it in.
     """
+    from src.sources.registry import is_view_only
+
     entry = dict(key=key, **SOURCE_NOTES.get(key, _unknown_source(key)))
     charge = commission_for(key)
     entry["commission"] = "" if charge.is_free else charge.describe()
     entry["settles"] = _SETTLEMENT_WORDS[regime_for(key)]
+    entry["view_only"] = is_view_only(key)
     return entry
 
 
@@ -1910,6 +1925,9 @@ def _empty_scrape_shell() -> str:
   button:hover { border-color:var(--muted); }
   button:disabled { opacity:0.55; cursor:wait; }
   #status { margin-top:10px; font:400 12px/1.4 ui-monospace, monospace; color:var(--muted); }
+  .bar { margin-top:10px; height:4px; border-radius:2px; background:#2a2a2a; overflow:hidden; display:none; }
+  .bar.on { display:block; }
+  .bar > i { display:block; height:100%; width:0%; background:#7aa3c9; transition:width .25s ease; }
 </style></head><body>
 <div class="card">
   <h1>Line shop</h1>
@@ -1921,12 +1939,16 @@ def _empty_scrape_shell() -> str:
     <option value="all">Everything (slower)</option>
   </select>
   <button type="button" id="go">Scrape now</button>
+  <div class="bar" id="bar"><i id="fill"></i></div>
   <div id="status">Ready.</div>
 </div>
 <script>
 const btn = document.getElementById('go');
 const status = document.getElementById('status');
 const scope = document.getElementById('scope');
+const bar = document.getElementById('bar');
+const fill = document.getElementById('fill');
+let poll = null;
 function payload() {
   const v = scope.value || 'league:MLB';
   if (v === 'all') return { tier: 'core' };
@@ -1934,23 +1956,45 @@ function payload() {
   if (v.startsWith('league:')) return { tier: 'core', league: v.slice(7) };
   return { tier: 'core', league: 'MLB' };
 }
+function paint(p) {
+  if (!p) return;
+  bar.classList.add('on');
+  status.textContent = p.message || 'Scraping…';
+  const done = Number(p.done) || 0, total = Number(p.total) || 0;
+  if (total > 0) fill.style.width = Math.max(4, Math.round(done / total * 100)) + '%';
+}
+function startPoll() {
+  if (poll) clearInterval(poll);
+  poll = setInterval(async () => {
+    try {
+      const r = await fetch('/api/status', { cache: 'no-store' });
+      const b = await r.json();
+      if (b.progress) paint(b.progress);
+    } catch (_) {}
+  }, 500);
+}
 btn.addEventListener('click', async () => {
   btn.disabled = true;
   status.textContent = 'Scraping…';
+  bar.classList.add('on');
+  startPoll();
   try {
     const res = await fetch('/api/collect', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload()),
     });
     const body = await res.json().catch(() => ({}));
+    if (poll) clearInterval(poll);
     if (!res.ok || !body.ok) {
       status.textContent = 'Failed: ' + (body.error || res.statusText || res.status);
       btn.disabled = false;
       return;
     }
     status.textContent = 'Got ' + ((body.collect && body.collect.quote_count) || 0) + ' prices — reloading…';
+    fill.style.width = '100%';
     location.reload();
   } catch (err) {
+    if (poll) clearInterval(poll);
     status.textContent = 'Failed: ' + (err && err.message ? err.message : err);
     btn.disabled = false;
   }
@@ -2002,6 +2046,7 @@ def _run_collect_from_ui(
     tier: str,
     sport: str | None,
     league: str | None,
+    on_progress: Any | None = None,
 ) -> dict[str, Any]:
     """One collection pass, started from the dashboard's Scrape button."""
     from src.collector import build_sources, collect_once, resolve_leagues
@@ -2034,6 +2079,7 @@ def _run_collect_from_ui(
             sports=sports,
             leagues=leagues,
             tier=chosen_tier,
+            on_progress=on_progress,
         )
     finally:
         for source in sources:
@@ -2071,7 +2117,30 @@ def _serve(
     root = path.parent.resolve()
     out = path.resolve()
     lock = threading.Lock()
-    state = {"busy": False, "last_error": None}
+    state: dict[str, Any] = {
+        "busy": False,
+        "last_error": None,
+        "progress": None,
+        "started_at": None,
+    }
+    state_lock = threading.Lock()
+
+    def set_progress(payload: Mapping[str, Any] | None) -> None:
+        with state_lock:
+            state["progress"] = dict(payload) if payload is not None else None
+
+    def status_payload() -> dict[str, Any]:
+        with state_lock:
+            progress = dict(state["progress"]) if state["progress"] else None
+            return {
+                "ok": True,
+                "busy": state["busy"],
+                "control": True,
+                "dashboard": out.name,
+                "last_error": state["last_error"],
+                "started_at": state["started_at"],
+                "progress": progress,
+            }
 
     class Handler(SimpleHTTPRequestHandler):
         def __init__(self, *args, **kwargs):
@@ -2094,12 +2163,7 @@ def _serve(
         def do_GET(self) -> None:  # noqa: N802
             route = self.path.split("?", 1)[0]
             if route == "/api/status":
-                self._json(200, {
-                    "ok": True,
-                    "busy": state["busy"],
-                    "control": True,
-                    "dashboard": out.name,
-                })
+                self._json(200, status_payload())
                 return
             return super().do_GET()
 
@@ -2132,18 +2196,49 @@ def _serve(
                     "ok": False,
                     "error": "a scrape is already running; wait for it to finish",
                     "busy": True,
+                    "progress": status_payload().get("progress"),
                 })
                 return
-            state["busy"] = True
+            with state_lock:
+                state["busy"] = True
+                state["last_error"] = None
+                state["started_at"] = datetime.now(UTC).isoformat()
+                state["progress"] = {
+                    "phase": "starting",
+                    "message": "Starting scrape…",
+                    "done": 0,
+                    "total": 0,
+                    "quote_count": 0,
+                }
             try:
-                collected = _run_collect_from_ui(tier=tier, sport=sport, league=league)
+                collected = _run_collect_from_ui(
+                    tier=tier,
+                    sport=sport,
+                    league=league,
+                    on_progress=set_progress,
+                )
+                set_progress({
+                    "phase": "rebuilding",
+                    "message": "Rebuilding dashboard…",
+                    "done": 1,
+                    "total": 1,
+                    "quote_count": collected.get("quote_count") or 0,
+                })
                 rebuilt = _rebuild_dashboard(
                     out,
                     run_limit=run_limit,
                     quote_runs=quote_runs,
                     max_quote_rows=max_quote_rows,
                 )
-                state["last_error"] = None
+                with state_lock:
+                    state["last_error"] = None
+                    state["progress"] = {
+                        "phase": "done",
+                        "message": (
+                            f"Got {collected.get('quote_count', 0):,} prices — reloading…"
+                        ),
+                        "quote_count": collected.get("quote_count") or 0,
+                    }
                 self._json(200, {
                     "ok": True,
                     "collect": collected,
@@ -2151,14 +2246,21 @@ def _serve(
                     "reload": True,
                 })
             except Exception as exc:  # noqa: BLE001
-                state["last_error"] = f"{type(exc).__name__}: {exc}"
+                err = f"{type(exc).__name__}: {exc}"
+                with state_lock:
+                    state["last_error"] = err
+                    state["progress"] = {
+                        "phase": "error",
+                        "message": err,
+                    }
                 self._json(500, {
                     "ok": False,
-                    "error": state["last_error"],
+                    "error": err,
                     "busy": False,
                 })
             finally:
-                state["busy"] = False
+                with state_lock:
+                    state["busy"] = False
                 lock.release()
 
     url = f"http://127.0.0.1:{port}/{path.name}"

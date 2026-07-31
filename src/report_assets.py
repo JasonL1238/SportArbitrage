@@ -100,11 +100,40 @@ a { color: var(--accent); }
 .nav a:hover { color: var(--ink); background: var(--surface-2); }
 .nav a[aria-current="true"] { color: var(--ink); font-weight: 600; background: transparent; }
 .nav a i { font: 400 11px/1 var(--mono); color: var(--muted); font-style: normal; }
+.nav-more {
+  margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line-soft);
+}
+.nav-more > summary {
+  list-style: none; cursor: pointer; user-select: none;
+  padding: 5px 6px; border-radius: 3px;
+  font: 500 11px/1.2 var(--sans); color: var(--muted);
+}
+.nav-more > summary::-webkit-details-marker { display: none; }
+.nav-more > summary::before {
+  content: '▸ '; font-size: 10px; opacity: 0.7;
+}
+.nav-more[open] > summary::before { content: '▾ '; }
+.nav-more > summary:hover { color: var(--ink-2); background: var(--surface-2); }
+.nav-more .nav { margin-top: 2px; }
 .nav-gap {
   display: block; margin: 10px 6px 3px; padding-top: 8px;
   border-top: 1px solid var(--line-soft);
   font: 500 11px/1.2 var(--sans); color: var(--muted);
 }
+.fold {
+  margin-top: 14px; border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--surface); overflow: hidden;
+}
+.fold > summary {
+  list-style: none; cursor: pointer; user-select: none;
+  display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between;
+  gap: 8px; padding: 9px 12px; border-bottom: 1px solid transparent;
+  font: 600 12.5px/1.3 var(--sans); color: var(--ink);
+}
+.fold > summary::-webkit-details-marker { display: none; }
+.fold[open] > summary { border-bottom-color: var(--line-soft); }
+.fold > summary .eyebrow { font-weight: 400; }
+.fold .card-body { border: 0; }
 
 .rail-block { display: flex; flex-direction: column; gap: 5px; }
 .rail-block > label,
@@ -133,10 +162,35 @@ select, input[type="search"], input[type="text"] {
   background: var(--surface-2); color: var(--muted);
   border-color: var(--line); cursor: not-allowed;
 }
+.scrape-progress {
+  display: none; flex-direction: column; gap: 5px; margin-top: 6px;
+}
+.scrape-progress.on { display: flex; }
+.scrape-bar {
+  height: 4px; border-radius: 2px; background: var(--line-soft); overflow: hidden;
+}
+.scrape-bar > i {
+  display: block; height: 100%; width: 0%;
+  background: var(--accent); transition: width 0.25s ease;
+}
+.scrape-progress.is-indeterminate .scrape-bar > i {
+  width: 35% !important;
+  animation: scrape-pulse 1.1s ease-in-out infinite;
+}
+@keyframes scrape-pulse {
+  0% { transform: translateX(-120%); }
+  100% { transform: translateX(320%); }
+}
+.scrape-progress .scrape-msg {
+  font: 400 11px/1.35 var(--sans); color: var(--ink-2);
+}
+.scrape-progress .scrape-meta {
+  font: 400 10.5px/1.3 var(--mono); color: var(--muted);
+}
 
 .run-list {
   display: flex; flex-direction: column; gap: 4px;
-  max-height: 240px; overflow: auto; padding-right: 2px;
+  max-height: min(60vh, 480px); overflow: auto; padding-right: 2px;
 }
 .run-item {
   display: flex; flex-direction: column; gap: 1px; text-align: left;
@@ -571,20 +625,25 @@ BODY = """
     </div>
 
     <nav class="nav" id="nav" aria-label="Sections">
-      <a href="#screen">Odds screen <i id="nav-screen"></i></a>
       <a href="#arb">Arbitrage <i id="nav-arb"></i></a>
+      <a href="#screen">Odds <i id="nav-screen"></i></a>
       <a href="#events">Games <i id="nav-events"></i></a>
-      <a href="#odds">All prices <i id="nav-odds"></i></a>
-      <a href="#overview">Home</a>
-      <a href="#sources">Books <i id="nav-sources"></i></a>
-      <a href="#movement">Movement <i id="nav-move"></i></a>
-      <span class="nav-gap">More</span>
-      <a href="#run">This scrape</a>
-      <a href="#sports">Coverage <i id="nav-sports"></i></a>
-      <a href="#quality">Checks <i id="nav-quality"></i></a>
-      <a href="#raw">Saved pages <i id="nav-raw"></i></a>
-      <a href="#glossary">Glossary</a>
-      <a href="#schema">Schema</a>
+      <details class="nav-more" id="nav-more">
+        <summary>More</summary>
+        <div class="nav">
+          <a href="#history">History <i id="nav-history"></i></a>
+          <a href="#run">This scrape</a>
+          <a href="#odds">All prices <i id="nav-odds"></i></a>
+          <a href="#sources">Books <i id="nav-sources"></i></a>
+          <a href="#sports">Coverage <i id="nav-sports"></i></a>
+          <a href="#movement">Movement <i id="nav-move"></i></a>
+          <a href="#quality">Checks <i id="nav-quality"></i></a>
+          <a href="#raw">Saved pages <i id="nav-raw"></i></a>
+          <a href="#overview">How to use</a>
+          <a href="#glossary">Glossary</a>
+          <a href="#schema">Schema</a>
+        </div>
+      </details>
     </nav>
 
     <div class="rail-block" id="scrape-block">
@@ -595,14 +654,12 @@ BODY = """
         <option value="all">Everything (slower)</option>
       </select>
       <button type="button" id="scrape-btn" class="scrape-btn">Scrape now</button>
+      <div class="scrape-progress" id="scrape-progress" aria-live="polite">
+        <div class="scrape-bar" aria-hidden="true"><i id="scrape-bar-fill"></i></div>
+        <span class="scrape-msg" id="scrape-msg">Scraping…</span>
+        <span class="scrape-meta" id="scrape-meta"></span>
+      </div>
       <span class="rail-foot" id="scrape-status">Open via --serve to enable scraping.</span>
-    </div>
-
-    <div class="rail-block" id="run-block">
-      <label for="run-pick">Collection</label>
-      <select id="run-pick" aria-label="Which scrape to show"></select>
-      <div id="run-list" class="run-list" role="listbox" aria-label="Collections by time"></div>
-      <span class="rail-foot" id="run-meta" style="margin:0"></span>
     </div>
 
     <div class="rail-block">
@@ -617,7 +674,7 @@ BODY = """
   <main>
     <header class="masthead">
       <div>
-        <h1 id="page-title">Odds screen</h1>
+        <h1 id="page-title">Arbitrage</h1>
         <p id="scrape-stamp" class="scrape-stamp"></p>
         <p id="lede"></p>
       </div>
@@ -628,40 +685,15 @@ BODY = """
 
     <div class="notice" id="run-notice"></div>
 
-    <section id="screen">
-      <header>
-        <h2>Odds screen</h2>
-        <p>Games down the left, books across. American odds; highlighted cell is the best takeable price on that line.</p>
-      </header>
-
-      <div class="market-tabs" id="market-tabs" role="tablist" aria-label="Market"></div>
-
-      <div class="screen-toolbar">
-        <label class="eyebrow" for="league-pick">League</label>
-        <select id="league-pick" aria-label="Filter by league">
-          <option value="">every league</option>
-        </select>
-        <label class="eyebrow" for="run-pick-screen">Scrape</label>
-        <select id="run-pick-screen" aria-label="Which scrape to show on the board"></select>
-        <span class="eyebrow" id="screen-note">pick a scrape to view</span>
-      </div>
-
-      <div class="card">
-        <div class="card-body flush scroll-wrap">
-          <div id="odds-screen" class="scroll"></div>
-        </div>
-      </div>
-    </section>
-
     <section id="arb">
       <header>
         <h2>Arbitrage</h2>
-        <p>Risk-free cross-book positions in this scrape — same detector as <code>collector arb</code>.</p>
+        <p>Risk-free cross-book positions in the latest scrape — same detector as <code>collector arb</code>.</p>
       </header>
 
       <div class="card">
         <div class="card-head">
-          <h3>This scrape</h3>
+          <h3>Latest scrape</h3>
           <span class="eyebrow" id="arb-summary">scanning…</span>
         </div>
         <div class="card-body flush">
@@ -672,28 +704,66 @@ BODY = """
       <div class="card" style="margin-top:14px">
         <div class="card-head">
           <h3>Takeable positions</h3>
-          <span class="eyebrow" id="arb-note">newest scrape first; switch scrapes in the sidebar</span>
+          <span class="eyebrow" id="arb-note">latest scrape only</span>
         </div>
         <div class="card-body" id="arb-list"></div>
       </div>
 
-      <div class="card" style="margin-top:14px">
-        <div class="card-head">
-          <h3>Why other markets were refused</h3>
-          <span class="eyebrow">near-misses the detector rejected on purpose</span>
-        </div>
+      <details class="fold" id="arb-rejected-fold">
+        <summary>Why other markets were refused <span class="eyebrow">near-misses, optional</span></summary>
         <div class="card-body" id="arb-rejected"></div>
+      </details>
+    </section>
+
+    <section id="screen">
+      <header>
+        <h2>Odds</h2>
+        <p>Games down the left, books across. American odds; highlighted cell is the best takeable price on that line (Open is context only).</p>
+      </header>
+
+      <div class="market-tabs" id="market-tabs" role="tablist" aria-label="Market"></div>
+
+      <div class="screen-toolbar">
+        <label class="eyebrow" for="league-pick">League</label>
+        <select id="league-pick" aria-label="Filter by league">
+          <option value="">every league</option>
+        </select>
+        <span class="eyebrow" id="screen-note">latest scrape</span>
+      </div>
+
+      <div class="card">
+        <div class="card-body flush scroll-wrap">
+          <div id="odds-screen" class="scroll"></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="history">
+      <header>
+        <h2>History</h2>
+        <p>Past scrapes. Pick one to inspect niche panels below; Arbitrage, Odds, and Games always show the latest.</p>
+      </header>
+      <div class="card">
+        <div class="card-head">
+          <h3>Saved scrapes</h3>
+          <span class="eyebrow" id="run-meta">newest on top</span>
+        </div>
+        <div class="card-body">
+          <label class="sr-only" for="run-pick">Which scrape to inspect</label>
+          <select id="run-pick" aria-label="Which scrape to inspect"></select>
+          <div id="run-list" class="run-list" role="listbox" aria-label="Collections by time" style="margin-top:10px"></div>
+        </div>
       </div>
     </section>
 
     <section id="overview">
       <header>
-        <h2>Home</h2>
-        <p>Scrape → pick a scrape → Odds screen to line-shop, Arbitrage for free-money positions.</p>
+        <h2>How to use</h2>
+        <p>Scrape → Arbitrage for free-money positions → Odds to line-shop the latest board.</p>
       </header>
 
       <div class="card how-card">
-        <div class="card-head"><h3>How to use this</h3><span class="eyebrow">four steps</span></div>
+        <div class="card-head"><h3>How to use this</h3><span class="eyebrow">three steps</span></div>
         <div class="card-body flush">
           <div class="tiles how-tiles">
             <div class="tile">
@@ -703,18 +773,13 @@ BODY = """
             </div>
             <div class="tile">
               <span class="ord">2</span>
-              <b>Pick a scrape</b>
-              <p>Newest on top. Switch scrapes to keep each snapshot manageable.</p>
+              <b>Check arbitrage</b>
+              <p>Front page lists risk-free multi-book positions with stakes and payouts — latest scrape only.</p>
             </div>
             <div class="tile">
               <span class="ord">3</span>
               <b>Line-shop the board</b>
-              <p>Odds screen: games × books. Highlighted cell is the best takeable price for that side.</p>
-            </div>
-            <div class="tile">
-              <span class="ord">4</span>
-              <b>Check arbitrage</b>
-              <p>Arbitrage section lists risk-free multi-book positions with stakes and payouts.</p>
+              <p>Odds: games × books. Highlighted cell is the best takeable price for that side.</p>
             </div>
           </div>
         </div>
@@ -736,9 +801,9 @@ BODY = """
       </div>
 
       <p class="dim home-more">
-        <a href="#screen">Odds screen</a> ·
-        <a href="#run">This scrape</a> ·
-        <a href="#odds">Search every price</a> ·
+        <a href="#arb">Arbitrage</a> ·
+        <a href="#screen">Odds</a> ·
+        <a href="#history">History</a> ·
         <a href="#glossary">Glossary</a></p>
     </section>
 
@@ -892,8 +957,8 @@ BODY = """
     <section id="events">
       <header>
         <h2>Games</h2>
-        <p>Click a game for every market side by side. Prefer the Odds screen for the
-        full board. Filter sport in the sidebar; filter league on the Odds screen.</p>
+        <p>Click a game for every market side by side. Prefer Odds for the full board.
+        Filter sport in the sidebar; filter league on Odds.</p>
       </header>
       <div class="card">
         <div class="card-head">
@@ -1215,6 +1280,8 @@ const book = (key) => (SOURCE_INFO.get(key) || {}).label || key;
 const venueKind = (key) => (SOURCE_INFO.get(key) || {}).kind || 'sportsbook';
 const commissionOf = (key) => (SOURCE_INFO.get(key) || {}).commission || '';
 const charges = (key) => Boolean(commissionOf(key));
+/** Consensus / opening columns shown for context — never "best" and never arb. */
+const isViewOnly = (key) => Boolean((SOURCE_INFO.get(key) || {}).view_only);
 
 /*  The price after the venue's cut — what you are actually paid.
  *
@@ -1672,47 +1739,49 @@ function bindRunSelect(pick) {
 
 function buildRunPicker() {
   const pick = el('run-pick');
-  const screen = el('run-pick-screen');
   const list = el('run-list');
   const options = runs.map((r, i) =>
     `<option value="${r.id}">${escapeHtml(runOptionLabel(r, i))}</option>`).join('');
-  pick.innerHTML = options || '<option value="">No scrapes yet</option>';
-  pick.value = currentRunId != null ? String(currentRunId) : '';
-  pick.disabled = !runs.length;
-  bindRunSelect(pick);
-  if (screen) {
-    screen.innerHTML = options || '<option value="">No scrapes yet</option>';
-    screen.value = currentRunId != null ? String(currentRunId) : '';
-    screen.disabled = !runs.length;
-    bindRunSelect(screen);
+  if (pick) {
+    pick.innerHTML = options || '<option value="">No scrapes yet</option>';
+    pick.value = currentRunId != null ? String(currentRunId) : '';
+    pick.disabled = !runs.length;
+    bindRunSelect(pick);
   }
-  list.innerHTML = runs.map((r, i) => {
-    const thin = !rowsByRun.has(r.id);
-    const secs = r.duration_ms != null ? (r.duration_ms / 1000).toFixed(1) + 's' : '—';
-    const prices = (r.quote_count || 0).toLocaleString() + ' prices';
-    const games = (r.event_count || 0) + ' games';
-    const flag = r.ok ? '' : ' · problems';
-    const kept = thin ? ' · prices not embedded' : '';
-    const cls = [
-      'run-item',
-      r.id === currentRunId ? 'on' : '',
-      r.ok ? '' : 'is-bad',
-      thin ? 'is-thin' : '',
-    ].filter(Boolean).join(' ');
-    return `<button type="button" role="option" class="${cls}" data-run-id="${r.id}"
-      aria-selected="${r.id === currentRunId ? 'true' : 'false'}">
-      <b>${i === 0 ? 'Latest · ' : ''}${fmtTime(r.started_at)}</b>
-      <span class="when">${fmtClock(r.started_at)} · ${ago(r.started_at)}</span>
-      <span class="bits">${prices} · ${games} · took ${secs}${flag}${kept}</span>
-    </button>`;
-  }).join('');
-  list.querySelectorAll('[data-run-id]').forEach((node) => {
-    node.addEventListener('click', () => selectRun(+node.getAttribute('data-run-id')));
-  });
+  if (list) {
+    list.innerHTML = runs.map((r, i) => {
+      const thin = !rowsByRun.has(r.id);
+      const secs = r.duration_ms != null ? (r.duration_ms / 1000).toFixed(1) + 's' : '—';
+      const prices = (r.quote_count || 0).toLocaleString() + ' prices';
+      const games = (r.event_count || 0) + ' games';
+      const flag = r.ok ? '' : ' · problems';
+      const kept = thin ? ' · prices not embedded' : '';
+      const cls = [
+        'run-item',
+        r.id === currentRunId ? 'on' : '',
+        r.ok ? '' : 'is-bad',
+        thin ? 'is-thin' : '',
+      ].filter(Boolean).join(' ');
+      return `<button type="button" role="option" class="${cls}" data-run-id="${r.id}"
+        aria-selected="${r.id === currentRunId ? 'true' : 'false'}">
+        <b>${i === 0 ? 'Latest · ' : ''}${fmtTime(r.started_at)}</b>
+        <span class="when">${fmtClock(r.started_at)} · ${ago(r.started_at)}</span>
+        <span class="bits">${prices} · ${games} · took ${secs}${flag}${kept}</span>
+      </button>`;
+    }).join('');
+    list.querySelectorAll('[data-run-id]').forEach((node) => {
+      node.addEventListener('click', () => selectRun(+node.getAttribute('data-run-id')));
+    });
+  }
   const run = runById.get(currentRunId);
-  el('run-meta').textContent = run
-    ? `${fmtClock(run.started_at)} · ${ago(run.started_at)} · ${runs.length} saved`
-    : 'no scrapes yet';
+  const meta = el('run-meta');
+  if (meta) {
+    meta.textContent = run
+      ? `${fmtClock(run.started_at)} · ${ago(run.started_at)} · ${runs.length} saved`
+      : 'no scrapes yet';
+  }
+  const histNav = el('nav-history');
+  if (histNav) histNav.textContent = runs.length ? String(runs.length) : '';
   paintScrapeStamp();
 }
 
@@ -1772,14 +1841,15 @@ function buildSportPicker() {
    can still show which part of the page you are inside. */
 
 const PANELS = {
-  screen:    { title: 'Odds screen' },
   arb:       { title: 'Arbitrage' },
-  overview:  { title: 'Home' },
+  screen:    { title: 'Odds' },
+  events:    { title: "Today's games" },
+  history:   { title: 'History' },
+  overview:  { title: 'How to use' },
   run:       { title: 'This scrape' },
   sports:    { title: 'Coverage' },
   sources:   { title: 'Books' },
   book:      { title: 'One book', parent: 'sources' },
-  events:    { title: "Today's games" },
   fixture:   { title: 'One game', parent: 'events' },
   bet:       { title: 'One bet', parent: 'events' },
   odds:      { title: 'All prices' },
@@ -1790,7 +1860,11 @@ const PANELS = {
   schema:    { title: 'Schema' },
 };
 
-let here = { panel: 'screen', arg: null };
+/** Primary panels always show the newest scrape; History and niche panels may pin an older one. */
+const PRIMARY_PANELS = new Set(['arb', 'screen', 'events', 'fixture', 'bet']);
+const LATEST_RUN_ID = DATA.meta.latest_run_id ?? (runs[0] && runs[0].id);
+
+let here = { panel: 'arb', arg: null };
 let currentMarket = 'moneyline';
 let currentLeague = '';
 
@@ -1829,7 +1903,17 @@ function parseBetKey(key) {
   };
 }
 
-function panelOf(name) { return PANELS[name] ? name : 'screen'; }
+function panelOf(name) { return PANELS[name] ? name : 'arb'; }
+
+function ensureLatestOnPrimary(panel) {
+  if (!PRIMARY_PANELS.has(panel)) return false;
+  if (LATEST_RUN_ID == null || currentRunId === LATEST_RUN_ID) return false;
+  currentRunId = LATEST_RUN_ID;
+  buildRunPicker();
+  buildSportPicker();
+  renderRunScoped();
+  return true;
+}
 
 function applyRoute() {
   const raw = (typeof location === 'undefined' ? '' : (location.hash || '')).replace(/^#/, '');
@@ -1837,6 +1921,9 @@ function applyRoute() {
   const panel = panelOf(cut < 0 ? raw : raw.slice(0, cut));
   const arg = cut < 0 ? null : decodeURIComponent(raw.slice(cut + 1));
   here = { panel, arg };
+
+  // Front views always show the newest scrape; History is where older ones live.
+  ensureLatestOnPrimary(panel);
 
   // #events/<sport> narrows the whole page to one sport, so a sport is linkable
   // rather than only reachable through a sidebar control.
@@ -1853,8 +1940,14 @@ function applyRoute() {
   if (panel === 'fixture') selectEvent(arg);
   if (panel === 'bet') renderBet(arg);
 
-  for (const id of Object.keys(PANELS)) el(id).classList.toggle('on', id === panel);
+  for (const id of Object.keys(PANELS)) {
+    const node = el(id);
+    if (node) node.classList.toggle('on', id === panel);
+  }
   const inRail = PANELS[panel].parent || panel;
+  const more = el('nav-more');
+  const primaryHrefs = new Set(['#arb', '#screen', '#events']);
+  if (more && !primaryHrefs.has('#' + inRail)) more.open = true;
   for (const link of navLinks()) {
     link.setAttribute('aria-current', String(link.getAttribute('href') === '#' + inRail));
   }
@@ -2192,7 +2285,8 @@ function priceCell(q, bestNet, comparable) {
   if (!q) return '<span class="dim">—</span>';
   const suspended = str(q[COL.status]) !== 'active';
   const net = netOdds(q);
-  const isBest = !!comparable && !suspended && bestNet !== null && net === bestNet;
+  const viewOnly = isViewOnly(str(q[COL.source]));
+  const isBest = !viewOnly && !!comparable && !suspended && bestNet !== null && net === bestNet;
   // Derive American from the same net the board ranks on, so a stored American
   // that disagrees with the decimal cannot paint a self-contradictory tip.
   const american = americanFromDecimal(net);
@@ -2265,13 +2359,13 @@ function renderOddsScreen() {
     if (note) {
       note.textContent = thin
         ? 'this scrape has prices, but they are not embedded in this page'
-        : 'scrape first, then pick the newest scrape in the sidebar';
+        : 'scrape first to fill the board';
     }
     host.innerHTML = thin
       ? `<div class="empty">This scrape's ${(run.quote_count || 0).toLocaleString()} prices are not
          embedded here — only the newest few scrapes carry the board. Rebuild with
-         <code>--quote-runs</code> larger, or pick a newer scrape.</div>`
-      : `<div class="empty">No games in this scrape. Hit <b>Scrape now</b>, then select the newest scrape in the sidebar.</div>`;
+         <code>--quote-runs</code> larger, or open <a href="#history">History</a> for an embedded scrape.</div>`
+      : `<div class="empty">No games in the latest scrape. Hit <b>Scrape now</b>.</div>`;
     return;
   }
 
@@ -2292,11 +2386,13 @@ function renderOddsScreen() {
     const comparableBySide = new Map();
     for (const [sel] of sides) {
       const live = [];
-      for (const bookMap of byBook.values()) {
+      for (const [src, bookMap] of byBook) {
+        if (isViewOnly(src)) continue;
         const q = bookMap.get(sel);
         if (q && str(q[COL.status]) === 'active') live.push(q);
       }
-      // Highlight only when 2+ books offer the *same* contract (same line).
+      // Highlight only when 2+ bettable books offer the *same* contract (same line).
+      // View-only feeds (AN Open) stay on the board but never set the best mark.
       const lineKey = (q) => (q[COL.line] === null || q[COL.line] === undefined)
         ? '' : String(+q[COL.line]);
       const byLine = new Map();
@@ -2401,10 +2497,10 @@ function renderArb() {
     summary.textContent = 'not embedded for this scrape';
     stats.innerHTML = '';
     list.innerHTML = `<div class="arb-empty">This scrape's prices are not embedded in the page, so
-      arbitrage was not computed for it. Pick a newer scrape in the sidebar, or rebuild with a
-      larger <code>--quote-runs</code>.</div>`;
+      arbitrage was not computed for it. Open <a href="#history">History</a> for an embedded scrape,
+      or rebuild with a larger <code>--quote-runs</code>.</div>`;
     rejected.innerHTML = `<div class="arb-empty">Nothing to show.</div>`;
-    if (note) note.textContent = 'switch scrapes in the sidebar';
+    if (note) note.textContent = 'latest scrape only';
     return;
   }
 
@@ -2865,14 +2961,18 @@ function selectEvent(key) {
         const net = netOdds(q);
         // "Best" means best *takeable*, as the detector means it: a suspended
         // price is showing, not offering.  37 cross-book selections on the live
-        // slate had their green marker on a row not accepting bets.
-        const live = [...r.prices.values()].filter((p) => str(p[COL.status]) === 'active');
+        // slate had their green marker on a row not accepting bets.  View-only
+        // feeds (AN Open) never set or receive the mark.
+        const live = [...r.prices.entries()]
+          .filter(([src, p]) => !isViewOnly(src) && str(p[COL.status]) === 'active')
+          .map(([, p]) => p);
         const best = live.length ? Math.max(...live.map(netOdds)) : null;
         const suspended = str(q[COL.status]) !== 'active';
-        const isBest = !suspended && live.length > 1 && net === best;
+        const isBest = !isViewOnly(s) && !suspended && live.length > 1 && net === best;
         const american = americanFromDecimal(net);
         const note = `${fmtAmerican(american)} · $100 returns ${fmtReturn(net)}${
           charges(s) ? ` · quoted ${fmtOdds(q[COL.decimal_odds])} before commission` : ''}${
+          isViewOnly(s) ? ' · context only, not a book' : ''}${
           suspended ? ' · not taking bets right now' : ''}`;
         return html(`<span class="odds-cell${isBest ? ' best' : ''}${suspended ? ' dim' : ''}">${
           fmtAmerican(american)}</span>`, '', note);
@@ -2882,8 +2982,9 @@ function selectEvent(key) {
       band: 'American odds (best highlighted)',
       label: 'Best vs worst', num: true, hint: 'How much more the best price pays than the worst',
       cell: (r) => {
-        const vals = [...r.prices.values()]
-          .filter((p) => str(p[COL.status]) === 'active').map(netOdds);
+        const vals = [...r.prices.entries()]
+          .filter(([src, p]) => !isViewOnly(src) && str(p[COL.status]) === 'active')
+          .map(([, p]) => netOdds(p));
         if (vals.length < 2) return html('<span class="dim">—</span>');
         const pct = (Math.max(...vals) / Math.min(...vals) - 1) * 100;
         return cell(pct.toFixed(1) + '%', pct >= 2 ? 'up' : 'dim');
@@ -3036,8 +3137,11 @@ function renderBet(key) {
   const byBook = new Map();
   for (const m of shown) keepBetter(byBook, str(m.row[COL.source]), m.row);
   // Best *takeable*, matching the fixture table and the detector: a suspended
-  // price is showing, not offering.
-  const live = [...byBook.values()].filter((r) => str(r[COL.status]) === 'active');
+  // price is showing, not offering.  View-only feeds stay visible but never
+  // win (or set) the best mark.
+  const live = [...byBook.entries()]
+    .filter(([src, r]) => !isViewOnly(src) && str(r[COL.status]) === 'active')
+    .map(([, r]) => r);
   const prices = live.map(netOdds);
   const best = prices.length ? Math.max(...prices) : null;
   const worst = prices.length ? Math.min(...prices) : null;
@@ -3052,7 +3156,7 @@ function renderBet(key) {
       const open = str(r[COL.status]) === 'active';
       const net = netOdds(r);
       const cut = charges(source);
-      const isBest = open && prices.length > 1 && net === best;
+      const isBest = !isViewOnly(source) && open && prices.length > 1 && net === best;
       const facts = [
         ['US odds', fmtAmerican(americanOf(r))],
         ['$100 returns', fmtReturn(net)],
@@ -4024,6 +4128,40 @@ function scrapeScopePayload() {
   return { tier: 'core', league: 'MLB' };
 }
 
+function paintScrapeProgress(progress, busy) {
+  const box = el('scrape-progress');
+  const fill = el('scrape-bar-fill');
+  const msg = el('scrape-msg');
+  const meta = el('scrape-meta');
+  if (!box || !fill || !msg || !meta) return;
+  if (!busy && !(progress && progress.phase === 'done')) {
+    box.classList.remove('on', 'is-indeterminate');
+    return;
+  }
+  box.classList.add('on');
+  const done = Number(progress && progress.done) || 0;
+  const total = Number(progress && progress.total) || 0;
+  const phase = (progress && progress.phase) || '';
+  const known = total > 0 && (phase === 'fetching' || phase === 'fetched' || phase === 'starting');
+  box.classList.toggle('is-indeterminate', busy && !known);
+  if (known) {
+    fill.style.width = Math.max(4, Math.min(100, Math.round((done / total) * 100))) + '%';
+  } else if (phase === 'rebuilding' || phase === 'done') {
+    fill.style.width = '100%';
+    box.classList.remove('is-indeterminate');
+  } else {
+    fill.style.width = '35%';
+  }
+  msg.textContent = (progress && progress.message) || (busy ? 'Scraping…' : '');
+  const bits = [];
+  if (total > 0) bits.push(`${done}/${total} books`);
+  if (progress && progress.quote_count != null) {
+    bits.push(`${Number(progress.quote_count).toLocaleString()} prices`);
+  }
+  if (phase && phase !== 'fetching' && phase !== 'fetched') bits.push(phase);
+  meta.textContent = bits.join(' · ');
+}
+
 function wireScrapeButton() {
   const btn = el('scrape-btn');
   const status = el('scrape-status');
@@ -4036,10 +4174,55 @@ function wireScrapeButton() {
     return;
   }
   status.textContent = 'Ready — scrapes the venues, then reloads this page on the new snapshot.';
+
+  let pollTimer = null;
+  const stopPoll = () => {
+    if (pollTimer != null) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+  };
+  const startPoll = () => {
+    stopPoll();
+    const tick = async () => {
+      try {
+        const res = await fetch('/api/status', { cache: 'no-store' });
+        const body = await res.json().catch(() => ({}));
+        paintScrapeProgress(body.progress, !!body.busy);
+        if (body.busy) {
+          btn.disabled = true;
+          status.textContent = 'Scraping in progress…';
+        }
+      } catch (_) { /* keep last paint */ }
+    };
+    tick();
+    pollTimer = setInterval(tick, 500);
+  };
+
+  // Resume the progress UI if this tab opened while a scrape was already running.
+  fetch('/api/status', { cache: 'no-store' })
+    .then((r) => r.json())
+    .then((body) => {
+      if (body && body.busy) {
+        btn.disabled = true;
+        status.textContent = 'Scraping in progress…';
+        startPoll();
+      }
+    })
+    .catch(() => {});
+
   btn.addEventListener('click', async () => {
     if (btn.disabled) return;
     btn.disabled = true;
-    status.textContent = 'Scraping… this usually takes 15–40s for MLB core.';
+    status.textContent = 'Scraping…';
+    paintScrapeProgress({
+      phase: 'starting',
+      message: 'Starting scrape…',
+      done: 0,
+      total: 0,
+      quote_count: 0,
+    }, true);
+    startPoll();
     try {
       const res = await fetch('/api/collect', {
         method: 'POST',
@@ -4047,16 +4230,33 @@ function wireScrapeButton() {
         body: JSON.stringify(scrapeScopePayload()),
       });
       const body = await res.json().catch(() => ({}));
+      stopPoll();
       if (!res.ok || !body.ok) {
-        status.textContent = 'Scrape failed: ' + (body.error || res.statusText || res.status);
+        const err = body.error || res.statusText || res.status;
+        status.textContent = 'Scrape failed: ' + err;
+        paintScrapeProgress({ phase: 'error', message: String(err) }, false);
+        el('scrape-progress').classList.add('on');
         btn.disabled = false;
         return;
       }
       const quotes = (body.collect && body.collect.quote_count) || 0;
       status.textContent = `Got ${quotes.toLocaleString()} prices — reloading…`;
+      paintScrapeProgress({
+        phase: 'done',
+        message: `Got ${quotes.toLocaleString()} prices — reloading…`,
+        quote_count: quotes,
+        done: 1,
+        total: 1,
+      }, false);
       location.reload();
     } catch (err) {
+      stopPoll();
       status.textContent = 'Scrape failed: ' + (err && err.message ? err.message : err);
+      paintScrapeProgress({
+        phase: 'error',
+        message: String(err && err.message ? err.message : err),
+      }, false);
+      el('scrape-progress').classList.add('on');
       btn.disabled = false;
     }
   });

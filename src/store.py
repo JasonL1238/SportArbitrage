@@ -1365,15 +1365,24 @@ class Store:
         one has the NHL openers, the other a Belarusian friendly — and in that
         case there is still nothing to compare.  Counting the *overlap* is what
         tells those two situations apart.
+
+        View-only feeds (AN Open) do not count toward the book total — they are
+        on the board for context, not a counterparty that makes a sport comparable.
         """
+        from src.sources.registry import VIEW_ONLY_SOURCES
+
+        exclude = tuple(sorted(VIEW_ONLY_SOURCES))
+        banned = (
+            f" AND source NOT IN ({','.join('?' * len(exclude))})" if exclude else ""
+        )
         rows = self._conn.execute(
-            """SELECT sport, COUNT(*) AS n FROM (
+            f"""SELECT sport, COUNT(*) AS n FROM (
                    SELECT sport, event_key
-                     FROM quote WHERE run_id = ?
+                     FROM quote WHERE run_id = ?{banned}
                     GROUP BY sport, event_key
                    HAVING COUNT(DISTINCT source) >= ?
                ) GROUP BY sport""",
-            (run_id, min_books),
+            (run_id, *exclude, min_books),
         ).fetchall()
         return {row["sport"]: row["n"] for row in rows}
 

@@ -276,9 +276,22 @@ def reconcile_event_keys(quotes: Sequence[Quote]) -> tuple[list[Quote], list[Rek
         # With every id suffixed, the other book sits alone on the bare key and
         # no cross-source join is made inside an ambiguous cluster.  A cluster
         # nobody can resolve produces no comparison, which is the honest answer.
+        # commence_time → cluster index, once.  The older form rescanned every
+        # cluster for every row (and built ``in_cluster`` with another pass over
+        # the group), which is fine for a doubleheader and wasteful for a soccer
+        # slate where one matchup group is uncommon but the cross-product still
+        # runs per fixture.
+        time_to_cluster: dict[datetime, int] = {
+            instant: index
+            for index, cluster in enumerate(clusters)
+            for instant in cluster
+        }
+        by_cluster: dict[int, list[Quote]] = defaultdict(list)
+        for quote in group:
+            by_cluster[time_to_cluster[quote.commence_time]].append(quote)
+
         ambiguous: dict[tuple[int, str, str], int] = {}
-        for index, cluster in enumerate(clusters):
-            in_cluster = [q for q in group if q.commence_time in cluster]
+        for index, in_cluster in by_cluster.items():
             for source in sorted({q.source for q in in_cluster}):
                 ids = sorted({q.source_event_id for q in in_cluster if q.source == source})
                 if len(ids) < 2:
@@ -287,9 +300,7 @@ def reconcile_event_keys(quotes: Sequence[Quote]) -> tuple[list[Quote], list[Rek
                     ambiguous[(index, source, event_id)] = rank
 
         for quote in group:
-            index = next(
-                i for i, cluster in enumerate(clusters) if quote.commence_time in cluster
-            )
+            index = time_to_cluster[quote.commence_time]
             correct = key_for_cluster[index]
             split = ambiguous.get((index, quote.source, quote.source_event_id))
             if split is not None:

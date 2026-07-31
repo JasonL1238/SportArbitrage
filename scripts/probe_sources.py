@@ -141,16 +141,6 @@ CANDIDATES: tuple[Candidate, ...] = (
                "tz": "0", "mode": "4", "country": "1"},
               expect="Value", counts=_len("Value"),
               note="registered as onexbet"),
-    Candidate("sportsbook", "unibet_au",
-              "https://www.unibet.com.au/sportsbook-feeds/views/filter/"
-              "baseball/all/matches",
-              {"includeParticipants": "true"},
-              expect="layout",
-              counts=lambda p: (
-                  f"{sum(len(e.get('events') or []) for s in ((p.get('layout') or {}).get('sections') or []) for w in s.get('widgets') or [] for e in ((w.get('matches') or {}).get('groups') or []))} event(s)"
-                  if isinstance(p, dict) else "?"
-              ),
-              note="registered as unibet_au"),
 
     # ── reopen candidates (blocked under plain httpx; try impersonation) ────
     Candidate("blocked", "draftkings",

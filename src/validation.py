@@ -1055,6 +1055,28 @@ MIN_SOURCES_FOR_PRICE_CONSENSUS = 3
 MAX_USABLE_OBSERVATION_GAP = MAX_OBSERVATION_SPREAD
 
 
+def _closest_observation_gap(
+    left: Sequence[datetime], right: Sequence[datetime]
+) -> timedelta:
+    """Smallest ``|a - b|`` for ``a`` in *left*, ``b`` in *right*.
+
+    Both sequences must already be sorted ascending.  Two pointers, not the
+    cartesian product: equal-length lists of *n* stamps cost ``O(n)`` here and
+    ``O(n²)`` in the nested generator this replaced.
+    """
+    i = j = 0
+    best = abs(left[0] - right[0])
+    while i < len(left) and j < len(right):
+        gap = abs(left[i] - right[j])
+        if gap < best:
+            best = gap
+        if left[i] <= right[j]:
+            i += 1
+        else:
+            j += 1
+    return best
+
+
 def _check_observation_window(quotes: Sequence[Quote], report: ValidationReport) -> None:
     """Which sources were collected too far apart to be compared with each other.
 
@@ -1102,14 +1124,18 @@ def _check_observation_window(quotes: Sequence[Quote], report: ValidationReport)
     for by_source in groups.values():
         if len(by_source) < 2:
             continue
-        for source, times in by_source.items():
+        # Sorted once per source in the group: closest gap between two lists is
+        # then a linear two-pointer walk rather than the cartesian product of
+        # observation times (which bites when a source posts several rows for
+        # one selection).
+        sorted_times = {
+            source: sorted(times) for source, times in by_source.items()
+        }
+        for source, times in sorted_times.items():
             shared[source] += 1
             closest = min(
-                (
-                    min(abs(mine - theirs) for mine in times for theirs in other),
-                    partner,
-                )
-                for partner, other in by_source.items()
+                (_closest_observation_gap(times, other), partner)
+                for partner, other in sorted_times.items()
                 if partner != source
             )
             if closest[0] <= MAX_USABLE_OBSERVATION_GAP:

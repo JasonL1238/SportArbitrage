@@ -514,6 +514,7 @@ def collect_once(
     sports: Sequence[str] | None = None,
     leagues: Sequence[str] | None = None,
     tier: Tier = Tier.FULL,
+    on_progress: Callable[[Mapping[str, Any]], None] | None = None,
 ) -> RunResult:
     """Fetch, persist raw, parse, reconcile, validate, find arbitrage, persist.
 
@@ -533,7 +534,19 @@ def collect_once(
     fixture cluster correctly across books, and event identity would then depend
     on a command-line flag.  Rows dropped this way are counted and recorded on
     the run, never silently discarded.
+
+    *on_progress*, when set, is called with small status dicts as the pass moves
+    through books and post-fetch work.  Callers that serve a UI use this to show
+    live progress without coupling the pipeline to HTTP.
     """
+    def _progress(payload: Mapping[str, Any]) -> None:
+        if on_progress is None:
+            return
+        try:
+            on_progress(payload)
+        except Exception:  # noqa: BLE001 — progress must never abort a collect
+            log.debug("on_progress failed", exc_info=True)
+
     started_at = datetime.now(UTC)
     run_id = (
         store.start_run(started_at, sports=sports, leagues=leagues) if store else None
@@ -548,8 +561,25 @@ def collect_once(
     coverage: list[LeagueCoverage] = []
     undeclared: list[str] = []
     claimed: dict[tuple[str, str], frozenset[Market]] = {}
+    source_list = list(sources)
+    total_sources = len(source_list)
+    _progress({
+        "phase": "starting",
+        "message": f"Starting scrape of {total_sources} book(s)",
+        "done": 0,
+        "total": total_sources,
+        "quote_count": 0,
+    })
 
-    for source in sources:
+    for index, source in enumerate(source_list, start=1):
+        _progress({
+            "phase": "fetching",
+            "message": f"Fetching {source.source_key} ({index}/{total_sources})",
+            "source": source.source_key,
+            "done": index - 1,
+            "total": total_sources,
+            "quote_count": len(all_quotes),
+        })
         health, outcome = _collect_source(
             source,
             raw_store=raw_store,
@@ -578,11 +608,31 @@ def collect_once(
                 source.source_key,
                 [(e.league, e.sport, e.quote_count, e.event_count) for e in per_league],
             )
+        flag = "ok" if health.ok else "failed"
+        _progress({
+            "phase": "fetched",
+            "message": (
+                f"{source.source_key} {flag} — "
+                f"{len(outcome.quotes):,} prices ({index}/{total_sources})"
+            ),
+            "source": source.source_key,
+            "source_ok": health.ok,
+            "done": index,
+            "total": total_sources,
+            "quote_count": len(all_quotes),
+        })
 
     # Event identity is settled across all sources at once, before anything is
     # validated or compared. Each adapter can only number doubleheaders over its
     # own slate, which makes "#2" a per-source ordinal rather than an identity;
     # left uncorrected, one book's game 2 joins onto another book's game 1.
+    _progress({
+        "phase": "reconciling",
+        "message": f"Reconciling {len(all_quotes):,} prices across books",
+        "done": total_sources,
+        "total": total_sources,
+        "quote_count": len(all_quotes),
+    })
     all_quotes, rekeys = reconcile_event_keys(all_quotes)
 
     # Measured on **everything collected**, before any scope filter, and passed
@@ -597,7 +647,11 @@ def collect_once(
     # book and no diagnostic at all.  This is what ``counterparty_groups``' own
     # docstring calls the most expensive defect this gate has had — round 16
     # fixed where a mirror is *filed* and left where it is *measured*.
-    measured_counterparties = counterparty_groups(all_quotes)
+    # Measured once and shared: ``counterparty_groups`` and the filing check
+    # below both need the same mirror list, and each used to call
+    # ``find_mirrors`` on its own — a second full pairwise scan of the slate.
+    measured_mirrors = find_mirrors(all_quotes)
+    measured_counterparties = counterparty_groups(all_quotes, mirrors=measured_mirrors)
     # Kept for the distinctness *filing* below, for the same reason the gate is
     # measured here: the evidence does not stop existing because this command
     # was asked about one league.  ``_check_distinctness`` ran on the filtered
@@ -622,6 +676,13 @@ def collect_once(
             and (not leagues or entry.league in leagues)
         ]
 
+    _progress({
+        "phase": "validating",
+        "message": f"Validating {len(all_quotes):,} prices",
+        "done": total_sources,
+        "total": total_sources,
+        "quote_count": len(all_quotes),
+    })
     report = validate(
         all_quotes,
         capabilities=claimed,
@@ -648,7 +709,7 @@ def collect_once(
             "that was never requested",
             source=source_key,
         )
-    _check_distinctness(unfiltered_quotes, report)
+    _check_distinctness(unfiltered_quotes, report, mirrors=measured_mirrors)
 
     for rekey in rekeys:
         report.add(
@@ -663,6 +724,13 @@ def collect_once(
     # The mirror gate is measured inside ``find_opportunities`` from these same
     # rows, so the live verdict and a later re-analysis of the stored rows agree
     # without either caller having to remember it.
+    _progress({
+        "phase": "arb",
+        "message": "Scanning for arbitrage",
+        "done": total_sources,
+        "total": total_sources,
+        "quote_count": len(all_quotes),
+    })
     arb_report = find_opportunities(
         all_quotes,
         as_of=as_of or datetime.now(UTC),
@@ -670,6 +738,13 @@ def collect_once(
     )
 
     if store is not None and run_id is not None:
+        _progress({
+            "phase": "saving",
+            "message": f"Saving {len(all_quotes):,} prices",
+            "done": total_sources,
+            "total": total_sources,
+            "quote_count": len(all_quotes),
+        })
         # One unusable run must not end an unattended watch loop, and it must
         # not be recorded as though nothing happened either.
         #
@@ -719,7 +794,12 @@ def collect_once(
     )
 
 
-def _check_distinctness(quotes: Sequence[Quote], report: ValidationReport) -> list[Agreement]:
+def _check_distinctness(
+    quotes: Sequence[Quote],
+    report: ValidationReport,
+    *,
+    mirrors: Sequence[Agreement] | None = None,
+) -> list[Agreement]:
     """Refuse a run in which two registered sources are one counterparty.
 
     The gate exists because a mirror is invisible to every other check here: it
@@ -740,8 +820,11 @@ def _check_distinctness(quotes: Sequence[Quote], report: ValidationReport) -> li
     shared selections to tell" is deliberately not an error: that is a thin
     slate, not a mirror, and failing on it would make every out-of-season sport
     unaddable.
+
+    *mirrors* is the already-measured list when the caller has one — collect
+    measures once for the gate and the filing check.
     """
-    mirrors = find_mirrors(quotes)
+    mirrors = mirrors if mirrors is not None else find_mirrors(quotes)
     for pair in mirrors:
         # Intentional Action Network failover pairs are supposed to agree.
         # :func:`check_redundancy` flags drift and outages for those; treating
@@ -1153,8 +1236,20 @@ def _check_source_health(
       to shout about.  Graded an error for that reason: the row count alone would
       stay plausible while a feed quietly died.
     """
-    producing = [h.source_key for h in health if h.quote_count > 0]
-    silent = [h.source_key for h in health if h.quote_count == 0]
+    from src.sources.registry import VIEW_ONLY_SOURCES
+
+    # View-only feeds do not make a slate comparable — AN Open alone beside one
+    # real book must not clear the two-counterparty floor.
+    producing = [
+        h.source_key
+        for h in health
+        if h.quote_count > 0 and h.source_key not in VIEW_ONLY_SOURCES
+    ]
+    silent = [
+        h.source_key
+        for h in health
+        if h.quote_count == 0 and h.source_key not in VIEW_ONLY_SOURCES
+    ]
 
     if len(producing) < MIN_HEALTHY_SOURCES:
         report.add(
@@ -2130,15 +2225,18 @@ def _cmd_arb(args: argparse.Namespace) -> int:
         # counterparty does not stop existing because this command was asked
         # about one league.  See ``collect_once``.
         everything, _ = reconcile_event_keys(store.load_quotes(run_id))
-        # Re-measured from the stored rows AND unioned with what the collector
-        # recorded at collection time.  A scoped run stores only the kept rows,
-        # so the store alone is narrowed evidence — the mirror established on 22
-        # shared MLB selections vanished from a ``--sport tennis`` run's rows,
-        # the gate reopened, and this command published a "guaranteed" +3.00
-        # with both legs at one operator seconds after the live pass refused it.
+        # Unioned with what the collector recorded at collection time.  A scoped
+        # run stores only the kept rows, so the store alone is narrowed evidence
+        # — the mirror established on 22 shared MLB selections vanished from a
+        # ``--sport tennis`` run's rows, the gate reopened, and this command
+        # published a "guaranteed" +3.00 with both legs at one operator seconds
+        # after the live pass refused it.  When the run already recorded the
+        # full-slate measurement, re-scanning the (possibly narrower) rows
+        # cannot strengthen the gate and is skipped.
+        recorded = store.recorded_counterparty_groups(run_id)
         measured_counterparties = merge_counterparty_groups(
-            counterparty_groups(everything),
-            store.recorded_counterparty_groups(run_id),
+            {} if recorded else counterparty_groups(everything),
+            recorded,
         )
         quotes = [q for q in everything if in_scope(q, sports, leagues)]
         # Gated on the clock by default, exactly as the live path is.  Without
@@ -2224,10 +2322,12 @@ def _cmd_lines(args: argparse.Namespace) -> int:
         surface = best_prices(quotes)
         sport_of = {quote.event_key: (quote.sport.value, quote.league) for quote in quotes}
         # Measured on the whole run and unioned with the collection-time
-        # record, for the same reason ``arb`` does it.
+        # record, for the same reason ``arb`` does it.  Reuse the already-
+        # reconciled rows — a second load+reconcile was pure duplicate work.
+        recorded = store.recorded_counterparty_groups(run_id)
         one_counterparty = merge_counterparty_groups(
-            counterparty_groups(reconcile_event_keys(store.load_quotes(run_id))[0]),
-            store.recorded_counterparty_groups(run_id),
+            {} if recorded else counterparty_groups(everything),
+            recorded,
         )
 
         shown = 0

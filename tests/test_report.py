@@ -855,10 +855,23 @@ def test_every_panel_can_be_routed_to(populated: Store, tmp_path) -> None:
 def test_the_scrape_controls_are_on_the_page() -> None:
     from src.report_assets import BODY, JS
 
-    for needle in ("scrape-btn", "scrape-scope", "scrape-status", "run-list", "/api/collect"):
+    for needle in (
+        "scrape-btn", "scrape-scope", "scrape-status", "scrape-progress",
+        "run-list", "/api/collect", "/api/status", "paintScrapeProgress",
+    ):
         assert needle in BODY or needle in JS, needle
+    assert 'id="history"' in BODY
+    assert "PRIMARY_PANELS" in JS
     assert "selectRun" in JS
     assert "wireScrapeButton" in JS
+    # Front door is arbitrage; past scrapes live under History, not the rail.
+    assert BODY.index('href="#arb"') < BODY.index('href="#history"')
+    assert 'id="run-list"' in BODY
+    assert "run-block" not in BODY
+    assert "run-pick-screen" not in BODY
+    # AN Open is view-only: shown for context, never best-price highlighted.
+    assert "isViewOnly" in JS
+    assert "view_only" in JS
 
 
 def test_rebuild_dashboard_writes_the_newest_run(populated: Store, tmp_path, monkeypatch) -> None:

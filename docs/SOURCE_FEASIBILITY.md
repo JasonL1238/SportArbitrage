@@ -28,8 +28,9 @@ python scripts/probe_sources.py --only blocked
 Measured on one live ``--tier core`` pass (2026-07-28), which produced **1,683
 cross-book markets** against 331 from the original three books, and found five
 risk-free positions where three books found none.  BetMGM was added on
-**2026-07-30** after a re-probe found the Illinois Entain CDS host answering;
-Unibet Australia's public filter feed was added the same day.
+**2026-07-30** after a re-probe found the Illinois Entain CDS host answering.
+Unibet Australia was probed the same day and later dropped — not a counterparty
+you can stake from this egress (Davis, CA / U.C.).
 
 | Source key | Venue | Kind | Charge | Requests | How it is reached |
 |---|---|---|---|---|---|
@@ -39,7 +40,6 @@ Unibet Australia's public filter feed was added the same day.
 | `leovegas_kambi` | LeoVegas | sportsbook | none (in the price) | 69 | Kambi offering API, operator `leo` |
 | `bovada` | Bovada | sportsbook (offshore) | none (in the price) | 12 | one coupon request per league, whole slate with prices; states `competitors[].home` |
 | `betmgm` | BetMGM Illinois | sportsbook | none (in the price) | ~6 | `www.il.betmgm.com/cds-api/bettingoffer/fixtures` with public `x-bwin-accessid`; one paged request per sport |
-| `unibet_au` | Unibet Australia | sportsbook | none (in the price) | 6 | `www.unibet.com.au/sportsbook-feeds/views/filter/{sport}/all/matches`; Kambi-shaped offers, stated `participants[].home` |
 | `matchbook` | Matchbook | exchange | 2% of net winnings | 6 | one call per sport: moneyline, totals and handicaps **with the money behind each price** |
 | `smarkets` | Smarkets | exchange | 2% of net winnings | 48 | fully typed markets and contracts; **moneyline only** — see the rate limit below |
 | `sxbet` | SX Bet | exchange | 5% oracle fee | 26 | resting order book, sized per order; the alternate ladder is a depth-tier cost |
