@@ -184,7 +184,7 @@ def _build_roster(roster_name: str) -> _Roster:
     # it structurally keeps the guarantee true as rosters change, instead of
     # relying on someone noticing the next collision by hand.
     word_tokens: set[str] = set()
-    for abbr, name, city, nickname in rows:
+    for _abbr, name, city, nickname in rows:
         for text in (name, city, nickname):
             if text:
                 word_tokens.update(_words(text, drop_parentheticals=True))

@@ -72,6 +72,37 @@ class PromoOffer(BaseModel):
     requires_login: bool = False
     """True when the public catalog says details need an account."""
 
+    summary: str = ""
+    """Concrete one-line mechanics, e.g. ``Bet $5, get $150 in bonus bets``."""
+
+    eligible_regions: list[str] = Field(default_factory=list)
+    """US state / CA province codes where the offer was observed or stated."""
+
+    ineligible_regions: list[str] = Field(default_factory=list)
+    """Codes explicitly excluded by the venue copy."""
+
+    eligibility_notes: str = ""
+    """New customer, min deposit, age, opt-in, and similar constraints."""
+
+    bonus_amount: float | None = None
+    """Primary reward dollars when parseable (bonus bets, free bet, match cap)."""
+
+    min_deposit: float | None = None
+    min_odds: str | None = None
+    """Minimum odds constraint as published (e.g. ``-200``, ``1.5``)."""
+
+    wagering_requirement: str | None = None
+    """Rollover / playthrough when stated (e.g. ``1x``, ``10x deposit``)."""
+
+    reward_type: str = ""
+    """``bonus_bets``, ``free_bet``, ``site_credit``, ``cash``, ``boost``, …"""
+
+    usage_guidance: str = ""
+    """Generated max-profit playbook for the dashboard detail panel."""
+
+    is_specific: bool = False
+    """True once enrichment found concrete mechanics ($/%, reward type, etc.)."""
+
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("title")
@@ -81,6 +112,27 @@ class PromoOffer(BaseModel):
         if not text:
             raise ValueError("title must be non-empty")
         return text
+
+    @field_validator("url")
+    @classmethod
+    def _url_empty_to_none(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        text = value.strip()
+        return text or None
+
+    @field_validator("eligible_regions", "ineligible_regions")
+    @classmethod
+    def _normalize_regions(cls, value: list[str]) -> list[str]:
+        seen: set[str] = set()
+        out: list[str] = []
+        for item in value:
+            code = str(item or "").strip().upper()
+            if not code or code in seen:
+                continue
+            seen.add(code)
+            out.append(code)
+        return out
 
     @property
     def dedup_key(self) -> tuple[str, str]:

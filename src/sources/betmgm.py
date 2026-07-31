@@ -496,7 +496,7 @@ def _accept_event(
         outcome.skipped["league_not_requested"] += 1
         return None
 
-    sides = _sides(event, competition, source, outcome, event_id)
+    sides = _sides(event, competition, outcome)
     if sides is None:
         return None
     home_name, away_name, book_home_name, id_map = sides
@@ -631,9 +631,7 @@ def _tennis_league(name: str) -> str:
 def _sides(
     event: Mapping[str, Any],
     competition: League,
-    source: str,
     outcome: ParseOutcome,
-    event_id: str,
 ) -> tuple[str, str, str, dict[int, str]] | None:
     """Return ``(home_name, away_name, book_home_name, id->name)``."""
     teams: list[tuple[int, str, str | None]] = []
@@ -912,7 +910,7 @@ def _build_quote(
         outcome.skipped["implausible_price"] += 1
         return None
 
-    line = _line_for(rule.market, selection, attr, label, line_hint)
+    line = _line_for(rule.market, attr, label, line_hint)
     if rule.market in MARKETS_REQUIRING_LINE and line is None:
         outcome.reject(
             source,
@@ -1073,7 +1071,6 @@ def _label_matches(label: str, name: str) -> bool:
 
 def _line_for(
     market: Market,
-    selection: Selection,
     attr: Any,
     label: str,
     line_hint: float | None,

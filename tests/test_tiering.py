@@ -18,7 +18,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from src.schema import Market, Sport
+from src.schema import Market
 from src.sources._common import Tier
 from src.sources.fanduel import FanDuelAdapter
 from src.sources.pinnacle import PinnacleAdapter

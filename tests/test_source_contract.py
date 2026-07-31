@@ -174,9 +174,9 @@ class TestInterface:
         finally:
             adapter.close()
         assert claims, f"{key} declares no capabilities"
-        for league, markets in claims.items():
-            assert is_known(league), f"{key} claims unregistered league {league!r}"
-            assert markets, f"{key} claims league {league} with no markets"
+        for league_key, markets in claims.items():
+            assert is_known(league_key), f"{key} claims unregistered league {league_key!r}"
+            assert markets, f"{key} claims league {league_key} with no markets"
         # Nothing it produced may be outside what it claimed for that league.
         for quote in outcome.quotes:
             declared = claims.get(quote.league)

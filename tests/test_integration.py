@@ -19,14 +19,7 @@ from pathlib import Path
 import pytest
 
 from src.arb import best_prices, find_opportunities
-from src.collector import SOURCE_FACTORIES, collect_once, replay_run
-
-
-def _paths_by_source(store, run_id):
-    grouped: dict[str, list] = {}
-    for source_key, path in store.raw_paths(run_id):
-        grouped.setdefault(source_key, []).append(path)
-    return grouped.items()
+from src.collector import collect_once, replay_run
 from src.events import reconcile_event_keys
 from src.raw_store import RawStore
 from src.schema import Market, Period, Sport

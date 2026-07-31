@@ -743,7 +743,6 @@ class FakeSource:
         self._leagues = tuple(leagues)
         self._raws = list(raws or [])
         self._fail = fail
-        self.parsed_after_write = None
 
     @property
     def source_key(self) -> str:
@@ -1039,10 +1038,6 @@ def test_replay_reproduces_a_stored_run(tmp_path: Path, collector, monkeypatch) 
     raw_store = RawStore(tmp_path / "raw")
     rows = multi_sport_quotes("fanduel")
     other = multi_sport_quotes("pinnacle")
-
-    class Replayable(FakeSource):
-        def __init__(self, quotes, **kwargs):
-            super().__init__(kwargs.pop("key"), quotes, **kwargs)
 
     monkeypatch.setitem(
         collector.SOURCE_FACTORIES, "fanduel",

@@ -337,7 +337,7 @@ def parse_onexbet(raws: Sequence[RawResponse]) -> ParseOutcome:
             if not isinstance(event, dict):
                 outcome.skipped["event_not_an_object"] += 1
                 continue
-            fixture = _accept(event, sport, source, raw.fetched_at, outcome)
+            fixture = _accept(event, source, raw.fetched_at, outcome)
             if fixture is None:
                 continue
             if fixture.event_id in fixtures:
@@ -383,7 +383,6 @@ def _sport_of_endpoint(endpoint: str) -> Sport | None:
 
 def _accept(
     event: Mapping[str, Any],
-    sport: Sport,
     source: str,
     captured_at: datetime,
     outcome: ParseOutcome,

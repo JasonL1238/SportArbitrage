@@ -1802,7 +1802,7 @@ def _cmd_migrate(args: argparse.Namespace) -> int:
     return 0
 
 
-def _non_negative(name: str, *, whole: bool = True):
+def _non_negative(*, whole: bool = True):
     """An argparse type for a value where zero is meaningful but below zero is not.
 
     ``--max-runs 0`` means unlimited, so it cannot use :func:`_positive` — and
@@ -1836,7 +1836,7 @@ def _non_negative(name: str, *, whole: bool = True):
     return parse
 
 
-def _a_rate(name: str):
+def _a_rate(text: str) -> float:
     """An argparse type for a proportion, which is a number between 0 and 1.
 
     ``--min-rate`` was a bare ``float``.  ``nan`` made the threshold unreachable,
@@ -1845,22 +1845,21 @@ def _a_rate(name: str):
     "below the inf% success threshold", and ``80`` — which the output invites,
     since every rate on it is a percentage — printed "below the 8000% success
     threshold" and failed every source.
+
+    argparse already prefixes the failing flag's own name onto the message, so
+    this takes the value and nothing else.
     """
-
-    def parse(text: str):
-        try:
-            value = float(text)
-        except ValueError:
-            raise argparse.ArgumentTypeError(f"{text!r} is not a number") from None
-        if not math.isfinite(value):
-            raise argparse.ArgumentTypeError(f"must be a finite number, got {text}")
-        if not 0.0 <= value <= 1.0:
-            raise argparse.ArgumentTypeError(
-                f"is a proportion between 0 and 1, not a percentage, got {text}"
-            )
-        return value
-
-    return parse
+    try:
+        value = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{text!r} is not a number") from None
+    if not math.isfinite(value):
+        raise argparse.ArgumentTypeError(f"must be a finite number, got {text}")
+    if not 0.0 <= value <= 1.0:
+        raise argparse.ArgumentTypeError(
+            f"is a proportion between 0 and 1, not a percentage, got {text}"
+        )
+    return value
 
 
 def _positive(name: str):
@@ -2695,7 +2694,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     collect.add_argument(
         "--max-runs",
-        type=_non_negative("count"),
+        type=_non_negative(),
         default=0,
         help="0 means unlimited",
     )
@@ -2731,7 +2730,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     arb.add_argument(
         "--min-margin",
-        type=_non_negative("min-margin", whole=False),
+        type=_non_negative(whole=False),
         default=0.0,
         help="minimum edge to report, in percent",
     )
@@ -2777,7 +2776,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="how many runs to look back over",
     )
     health.add_argument(
-        "--min-rate", type=_a_rate("min-rate"), default=0.8,
+        "--min-rate", type=_a_rate, default=0.8,
         help="failure threshold, 0-1",
     )
     _add_scope_arguments(health)

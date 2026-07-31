@@ -1932,7 +1932,7 @@ def _examine_group(
         def _refuse(code: str, detail: str) -> None:
             refusals.append((code, detail))
 
-        for (chosen, sum_implied), legs_quotes in ranked:
+        for (_chosen, sum_implied), legs_quotes in ranked:
             margin = 1.0 - sum_implied
             reject_here = _refuse
 

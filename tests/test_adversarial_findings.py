@@ -545,8 +545,6 @@ class TestLineShoppingAgreesWithTheDetector:
         broken, which is the one conclusion that makes a false positive
         actionable.
         """
-        from src.collector import _cmd_lines
-
         # A book at 2.05 against an exchange at 1.96 whose net is 1.9408: the
         # quoted pair sums to 0.9980 and looks like a 0.2% edge; the net pair
         # sums to 1.0031 and loses.  This is the whole failure in two prices.
@@ -572,8 +570,6 @@ class TestLineShoppingAgreesWithTheDetector:
 
     def test_a_book_is_printed_exactly_as_quoted(self, capsys) -> None:
         """Nothing is added where nothing is charged."""
-        from src.collector import _cmd_lines
-
         quotes = [
             make_quote(source="fanduel", selection=Selection.HOME, decimal_odds=2.08),
             make_quote(source="pinnacle", selection=Selection.AWAY, decimal_odds=1.95),
@@ -3381,7 +3377,6 @@ class TestSmarketsKeepsTheBatchesItAlreadyPaidFor:
 
     def test_a_failure_mid_batch_keeps_the_batches_already_fetched(self) -> None:
         from src.sources.guards import SourceError
-        from src.raw_store import RawResponse
         from src.schema import Sport as SchemaSport
         from src.sources._common import Tier
 
@@ -4472,7 +4467,6 @@ class TestTheLinesSurfaceSaysWhyTheDetectorRefuses:
     """
 
     def _note(self, legs, one_counterparty=None):
-        from src.arb import EVERY_LEAGUE
         from src.collector import _why_the_detector_would_refuse
 
         return _why_the_detector_would_refuse(legs, one_counterparty or {})
@@ -7724,9 +7718,9 @@ class TestAnArgumentThatCannotBeHonouredIsRefused:
         from src.collector import _non_negative
 
         with pytest.raises(argparse.ArgumentTypeError, match="negative"):
-            _non_negative("count")("-1")
-        assert _non_negative("count")("0") == 0
-        assert _non_negative("count")("3") == 3
+            _non_negative()("-1")
+        assert _non_negative()("0") == 0
+        assert _non_negative()("3") == 3
 
     def test_the_ordinary_values_still_pass(self) -> None:
         from src.collector import _positive
@@ -8133,13 +8127,13 @@ class TestAMarginBarBelowZeroIsRefused:
         from src.collector import _non_negative
 
         with pytest.raises(argparse.ArgumentTypeError):
-            _non_negative("min-margin", whole=False)(text)
+            _non_negative(whole=False)(text)
 
     @pytest.mark.parametrize("text,expected", [("0", 0.0), ("2.5", 2.5), ("1e-9", 1e-9)])
     def test_a_bar_that_can_be_honoured_is_kept(self, text, expected) -> None:
         from src.collector import _non_negative
 
-        assert _non_negative("min-margin", whole=False)(text) == expected
+        assert _non_negative(whole=False)(text) == expected
 
     def test_the_argument_is_actually_wired_to_it(self, capsys) -> None:
         """The mechanism was already there for ``--stake``; what was missing was
@@ -8617,13 +8611,13 @@ class TestARateIsAProportionNotAPercentage:
         from src.collector import _a_rate
 
         with pytest.raises(argparse.ArgumentTypeError):
-            _a_rate("min-rate")(text)
+            _a_rate(text)
 
     @pytest.mark.parametrize("text,expected", [("0", 0.0), ("0.8", 0.8), ("1", 1.0)])
     def test_a_real_proportion_is_kept(self, text, expected) -> None:
         from src.collector import _a_rate
 
-        assert _a_rate("min-rate")(text) == expected
+        assert _a_rate(text) == expected
 
     def test_the_argument_is_wired_to_it(self, capsys) -> None:
         from src.collector import main
@@ -9014,7 +9008,7 @@ class TestReportFlagsThatCannotBeHonouredAreRefused:
         from src.report import _a_count
 
         with pytest.raises(argparse.ArgumentTypeError):
-            _a_count("runs")(text)
+            _a_count(text)
 
     def test_the_flags_are_wired_to_it(self, capsys) -> None:
         from src.report import main
@@ -9273,11 +9267,6 @@ class TestReplayJudgesAScopedRunByItsOwnScope:
     walked into it.  The scope was recoverable only as prose in the run's note,
     which no code could safely read back, so it is now recorded structurally.
     """
-
-    def _collector(self, tmp_path, monkeypatch):
-        import tests.test_pipeline as pipeline
-
-        return pipeline
 
     def test_a_scoped_run_replays_clean(self, tmp_path, monkeypatch) -> None:
         from src.collector import collect_once, replay_run

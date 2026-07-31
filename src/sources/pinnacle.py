@@ -126,7 +126,6 @@ class PinnacleLeague:
     pinnacle_id: int
     sport: Sport
     league_key: str
-    pinnacle_name: str
 
 
 #: The Pinnacle leagues this adapter can classify by id.  Ids are stable for
@@ -141,28 +140,28 @@ class PinnacleLeague:
 #: than onto ``NHL``, whose closed roster these clubs are correctly not in.
 LEAGUE_ROUTES: tuple[PinnacleLeague, ...] = (
     # ── baseball ─────────────────────────────────────────────────────────────
-    PinnacleLeague(246, Sport.BASEBALL, "MLB", "MLB"),
+    PinnacleLeague(246, Sport.BASEBALL, "MLB"),
     # ── basketball ───────────────────────────────────────────────────────────
-    PinnacleLeague(578, Sport.BASKETBALL, "WNBA", "WNBA"),
-    PinnacleLeague(487, Sport.BASKETBALL, "NBA", "NBA"),
+    PinnacleLeague(578, Sport.BASKETBALL, "WNBA"),
+    PinnacleLeague(487, Sport.BASKETBALL, "NBA"),
     # ── hockey ───────────────────────────────────────────────────────────────
-    PinnacleLeague(1456, Sport.HOCKEY, "NHL", "NHL"),
-    PinnacleLeague(1602, Sport.HOCKEY, "HOCKEY_OTHER", "World - Club Friendlies"),
+    PinnacleLeague(1456, Sport.HOCKEY, "NHL"),
+    PinnacleLeague(1602, Sport.HOCKEY, "HOCKEY_OTHER"),  # World - Club Friendlies
     # ── football ─────────────────────────────────────────────────────────────
     # Preseason settles the same way a regular-season game does and the books
     # list it on the same page, so it maps onto the same canonical league.
-    PinnacleLeague(889, Sport.FOOTBALL, "NFL", "NFL"),
-    PinnacleLeague(4347, Sport.FOOTBALL, "NFL", "NFL Pre Season"),
+    PinnacleLeague(889, Sport.FOOTBALL, "NFL"),
+    PinnacleLeague(4347, Sport.FOOTBALL, "NFL"),  # NFL Pre Season
     # ── soccer ───────────────────────────────────────────────────────────────
     # Matched on id, never on a name substring: Pinnacle also lists
     # "Iceland - Premier League", "Brazil - Serie A" and "Austria - Bundesliga",
     # all of which a substring rule would file as EPL / SERIE_A / BUNDESLIGA.
-    PinnacleLeague(1980, Sport.SOCCER, "EPL", "England - Premier League"),
-    PinnacleLeague(2663, Sport.SOCCER, "MLS", "USA - Major League Soccer"),
-    PinnacleLeague(2196, Sport.SOCCER, "LA_LIGA", "Spain - La Liga"),
-    PinnacleLeague(2436, Sport.SOCCER, "SERIE_A", "Italy - Serie A"),
-    PinnacleLeague(1842, Sport.SOCCER, "BUNDESLIGA", "Germany - Bundesliga"),
-    PinnacleLeague(2036, Sport.SOCCER, "LIGUE_1", "France - Ligue 1"),
+    PinnacleLeague(1980, Sport.SOCCER, "EPL"),  # England - Premier League
+    PinnacleLeague(2663, Sport.SOCCER, "MLS"),  # USA - Major League Soccer
+    PinnacleLeague(2196, Sport.SOCCER, "LA_LIGA"),  # Spain - La Liga
+    PinnacleLeague(2436, Sport.SOCCER, "SERIE_A"),  # Italy - Serie A
+    PinnacleLeague(1842, Sport.SOCCER, "BUNDESLIGA"),  # Germany - Bundesliga
+    PinnacleLeague(2036, Sport.SOCCER, "LIGUE_1"),  # France - Ligue 1
 )
 
 ROUTE_BY_PINNACLE_ID: dict[int, PinnacleLeague] = {

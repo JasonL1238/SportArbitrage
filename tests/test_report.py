@@ -859,6 +859,7 @@ def test_the_scrape_controls_are_on_the_page() -> None:
         "scrape-btn", "scrape-scope", "scrape-status", "scrape-progress",
         "run-list", "/api/collect", "/api/status", "paintScrapeProgress",
         "promo-scrape-btn", "promo-scrape-status", "/api/promos/collect",
+        "promo-region", "promo-detail", "usage_guidance", "selectedPromoKey",
         "/api/promos/status", "wirePromoScrapeButton", 'id="promos"',
     ):
         assert needle in BODY or needle in JS, needle
@@ -929,8 +930,15 @@ def test_promo_payload_and_build_report_include_promos(
                 offer_id="welcome",
                 kind=PromoKind.SIGNUP_BONUS,
                 title="Welcome Bonus",
+                summary="Bet $5, get $150 in bonus bets",
+                terms="New customers in NJ only. Min odds -200.",
                 observed_at=datetime.now(UTC),
                 url="https://example.test/promo",
+                eligible_regions=["NJ"],
+                bonus_amount=150.0,
+                reward_type="bonus_bets",
+                usage_guidance="Hedge the bonus bet at another book.",
+                is_specific=True,
             )
         ],
         health=[
@@ -947,6 +955,11 @@ def test_promo_payload_and_build_report_include_promos(
     payload = report_mod._promo_payload()
     assert payload["run"]["id"] == run_id
     assert payload["offers"][0]["title"] == "Welcome Bonus"
+    assert payload["offers"][0]["summary"].startswith("Bet $5")
+    assert payload["offers"][0]["terms"]
+    assert payload["offers"][0]["eligible_regions"] == ["NJ"]
+    assert payload["offers"][0]["usage_guidance"]
+    assert payload["offers"][0]["is_specific"] is True
     assert payload["health"][0]["source_key"] == "draftkings"
 
     monkeypatch.setattr(settings_mod, "DB_PATH", populated.path)

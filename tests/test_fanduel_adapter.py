@@ -43,7 +43,6 @@ from src.sources.fanduel import (
 MLB_ENDPOINT = "content-managed-page-mlb"
 WNBA_ENDPOINT = "content-managed-page-wnba"
 NHL_ENDPOINT = "content-managed-page-nhl"
-NFL_ENDPOINT = "content-managed-page-nfl"
 TENNIS_ENDPOINT = "content-managed-page-tennis"
 SOCCER_ENDPOINT = "content-managed-page-soccer"
 SOCCER_EVENT_ENDPOINT = "event-page-epl-35737555"

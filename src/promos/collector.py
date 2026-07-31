@@ -17,9 +17,12 @@ from typing import Callable, Mapping, Sequence
 from src import settings
 from src.promos import registry
 from src.promos.base import PromoParseOutcome, PromoSource, PromoSourceHealth
+from src.promos.deepen import deepen_by_source
+from src.promos.enrich import enrich_offers
 from src.promos.redundancy import brand_coverage, prefer_primary_offers
 from src.promos.schema import PromoOffer
 from src.promos.store import PromoStore
+from src.promos.strategy import apply_usage_guidance
 from src.raw_store import RawStore
 from src.sources.guards import SourceError
 
@@ -112,6 +115,8 @@ def _health_ok(outcome: PromoParseOutcome) -> tuple[bool, str | None, str | None
     Usable offers win even if another surface on the same source rejected.
     Structured empty catalogs (FanDuel merchandising ``[]``) are OK only when
     no fallback surface also reported that it found nothing.
+    Specificity is reassessed after enrich/deepen in
+    :func:`_reassess_health_after_enrich`.
     """
     if outcome.offers:
         return True, None, None
@@ -130,6 +135,77 @@ def _health_ok(outcome: PromoParseOutcome) -> tuple[bool, str | None, str | None
     if outcome.skipped.get("no_brand_offers"):
         return False, "empty_after_parse", "TheLines page had no offers for this brand"
     return False, "empty_after_parse", "no offers parsed"
+
+
+def _reassess_health_after_enrich(
+    health_rows: list[PromoSourceHealth],
+    offers: Sequence[PromoOffer],
+) -> list[PromoSourceHealth]:
+    """Flip vague-only / emptied sources to failed once enrich/deepen has run."""
+    by_source: dict[str, list[PromoOffer]] = {}
+    for offer in offers:
+        by_source.setdefault(offer.source, []).append(offer)
+    out: list[PromoSourceHealth] = []
+    for row in health_rows:
+        source_offers = by_source.get(row.source_key, [])
+        if not row.ok:
+            out.append(row)
+            continue
+        if not source_offers:
+            # Originally OK with offers that were all folded away as weaker dups.
+            if row.offer_count > 0:
+                out.append(
+                    PromoSourceHealth(
+                        source_key=row.source_key,
+                        ok=False,
+                        checked_at=row.checked_at,
+                        request_count=row.request_count,
+                        raw_bytes=row.raw_bytes,
+                        latency_ms=row.latency_ms,
+                        offer_count=0,
+                        rejection_count=row.rejection_count,
+                        skipped_count=row.skipped_count,
+                        error_kind="deduped_empty",
+                        error_message="offers removed as weaker duplicates of primary",
+                    )
+                )
+            else:
+                out.append(row)
+            continue
+        if any(o.is_specific for o in source_offers):
+            out.append(
+                PromoSourceHealth(
+                    source_key=row.source_key,
+                    ok=True,
+                    checked_at=row.checked_at,
+                    request_count=row.request_count,
+                    raw_bytes=row.raw_bytes,
+                    latency_ms=row.latency_ms,
+                    offer_count=len(source_offers),
+                    rejection_count=row.rejection_count,
+                    skipped_count=row.skipped_count,
+                )
+            )
+            continue
+        if all(o.requires_login for o in source_offers):
+            out.append(row)
+            continue
+        out.append(
+            PromoSourceHealth(
+                source_key=row.source_key,
+                ok=False,
+                checked_at=row.checked_at,
+                request_count=row.request_count,
+                raw_bytes=row.raw_bytes,
+                latency_ms=row.latency_ms,
+                offer_count=len(source_offers),
+                rejection_count=row.rejection_count,
+                skipped_count=row.skipped_count,
+                error_kind="vague_offers",
+                error_message=f"{len(source_offers)} offer(s) without concrete mechanics",
+            )
+        )
+    return out
 
 
 def _collect_source(
@@ -298,7 +374,25 @@ def collect_promos_once(
                 }
             )
 
-        offers = prefer_primary_offers(dedupe_offers(offers))
+        offers = dedupe_offers(offers)
+        _progress(
+            {
+                "phase": "enriching",
+                "message": "Enriching offer specifics and eligibility…",
+                "done": total,
+                "total": total,
+                "offer_count": len(offers),
+                "kind": "promos",
+            }
+        )
+        # Enrich/deepen before primary preference so concrete TheLines welcomes
+        # are not dropped against a still-vague first-party "Welcome offer".
+        offers = enrich_offers(offers)
+        offers = deepen_by_source(offers)
+        offers = enrich_offers(offers)
+        offers = prefer_primary_offers(offers)
+        offers = apply_usage_guidance(offers)
+        health_rows = _reassess_health_after_enrich(health_rows, offers)
         ok_brands, total_brands, _ = brand_coverage(health_rows)
         # Run health folds TheLines secondaries into brand coverage so a dead
         # first-party landing does not fail the slate when tl_* covered the book.
@@ -338,9 +432,10 @@ def _cmd_collect(args: argparse.Namespace) -> int:
     if args.verbose:
         for offer in result.offers:
             end = offer.ends_at.isoformat() if offer.ends_at else "-"
+            label = offer.summary or offer.title
             print(
-                f"  [{offer.source}] {offer.kind.value:14} {offer.title[:70]}"
-                f"  ends={end}"
+                f"  [{offer.source}] {offer.kind.value:14} {label[:70]}"
+                f"  ends={end} specific={offer.is_specific}"
             )
     return 0 if result.ok else 1
 

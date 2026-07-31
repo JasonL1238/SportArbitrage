@@ -118,7 +118,7 @@ const required = ['stat-strip', 'flow', 'matrix', 'sports-grid', 'leagues-grid',
   'odds-screen', 'screen-note', 'league-pick', 'market-tabs', 'nav-screen',
   'arb-list', 'arb-stats', 'arb-summary', 'arb-rejected', 'nav-arb',
   'promo-list', 'promo-stats', 'promo-summary', 'promo-health', 'nav-promos',
-  'promo-scrape-status',
+  'promo-scrape-status', 'promo-region', 'promo-kind', 'promo-source',
   // The drill-down panels are rendered while off screen, so a link straight into one
   // opens on something. An empty one here means a reader would arrive at a blank page.
   'crumbs', 'event-title', 'event-sub',

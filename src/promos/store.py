@@ -10,12 +10,12 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any, Sequence
 
 from src.promos.base import PromoSourceHealth
 from src.promos.schema import PromoOffer
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -65,10 +65,35 @@ CREATE TABLE IF NOT EXISTS promo_offers (
     raw_kind TEXT NOT NULL DEFAULT '',
     product TEXT NOT NULL DEFAULT '',
     requires_login INTEGER NOT NULL DEFAULT 0,
+    summary TEXT NOT NULL DEFAULT '',
+    eligible_regions_json TEXT NOT NULL DEFAULT '[]',
+    ineligible_regions_json TEXT NOT NULL DEFAULT '[]',
+    eligibility_notes TEXT NOT NULL DEFAULT '',
+    bonus_amount REAL,
+    min_deposit REAL,
+    min_odds TEXT,
+    wagering_requirement TEXT,
+    reward_type TEXT NOT NULL DEFAULT '',
+    usage_guidance TEXT NOT NULL DEFAULT '',
+    is_specific INTEGER NOT NULL DEFAULT 0,
     metadata_json TEXT NOT NULL DEFAULT '{}',
     PRIMARY KEY (run_id, source, offer_id)
 );
 """
+
+_V2_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("summary", "TEXT NOT NULL DEFAULT ''"),
+    ("eligible_regions_json", "TEXT NOT NULL DEFAULT '[]'"),
+    ("ineligible_regions_json", "TEXT NOT NULL DEFAULT '[]'"),
+    ("eligibility_notes", "TEXT NOT NULL DEFAULT ''"),
+    ("bonus_amount", "REAL"),
+    ("min_deposit", "REAL"),
+    ("min_odds", "TEXT"),
+    ("wagering_requirement", "TEXT"),
+    ("reward_type", "TEXT NOT NULL DEFAULT ''"),
+    ("usage_guidance", "TEXT NOT NULL DEFAULT ''"),
+    ("is_specific", "INTEGER NOT NULL DEFAULT 0"),
+)
 
 
 def _iso(value: datetime | None) -> str | None:
@@ -77,6 +102,25 @@ def _iso(value: datetime | None) -> str | None:
     if value.tzinfo is None:
         value = value.replace(tzinfo=UTC)
     return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _json_list(value: Sequence[str] | None) -> str:
+    return json.dumps(list(value or []), sort_keys=False)
+
+
+def _load_str_list(raw: str | None) -> list[str]:
+    try:
+        data = json.loads(raw or "[]")
+    except ValueError:
+        return []
+    if not isinstance(data, list):
+        return []
+    out: list[str] = []
+    for item in data:
+        code = str(item or "").strip().upper()
+        if code:
+            out.append(code)
+    return out
 
 
 @dataclass
@@ -90,15 +134,33 @@ class PromoStore:
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON")
         self._conn.executescript(_SCHEMA)
+        self._migrate()
+
+    def _migrate(self) -> None:
         row = self._conn.execute(
             "SELECT value FROM meta WHERE key = 'schema_version'"
         ).fetchone()
+        current = int(row["value"]) if row is not None else 0
+        if current < 2:
+            cols = {
+                r["name"]
+                for r in self._conn.execute("PRAGMA table_info(promo_offers)").fetchall()
+            }
+            for name, decl in _V2_COLUMNS:
+                if name not in cols:
+                    self._conn.execute(f"ALTER TABLE promo_offers ADD COLUMN {name} {decl}")
+            current = 2
         if row is None:
             self._conn.execute(
                 "INSERT INTO meta(key, value) VALUES ('schema_version', ?)",
                 (str(SCHEMA_VERSION),),
             )
-            self._conn.commit()
+        elif int(row["value"]) != SCHEMA_VERSION:
+            self._conn.execute(
+                "UPDATE meta SET value = ? WHERE key = 'schema_version'",
+                (str(SCHEMA_VERSION),),
+            )
+        self._conn.commit()
 
     def close(self) -> None:
         self._conn.close()
@@ -133,8 +195,14 @@ class PromoStore:
                 INSERT INTO promo_offers(
                     run_id, source, offer_id, kind, title, description, terms,
                     url, starts_at, ends_at, observed_at, raw_ref, raw_kind,
-                    product, requires_login, metadata_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    product, requires_login, summary, eligible_regions_json,
+                    ineligible_regions_json, eligibility_notes, bonus_amount,
+                    min_deposit, min_odds, wagering_requirement, reward_type,
+                    usage_guidance, is_specific, metadata_json
+                ) VALUES (
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?, ?, ?
+                )
                 """,
                 (
                     run_id,
@@ -143,7 +211,7 @@ class PromoStore:
                     offer.kind.value,
                     offer.title,
                     offer.description[:4000],
-                    offer.terms[:4000],
+                    offer.terms[:8000],
                     offer.url,
                     _iso(offer.starts_at),
                     _iso(offer.ends_at),
@@ -152,6 +220,17 @@ class PromoStore:
                     offer.raw_kind,
                     offer.product,
                     int(offer.requires_login),
+                    (offer.summary or "")[:1000],
+                    _json_list(offer.eligible_regions),
+                    _json_list(offer.ineligible_regions),
+                    (offer.eligibility_notes or "")[:2000],
+                    offer.bonus_amount,
+                    offer.min_deposit,
+                    offer.min_odds,
+                    offer.wagering_requirement,
+                    offer.reward_type or "",
+                    (offer.usage_guidance or "")[:8000],
+                    int(offer.is_specific),
                     json.dumps(offer.metadata, sort_keys=True),
                 ),
             )
@@ -211,8 +290,12 @@ class PromoStore:
     def offers_for_run(self, run_id: int) -> list[dict[str, Any]]:
         rows = self._conn.execute(
             """
-            SELECT source, offer_id, kind, title, description, url, ends_at, product,
-                   requires_login, raw_kind, metadata_json
+            SELECT source, offer_id, kind, title, description, terms, url,
+                   starts_at, ends_at, product, requires_login, raw_kind,
+                   summary, eligible_regions_json, ineligible_regions_json,
+                   eligibility_notes, bonus_amount, min_deposit, min_odds,
+                   wagering_requirement, reward_type, usage_guidance,
+                   is_specific, metadata_json
             FROM promo_offers
             WHERE run_id = ?
             ORDER BY source, kind, title
@@ -229,6 +312,12 @@ class PromoStore:
                 item.pop("metadata_json", None)
             if not isinstance(item.get("metadata"), dict):
                 item["metadata"] = {}
+            item["eligible_regions"] = _load_str_list(item.pop("eligible_regions_json", None))
+            item["ineligible_regions"] = _load_str_list(
+                item.pop("ineligible_regions_json", None)
+            )
+            item["requires_login"] = bool(item.get("requires_login"))
+            item["is_specific"] = bool(item.get("is_specific"))
             out.append(item)
         return out
 

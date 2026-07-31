@@ -341,8 +341,26 @@ def _welcome_from_section(
             ).strip(" .")
             if len(title) >= 12:
                 return title[:160], text[:500]
+    # Never emit a bare "welcome offer" — keep hunting for $ / reward mechanics
+    # elsewhere in the section before giving up.
+    fallback_patterns = (
+        r"((?:up to\s+)?\$[\d,]+(?:\s+in)?\s+(?:bonus bets?|free bets?|FanCash|site credit)[^.!?]{0,40})",
+        r"((?:first bet|risk[- ]?free)[^.!?]{0,80}\$[\d,]+[^.!?]{0,40})",
+        r"(\d+%\s+(?:deposit\s+)?match[^.!?]{0,60})",
+    )
+    for pat in fallback_patterns:
+        m = re.search(pat, text, re.I)
+        if m:
+            title = re.sub(r"\s+", " ", m.group(1)).strip(" .")
+            if len(title) >= 10:
+                return title[:160], text[:500]
     brand = next((a for a in aliases if a in heading.lower()), aliases[0])
-    return f"{brand.title()} welcome offer", text[:500]
+    # Last resort: include a short snippet so enrich/deepen still has dollars.
+    snippet = re.sub(r"\s+", " ", text).strip()
+    money = re.search(r"\$[\d,]+[^.]{0,80}", snippet)
+    if money:
+        return f"{brand.title()}: {money.group(0).strip()[:120]}", text[:500]
+    return f"{brand.title()} sportsbook promo (details on page)", text[:500]
 
 
 def _ongoing_lines(text: str) -> list[str]:

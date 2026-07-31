@@ -31,7 +31,6 @@ from tests.conftest import make_quote
 
 MLB = league("MLB")
 ATP = league("ATP")
-EPL = league("EPL")
 
 EASTERN_EVENING = datetime(2026, 7, 28, 23, 10, tzinfo=UTC)  # 19:10 ET
 

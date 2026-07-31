@@ -1180,11 +1180,24 @@ def _promo_payload() -> dict[str, Any]:
                     "kind": row["kind"],
                     "title": row["title"],
                     "description": row["description"] or "",
+                    "terms": row.get("terms") or "",
                     "url": row["url"],
+                    "starts_at": row.get("starts_at"),
                     "ends_at": row["ends_at"],
                     "product": row["product"] or "",
                     "requires_login": bool(row["requires_login"]),
                     "raw_kind": row["raw_kind"] or "",
+                    "summary": row.get("summary") or "",
+                    "eligible_regions": row.get("eligible_regions") or [],
+                    "ineligible_regions": row.get("ineligible_regions") or [],
+                    "eligibility_notes": row.get("eligibility_notes") or "",
+                    "bonus_amount": row.get("bonus_amount"),
+                    "min_deposit": row.get("min_deposit"),
+                    "min_odds": row.get("min_odds"),
+                    "wagering_requirement": row.get("wagering_requirement"),
+                    "reward_type": row.get("reward_type") or "",
+                    "usage_guidance": row.get("usage_guidance") or "",
+                    "is_specific": bool(row.get("is_specific")),
                     "metadata": row.get("metadata") or {},
                 }
             )
@@ -1836,7 +1849,7 @@ def _replay_note(store: Store, run_id: int) -> str:
         return f"unavailable: {type(exc).__name__}"
 
 
-def _a_count(name: str):
+def _a_count(text: str) -> int:
     """An argparse type for a strictly positive whole number.
 
     These flags were bare ``int``.  ``--runs 0`` produced "no finished
@@ -1844,18 +1857,17 @@ def _a_count(name: str):
     falsy so the flag silently did not serve, and a negative reached SQLite as
     ``LIMIT -1`` — which means *unlimited*, the opposite of what a negative
     could possibly have meant.
+
+    argparse already prefixes the failing flag's own name onto the message, so
+    this takes the value and nothing else.
     """
-
-    def parse(text: str):
-        try:
-            value = int(text)
-        except ValueError:
-            raise argparse.ArgumentTypeError(f"{text!r} is not a whole number") from None
-        if value <= 0:
-            raise argparse.ArgumentTypeError(f"must be at least 1, got {text}")
-        return value
-
-    return parse
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{text!r} is not a whole number") from None
+    if value <= 0:
+        raise argparse.ArgumentTypeError(f"must be at least 1, got {text}")
+    return value
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -1867,11 +1879,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         description="Write a self-contained dashboard for what the collector has stored.",
     )
     parser.add_argument("--out", type=Path, default=settings.DATA_DIR / "dashboard.html")
-    parser.add_argument("--runs", type=_a_count("runs"), default=DEFAULT_RUN_LIMIT,
+    parser.add_argument("--runs", type=_a_count, default=DEFAULT_RUN_LIMIT,
                         help="how many runs to list")
-    parser.add_argument("--quote-runs", type=_a_count("quote-runs"), default=DEFAULT_QUOTE_RUNS,
+    parser.add_argument("--quote-runs", type=_a_count, default=DEFAULT_QUOTE_RUNS,
                         help="how many recent runs to embed price rows for")
-    parser.add_argument("--max-quote-rows", type=_a_count("max-quote-rows"), default=DEFAULT_MAX_QUOTE_ROWS,
+    parser.add_argument("--max-quote-rows", type=_a_count, default=DEFAULT_MAX_QUOTE_ROWS,
                         help=(
                             "ceiling on embedded price rows, whatever --quote-runs asks "
                             "for; the newest rows are kept and the page says how many "
@@ -1882,7 +1894,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--no-replay-check", action="store_true",
                         help="skip re-parsing the latest run's stored bytes")
     parser.add_argument("--open", action="store_true", help="open the file when it is written")
-    parser.add_argument("--serve", type=_a_count("serve"), metavar="PORT",
+    parser.add_argument("--serve", type=_a_count, metavar="PORT",
                         help="serve the report on localhost instead of only writing it")
     args = parser.parse_args(argv)
 
@@ -2276,7 +2288,7 @@ def _serve(
             if route in ("/api/status", "/api/promos/status"):
                 self._json(200, status_payload())
                 return
-            return super().do_GET()
+            super().do_GET()
 
         def do_POST(self) -> None:  # noqa: N802
             route = self.path.split("?", 1)[0]

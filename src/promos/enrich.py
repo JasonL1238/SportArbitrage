@@ -1,0 +1,267 @@
+"""Extract concrete offer mechanics from promo free text."""
+from __future__ import annotations
+
+import re
+from typing import Any
+
+from src.promos.geo import merge_regions, parse_eligibility
+from src.promos.schema import PromoOffer
+
+_MONEY = r"\$?\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]+)?|\d+(?:\.\d+)?)"
+
+_BET_GET = re.compile(
+    rf"bet\s+{_MONEY}\s*(?:or\s+more)?\s*[,:]?\s*"
+    rf"(?:to\s+)?(?:get|receive|earn)\s+(?:up\s+to\s+)?{_MONEY}",
+    re.I,
+)
+_GET_IN_BONUS = re.compile(
+    rf"(?:get|receive|earn)\s+(?:up\s+to\s+)?{_MONEY}\s+"
+    r"(?:in\s+)?(bonus\s+bets?|free\s+bets?|site\s+credit|casino\s+credits?)",
+    re.I,
+)
+_PCT_MATCH = re.compile(
+    rf"(\d+)\s*%\s*(?:deposit\s+)?match(?:\s+up\s+to\s+{_MONEY})?",
+    re.I,
+)
+_UP_TO = re.compile(rf"up\s+to\s+{_MONEY}", re.I)
+_MIN_DEPOSIT = re.compile(rf"min(?:imum)?\s+deposit\s+(?:of\s+)?{_MONEY}", re.I)
+_MIN_ODDS = re.compile(
+    r"min(?:imum)?\s+odds\s+(?:of\s+)?([+-]?\d{2,4}|\d+(?:\.\d+)?)",
+    re.I,
+)
+_WAGERING = re.compile(
+    r"(\d+\s*x|\d+x)\s*(?:wagering|playthrough|rollover)?|"
+    r"(?:wagering|playthrough|rollover)\s*(?:requirement\s*)?(?:of\s*)?(\d+\s*x|\d+x)",
+    re.I,
+)
+_PROFIT_BOOST = re.compile(r"(\d+)\s*%\s*(?:profit\s+)?boost", re.I)
+
+_VAGUE_TITLE = re.compile(
+    r"^(?:welcome(?:\s+offer|\s+bonus)?|sign[- ]?up(?:\s+bonus|\s+offer)?|"
+    r"new\s+(?:customer|player)\s+(?:bonus|offer)|promotions?|bonus|"
+    r"daily\s+boosts?|odds\s+boosts?|boost(?:s)?(?:\s+hub)?)$",
+    re.I,
+)
+
+_REWARD_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"bonus\s+bets?", re.I), "bonus_bets"),
+    (re.compile(r"free\s+bets?", re.I), "free_bet"),
+    (re.compile(r"site\s+credit|bonus\s+funds?|casino\s+credits?", re.I), "site_credit"),
+    (re.compile(r"cash\s+bonus|\bcash\s+back\b", re.I), "cash"),
+    (re.compile(r"\d+\s*%\s*(?:profit\s+)?boost|profit\s+boost|odds\s+boost|parlay\s+boost", re.I), "boost"),
+    (re.compile(r"no\s*sweat|bet\s+reset", re.I), "no_sweat"),
+    (re.compile(r"risk[- ]?free", re.I), "risk_free"),
+)
+
+
+def _money(raw: str | None) -> float | None:
+    if not raw:
+        return None
+    try:
+        return float(raw.replace(",", "").replace("$", "").strip())
+    except ValueError:
+        return None
+
+
+def _blob(*parts: str | None) -> str:
+    return " ".join(p for p in parts if p)
+
+
+def is_vague_text(*parts: str | None) -> bool:
+    """True when copy lacks concrete $/%/reward mechanics.
+
+    Reward words alone (``free bets``, ``cash bonus``) are still vague — need
+    a dollar amount or percentage tied to the offer.
+    """
+    text = _blob(*parts).strip()
+    if not text:
+        return True
+    if _VAGUE_TITLE.match(text.strip()):
+        return True
+    has_money = bool(re.search(r"\$\s*\d", text))
+    has_pct = bool(re.search(r"\d+\s*%", text))
+    return not (has_money or has_pct)
+
+
+def extract_mechanics(*parts: str | None) -> dict[str, Any]:
+    """Pull structured fields + a concrete summary line from free text."""
+    text = _blob(*parts)
+    out: dict[str, Any] = {
+        "summary": "",
+        "bonus_amount": None,
+        "min_deposit": None,
+        "min_odds": None,
+        "wagering_requirement": None,
+        "reward_type": "",
+        "is_specific": False,
+    }
+    if not text:
+        return out
+
+    reward = ""
+    for pattern, label in _REWARD_PATTERNS:
+        if pattern.search(text):
+            reward = label
+            break
+
+    bonus: float | None = None
+    min_deposit: float | None = None
+    summary_bits: list[str] = []
+
+    m = _BET_GET.search(text)
+    if m:
+        stake = _money(m.group(1))
+        reward_amt = _money(m.group(2))
+        if reward_amt is not None:
+            bonus = reward_amt
+        if stake is not None and reward_amt is not None:
+            label = reward.replace("_", " ") if reward else "bonus"
+            summary_bits.append(f"Bet ${stake:g}, get ${reward_amt:g} in {label}")
+        if stake is not None and min_deposit is None:
+            min_deposit = stake
+
+    if not summary_bits:
+        m = _GET_IN_BONUS.search(text)
+        if m:
+            amt = _money(m.group(1))
+            kind = re.sub(r"\s+", " ", m.group(2).lower())
+            if amt is not None:
+                bonus = amt
+                summary_bits.append(f"Get ${amt:g} in {kind}")
+                if not reward:
+                    if "bonus bet" in kind:
+                        reward = "bonus_bets"
+                    elif "free bet" in kind:
+                        reward = "free_bet"
+                    elif "credit" in kind:
+                        reward = "site_credit"
+
+    m = _PCT_MATCH.search(text)
+    if m:
+        pct = m.group(1)
+        cap = _money(m.group(2)) if m.lastindex and m.lastindex >= 2 else None
+        if cap is not None:
+            bonus = bonus if bonus is not None else cap
+            summary_bits.append(f"{pct}% deposit match up to ${cap:g}")
+        else:
+            summary_bits.append(f"{pct}% deposit match")
+        if not reward:
+            reward = "site_credit"
+
+    if bonus is None:
+        m = _UP_TO.search(text)
+        if m and reward:
+            bonus = _money(m.group(1))
+
+    m = _MIN_DEPOSIT.search(text)
+    if m:
+        min_deposit = _money(m.group(1))
+
+    min_odds = None
+    m = _MIN_ODDS.search(text)
+    if m:
+        min_odds = m.group(1)
+
+    wagering = None
+    m = _WAGERING.search(text)
+    if m:
+        wagering = (m.group(1) or m.group(2) or "").replace(" ", "").lower() or None
+
+    m = _PROFIT_BOOST.search(text)
+    if m and not summary_bits:
+        summary_bits.append(f"{m.group(1)}% profit boost")
+        reward = reward or "boost"
+
+    if not summary_bits and reward and bonus is not None:
+        summary_bits.append(f"${bonus:g} {reward.replace('_', ' ')}")
+
+    summary = summary_bits[0] if summary_bits else ""
+    is_specific = bool(summary) or (
+        bonus is not None and bool(reward)
+    ) or (bool(reward) and bool(re.search(r"\$\s*\d|\d+\s*%", text)))
+    if is_specific and not summary:
+        cleaned = re.sub(r"\s+", " ", text).strip()
+        # Prefer a money-bearing slice.
+        money = re.search(r".{0,40}\$\s*[\d,]+.{0,60}", cleaned)
+        summary = (money.group(0).strip() if money else cleaned)[:160]
+
+    out.update(
+        {
+            "summary": summary,
+            "bonus_amount": bonus,
+            "min_deposit": min_deposit,
+            "min_odds": min_odds,
+            "wagering_requirement": wagering,
+            "reward_type": reward,
+            "is_specific": is_specific,
+        }
+    )
+    return out
+
+
+def enrich_offer(offer: PromoOffer) -> PromoOffer:
+    """Fill structured fields, geo, and summary from existing text surfaces."""
+    mechanics = extract_mechanics(offer.title, offer.description, offer.terms, offer.summary)
+    eligible, ineligible, notes = parse_eligibility(
+        _blob(offer.title, offer.description, offer.terms, offer.eligibility_notes)
+    )
+    eligible = merge_regions(offer.eligible_regions, eligible)
+    ineligible = merge_regions(offer.ineligible_regions, ineligible)
+    if ineligible:
+        eligible = [c for c in eligible if c not in set(ineligible)]
+
+    eligibility_notes = offer.eligibility_notes
+    if notes:
+        eligibility_notes = "; ".join(x for x in (eligibility_notes, notes) if x)
+
+    existing_summary = offer.summary or ""
+    mech_summary = mechanics["summary"] or ""
+    if mech_summary and (not existing_summary or is_vague_text(existing_summary)):
+        summary = mech_summary
+    elif existing_summary and not is_vague_text(existing_summary):
+        summary = existing_summary
+    elif not is_vague_text(offer.title) and mechanics["is_specific"]:
+        summary = offer.title.strip()
+    else:
+        summary = existing_summary or mech_summary
+
+    is_specific = bool(offer.is_specific or mechanics["is_specific"])
+    if summary and not is_vague_text(summary):
+        is_specific = True
+
+    return offer.model_copy(
+        update={
+            "summary": summary,
+            "bonus_amount": offer.bonus_amount
+            if offer.bonus_amount is not None
+            else mechanics["bonus_amount"],
+            "min_deposit": offer.min_deposit
+            if offer.min_deposit is not None
+            else mechanics["min_deposit"],
+            "min_odds": offer.min_odds or mechanics["min_odds"],
+            "wagering_requirement": offer.wagering_requirement
+            or mechanics["wagering_requirement"],
+            "reward_type": offer.reward_type or mechanics["reward_type"],
+            "eligible_regions": eligible,
+            "ineligible_regions": ineligible,
+            "eligibility_notes": eligibility_notes,
+            "is_specific": is_specific,
+        }
+    )
+
+
+def enrich_offers(offers: list[PromoOffer]) -> list[PromoOffer]:
+    return [enrich_offer(o) for o in offers]
+
+
+def offer_needs_deepen(offer: PromoOffer) -> bool:
+    return (not offer.is_specific) and bool(offer.url) and not offer.requires_login
+
+
+__all__ = [
+    "enrich_offer",
+    "enrich_offers",
+    "extract_mechanics",
+    "is_vague_text",
+    "offer_needs_deepen",
+]

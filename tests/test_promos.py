@@ -51,7 +51,14 @@ def test_registry_covers_major_odds_books() -> None:
         "pinnacle",
         "onexbet",
         "leovegas_kambi",
-        # US majors without first-party promo JSON — TheLines failover tenants.
+        "betmgm",
+        "caesars",
+        "fanatics",
+        "hardrock",
+        "bet365",
+        "leovegas_on",
+        "betmgm_on",
+        # TheLines failover tenants.
         "tl_betmgm",
         "tl_caesars",
         "tl_bet365",
@@ -117,6 +124,15 @@ def test_promo_store_roundtrip(tmp_path: Path) -> None:
         description="desc",
         observed_at=datetime(2026, 7, 31, 12, 0, tzinfo=UTC),
         raw_ref="x",
+        summary="Bet $10, get $150 in bonus bets",
+        eligible_regions=["IL", "NJ"],
+        ineligible_regions=["CA"],
+        eligibility_notes="New customers only",
+        bonus_amount=150.0,
+        min_deposit=10.0,
+        reward_type="bonus_bets",
+        usage_guidance="Hedge the bonus bet.",
+        is_specific=True,
     )
     from src.promos.base import PromoSourceHealth
 
@@ -132,9 +148,186 @@ def test_promo_store_roundtrip(tmp_path: Path) -> None:
     store.close()
     assert len(rows) == 1
     assert rows[0]["title"] == "Test No Sweat"
+    assert rows[0]["summary"].startswith("Bet $10")
+    assert rows[0]["eligible_regions"] == ["IL", "NJ"]
+    assert rows[0]["ineligible_regions"] == ["CA"]
+    assert rows[0]["bonus_amount"] == 150.0
+    assert rows[0]["is_specific"] is True
+    assert rows[0]["usage_guidance"]
     assert len(health_rows) == 1
     assert health_rows[0]["source_key"] == "draftkings"
     assert health_rows[0]["ok"] is True
+
+
+def test_enrich_extracts_bet_get_bonus_bets() -> None:
+    from src.promos.enrich import enrich_offer, extract_mechanics, is_vague_text
+    from src.promos.geo import parse_eligibility, regions_from_text
+
+    eligible, ineligible, _ = parse_eligibility(
+        "Available in New Jersey and Illinois. Not available in California."
+    )
+    assert set(eligible) == {"NJ", "IL"}
+    assert ineligible == ["CA"]
+
+    # English words must not become Indiana / Oregon / Ontario.
+    assert regions_from_text("Bet $5 get $150 in Bonus Bets or Free Bets on the app") == []
+    loc_eligible, _, _ = parse_eligibility(
+        "Must be physically located in AR, AZ, CO, CT, IL, IN, NJ, NY, PA, WV"
+    )
+    assert "AR" in loc_eligible and "IN" in loc_eligible and "NJ" in loc_eligible
+    assert "OR" not in loc_eligible
+
+    assert is_vague_text("Daily Boost Hub") is True
+    assert is_vague_text("Cash out anytime") is True
+    assert is_vague_text("Cash Bonus") is True
+    assert is_vague_text("free bets") is True
+    eligible_or, _, _ = parse_eligibility("Available in NJ or PA only")
+    assert set(eligible_or) == {"NJ", "PA"}
+    assert "OR" not in eligible_or
+    _, ineligible_or, _ = parse_eligibility("Not available in NY or NJ")
+    assert set(ineligible_or) == {"NY", "NJ"}
+    eligible_ca, _, _ = parse_eligibility(
+        "physically located in AR, AZ, CA-AB (18+), CA-ON, NJ"
+    )
+    assert "CA" not in eligible_ca
+    assert "AB" in eligible_ca and "ON" in eligible_ca and "NJ" in eligible_ca
+    eligible_or_state, _, _ = parse_eligibility("Available in OH, OR, PA")
+    assert set(eligible_or_state) >= {"OH", "OR", "PA"}
+
+    mechanics = extract_mechanics("Bet $5, Get $150 in Bonus Bets")
+    assert mechanics["bonus_amount"] == 150.0
+    assert mechanics["min_deposit"] == 5.0
+
+    offer = PromoOffer(
+        source="fanduel",
+        offer_id="1",
+        kind=PromoKind.SIGNUP_BONUS,
+        title="Welcome offer",
+        description="Bet $5 get $150 in Bonus Bets. Available in New Jersey and Illinois.",
+        observed_at=datetime(2026, 7, 31, 12, 0, tzinfo=UTC),
+    )
+    enriched = enrich_offer(offer)
+    assert enriched.is_specific is True
+    assert enriched.bonus_amount == 150.0
+    assert enriched.reward_type == "bonus_bets"
+    assert "IL" in enriched.eligible_regions
+    assert "NJ" in enriched.eligible_regions
+    assert "IN" not in enriched.eligible_regions
+    assert enriched.summary
+
+
+def test_strategy_bonus_bet_mentions_hedge() -> None:
+    from src.promos.strategy import build_usage_guidance
+
+    offer = PromoOffer(
+        source="draftkings",
+        offer_id="1",
+        kind=PromoKind.BONUS_BET,
+        title="Bonus Bets",
+        summary="Bet $5, get $150 in bonus bets",
+        bonus_amount=150.0,
+        reward_type="bonus_bets",
+        is_specific=True,
+        observed_at=datetime(2026, 7, 31, 12, 0, tzinfo=UTC),
+    )
+    text = build_usage_guidance(offer)
+    assert "hedge" in text.lower()
+    assert "stake-not-returned" in text.lower()
+
+
+def test_strategy_routes_on_reward_type_when_kind_is_generic() -> None:
+    """``reward_type`` is a real routing signal, not only ``kind``.
+
+    The branches matched a space-normalised copy of the value (``"bonus bets"``)
+    against the stored vocabulary (``"bonus_bets"``), so every underscored
+    reward type — all of them but ``boost`` and ``cash`` — could never fire and
+    an offer whose ``kind`` was generic fell to the "public copy is vague"
+    catch-all even with concrete mechanics parsed out of it.
+    """
+    from src.promos.strategy import build_usage_guidance
+
+    def guidance(reward_type: str) -> str:
+        return build_usage_guidance(
+            PromoOffer(
+                source="betmgm",
+                offer_id=reward_type,
+                kind=PromoKind.OTHER,
+                title="Promotion",
+                reward_type=reward_type,
+                bonus_amount=100.0,
+                is_specific=True,
+                observed_at=datetime(2026, 7, 31, 12, 0, tzinfo=UTC),
+            )
+        )
+
+    assert "stake-not-returned" in guidance("bonus_bets").lower()
+    assert "stake-not-returned" in guidance("free_bet").lower()
+    assert "site credit" in guidance("site_credit").lower()
+    assert "refund/bonus bet" in guidance("no_sweat").lower()
+    assert "refund/bonus bet" in guidance("risk_free").lower()
+    assert "no-vig" in guidance("boost").lower()
+
+
+def test_deepen_reuses_shared_url_cache() -> None:
+    from src.promos.deepen import deepen_offers
+
+    html = """
+    <html><head><title>Bet $5 Get $200 in Bonus Bets</title>
+    <meta name="description" content="New customers: Bet $5, Get $200 in Bonus Bets"/>
+    </head><body>Bet $5, Get $200 in Bonus Bets. Min odds -200.</body></html>
+    """
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(200, text=html)
+
+    observed = datetime(2026, 7, 31, 12, 0, tzinfo=UTC)
+    offers = [
+        PromoOffer(
+            source="fanduel",
+            offer_id=str(i),
+            kind=PromoKind.SIGNUP_BONUS,
+            title="Welcome offer",
+            url="https://example.test/promotions",
+            observed_at=observed,
+        )
+        for i in range(3)
+    ]
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    out = deepen_offers(offers, client=client, max_details=12)
+    client.close()
+    assert calls["n"] == 1
+    assert all(o.is_specific for o in out)
+    assert all(o.bonus_amount == 200.0 for o in out)
+
+
+def test_prefer_primary_keeps_more_specific_secondary() -> None:
+    from src.promos.redundancy import prefer_primary_offers
+
+    observed = datetime(2026, 7, 31, 12, 0, tzinfo=UTC)
+    primary = PromoOffer(
+        source="fanduel",
+        offer_id="1",
+        kind=PromoKind.SIGNUP_BONUS,
+        title="Welcome Offer",
+        is_specific=False,
+        observed_at=observed,
+    )
+    secondary = PromoOffer(
+        source="tl_fanduel",
+        offer_id="2",
+        kind=PromoKind.SIGNUP_BONUS,
+        title="FanDuel Welcome Offer Bet $5 get $150 in Bonus Bets",
+        summary="Bet $5, get $150 in bonus bets",
+        bonus_amount=150.0,
+        is_specific=True,
+        observed_at=observed,
+        metadata={"feed": "thelines", "brand_key": "fanduel"},
+    )
+    merged = prefer_primary_offers([primary, secondary])
+    assert any(o.source == "tl_fanduel" for o in merged)
+    assert not any(o.source == "fanduel" for o in merged)
 
 
 def test_promo_offer_rejects_blank_title() -> None:

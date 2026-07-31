@@ -198,8 +198,11 @@ select, input[type="search"], input[type="text"] {
 .promo-row {
   display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 14px;
   padding: 10px 0; border-top: 1px solid var(--line-soft);
+  cursor: pointer;
 }
 .promo-row:first-child { border-top: 0; padding-top: 0; }
+.promo-row:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.promo-row.is-open { background: color-mix(in srgb, var(--accent) 8%, transparent); }
 .promo-row .title { margin: 0; font: 600 13px/1.35 var(--sans); color: var(--ink); }
 .promo-row .meta {
   margin: 3px 0 0; font: 400 11.5px/1.4 var(--sans); color: var(--ink-2);
@@ -216,6 +219,28 @@ select, input[type="search"], input[type="text"] {
   color: var(--accent); text-decoration: none; font: 500 11.5px/1.3 var(--sans);
 }
 .promo-row a.promo-link:hover { text-decoration: underline; }
+.promo-detail {
+  grid-column: 1 / -1;
+  margin-top: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  background: var(--bg, transparent);
+  display: none;
+}
+.promo-row.is-open .promo-detail { display: block; }
+.promo-detail h4 {
+  margin: 0 0 6px; font: 600 12px/1.3 var(--sans); color: var(--ink);
+}
+.promo-detail p, .promo-detail li {
+  margin: 0 0 6px; font: 400 12px/1.45 var(--sans); color: var(--ink-2);
+  max-width: 78ch;
+}
+.promo-detail .terms {
+  white-space: pre-wrap; max-height: 160px; overflow: auto;
+  font: 400 11px/1.4 var(--mono); color: var(--muted);
+}
+.promo-detail .pill-row { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 8px; }
 .promo-health {
   display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px;
 }
@@ -815,9 +840,15 @@ BODY = """
             <option value="">every book</option>
           </select>
         </label>
+        <label>
+          <span class="eyebrow" for="promo-region">Region</span>
+          <select id="promo-region" aria-label="Filter by eligible region">
+            <option value="">all regions</option>
+          </select>
+        </label>
         <label style="flex:1; min-width:180px">
           <span class="eyebrow" for="promo-q">Search</span>
-          <input type="search" id="promo-q" placeholder="title or description" autocomplete="off"/>
+          <input type="search" id="promo-q" placeholder="title, summary, or description" autocomplete="off"/>
         </label>
         <span class="eyebrow" id="promo-note">latest promo scrape</span>
       </div>
@@ -2627,6 +2658,7 @@ const PROMO_BRAND_LABEL = {
   fanduel: 'FanDuel',
   draftkings: 'DraftKings',
   betmgm: 'BetMGM',
+  betmgm_on: 'BetMGM Ontario',
   caesars: 'Caesars',
   bet365: 'bet365',
   hardrock: 'Hard Rock',
@@ -2634,12 +2666,15 @@ const PROMO_BRAND_LABEL = {
   bovada: 'Bovada',
   cloudbet: 'Cloudbet',
   leovegas_kambi: 'LeoVegas',
+  leovegas_on: 'LeoVegas Ontario',
   betrivers_kambi: 'BetRivers',
   onexbet: '1xBet',
   pinnacle: 'Pinnacle',
   smarkets: 'Smarkets',
   matchbook: 'Matchbook',
 };
+
+let selectedPromoKey = null;
 
 function promoBrandKey(key) {
   const k = String(key || '');
@@ -2667,23 +2702,79 @@ function promoBrandCoverage(healthRows) {
   return { ok, total: byBrand.size };
 }
 
+function promoOfferKey(o) {
+  return `${o.source || ''}|${o.offer_id || ''}`;
+}
+
 function ensurePromoFilters() {
   const kindSel = el('promo-kind');
   const sourceSel = el('promo-source');
+  const regionSel = el('promo-region');
   if (!kindSel || !sourceSel) return;
   const kinds = new Set((PROMOS.kinds || []).concat((PROMOS.offers || []).map((o) => o.kind)));
   const sources = new Set((PROMOS.offers || []).map((o) => o.source));
   for (const h of (PROMOS.health || [])) sources.add(h.source_key);
+  const regions = new Set();
+  for (const o of (PROMOS.offers || [])) {
+    for (const r of (o.eligible_regions || [])) regions.add(r);
+    for (const r of (o.ineligible_regions || [])) regions.add(r);
+  }
   const kindVal = kindSel.value;
   const sourceVal = sourceSel.value;
+  const regionVal = regionSel ? regionSel.value : '';
   kindSel.innerHTML = '<option value="">every kind</option>' +
     [...kinds].filter(Boolean).sort().map((k) =>
       `<option value="${escapeHtml(k)}">${escapeHtml(promoKindLabel(k))}</option>`).join('');
   sourceSel.innerHTML = '<option value="">every book</option>' +
     [...sources].filter(Boolean).sort().map((k) =>
       `<option value="${escapeHtml(k)}">${escapeHtml(promoBookLabel(k))}</option>`).join('');
+  if (regionSel) {
+    regionSel.innerHTML = '<option value="">all regions</option>' +
+      [...regions].filter(Boolean).sort().map((k) =>
+        `<option value="${escapeHtml(k)}">${escapeHtml(k)}</option>`).join('');
+    if ([...regions].includes(regionVal)) regionSel.value = regionVal;
+  }
   if ([...kinds].includes(kindVal)) kindSel.value = kindVal;
   if ([...sources].includes(sourceVal)) sourceSel.value = sourceVal;
+}
+
+function promoDetailHtml(o) {
+  const summary = o.summary || o.title || '';
+  const eligible = (o.eligible_regions || []).join(', ') || 'not stated';
+  const ineligible = (o.ineligible_regions || []).join(', ');
+  const bits = [];
+  if (o.bonus_amount != null) bits.push(`reward $${Number(o.bonus_amount)}`);
+  if (o.min_deposit != null) bits.push(`min deposit $${Number(o.min_deposit)}`);
+  if (o.min_odds) bits.push(`min odds ${o.min_odds}`);
+  if (o.wagering_requirement) bits.push(`wagering ${o.wagering_requirement}`);
+  if (o.reward_type) bits.push(String(o.reward_type).replace(/_/g, ' '));
+  if (!o.is_specific) bits.push('incomplete public details');
+  const pills = bits.length
+    ? `<div class="pill-row">${bits.map((b) => `<span class="pill flat">${escapeHtml(String(b))}</span>`).join('')}</div>`
+    : '';
+  const link = o.url
+    ? `<p><a class="promo-link" href="${escapeHtml(o.url)}" target="_blank" rel="noopener noreferrer">Open offer</a></p>`
+    : '';
+  const terms = o.terms
+    ? `<h4>Terms</h4><p class="terms">${escapeHtml(o.terms.slice(0, 4000))}</p>`
+    : '';
+  const notes = o.eligibility_notes
+    ? `<p><b>Eligibility notes:</b> ${escapeHtml(o.eligibility_notes)}</p>`
+    : '';
+  const guidance = o.usage_guidance
+    ? `<h4>Best way to use</h4><p>${escapeHtml(o.usage_guidance)}</p>`
+    : '<h4>Best way to use</h4><p class="dim">No strategy generated for this offer.</p>';
+  return `<div class="promo-detail" id="promo-detail">
+    <h4>${escapeHtml(summary)}</h4>
+    ${pills}
+    <p><b>Eligible:</b> ${escapeHtml(eligible)}${
+      ineligible ? ` · <b>Excluded:</b> ${escapeHtml(ineligible)}` : ''}</p>
+    ${notes}
+    ${o.description ? `<p>${escapeHtml(o.description)}</p>` : ''}
+    ${guidance}
+    ${terms}
+    ${link}
+  </div>`;
 }
 
 function renderPromos() {
@@ -2736,20 +2827,29 @@ function renderPromos() {
 
   const kindFilter = (el('promo-kind') && el('promo-kind').value) || '';
   const sourceFilter = (el('promo-source') && el('promo-source').value) || '';
+  const regionFilter = (el('promo-region') && el('promo-region').value) || '';
   const q = ((el('promo-q') && el('promo-q').value) || '').trim().toLowerCase();
   const filtered = offers.filter((o) => {
     if (kindFilter && o.kind !== kindFilter) return false;
     if (sourceFilter && o.source !== sourceFilter) return false;
+    if (regionFilter) {
+      const eligible = o.eligible_regions || [];
+      const ineligible = new Set(o.ineligible_regions || []);
+      if (ineligible.has(regionFilter)) return false;
+      // Known eligible list: must include the selected region.
+      // Unknown eligibility (empty list) stays visible — public copy often omits geo.
+      if (eligible.length && !eligible.includes(regionFilter)) return false;
+    }
     if (!q) return true;
     const code = (o.metadata && o.metadata.promo_code) || '';
-    const hay = `${o.title} ${o.description || ''} ${o.raw_kind || ''} ${code}`.toLowerCase();
+    const hay = `${o.title} ${o.summary || ''} ${o.description || ''} ${o.raw_kind || ''} ${code} ${(o.eligible_regions || []).join(' ')}`.toLowerCase();
     return hay.includes(q);
   });
 
   if (listNote) {
     listNote.textContent = filtered.length === offers.length
-      ? `${offers.length} total`
-      : `${filtered.length} of ${offers.length}`;
+      ? `${offers.length} total · click a row for usage tips`
+      : `${filtered.length} of ${offers.length} · click a row for usage tips`;
   }
 
   if (!filtered.length) {
@@ -2758,35 +2858,58 @@ function renderPromos() {
       : 'This promo scrape stored no offers.'}</div>`;
   } else {
     list.innerHTML = `<div class="promo-list">${filtered.map((o) => {
+      const key = promoOfferKey(o);
+      const open = key === selectedPromoKey;
       const end = o.ends_at
         ? `ends ${escapeHtml(fmtClock(o.ends_at))}`
         : 'no end date';
       const link = o.url
         ? `<a class="promo-link" href="${escapeHtml(o.url)}" target="_blank" rel="noopener noreferrer">Open offer</a>`
         : '';
-      const desc = o.description
-        ? `<p class="desc">${escapeHtml(o.description.slice(0, 280))}${o.description.length > 280 ? '…' : ''}</p>`
+      const teaser = o.summary || o.description || '';
+      const desc = teaser
+        ? `<p class="desc">${escapeHtml(teaser.slice(0, 280))}${teaser.length > 280 ? '…' : ''}</p>`
         : '';
       const login = o.requires_login ? ' · login for details' : '';
+      const vague = o.is_specific ? '' : ' · needs details';
+      const regions = (o.eligible_regions || []).length
+        ? ` · ${(o.eligible_regions || []).slice(0, 6).join(', ')}${(o.eligible_regions || []).length > 6 ? '…' : ''}`
+        : '';
       const code = o.metadata && o.metadata.promo_code
         ? ` · code ${escapeHtml(o.metadata.promo_code)}`
         : '';
       const via = (o.metadata && o.metadata.feed === 'thelines') || String(o.source || '').startsWith('tl_')
         ? ' · via TheLines'
         : '';
-      return `<article class="promo-row">
+      return `<article class="promo-row${open ? ' is-open' : ''}" data-promo-key="${escapeHtml(key)}" tabindex="0" role="button" aria-expanded="${open ? 'true' : 'false'}">
         <div>
-          <p class="title">${escapeHtml(o.title)}</p>
+          <p class="title">${escapeHtml(o.summary || o.title)}</p>
           <p class="meta">${escapeHtml(promoBookLabel(o.source))} · ${escapeHtml(promoKindLabel(o.kind))}${
-            o.product ? ` · ${escapeHtml(o.product)}` : ''}${login}${code}${via}</p>
+            o.product ? ` · ${escapeHtml(o.product)}` : ''}${login}${vague}${regions}${code}${via}</p>
           ${desc}
         </div>
         <div class="side">
           <span>${end}</span>
           ${link}
         </div>
+        ${open ? promoDetailHtml(o) : ''}
       </article>`;
     }).join('')}</div>`;
+    list.querySelectorAll('.promo-row').forEach((node) => {
+      const activate = (ev) => {
+        if (ev.target.closest && (ev.target.closest('a') || ev.target.closest('.promo-detail'))) return;
+        const key = node.getAttribute('data-promo-key');
+        selectedPromoKey = selectedPromoKey === key ? null : key;
+        renderPromos();
+      };
+      node.addEventListener('click', activate);
+      node.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Enter' || ev.key === ' ') {
+          ev.preventDefault();
+          activate(ev);
+        }
+      });
+    });
   }
 
   if (health) {
@@ -4788,7 +4911,7 @@ function wirePromoScrapeButton() {
 }
 wirePromoScrapeButton();
 
-['promo-kind', 'promo-source', 'promo-q'].forEach((id) => {
+['promo-kind', 'promo-source', 'promo-region', 'promo-q'].forEach((id) => {
   const node = el(id);
   if (node) node.addEventListener('input', renderPromos);
 });

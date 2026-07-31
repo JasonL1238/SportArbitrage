@@ -55,7 +55,6 @@ class BrowserSession:
         from playwright.sync_api import sync_playwright
 
         self._timeout_ms = timeout_ms
-        self._seed_url = seed_url
         self._pw = sync_playwright().start()
         launch_kwargs: dict[str, Any] = {"headless": headless}
         if proxy:
@@ -169,24 +168,3 @@ def build_browser_client(
         proxy=proxy_url(),
         headless=os.environ.get("ODDS_BROWSER_HEADED", "").strip() not in {"1", "true"},
     )
-
-
-def probe_with_browser(
-    url: str,
-    *,
-    params: Mapping[str, Any] | None = None,
-    seed_url: str | None = None,
-) -> tuple[int, str]:
-    """One-shot helper for scripts: ``(status, body_prefix)``."""
-    session = build_browser_client(seed_url=seed_url)
-    try:
-        response = session.get(url, params=params)
-        preview = response.text[:300]
-        try:
-            json.loads(response.text)
-            preview = f"JSON ok, {len(response.text)} bytes"
-        except ValueError:
-            pass
-        return response.status_code, preview
-    finally:
-        session.close()
