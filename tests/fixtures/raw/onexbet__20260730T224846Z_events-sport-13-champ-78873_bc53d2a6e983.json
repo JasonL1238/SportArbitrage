@@ -1,0 +1,39 @@
+{
+ "envelope_version": 3,
+ "source": "onexbet",
+ "endpoint": "events:sport-13:champ-78873",
+ "url": "https://1xbet.com/service-api/LineFeed/Get1x2_VZip?sports=13&champs=78873&count=40&lng=en&tf=2200000&tz=0&mode=4&country=1",
+ "status_code": 200,
+ "content_type": "application/json; charset=utf-8",
+ "fetched_at": "2026-07-30T22:48:46.423298+00:00",
+ "request_params": {
+  "sports": "13",
+  "champs": "78873",
+  "count": "40",
+  "lng": "en",
+  "tf": "2200000",
+  "tz": "0",
+  "mode": "4",
+  "country": "1"
+ },
+ "headers": {
+  "date": "Thu, 30 Jul 2026 22:48:41 GMT",
+  "content-type": "application/json; charset=utf-8",
+  "server": "cloudflare",
+  "vary": "Accept-Encoding, Accept",
+  "cache-control": "public,max-age=5",
+  "api-supported-versions": "1.0",
+  "x-time-ng": "0.008",
+  "strict-transport-security": "max-age=63072000; includeSubDomains; preload",
+  "server-timing": "wf-uht;dur=0.010",
+  "last-modified": "Thu, 30 Jul 2026 22:48:41 GMT",
+  "cf-cache-status": "EXPIRED",
+  "content-encoding": "zstd",
+  "cf-ray": "a237e9893eb0eb32-SJC",
+  "alt-svc": "h3=\":443\"; ma=86400"
+ },
+ "capture_id": "",
+ "sha256": "bc53d2a6e983aa2ac5ccdfb52be625696a5f17368c3991c7298195dc26e90196",
+ "byte_size": 2466,
+ "body": "{\"Id\":0,\"Success\":true,\"Error\":\"\",\"ErrorCode\":0,\"Guid\":\"\",\"Value\":[{\"B\":609078,\"I\":733809128,\"N\":167458,\"CI\":333945066,\"E\":[{\"T\":14,\"P\":17.5,\"C\":1.79,\"CV\":\"1.79\",\"G\":62,\"CE\":1},{\"T\":402,\"C\":1.833,\"CV\":\"1.833\",\"G\":101},{\"T\":7,\"P\":1.5,\"C\":1.87,\"CV\":\"1.87\",\"G\":2,\"CE\":1},{\"T\":9,\"P\":35.5,\"C\":1.909,\"CV\":\"1.909\",\"G\":17,\"CE\":1},{\"T\":10,\"P\":35.5,\"C\":1.909,\"CV\":\"1.909\",\"G\":17,\"CE\":1},{\"T\":13,\"P\":17.5,\"C\":1.94,\"CV\":\"1.94\",\"G\":62,\"CE\":1},{\"T\":8,\"P\":-1.5,\"C\":1.952,\"CV\":\"1.952\",\"G\":2,\"CE\":1},{\"T\":401,\"C\":2,\"CV\":\"2\",\"G\":101}],\"AE\":[{\"G\":2,\"ME\":[{\"T\":7,\"P\":-1,\"C\":1.94,\"CV\":\"1.94\",\"G\":2},{\"T\":8,\"P\":1,\"C\":1.86,\"CV\":\"1.86\",\"G\":2},{\"T\":7,\"P\":-1.5,\"C\":1.99,\"CV\":\"1.99\",\"G\":2},{\"T\":8,\"P\":-1.5,\"C\":1.952,\"CV\":\"1.952\",\"G\":2,\"CE\":1},{\"T\":7,\"P\":1.5,\"C\":1.87,\"CV\":\"1.87\",\"G\":2,\"CE\":1},{\"T\":8,\"P\":1.5,\"C\":1.75,\"CV\":\"1.75\",\"G\":2},{\"T\":8,\"P\":-4.5,\"C\":2.42,\"CV\":\"2.42\",\"G\":2},{\"T\":7,\"P\":4.5,\"C\":1.51,\"CV\":\"1.51\",\"G\":2}]},{\"G\":17,\"ME\":[{\"T\":9,\"P\":30.5,\"C\":1.41,\"CV\":\"1.41\",\"G\":17},{\"T\":10,\"P\":30.5,\"C\":2.69,\"CV\":\"2.69\",\"G\":17},{\"T\":9,\"P\":33.5,\"C\":1.63,\"CV\":\"1.63\",\"G\":17},{\"T\":10,\"P\":33.5,\"C\":2.17,\"CV\":\"2.17\",\"G\":17},{\"T\":9,\"P\":35.5,\"C\":1.909,\"CV\":\"1.909\",\"G\":17,\"CE\":1},{\"T\":10,\"P\":35.5,\"C\":1.909,\"CV\":\"1.909\",\"G\":17,\"CE\":1},{\"T\":9,\"P\":36.5,\"C\":1.909,\"CV\":\"1.909\",\"G\":17},{\"T\":10,\"P\":36.5,\"C\":1.833,\"CV\":\"1.833\",\"G\":17},{\"T\":9,\"P\":39.5,\"C\":2.375,\"CV\":\"2.375\",\"G\":17},{\"T\":10,\"P\":39.5,\"C\":1.53,\"CV\":\"1.53\",\"G\":17}]}],\"EC\":36,\"TG\":\"\",\"V\":\"Including Overtime\",\"VE\":\"Including Overtime\",\"PN\":\"\",\"TN\":\"Quarter\",\"SS\":2,\"SST\":2,\"HSI\":true,\"SSI\":0,\"STI\":\"6a5aa9605e99bd05c64f8bc6\",\"S\":1786060800,\"HS\":1,\"SGC\":3,\"O1\":\"Arizona Cardinals\",\"O2\":\"Carolina Panthers\",\"O1I\":10859,\"O2I\":10853,\"O1IS\":[10859],\"O2IS\":[10853],\"O1C\":153,\"O1CT\":\"Glendale\",\"O2C\":153,\"O2CT\":\"Charlotte\",\"O1IMG\":[\"33d015a44b94e8af39b8b1c7e3fae1d4.png\"],\"O2IMG\":[\"67796e03734ac1979222f992addf135b.png\"],\"O1R\":\"\u0410\u0440\u0438\u0437\u043e\u043d\u0430 \u041a\u0430\u0440\u0434\u0438\u043d\u0430\u043b\u0437\",\"O2R\":\"\u041a\u0430\u0440\u043e\u043b\u0438\u043d\u0430 \u041f\u0430\u043d\u0442\u0435\u0440\u0441\",\"O1E\":\"Arizona Cardinals\",\"O2E\":\"Carolina Panthers\",\"MIS\":[{\"K\":2,\"V\":\"Tom Benson Hull of Fame (Canton)\"},{\"K\":11,\"V\":\"USA\"}],\"MIO\":{\"Loc\":\"Tom Benson Hull of Fame (Canton)\"},\"SI\":13,\"SN\":\"American Football\",\"SR\":\"\u0410\u043c\u0435\u0440\u0438\u043a\u0430\u043d\u0441\u043a\u0438\u0439 \u0444\u0443\u0442\u0431\u043e\u043b\",\"SE\":\"American Football\",\"L\":\"NFL. Preseason Games\",\"LR\":\"NFL. \u041f\u0440\u0435\u0434\u0441\u0435\u0437\u043e\u043d\u043d\u044b\u0435 \u043c\u0430\u0442\u0447\u0438\",\"LE\":\"NFL. Preseason Games\",\"LI\":78873,\"CN\":\"United States\",\"COI\":153,\"MS\":[0],\"SGI\":\"6a5aa9605e99bd05c64f8bc5\",\"KI\":3,\"CID\":1,\"IV\":12,\"SmI\":37916,\"HHTHS\":true,\"TNS\":\"Quarters\",\"SUBA\":true}]}"
+}

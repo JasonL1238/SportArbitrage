@@ -1,0 +1,36 @@
+{
+ "envelope_version": 3,
+ "source": "onexbet",
+ "endpoint": "champs:sport-13",
+ "url": "https://1xbet.com/service-api/LineFeed/GetChampsZip?sport=13&lng=en&tf=2200000&tz=0&country=1",
+ "status_code": 200,
+ "content_type": "application/json; charset=utf-8",
+ "fetched_at": "2026-07-30T22:48:45.411553+00:00",
+ "request_params": {
+  "sport": "13",
+  "lng": "en",
+  "tf": "2200000",
+  "tz": "0",
+  "country": "1"
+ },
+ "headers": {
+  "date": "Thu, 30 Jul 2026 22:48:40 GMT",
+  "content-type": "application/json; charset=utf-8",
+  "server": "cloudflare",
+  "vary": "Accept-Encoding, Accept",
+  "cache-control": "public,max-age=5",
+  "api-supported-versions": "1.0",
+  "x-time-ng": "0.008",
+  "strict-transport-security": "max-age=63072000; includeSubDomains; preload",
+  "server-timing": "wf-uht;dur=0.010",
+  "last-modified": "Thu, 30 Jul 2026 22:48:40 GMT",
+  "cf-cache-status": "EXPIRED",
+  "content-encoding": "zstd",
+  "cf-ray": "a237e982ddc0eb32-SJC",
+  "alt-svc": "h3=\":443\"; ma=86400"
+ },
+ "capture_id": "",
+ "sha256": "30a73726ee6bae4ee19c8021490bae5f76868051b87ec19c922d28e1d2c8ab1b",
+ "byte_size": 1158,
+ "body": "{\"Id\":0,\"Success\":true,\"Error\":\"\",\"ErrorCode\":0,\"Guid\":\"\",\"Value\":[{\"SI\":13,\"SN\":\"American Football\",\"SR\":\"\u0410\u043c\u0435\u0440\u0438\u043a\u0430\u043d\u0441\u043a\u0438\u0439 \u0444\u0443\u0442\u0431\u043e\u043b\",\"L\":\"USA. NFL\",\"LR\":\"NFL\",\"LI\":68315,\"CI\":153,\"T\":300,\"GC\":34},{\"SI\":13,\"SN\":\"American Football\",\"SR\":\"\u0410\u043c\u0435\u0440\u0438\u043a\u0430\u043d\u0441\u043a\u0438\u0439 \u0444\u0443\u0442\u0431\u043e\u043b\",\"L\":\"NFL. Preseason Games\",\"LR\":\"NFL. \u041f\u0440\u0435\u0434\u0441\u0435\u0437\u043e\u043d\u043d\u044b\u0435 \u043c\u0430\u0442\u0447\u0438\",\"LI\":78873,\"CI\":153,\"GC\":1},{\"SI\":13,\"SN\":\"American Football\",\"SR\":\"\u0410\u043c\u0435\u0440\u0438\u043a\u0430\u043d\u0441\u043a\u0438\u0439 \u0444\u0443\u0442\u0431\u043e\u043b\",\"L\":\"CFL\",\"LR\":\"\u041a\u0424\u041b\",\"LI\":2311131,\"CI\":85,\"GC\":5},{\"SI\":13,\"SN\":\"American Football\",\"SR\":\"\u0410\u043c\u0435\u0440\u0438\u043a\u0430\u043d\u0441\u043a\u0438\u0439 \u0444\u0443\u0442\u0431\u043e\u043b\",\"L\":\"Arena football. IFL\",\"LR\":\"\u0410\u0440\u0435\u043d\u0430-\u0444\u0443\u0442\u0431\u043e\u043b. IFL\",\"LI\":2366120,\"CI\":153,\"GC\":4},{\"SI\":13,\"SN\":\"American Football\",\"SR\":\"\u0410\u043c\u0435\u0440\u0438\u043a\u0430\u043d\u0441\u043a\u0438\u0439 \u0444\u0443\u0442\u0431\u043e\u043b\",\"L\":\"EFA\",\"LI\":3008805,\"CI\":223,\"GC\":3,\"CHIMG\":\"74e561e2e06931265314aea8ed9ea05e.png\"},{\"SI\":13,\"SN\":\"American Football\",\"SR\":\"\u0410\u043c\u0435\u0440\u0438\u043a\u0430\u043d\u0441\u043a\u0438\u0439 \u0444\u0443\u0442\u0431\u043e\u043b\",\"L\":\"Germany. GFL\",\"LR\":\"\u0427\u0435\u043c\u043f\u0438\u043e\u043d\u0430\u0442 \u0413\u0435\u0440\u043c\u0430\u043d\u0438\u0438. \u0413\u0424\u041b\",\"LI\":1166017,\"CI\":53,\"GC\":6},{\"SI\":13,\"SN\":\"American Football\",\"SR\":\"\u0410\u043c\u0435\u0440\u0438\u043a\u0430\u043d\u0441\u043a\u0438\u0439 \u0444\u0443\u0442\u0431\u043e\u043b\",\"L\":\"NCAA\",\"LI\":93369,\"CI\":153,\"GC\":60}]}"
+}

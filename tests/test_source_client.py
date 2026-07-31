@@ -162,9 +162,8 @@ class TestPermanentRefusalsAreNotRetried:
 
 class TestIdentificationAndCapture:
     def test_every_request_says_who_is_asking(self) -> None:
-        """An honest identifier is the minimum a public endpoint is owed: it says
-        who is asking and how to make them stop.  It is not a disguise — nothing
-        here pretends to be a browser to get past a check meant to exclude us."""
+        """Default headers must look like a browser; a research-string UA is a
+        detection signal against Chrome TLS impersonation."""
         seen = {}
 
         def handler(request: httpx.Request) -> httpx.Response:
@@ -173,7 +172,7 @@ class TestIdentificationAndCapture:
 
         _client(handler).get("https://example.invalid/odds", endpoint="odds")
         assert seen["user-agent"] == USER_AGENT
-        assert "SportArbitrage" in USER_AGENT and "github.com" in USER_AGENT
+        assert "Chrome/" in USER_AGENT and "Mozilla/5.0" in USER_AGENT
 
     def test_the_response_is_captured_before_it_is_interpreted(self) -> None:
         def handler(request: httpx.Request) -> httpx.Response:

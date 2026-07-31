@@ -106,6 +106,17 @@ SETTLEMENT: dict[str, SettlementRegime] = {
     "betrivers_kambi": SettlementRegime.VOID_AND_REFUND,
     "leovegas_kambi": SettlementRegime.VOID_AND_REFUND,
     "bovada": SettlementRegime.VOID_AND_REFUND,
+    "betmgm": SettlementRegime.VOID_AND_REFUND,
+    "cloudbet": SettlementRegime.VOID_AND_REFUND,
+    "onexbet": SettlementRegime.VOID_AND_REFUND,
+    "an_draftkings": SettlementRegime.VOID_AND_REFUND,
+    "an_caesars": SettlementRegime.VOID_AND_REFUND,
+    "an_bet365": SettlementRegime.VOID_AND_REFUND,
+    "an_open": SettlementRegime.VOID_AND_REFUND,
+    "an_fanduel": SettlementRegime.VOID_AND_REFUND,
+    "an_betrivers": SettlementRegime.VOID_AND_REFUND,
+    "an_betmgm": SettlementRegime.VOID_AND_REFUND,
+    "unibet_au": SettlementRegime.VOID_AND_REFUND,
     "matchbook": SettlementRegime.VOID_AND_REFUND,
     "smarkets": SettlementRegime.VOID_AND_REFUND,
     "sxbet": SettlementRegime.VOID_AND_REFUND,
@@ -162,11 +173,3 @@ def mismatch(
             "not played as scheduled"
         ),
     )
-
-
-def regimes_present(
-    source_keys: Sequence[str], table: Mapping[str, SettlementRegime] | None = None
-) -> tuple[SettlementRegime, ...]:
-    """Every distinct regime among *source_keys*, in declaration order."""
-    present = {regime_for(key, table) for key in source_keys}
-    return tuple(regime for regime in SettlementRegime if regime in present)

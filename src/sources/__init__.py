@@ -1,14 +1,6 @@
-from src.sources.base import OddsSource, ParseOutcome, Rejection, SourceHealth
-from src.sources.betrivers_kambi import BetRiversKambiAdapter
-from src.sources.fanduel import FanDuelAdapter
-from src.sources.pinnacle import PinnacleAdapter
+"""Odds-source adapters and the registry that names them.
 
-__all__ = [
-    "BetRiversKambiAdapter",
-    "FanDuelAdapter",
-    "OddsSource",
-    "ParseOutcome",
-    "PinnacleAdapter",
-    "Rejection",
-    "SourceHealth",
-]
+Import adapters and helpers from their modules (``src.sources.fanduel``,
+``src.sources.registry``, …).  This package root intentionally re-exports
+nothing — the live surface is :mod:`src.sources.registry`.
+"""

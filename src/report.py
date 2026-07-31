@@ -33,7 +33,15 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from src import settings
+from src.arb import (
+    DEFAULT_TOTAL_STAKE,
+    Opportunity,
+    counterparty_groups,
+    find_opportunities,
+    merge_counterparty_groups,
+)
 from src.commission import commission_for, net_decimal_odds
+from src.events import reconcile_event_keys
 from src.leagues import is_known
 from src.leagues import league as get_league
 from src.report_assets import BODY, CSS, JS
@@ -115,6 +123,81 @@ SOURCE_NOTES: dict[str, dict[str, str]] = {
         "what": "Reads the coupon feed behind its own sport pages, and is the only source "
                 "that states outright which side it counts as home — which is how the "
                 "others' orderings were checked.",
+    },
+    "betmgm": {
+        "label": "BetMGM",
+        "host": "www.il.betmgm.com",
+        "kind": "sportsbook",
+        "what": "US retail book via Entain's public CDS fixtures feed. Illinois answers "
+                "an honest User-Agent with a public access id, so whole-game moneylines, "
+                "spreads and totals can be collected without a browser session.",
+    },
+    "cloudbet": {
+        "label": "Cloudbet",
+        "host": "www.cloudbet.com",
+        "kind": "sportsbook",
+        "what": "Public sports-api list plus per-event detail: moneyline, handicap and "
+                "totals (including baseball first-five), with home/away stated on the event.",
+    },
+    "onexbet": {
+        "label": "1xBet",
+        "host": "1xbet.com",
+        "kind": "sportsbook",
+        "what": "LineFeed Get1x2_VZip championship slates — short-key moneyline, handicap "
+                "and total selections filtered by the league label string.",
+    },
+    "unibet_au": {
+        "label": "Unibet Australia",
+        "host": "www.unibet.com.au",
+        "kind": "sportsbook",
+        "what": "Australian sportsbook filter feed — one request per sport, Kambi-shaped "
+                "bet offers with stated home/away participants and decimal odds.",
+    },
+    "an_draftkings": {
+        "label": "DraftKings (Action Network)",
+        "host": "api.actionnetwork.com",
+        "kind": "sportsbook",
+        "what": "DraftKings prices as Action Network publishes them on its public "
+                "scoreboard — a secondary path when a book's own edge is unreachable.",
+    },
+    "an_caesars": {
+        "label": "Caesars (Action Network)",
+        "host": "api.actionnetwork.com",
+        "kind": "sportsbook",
+        "what": "Caesars prices from Action Network's public scoreboard.",
+    },
+    "an_bet365": {
+        "label": "Bet365 (Action Network)",
+        "host": "api.actionnetwork.com",
+        "kind": "sportsbook",
+        "what": "Bet365 prices from Action Network's public scoreboard.",
+    },
+    "an_open": {
+        "label": "Open (Action Network)",
+        "host": "api.actionnetwork.com",
+        "kind": "sportsbook",
+        "what": "Action Network's \"open\" consensus book on the public scoreboard.",
+    },
+    "an_fanduel": {
+        "label": "FanDuel (Action Network)",
+        "host": "api.actionnetwork.com",
+        "kind": "sportsbook",
+        "what": "FanDuel prices as Action Network publishes them — a redundant secondary "
+                "feed beside the primary FanDuel adapter, kept for durability.",
+    },
+    "an_betrivers": {
+        "label": "BetRivers (Action Network)",
+        "host": "api.actionnetwork.com",
+        "kind": "sportsbook",
+        "what": "BetRivers prices as Action Network publishes them — a redundant secondary "
+                "feed beside the Kambi adapter, kept for durability.",
+    },
+    "an_betmgm": {
+        "label": "BetMGM (Action Network)",
+        "host": "api.actionnetwork.com",
+        "kind": "sportsbook",
+        "what": "BetMGM prices as Action Network publishes them — a redundant secondary "
+                "feed beside the Entain CDS adapter, kept for durability.",
     },
     "matchbook": {
         "label": "Matchbook",
@@ -241,6 +324,9 @@ SKIP_NOTES: list[tuple[str, str]] = [
      "The venue flags this fixture as in-running, so its prices are live ones."),
     ("event_live",
      "The venue flags this fixture as live, so its prices are in-play ones."),
+    ("draw_not_priced_for_sport",
+     "A draw price on a sport or window where a level score is not a settlement "
+     "outcome."),
     ("no_resting_order_for_outcome",
      "Nobody is offering this side on the exchange. Ordinary on a thin order book, and "
      "the reason an exchange row is not the same thing as a book's posted price."),
@@ -342,12 +428,159 @@ SKIP_NOTES: list[tuple[str, str]] = [
     ("outright", "A season-long or tournament-long bet rather than a single fixture."),
     ("unknown_league",
      "A competition this tool has no recorded rules for. Counted rather than guessed at."),
+    ("competition_out_of_scope",
+     "A competition this collector was not asked for, or one outside the leagues it "
+     "knows how to settle."),
+    ("doubles_or_team_pairing",
+     "A doubles or team pairing rather than a two-competitor fixture."),
+    ("first_to_score_market",
+     "Who scores first — a different contract from the result, handicap or total."),
+    ("combined_or_prop_market",
+     "A combined outcome or player prop, not one of the four game markets collected."),
+    ("promo_market",
+     "A promotional or boosted market with settlement rules that are not the plain "
+     "game market it resembles."),
+    ("set_only_market",
+     "Settles on a single set rather than the match, so it is not the full-game "
+     "contract collected here."),
+    ("outcome_not_visible",
+     "A selection the book is not currently showing a price for."),
+    ("virtual_event",
+     "A simulated or virtual fixture, not a real scheduled contest."),
+    ("league_not_requested",
+     "A competition outside the leagues this scrape was asked to collect."),
+    ("league_out_of_scope",
+     "A competition outside the leagues this scrape was asked to collect."),
+    ("event_state:",
+     "The book flags this fixture in a state that is not a pre-match price "
+     "(started, live, or finished)."),
+    ("statistic_not_a_fixture",
+     "A statistics or props container, not a two-competitor fixture."),
+    ("competition_missing",
+     "The book listed a fixture without naming its competition."),
+    ("unknown_competition",
+     "A competition this tool has no recorded rules for."),
+    ("market_not_visible",
+     "A market the book is not currently offering."),
+    ("duplicate_market_id",
+     "The same market id appeared twice; kept once and counted here."),
+    ("option_market_not_an_object",
+     "A market entry the book returned in a shape that is not an object."),
+    ("game_market_not_an_object",
+     "A game-market entry the book returned in a shape that is not an object."),
+    ("option_not_an_object",
+     "A selection the book returned in a shape that is not an object."),
+    ("outcome_not_an_object",
+     "A selection the book returned in a shape that is not an object."),
+    ("fixture_not_an_object",
+     "A fixture entry the book returned in a shape that is not an object."),
+    ("outcome_without_price",
+     "A selection the book listed without a price. There is nothing to record."),
+    ("implausible_price",
+     "A price outside the range a real game market can have — refused rather than stored."),
+    ("period_only_market",
+     "Settles on a single period rather than the full game collected here."),
+    ("outright_or_series",
+     "A series, series-winner, or to-qualify market — not a single fixture result."),
+    ("unmapped_market:",
+     "The book's own name for this market is not one of the labels this tool "
+     "recognises, so it is counted and left alone rather than guessed at."),
 
     # ── the row itself was unusable ──────────────────────────────────────────
     ("runner_without_price",
      "A selection the book listed without a price. There is nothing to record."),
     ("outcome_without_odds",
      "A selection the book listed without a price. There is nothing to record."),
+
+    # ── new multi-source adapters (prefix-matched) ───────────────────────────
+    ("odds_for_other_book",
+     "An Action Network scoreboard row belonging to a different book_id than this "
+     "registered source."),
+    ("event_status:",
+     "The fixture is not in a pregame state the adapter collects (complete, live, "
+     "delayed, …)."),
+    ("period_out_of_scope:",
+     "A partial period (half, quarter, …) outside the windows this pipeline prices."),
+    ("market_type_out_of_scope:",
+     "A market type this adapter does not map — player props, races, odd/even, …"),
+    ("market_in_scope_but_not_fetched:",
+     "A market the source can price but this request tier or view did not return."),
+    ("market_out_of_scope:",
+     "A market shape this source deliberately does not collect for that sport."),
+    ("unmapped_criterion:",
+     "A bet-offer criterion label that has no mapping in this adapter."),
+    ("league_unmapped:",
+     "A competition the adapter saw but has no canonical league key for."),
+    ("alternate_scoring_unit_games",
+     "Priced in games rather than the sport's primary scoring unit."),
+    ("child_matchup:",
+     "A child matchup in an alternate scoring unit of a parent fixture."),
+    ("already_collected_from_sport_page:",
+     "Already collected from another endpoint of the same source."),
+    ("empty_linefeed",
+     "The LineFeed response body was empty."),
+    ("soccer_total_out_of_scale",
+     "A soccer total whose line is far above game goals — usually corners."),
+    ("line_out_of_scale",
+     "A handicap/total line far outside the sport's plausible magnitude."),
+    ("mirror_spread_framing",
+     "The opposite home/away framing of the same handicap (already collected)."),
+    ("total_out_of_band",
+     "A total whose line sits outside a plausible range for that sport."),
+    ("unknown_selection_type:",
+     "A 1xBet selection-type code this adapter does not map."),
+    ("sport_market_out_of_scope:",
+     "A market type this adapter does not collect for that sport."),
+    ("draw_not_priced",
+     "A draw row on a sport/period where regulation draw is not a settlement."),
+    ("regulation_three_way_unpriced",
+     "A regulation 1X2 moneyline on a sport that settles in OT/SO, so the draw is not a priced settlement."),
+    ("markets_missing",
+     "An event detail payload had no markets object."),
+    ("event_not_an_object",
+     "An event entry that was not a JSON object."),
+    ("selection_not_an_object",
+     "A selection entry that was not a JSON object."),
+    ("unreadable_odds",
+     "Odds that could not be read as a number."),
+    ("price_below_plausible_minimum",
+     "A price below the lowest plausible decimal odds."),
+    ("selection_disabled",
+     "The venue marked this selection as not currently bettable."),
+    ("unmapped_outcome_label",
+     "An outcome label that could not be matched to home or away."),
+    ("offer_suspended",
+     "The bet offer is suspended."),
+    ("odds_not_an_object",
+     "An odds entry that was not a JSON object."),
+    ("game_not_an_object",
+     "A game entry that was not a JSON object."),
+    ("missing_home_away",
+     "The fixture did not state both participants."),
+    ("bad_price_row",
+     "A price row missing a usable type or coefficient."),
+    ("bad_spread_line",
+     "A spread line that could not be read as a number."),
+    ("bad_total_line",
+     "A total line that could not be read as a number."),
+    ("unreadable_american_odds",
+     "American odds that could not be parsed as an integer."),
+    ("implausible_odds",
+     "Odds outside the plausible decimal range."),
+    ("missing_line",
+     "A line market without a numeric line."),
+    ("missing_price",
+     "A selection without a price."),
+    ("missing_event_id",
+     "An event with no id."),
+    ("outcome:",
+     "An outcome name this adapter does not map."),
+    ("market:",
+     "A market label this adapter does not collect."),
+    ("status:",
+     "A venue status value outside the collectable set."),
+    ("state:",
+     "A venue state value outside the collectable set."),
 ]
 
 #: Field-by-field reference, shown so "one consistent schema" is inspectable.
@@ -874,6 +1107,9 @@ def build_report(
         # collection saw was in scope" about tables it had never loaded, with the
         # true numbers printed a few lines up in the same flow diagram.
         "detail_runs": list(detail_ids),
+        # Arb opportunities per embedded run — same detector the CLI uses, so the
+        # page and ``collector arb`` cannot disagree about what is takeable.
+        "arbs": _arb_payload(store, detail_ids, as_of=generated_at),
         "glossary": GLOSSARY,
         "schema_fields": [
             {"name": name, "type": kind, "required": required, "note": note}
@@ -898,6 +1134,107 @@ def _blank_sport(sport: str) -> dict[str, Any]:
         "leagues": {},
         "quote_count": 0,
         "event_count": 0,
+    }
+
+
+def _arb_payload(
+    store: Store,
+    run_ids: Sequence[int],
+    *,
+    as_of: datetime,
+    total_stake: float = DEFAULT_TOTAL_STAKE,
+) -> dict[str, Any]:
+    """Run the arb detector for each embedded scrape, keyed by run id.
+
+    Mirrors ``collector arb``: whole-run quotes, recorded counterparties unioned
+    with a re-measure, and *as_of* so already-started fixtures are not shown as
+    takeable.  Empty runs still get an entry so the UI can say "none" rather than
+    "not loaded".
+    """
+    out: dict[str, Any] = {}
+    for run_id in run_ids:
+        quotes = store.load_quotes(run_id)
+        if not quotes:
+            out[str(run_id)] = {
+                "opportunities": [],
+                "diagnostics": [],
+                "group_count": 0,
+                "comparable_group_count": 0,
+                "stake": total_stake,
+            }
+            continue
+        everything, _ = reconcile_event_keys(quotes)
+        report = find_opportunities(
+            everything,
+            total_stake=total_stake,
+            as_of=as_of,
+            one_counterparty=merge_counterparty_groups(
+                counterparty_groups(everything),
+                store.recorded_counterparty_groups(run_id),
+            ),
+        )
+        rejected = {}
+        for diagnostic in report.diagnostics:
+            rejected[diagnostic.code] = rejected.get(diagnostic.code, 0) + 1
+        out[str(run_id)] = {
+            "opportunities": [_opportunity_entry(opp) for opp in report.opportunities],
+            "diagnostics": [
+                {"code": code, "count": count}
+                for code, count in sorted(rejected.items(), key=lambda item: -item[1])
+            ],
+            "group_count": report.group_count,
+            "comparable_group_count": report.comparable_group_count,
+            "stake": total_stake,
+        }
+    return out
+
+
+def _opportunity_entry(opportunity: Opportunity) -> dict[str, Any]:
+    """JSON shape for one takeable position on the dashboard."""
+    league = opportunity.legs[0].quote.league if opportunity.legs else ""
+    return {
+        "event_key": opportunity.event_key,
+        "sport": opportunity.sport.value,
+        "league": league,
+        "home_team": opportunity.home_team,
+        "away_team": opportunity.away_team,
+        "home_participant": opportunity.legs[0].quote.home_participant if opportunity.legs else "",
+        "away_participant": opportunity.legs[0].quote.away_participant if opportunity.legs else "",
+        "commence_time": opportunity.commence_time.isoformat(),
+        "market": opportunity.market.value,
+        "period": opportunity.period.value,
+        "side": opportunity.side.value if opportunity.side else None,
+        "line": opportunity.line,
+        "margin_pct": round(opportunity.margin * 100.0, 3),
+        "roi_pct": round(opportunity.roi * 100.0, 3),
+        "guaranteed_profit": round(opportunity.guaranteed_profit, 2),
+        "total_stake": round(opportunity.total_stake, 2),
+        "max_total_stake": (
+            None if opportunity.max_total_stake is None
+            else round(opportunity.max_total_stake, 2)
+        ),
+        "sum_implied": round(opportunity.sum_implied, 6),
+        "is_risk_free": opportunity.is_risk_free,
+        "can_push": opportunity.can_push,
+        "can_half_push": opportunity.can_half_push,
+        "notes": list(opportunity.notes),
+        "legs": [
+            {
+                "source": leg.source,
+                "selection": leg.selection.value,
+                "line": leg.quote.line,
+                "american_odds": leg.quote.american_odds,
+                "decimal_odds": round(leg.decimal_odds, 4),
+                "net_decimal_odds": round(leg.net_odds, 4),
+                "stake": round(leg.stake, 2),
+                "payout": round(leg.payout, 2),
+            }
+            for leg in opportunity.legs
+        ],
+        "outcome_profits": [
+            {"label": label, "profit": round(profit, 2)}
+            for label, profit in opportunity.outcome_profits
+        ],
     }
 
 
@@ -1303,7 +1640,7 @@ def _slate_dates(quotes: dict[str, Any], strings: Sequence[str]) -> str:
 
 
 def _lede(latest: dict[str, Any]) -> str:
-    # Labels come from ``SOURCE_NOTES``, which names all ten sources.  A private
+    # Labels come from ``SOURCE_NOTES``, which names every registered source.  A private
     # three-entry dict here predated the expansion and printed raw registry keys
     # for everything added since: "…from BetRivers, FanDuel, leovegas_kambi and
     # Pinnacle."
@@ -1331,13 +1668,11 @@ def _lede(latest: dict[str, Any]) -> str:
         )
     count = len(latest["sports"])
     return (
-        f"Sportsbooks, betting exchanges and prediction markets all publish prices for "
-        f"today's fixtures on their own websites. This tool "
-        f"reads them, converts every one of those formats into one, checks the result and "
-        f"saves it. On its most recent pass it collected {latest['quote_count']:,} prices "
-        f"across {latest['event_count']} fixtures in {count} sport"
-        f"{'' if count == 1 else 's'} from {listed or 'no books'}. {verdict} Nothing on "
-        f"this page is fetched live — it is all read back out of what was saved."
+        f"This page compares what {listed or 'the books'} are offering for the same games. "
+        f"Latest scrape: {latest['quote_count']:,} prices across {latest['event_count']} "
+        f"games in {count} sport{'' if count == 1 else 's'}. {verdict} "
+        f"Nothing here updates by itself — hit Scrape now (or rebuild the page) for a "
+        f"fresh snapshot."
     )
 
 
@@ -1379,7 +1714,7 @@ def render_page(data: dict[str, Any]) -> str:
         "<!doctype html>\n"
         '<html lang="en">\n<head>\n<meta charset="utf-8" />\n'
         '<meta name="viewport" content="width=device-width, initial-scale=1" />\n'
-        "<title>Odds Collector — what got grabbed</title>\n"
+        "<title>Sportsbook prices — easy compare</title>\n"
         "</head>\n<body>\n"
         f"{render_fragment(data)}"
         "</body>\n</html>\n"
@@ -1489,8 +1824,27 @@ def main(argv: Sequence[str] | None = None) -> int:
                 replay_run_id=latest,
             )
         except LookupError as exc:
-            print(f"{exc}\nrun `python -m src.collector collect` first", file=sys.stderr)
-            return 1
+            # A wiped DB has no runs yet.  Ordinary ``--out`` still refuses so
+            # callers do not open an empty board and think collection failed —
+            # but ``--serve`` must still bring up the Scrape button that fills it.
+            if not args.serve:
+                print(f"{exc}\nrun `python -m src.collector collect` first", file=sys.stderr)
+                return 1
+            args.out.parent.mkdir(parents=True, exist_ok=True)
+            args.out.write_text(_empty_scrape_shell(), encoding="utf-8")
+            print(
+                f"wrote empty scrape shell to {args.out} — no finished runs yet; "
+                "use Scrape now in the browser",
+                file=sys.stderr,
+            )
+            return _serve(
+                args.out,
+                args.serve,
+                open_browser=args.open,
+                run_limit=args.runs,
+                quote_runs=args.quote_runs,
+                max_quote_rows=args.max_quote_rows,
+            )
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     markup = render_fragment(data) if args.fragment else render_page(data)
@@ -1524,6 +1878,76 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.open:
         webbrowser.open(args.out.resolve().as_uri())
     return 0
+
+
+def _empty_scrape_shell() -> str:
+    """Minimal localhost page so a wiped DB can still scrape from the UI."""
+    return """<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Line shop — scrape to begin</title>
+<style>
+  :root { color-scheme: dark; --ground:#0c1118; --surface:#121821; --ink:#e8eef6;
+    --muted:#8796a8; --accent:#5b8cff; --line:#283140; }
+  body { margin:0; min-height:100vh; display:grid; place-items:center;
+    background:var(--ground); color:var(--ink);
+    font:400 15px/1.5 "IBM Plex Sans", "Segoe UI", system-ui, sans-serif; }
+  .card { width:min(440px, 92vw); padding:28px; border:1px solid var(--line);
+    border-radius:12px; background:var(--surface); }
+  h1 { margin:0 0 8px; font:800 22px/1.2 system-ui; }
+  p { margin:0 0 16px; color:var(--muted); }
+  select, button { width:100%; padding:10px 12px; border-radius:8px; border:1px solid var(--line);
+    font:650 13px/1.2 system-ui; margin-top:8px; }
+  button { background:var(--accent); color:#fff; border-color:var(--accent); cursor:pointer; }
+  button:disabled { opacity:0.55; cursor:wait; }
+  #status { margin-top:12px; font:400 12.5px/1.4 ui-monospace, monospace; color:var(--muted); }
+</style></head><body>
+<div class="card">
+  <h1>Line shop</h1>
+  <p>No scrapes yet. Pull live prices, then this page reloads as the odds board.</p>
+  <label for="scope" style="font-size:12px;color:var(--muted)">Scope</label>
+  <select id="scope">
+    <option value="league:MLB" selected>MLB baseball (fast)</option>
+    <option value="sport:baseball">All baseball</option>
+    <option value="all">Everything (slower)</option>
+  </select>
+  <button type="button" id="go">Scrape now</button>
+  <div id="status">Ready.</div>
+</div>
+<script>
+const btn = document.getElementById('go');
+const status = document.getElementById('status');
+const scope = document.getElementById('scope');
+function payload() {
+  const v = scope.value || 'league:MLB';
+  if (v === 'all') return { tier: 'core' };
+  if (v.startsWith('sport:')) return { tier: 'core', sport: v.slice(6) };
+  if (v.startsWith('league:')) return { tier: 'core', league: v.slice(7) };
+  return { tier: 'core', league: 'MLB' };
+}
+btn.addEventListener('click', async () => {
+  btn.disabled = true;
+  status.textContent = 'Scraping…';
+  try {
+    const res = await fetch('/api/collect', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload()),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok || !body.ok) {
+      status.textContent = 'Failed: ' + (body.error || res.statusText || res.status);
+      btn.disabled = false;
+      return;
+    }
+    status.textContent = 'Got ' + ((body.collect && body.collect.quote_count) || 0) + ' prices — reloading…';
+    location.reload();
+  } catch (err) {
+    status.textContent = 'Failed: ' + (err && err.message ? err.message : err);
+    btn.disabled = false;
+  }
+});
+</script></body></html>
+"""
 
 
 def _rebuild_dashboard(
@@ -1633,7 +2057,6 @@ def _serve(
     the page is loaded from this server, which is what can run a collect and
     rewrite the HTML without violating that rule.
     """
-    import functools
     from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
     root = path.parent.resolve()

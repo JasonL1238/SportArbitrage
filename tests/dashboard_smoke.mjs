@@ -90,6 +90,13 @@ try {
     globalThis.__renderBook = renderBook;
     globalThis.__renderSources = renderSources;
     globalThis.__scopesFailedOf = scopesFailedOf;
+    globalThis.__boardQuotes = boardQuotes;
+    globalThis.__boardSideLabels = boardSideLabels;
+    globalThis.__fmtLine = fmtLine;
+    globalThis.__priceCell = priceCell;
+    globalThis.__americanOf = americanOf;
+    globalThis.__consensusLine = consensusLine;
+    globalThis.__fmtAmerican = fmtAmerican;
   `)();
 } catch (err) {
   errors.push(err);
@@ -106,6 +113,9 @@ const required = ['stat-strip', 'flow', 'matrix', 'sports-grid', 'leagues-grid',
   'move-table', 'quality-strip', 'findings', 'overround', 'rejections', 'raws',
   'schema-table', 'vocab', 'sport-pick', 'sport-meta',
   'run-list', 'scrape-status',
+  'home-stats', 'browse-games', 'events-games',
+  'odds-screen', 'screen-note', 'league-pick', 'market-tabs', 'nav-screen',
+  'arb-list', 'arb-stats', 'arb-summary', 'arb-rejected', 'nav-arb',
   // The drill-down panels are rendered while off screen, so a link straight into one
   // opens on something. An empty one here means a reader would arrive at a blank page.
   'crumbs', 'event-title', 'event-sub',
@@ -121,6 +131,99 @@ console.log(`script ran clean; ${counted} innerHTML writes across ${nodes.size} 
 if (blank.length) {
   console.error('EMPTY REGIONS:', blank.join(', '));
   process.exit(1);
+}
+
+// Odds screen pins — the primary board must not silently regress.
+{
+  const boardProblems = [];
+  const screen = filled('odds-screen');
+  if (!screen.includes('oj-board') && !screen.includes('No games') && !screen.includes('not embedded')) {
+    boardProblems.push('odds-screen missing board table or empty-state copy');
+  }
+  if (!filled('market-tabs').includes('Moneyline')) {
+    boardProblems.push('market-tabs did not render Moneyline/Spread/Total');
+  }
+  if (globalThis.__fmtLine(0.25, 'spread') !== '+0.25') {
+    boardProblems.push(`fmtLine spread quarter wrong: ${globalThis.__fmtLine(0.25, 'spread')}`);
+  }
+  if (globalThis.__fmtLine(8.5, 'total') !== '8.5') {
+    boardProblems.push(`fmtLine total should not force +: ${globalThis.__fmtLine(8.5, 'total')}`);
+  }
+  // Call site must decode COL.market through str(), not pass the intern index.
+  {
+    const COL = globalThis.__COL;
+    const DATA = globalThis.__DATA;
+    let ti = DATA.strings.indexOf('total');
+    if (ti < 0) { DATA.strings.push('total'); ti = DATA.strings.length - 1; }
+    const q = new Array(Math.max(...Object.values(COL)) + 1).fill(null);
+    q[COL.market] = ti;
+    q[COL.line] = 8.5;
+    q[COL.status] = (() => { let i = DATA.strings.indexOf('active'); if (i < 0) { DATA.strings.push('active'); i = DATA.strings.length - 1; } return i; })();
+    q[COL.decimal_odds] = 1.91;
+    if (COL.net_decimal_odds !== undefined) q[COL.net_decimal_odds] = 1.91;
+    const cell = globalThis.__priceCell(q, null, false);
+    if (cell.includes('+8.5')) boardProblems.push('priceCell must not prefix totals with +');
+    if (!cell.includes('8.5')) boardProblems.push('priceCell dropped the total line');
+  }
+  // Same-line best only: two books on -1.5, one juicier loner on -3.5.
+  const COL = globalThis.__COL;
+  // boardQuotes reads through COL indexes and str() → DATA.strings.
+  const DATA = globalThis.__DATA;
+  const enc = (s) => {
+    let i = DATA.strings.indexOf(s);
+    if (i < 0) { DATA.strings.push(s); i = DATA.strings.length - 1; }
+    return i;
+  };
+  const row = (src, sel, line, decimal) => {
+    const r = new Array(Math.max(...Object.values(COL)) + 1).fill(null);
+    r[COL.source] = enc(src);
+    r[COL.market] = enc('spread');
+    r[COL.period] = enc('full_game');
+    r[COL.selection] = enc(sel);
+    r[COL.status] = enc('active');
+    r[COL.line] = line;
+    r[COL.is_alternate] = 0;
+    r[COL.decimal_odds] = decimal;
+    r[COL.american_odds] = decimal >= 2
+      ? Math.round((decimal - 1) * 100) : -Math.round(100 / (decimal - 1));
+    if (COL.net_decimal_odds !== undefined) r[COL.net_decimal_odds] = decimal;
+    return r;
+  };
+  const event = {
+    rows: [
+      row('bookA', 'home', -1.5, 1.91),
+      row('bookB', 'home', -1.5, 1.95),
+      row('bookC', 'home', -3.5, 2.80), // juicier, different line — must not win consensus
+    ],
+    homeRaw: 'HOME', awayRaw: 'AWAY', key: 't', sport: 'baseball', league: 'MLB', commence: '',
+  };
+  const byBook = globalThis.__boardQuotes(event, 'spread');
+  const a = byBook.get('bookA')?.get('home');
+  const c = byBook.get('bookC')?.get('home');
+  if (!a || +a[COL.line] !== -1.5) boardProblems.push('consensus main line did not keep -1.5 for bookA');
+  if (c) boardProblems.push('bookC -3.5 must not appear when consensus is -1.5');
+  const b = byBook.get('bookB')?.get('home');
+  const tip = globalThis.__priceCell(b, 1.95, true);
+  if (!tip.includes('$100 returns')) boardProblems.push('priceCell tip must use "$100 returns"');
+  if (!tip.includes('best')) boardProblems.push('priceCell should yellow-mark the best when comparable');
+  const worse = globalThis.__priceCell(a, 1.95, true);
+  if (worse.includes('best')) boardProblems.push('priceCell must not yellow a worse price on the same line');
+  const alone = globalThis.__priceCell(a, 1.91, false);
+  if (alone.includes('best')) boardProblems.push('priceCell must not yellow a lone/uncomparable price');
+  const labels = globalThis.__boardSideLabels({
+    rows: [
+      row('bookA', 'home', null, 1.9),
+      // F5 draw must not invent a Draw row on the full-game board
+      (() => { const r = row('bookA', 'draw', null, 3.2); r[COL.period] = enc('first_5_innings'); r[COL.market] = enc('moneyline'); return r; })(),
+    ],
+    homeRaw: 'HOME', awayRaw: 'AWAY',
+  }, 'moneyline').map(([k]) => k);
+  if (labels.includes('draw')) boardProblems.push('Draw row leaked from non-full_game moneyline');
+  if (boardProblems.length) {
+    console.error('ODDS SCREEN PINS:', boardProblems.join(' | '));
+    process.exit(1);
+  }
+  console.log('  odds-screen pins: ok');
 }
 // A missing payload field renders as NaN or undefined rather than throwing.
 const rendered = [...nodes.entries()].filter(([id]) => id !== 'report-data')

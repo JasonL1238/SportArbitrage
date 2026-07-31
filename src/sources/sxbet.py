@@ -112,8 +112,6 @@ ORDERS_PAGE_CAP = 100
 #: Bound on paging per sport — a runaway guard, not a limit anyone expects to hit.
 MAX_PAGES_PER_SPORT = 10
 
-DEFAULT_PAGE_LIMIT = 100
-
 _ACTIVE = "ACTIVE"
 
 

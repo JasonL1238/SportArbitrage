@@ -1,0 +1,33 @@
+{
+ "envelope_version": 3,
+ "source": "cloudbet",
+ "endpoint": "event:35489261",
+ "url": "https://www.cloudbet.com/sports-api/c/v6/sports/events/35489261",
+ "status_code": 200,
+ "content_type": "application/json",
+ "fetched_at": "2026-07-30T22:49:11.864354+00:00",
+ "request_params": {},
+ "headers": {
+  "date": "Thu, 30 Jul 2026 22:49:07 GMT",
+  "content-type": "application/json",
+  "content-length": "1246",
+  "cf-ray": "a237ea2b7bd93222-SJC",
+  "cf-cache-status": "HIT",
+  "accept-ranges": "bytes",
+  "age": "184",
+  "cache-control": "no-transform, public, s-maxage=600, max-age=0",
+  "content-encoding": "gzip",
+  "last-modified": "Thu, 30 Jul 2026 22:46:02 GMT",
+  "server": "cloudflare",
+  "vary": "Accept-Encoding",
+  "via": "1.1 google",
+  "content-security-policy": "frame-ancestors https://cloudbet.com https://*.cloudbet.com",
+  "x-authenticated": "false",
+  "x-cf-ipcountry": "US",
+  "cf-apo-via": "origin,host"
+ },
+ "capture_id": "",
+ "sha256": "5601957c22fd64c9f0a8e7682167b9ac06a6c5a460453653174022d88ebac03d",
+ "byte_size": 3855,
+ "body": "{\"sequence\":\"294\", \"id\":35489261, \"sport\":{\"name\":\"American Football\", \"key\":\"american-football\"}, \"competition\":{\"name\":\"NFL\", \"key\":\"american-football-usa-nfl\", \"tags\":[], \"category\":{\"name\":\"USA\", \"key\":\"usa\"}}, \"home\":{\"name\":\"ARZ Cardinals\", \"key\":\"cd70-arizona-cardinals\", \"abbreviation\":\"ARI\", \"media\":[{\"type\":\"IMAGE\", \"url\":\"https://www.cloudbet.com/sports-data/entity-media/competitor/3440/image/2023-08-31-06-21-53\"}, {\"type\":\"LOGO\", \"url\":\"https://www.cloudbet.com/sports-data/entity-media/competitor/3440/logo/2020-12-26-14-23-11\"}], \"nationality\":\"USA\", \"researchId\":\"\"}, \"away\":{\"name\":\"CAR Panthers\", \"key\":\"cd77-carolina-panthers\", \"abbreviation\":\"CAR\", \"media\":[{\"type\":\"IMAGE\", \"url\":\"https://www.cloudbet.com/sports-data/entity-media/competitor/3447/image/2023-08-30-09-34-51\"}, {\"type\":\"LOGO\", \"url\":\"https://www.cloudbet.com/sports-data/entity-media/competitor/3447/logo/2020-12-26-14-33-38\"}], \"nationality\":\"USA\", \"researchId\":\"\"}, \"players\":{}, \"status\":\"TRADING\", \"markets\":{\"american_football.handicap\":{\"submarkets\":{\"period=ot&period=ft\":{\"blank\":false, \"parlayRestriction\":false, \"sequence\":\"289\", \"selections\":[{\"outcome\":\"home\", \"params\":\"handicap=-1\", \"marketUrl\":\"american_football.handicap/home?handicap=-1\", \"price\":1.93, \"minStake\":0.08, \"probability\":0.488, \"status\":\"SELECTION_ENABLED\", \"side\":\"BACK\", \"maxStake\":7903.225}, {\"outcome\":\"away\", \"params\":\"handicap=-1\", \"marketUrl\":\"american_football.handicap/away?handicap=-1\", \"price\":1.84, \"minStake\":0.08, \"probability\":0.512, \"status\":\"SELECTION_ENABLED\", \"side\":\"BACK\", \"maxStake\":8750}], \"selectionLimit\":true, \"description\":\"\", \"promotions\":[\"SUBMARKET_PROMOTION_UNLIMITED_LIABILITY\", \"SUBMARKET_PROMOTION_LOYALTY\"]}}}, \"american_football.moneyline\":{\"submarkets\":{\"period=ot&period=ft\":{\"blank\":false, \"parlayRestriction\":false, \"sequence\":\"289\", \"selections\":[{\"outcome\":\"home\", \"params\":\"\", \"marketUrl\":\"american_football.moneyline/home\", \"price\":1.85, \"minStake\":0.08, \"probability\":0.509, \"status\":\"SELECTION_ENABLED\", \"side\":\"BACK\", \"maxStake\":8647.058}, {\"outcome\":\"away\", \"params\":\"\", \"marketUrl\":\"american_football.moneyline/away\", \"price\":1.92, \"minStake\":0.08, \"probability\":0.491, \"status\":\"SELECTION_ENABLED\", \"side\":\"BACK\", \"maxStake\":7989.13}], \"selectionLimit\":true, \"description\":\"\", \"promotions\":[\"SUBMARKET_PROMOTION_UNLIMITED_LIABILITY\", \"SUBMARKET_PROMOTION_LOYALTY\"]}}}, \"american_football.totals\":{\"submarkets\":{\"period=ot&period=ft\":{\"blank\":false, \"parlayRestriction\":false, \"sequence\":\"289\", \"selections\":[{\"outcome\":\"over\", \"params\":\"total=35.5\", \"marketUrl\":\"american_football.totals/over?total=35.5\", \"price\":1.89, \"minStake\":0.08, \"probability\":0.497, \"status\":\"SELECTION_ENABLED\", \"side\":\"BACK\", \"maxStake\":6193.82}, {\"outcome\":\"under\", \"params\":\"total=35.5\", \"marketUrl\":\"american_football.totals/under?total=35.5\", \"price\":1.87, \"minStake\":0.08, \"probability\":0.503, \"status\":\"SELECTION_ENABLED\", \"side\":\"BACK\", \"maxStake\":6336.206}], \"selectionLimit\":true, \"description\":\"\", \"promotions\":[\"SUBMARKET_PROMOTION_UNLIMITED_LIABILITY\", \"SUBMARKET_PROMOTION_LOYALTY\"]}}}}, \"blank\":false, \"betradarId\":71547222, \"sportcastId\":0, \"metadata\":{\"eventStatus\":\"\", \"matchDay\":\"0\", \"score\":[], \"setScores\":[], \"clearedScore\":[], \"cutoffTime\":\"2026-08-07T00:00:00Z\", \"eventTime\":\"\", \"eventTimeExtended\":\"\", \"opinion\":[], \"opinions\":{}, \"winningOutcomes\":[], \"resultedScores\":{}, \"positions\":{}, \"lastModified\":\"0\", \"sequence\":\"0\"}, \"name\":\"ARZ Cardinals v CAR Panthers\", \"key\":\"cd70-arizona-cardinals-v-cd77-carolina-panthers\", \"submarketsCount\":0, \"cutoffTime\":\"2026-08-07T00:00:00Z\", \"resultedTime\":\"\", \"endTime\":\"\", \"type\":\"EVENT_TYPE_EVENT\", \"promotions\":[], \"eventMedia\":[], \"streams\":[], \"names\":{}, \"settlement\":{}, \"media\":{\"image\":\"\", \"videoThumbnail\":\"\"}, \"startTime\":\"2026-08-07T00:00:00Z\", \"availability\":0, \"gradingDuration\":15}"
+}

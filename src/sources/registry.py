@@ -41,19 +41,23 @@ from functools import partial
 from inspect import signature
 from typing import Any, Callable, Mapping, Sequence
 
-from src.commission import COMMISSIONS, Commission, commission_for
-from src.settlement import SETTLEMENT, SettlementRegime, regime_for
-from src.sources._common import Tier
+from src.commission import COMMISSIONS
+from src.settlement import SETTLEMENT
 from src.sources.base import OddsSource
+from src.sources.actionnetwork import ActionNetworkAdapter
 from src.sources.betrivers_kambi import BetRiversKambiAdapter
+from src.sources.betmgm import BetMgmAdapter
 from src.sources.bovada import BovadaAdapter
+from src.sources.cloudbet import CloudbetAdapter
 from src.sources.fanduel import FanDuelAdapter
 from src.sources.kalshi import KalshiAdapter
 from src.sources.matchbook import MatchbookAdapter
+from src.sources.onexbet import OneXBetAdapter
 from src.sources.pinnacle import PinnacleAdapter
 from src.sources.polymarket import PolymarketAdapter
 from src.sources.smarkets import SmarketsAdapter
 from src.sources.sxbet import SxBetAdapter
+from src.sources.unibet_au import UnibetAuAdapter
 
 
 #: Sources that take much longer than the rest of the pass, because their own
@@ -108,13 +112,6 @@ class SourceDescriptor:
     """What distinguishes this instance from its siblings on the same class — the
     Kambi operator token, a FanDuel state, an exchange's currency."""
 
-    notes: str = ""
-    """One line for the dashboard and the coverage report."""
-
-    @property
-    def commission(self) -> Commission:
-        return commission_for(self.key)
-
     def factory(self) -> Callable[..., OddsSource]:
         """A callable that builds this source, with its configuration bound.
 
@@ -155,20 +152,17 @@ SOURCES: tuple[SourceDescriptor, ...] = (
         key="fanduel",
         adapter=FanDuelAdapter,
         kind=SourceKind.SPORTSBOOK,
-        notes="US retail book; soccer totals and handicaps live on a per-event page",
     ),
     SourceDescriptor(
         key="pinnacle",
         adapter=PinnacleAdapter,
         kind=SourceKind.SPORTSBOOK,
-        notes="sharp book; two calls per scope, matchups joined to markets locally",
     ),
     SourceDescriptor(
         key="betrivers_kambi",
         adapter=BetRiversKambiAdapter,
         kind=SourceKind.SPORTSBOOK,
         config={"operator": "rsiusil", "market": "US-IL", "lang": "en_US"},
-        notes="Kambi platform, BetRivers Illinois tenant",
     ),
     # The second Kambi tenant, and the reason the registry exists in this shape.
     #
@@ -186,7 +180,6 @@ SOURCES: tuple[SourceDescriptor, ...] = (
         adapter=BetRiversKambiAdapter,
         kind=SourceKind.SPORTSBOOK,
         config={"operator": "leo", "market": "GB", "lang": "en_GB"},
-        notes="Kambi platform, LeoVegas tenant — prices independently of the BetRivers tenants",
     ),
     # ── exchanges ────────────────────────────────────────────────────────────
     #
@@ -199,56 +192,103 @@ SOURCES: tuple[SourceDescriptor, ...] = (
         key="matchbook",
         adapter=MatchbookAdapter,
         kind=SourceKind.EXCHANGE,
-        notes=(
-            "betting exchange; one call per sport returns moneyline, totals and "
-            "handicaps with the money behind each price"
-        ),
     ),
     SourceDescriptor(
         key="bovada",
         adapter=BovadaAdapter,
         kind=SourceKind.SPORTSBOOK,
-        notes=(
-            "offshore book; one coupon request per league returns the whole slate "
-            "with prices, and states which side is home rather than implying it"
-        ),
+    ),
+    SourceDescriptor(
+        key="betmgm",
+        adapter=BetMgmAdapter,
+        kind=SourceKind.SPORTSBOOK,
+    ),
+    SourceDescriptor(
+        key="cloudbet",
+        adapter=CloudbetAdapter,
+        kind=SourceKind.SPORTSBOOK,
+    ),
+    SourceDescriptor(
+        key="onexbet",
+        adapter=OneXBetAdapter,
+        kind=SourceKind.SPORTSBOOK,
+    ),
+    SourceDescriptor(
+        key="unibet_au",
+        adapter=UnibetAuAdapter,
+        kind=SourceKind.SPORTSBOOK,
+    ),
+    # ── Action Network multi-book scoreboard ─────────────────────────────────
+    #
+    # One public JSON feed carrying many books.  Redundant keys (FanDuel /
+    # BetRivers / BetMGM) are intentional secondary feeds for when a book's own
+    # edge is unreachable; distinctness still has to clear them against the
+    # primary adapter on a live slate.
+    SourceDescriptor(
+        key="an_draftkings",
+        adapter=ActionNetworkAdapter,
+        kind=SourceKind.SPORTSBOOK,
+        config={"book_id": 68},
+    ),
+    # Caesars (and Bet365) are omitted unless bookIds names them.
+    SourceDescriptor(
+        key="an_caesars",
+        adapter=ActionNetworkAdapter,
+        kind=SourceKind.SPORTSBOOK,
+        config={"book_id": 123, "fetch_book_ids": "123"},
+    ),
+    # Bet365 only appears when Caesars is named on the request; parse still
+    # filters to book_id 79.
+    SourceDescriptor(
+        key="an_bet365",
+        adapter=ActionNetworkAdapter,
+        kind=SourceKind.SPORTSBOOK,
+        config={"book_id": 79, "fetch_book_ids": "123"},
+    ),
+    SourceDescriptor(
+        key="an_open",
+        adapter=ActionNetworkAdapter,
+        kind=SourceKind.SPORTSBOOK,
+        config={"book_id": 30},
+    ),
+    SourceDescriptor(
+        key="an_fanduel",
+        adapter=ActionNetworkAdapter,
+        kind=SourceKind.SPORTSBOOK,
+        config={"book_id": 69},
+    ),
+    SourceDescriptor(
+        key="an_betrivers",
+        adapter=ActionNetworkAdapter,
+        kind=SourceKind.SPORTSBOOK,
+        config={"book_id": 71},
+    ),
+    SourceDescriptor(
+        key="an_betmgm",
+        adapter=ActionNetworkAdapter,
+        kind=SourceKind.SPORTSBOOK,
+        config={"book_id": 75},
     ),
     SourceDescriptor(
         key="sxbet",
         adapter=SxBetAdapter,
         kind=SourceKind.EXCHANGE,
-        notes=(
-            "peer-to-peer order book; every price is one counterparty's resting "
-            "order, with its own size"
-        ),
     ),
     SourceDescriptor(
         key="smarkets",
         adapter=SmarketsAdapter,
         kind=SourceKind.EXCHANGE,
-        notes=(
-            "exchange with fully typed markets and contracts; the moneyline only, "
-            "because the venue's published rate limit will not support the ladder"
-        ),
     ),
     # ── prediction markets ───────────────────────────────────────────────────
     SourceDescriptor(
         key="kalshi",
         adapter=KalshiAdapter,
         kind=SourceKind.PREDICTION_MARKET,
-        notes=(
-            "regulated contract exchange; MLB moneyline, totals and spreads from "
-            "structured series, with no title ever parsed"
-        ),
     ),
     SourceDescriptor(
         key="polymarket",
         adapter=PolymarketAdapter,
         kind=SourceKind.PREDICTION_MARKET,
-        notes=(
-            "prediction market; structured sportsMarketType, line and teams, so no "
-            "question text is ever parsed"
-        ),
     ),
 )
 
@@ -329,7 +369,6 @@ __all__ = [
     "SOURCES",
     "SourceDescriptor",
     "SourceKind",
-    "Tier",
     "accepts_leagues",
     "descriptor",
     "keys",

@@ -1,7 +1,12 @@
-# Runtime dependencies. All permanently free, open source, and installed
-# locally — no accounts, API keys, hosted services, or paid tiers.
-httpx>=0.27,<1.0        # BSD-3-Clause: HTTP client
-pydantic>=2.0,<3.0      # MIT: schema validation
+# Runtime dependencies. Installed locally.
+httpx>=0.27,<1.0          # BSD-3-Clause: HTTP client (tests + injectable mocks)
+pydantic>=2.0,<3.0        # MIT: schema validation
+curl_cffi>=0.7,<1.0       # MIT: Chrome TLS impersonation for bot-walled hosts
+playwright>=1.40,<2.0     # Apache-2.0: Chromium for JS / cookie challenges
+
+# After install: ``python -m playwright install chromium``
+# Set ODDS_HTTP_PROXY when an exit IP is geo-blocked.
+# Set ODDS_FETCH_MODE=browser to force the Playwright path globally.
 
 # Storage (sqlite3), timezones (zoneinfo), and hashing (hashlib) come from the
-# standard library, so there is no database server or extra package to install.
+# standard library.

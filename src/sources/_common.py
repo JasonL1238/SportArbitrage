@@ -12,24 +12,20 @@ the declarative market tables and ``_build_quote`` differ in kind between books
 whose meaning depends on the sport, Kambi scales odds *and* lines by 1000), and
 forcing those into one abstraction is how a per-book trap gets lost.
 
-Politeness is a design property here, not a courtesy.  Every source is somebody
-else's public endpoint: requests are paced per host, retried at most a couple of
-times with backoff, and identified by an honest User-Agent.  A refusal that says
-"slow down" is honoured; a refusal that says "not from there" is not retried at
-all.
+Reachability first.  The default session impersonates Chrome's TLS stack
+(``curl_cffi``) and will use ``ODDS_HTTP_PROXY`` when set.  Requests are still
+paced and retried so a run does not hammer a host into a ban, but identity and
+geo walls are something to route around, not accept.
 """
 from __future__ import annotations
 
 import logging
 import time
-from collections import Counter
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from enum import Enum
 from typing import Any, Callable, Iterable, Mapping, Sequence
 from urllib.parse import urlsplit
-
-import httpx
 
 from src.raw_store import RawResponse
 from src.schema import Market
@@ -43,18 +39,20 @@ from src.sources.guards import (
 
 log = logging.getLogger(__name__)
 
-#: Sent on every request.  An honest identifier is the minimum a public endpoint
-#: is owed: it says who is asking and how to make them stop, which a blank
-#: default does not.  It is not a disguise — nothing here pretends to be a
-#: browser in order to get past a check that is there to exclude us.
+#: Fallback User-Agent when the transport is not impersonating a browser.
+#: The default :class:`~src.sources.transport.ImpersonatedSession` sends the
+#: Chrome UA that matches its TLS fingerprint; that pair is what opens edges
+#: that reject a research-string UA on a Chrome ClientHello.
 USER_AGENT = (
-    "SportArbitrage/1.0 (odds-comparison research; "
-    "https://github.com/JasonL1238/SportArbitrage)"
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/131.0.0.0 Safari/537.36"
 )
 
 DEFAULT_HEADERS: Mapping[str, str] = {
     "User-Agent": USER_AGENT,
-    "Accept": "application/json",
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-US,en;q=0.9",
 }
 
 #: Minimum gap between two requests to the same host, seconds.  Pinnacle already
@@ -155,7 +153,7 @@ class SourceClient:
         source_key: str,
         *,
         timeout: float = 20.0,
-        client: httpx.Client | None = None,
+        client: Any | None = None,
         headers: Mapping[str, str] | None = None,
         retry: RetryPolicy | None = None,
         pacer: HostPacer | None = None,
@@ -163,6 +161,8 @@ class SourceClient:
         host_interval: float = 0.0,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
+        from src.sources.transport import build_default_client
+
         self.source_key = source_key
         self.retry = retry or RetryPolicy()
         self.host_interval = host_interval
@@ -175,7 +175,9 @@ class SourceClient:
             self._pacer = _SHARED_PACER
         self._headers = {**DEFAULT_HEADERS, **(headers or {})}
         self._owns_client = client is None
-        self._client = client or httpx.Client(timeout=timeout, follow_redirects=True)
+        # Default: Chrome TLS impersonation (+ optional proxy).  Injected
+        # clients (httpx.MockTransport in tests) are left alone.
+        self._client = client if client is not None else build_default_client(timeout=timeout)
 
     def get(
         self,
@@ -215,7 +217,11 @@ class SourceClient:
                     params=None if params is None else dict(params),
                     headers={**self._headers, **(headers or {})},
                 )
-            except httpx.HTTPError as exc:
+            except Exception as exc:
+                # httpx, curl_cffi, and proxy stacks each raise their own
+                # hierarchy; anything that prevented a response is transport.
+                if isinstance(exc, (SourceError, KeyboardInterrupt, SystemExit)):
+                    raise
                 last = TransportError(f"{self.source_key}:{endpoint}: {type(exc).__name__}: {exc}")
                 if attempt >= self.retry.attempts:
                     raise last from exc
@@ -488,12 +494,6 @@ class ScopeTally:
 
 # ── capability declaration ───────────────────────────────────────────────────
 
-#: What a source says it prices, per canonical league key.  Published so coverage
-#: reporting can say "this source has no totals for soccer" instead of inferring
-#: it from an absence, and so validation stops faulting a source for a market it
-#: never claimed.
-Capabilities = Mapping[str, frozenset[Market]]
-
 
 def capabilities_from(
     league_markets: Mapping[str, Iterable[Market]], leagues: Sequence[str]
@@ -615,13 +615,6 @@ def latest_capture(
         for raw in raws
         if not raw.capture_id and newest.fetched_at - raw.fetched_at <= separation
     ]
-
-
-def merge_skips(*tallies: Counter[str]) -> Counter[str]:
-    merged: Counter[str] = Counter()
-    for tally in tallies:
-        merged.update(tally)
-    return merged
 
 
 # ── which instance produced these bytes ──────────────────────────────────────

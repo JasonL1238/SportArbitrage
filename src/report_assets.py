@@ -23,70 +23,59 @@ CSS = """
 *, *::before, *::after { box-sizing: border-box; }
 
 :root {
-  color-scheme: light dark;
-
-  /* Blue-biased neutrals: a pure grey reads as unconsidered, and biasing toward
-     the accent leaves red/green free to mean only "price moved". */
-  --ground:      #eef1f6;
-  --surface:     #ffffff;
-  --surface-2:   #f6f8fb;
-  --line:        #d8dfe9;
-  --line-soft:   #e7ecf3;
-  --ink:         #131922;
-  --ink-2:       #3d4757;
-  --muted:       #5a6675;
-  --accent:      #1b44a8;
-  --accent-soft: #e6ecfa;
-  --up:          #0b7a4b;
-  --down:        #b32318;
-  --warn:        #8a5a00;
-  --warn-soft:   #fdf3df;
-  --bad-soft:    #fdeceb;
-  --good-soft:   #e6f4ec;
+  /* OddsJam-like dark board. Yellow marks the best takeable price on one line. */
+  color-scheme: dark;
+  --ground:      #0c1118;
+  --surface:     #121821;
+  --surface-2:   #18202b;
+  --line:        #283140;
+  --line-soft:   #1e2733;
+  --ink:         #e8eef6;
+  --ink-2:       #b7c3d4;
+  --muted:       #8796a8;
+  --accent:      #5b8cff;
+  --accent-soft: #17233a;
+  --up:          #3dd68c;
+  --down:        #ff6b5e;
+  --warn:        #f0b429;
+  --warn-soft:   #2a2113;
+  --bad-soft:    #2c1715;
+  --good-soft:   #10241a;
+  --best:        #f5c518;
+  --best-ink:    #1a1400;
+  --best-soft:   #3a2f0a;
 
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  --sans: "IBM Plex Sans", "Segoe UI", system-ui, -apple-system, sans-serif;
 
-  --rail: 236px;
-  --pad: 22px;
-  --radius: 10px;
+  --rail: 248px;
+  --pad: 18px;
+  --radius: 8px;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --ground:      #0b0f15;
-    --surface:     #141b24;
-    --surface-2:   #1a2230;
-    --line:        #2a3542;
-    --line-soft:   #212b37;
-    --ink:         #e4eaf2;
-    --ink-2:       #b6c2d1;
-    --muted:       #8b98a9;
-    --accent:      #6fa0ff;
-    --accent-soft: #17253d;
-    --up:          #3fc98a;
-    --down:        #ff7a6e;
-    --warn:        #e0ab4f;
-    --warn-soft:   #2a2113;
-    --bad-soft:    #2c1715;
-    --good-soft:   #10241a;
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    color-scheme: light;
+    --ground: #eef1f6; --surface: #ffffff; --surface-2: #f6f8fb;
+    --line: #d8dfe9; --line-soft: #e7ecf3; --ink: #131922; --ink-2: #3d4757;
+    --muted: #5a6675; --accent: #1b44a8; --accent-soft: #e6ecfa;
+    --up: #0b7a4b; --down: #b32318; --warn: #8a5a00;
+    --warn-soft: #fdf3df; --bad-soft: #fdeceb; --good-soft: #e6f4ec;
+    --best: #e6b800; --best-ink: #1a1400; --best-soft: #fff3c4;
   }
 }
 
-/* The viewer's own toggle must win over the OS preference in both directions. */
-:root[data-theme="dark"] {
-  --ground: #0b0f15; --surface: #141b24; --surface-2: #1a2230;
-  --line: #2a3542; --line-soft: #212b37; --ink: #e4eaf2; --ink-2: #b6c2d1;
-  --muted: #8b98a9; --accent: #6fa0ff; --accent-soft: #17253d;
-  --up: #3fc98a; --down: #ff7a6e; --warn: #e0ab4f;
-  --warn-soft: #2a2113; --bad-soft: #2c1715; --good-soft: #10241a;
-}
 :root[data-theme="light"] {
+  color-scheme: light;
   --ground: #eef1f6; --surface: #ffffff; --surface-2: #f6f8fb;
   --line: #d8dfe9; --line-soft: #e7ecf3; --ink: #131922; --ink-2: #3d4757;
   --muted: #5a6675; --accent: #1b44a8; --accent-soft: #e6ecfa;
   --up: #0b7a4b; --down: #b32318; --warn: #8a5a00;
   --warn-soft: #fdf3df; --bad-soft: #fdeceb; --good-soft: #e6f4ec;
+  --best: #e6b800; --best-ink: #1a1400; --best-soft: #fff3c4;
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
 }
 
 body {
@@ -123,6 +112,12 @@ a { color: var(--accent); }
 .nav a:hover { background: var(--surface-2); color: var(--ink); }
 .nav a[aria-current="true"] { background: var(--accent-soft); color: var(--accent); }
 .nav a i { font: 400 11px/1 var(--mono); color: var(--muted); font-style: normal; }
+.nav-gap {
+  display: block; margin: 10px 10px 4px; padding-top: 8px;
+  border-top: 1px solid var(--line-soft);
+  font: 600 10px/1.2 var(--sans); letter-spacing: 0.09em;
+  text-transform: uppercase; color: var(--muted);
+}
 
 .rail-block { display: flex; flex-direction: column; gap: 6px; }
 .rail-block > label,
@@ -228,6 +223,50 @@ tbody tr.go:focus-visible { outline: 2px solid var(--accent); outline-offset: -2
 .qcard dt { color: var(--muted); }
 .qcard dd { margin: 0; font-family: var(--mono); font-variant-numeric: tabular-nums; text-align: right; }
 
+/* Arbitrage opportunity cards */
+.arb-empty { padding: 18px 4px; color: var(--ink-2); font-size: 13px; max-width: 64ch; }
+.arb-card + .arb-card { margin-top: 12px; border-top: 1px solid var(--line-soft); padding-top: 14px; }
+.arb-card .arb-top {
+  display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between;
+  gap: 8px 16px; margin-bottom: 10px;
+}
+.arb-card .arb-top b { font: 700 15px/1.25 var(--sans); letter-spacing: -0.015em; }
+.arb-card .arb-meta { font: 400 12px/1.4 var(--sans); color: var(--ink-2); }
+.arb-pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 9px; border-radius: 999px;
+  background: var(--accent-soft); color: var(--accent);
+  font: 700 12px/1.2 var(--mono); font-variant-numeric: tabular-nums;
+}
+.arb-pill.ok { background: color-mix(in srgb, var(--up) 16%, transparent); color: var(--up); }
+.arb-kpis {
+  display: flex; flex-wrap: wrap; gap: 10px 18px; margin: 0 0 12px;
+  font: 400 12px/1.35 var(--sans); color: var(--ink-2);
+}
+.arb-kpis strong { color: var(--ink); font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.arb-legs { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.arb-legs th {
+  text-align: left; font: 600 10px/1.2 var(--sans); letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--muted); padding: 0 10px 6px 0;
+}
+.arb-legs td {
+  padding: 7px 10px 7px 0; border-top: 1px solid var(--line-soft);
+  font-variant-numeric: tabular-nums; vertical-align: top;
+}
+.arb-legs td.num { font-family: var(--mono); text-align: right; padding-right: 0; }
+.arb-outcomes {
+  margin: 10px 0 0; font: 400 12px/1.45 var(--mono); color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+}
+.arb-notes { margin: 8px 0 0; font-size: 12px; color: var(--muted); }
+.arb-reject { display: flex; flex-wrap: wrap; gap: 8px; }
+.arb-reject span {
+  display: inline-flex; gap: 6px; align-items: baseline;
+  padding: 5px 9px; border: 1px solid var(--line); border-radius: 8px;
+  font: 400 12px/1.3 var(--sans); color: var(--ink-2);
+}
+.arb-reject b { font-family: var(--mono); color: var(--ink); }
+
 .card {
   background: var(--surface); border: 1px solid var(--line);
   border-radius: var(--radius); overflow: hidden;
@@ -263,6 +302,39 @@ tbody tr.go:focus-visible { outline: 2px solid var(--accent); outline-offset: -2
 .tile p { margin: 0; font-size: 12.5px; color: var(--ink-2); max-width: 44ch; }
 .tile b.big { font: 700 17px/1.15 var(--mono); font-variant-numeric: tabular-nums; color: var(--ink); }
 .tile code { font: 400 11.5px/1.5 var(--mono); color: var(--muted); }
+.how-tiles .tile .ord {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; margin-bottom: 2px; border-radius: 999px;
+  background: var(--accent-soft); color: var(--accent);
+  font: 700 11px/1 var(--sans); letter-spacing: 0; text-transform: none;
+}
+.how-card + .card { margin-top: 14px; }
+.home-more { margin: 14px 2px 0; font-size: 12.5px; max-width: 72ch; }
+
+/* Big clickable games — the beginner path into comparing books. */
+.game-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 1px; background: var(--line-soft);
+}
+a.game-card {
+  display: flex; flex-direction: column; gap: 6px; padding: 14px 15px;
+  background: var(--surface); color: var(--ink); text-decoration: none;
+  min-height: 118px;
+}
+a.game-card:hover { background: var(--accent-soft); }
+a.game-card .when { font: 400 11px/1.3 var(--mono); color: var(--muted); }
+a.game-card b { font: 700 14.5px/1.3 var(--sans); letter-spacing: -0.015em; text-wrap: balance; }
+a.game-card .meta { font: 400 12px/1.35 var(--sans); color: var(--ink-2); }
+a.game-card .mlines {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 4px;
+}
+a.game-card .mlines span {
+  display: flex; flex-direction: column; gap: 1px; padding: 7px 8px;
+  border-radius: 7px; background: var(--surface-2); font-size: 11.5px;
+}
+a.game-card .mlines i { font: 400 10px/1.2 var(--sans); font-style: normal; color: var(--muted); }
+a.game-card .mlines b { font: 700 14px/1.2 var(--mono); letter-spacing: -0.02em; }
+a.game-card .cta { margin-top: auto; font: 600 11.5px/1.3 var(--sans); color: var(--accent); }
 
 /* One or two short captions, pinned directly above the data they describe. */
 .brief {
@@ -348,8 +420,65 @@ tbody tr:last-child td { border-bottom: 0; }
 td.num, th.num { text-align: right; }
 td.wrap { white-space: normal; min-width: 22ch; }
 .tall { max-height: 470px; overflow: auto; }
-.best { color: var(--up); font-weight: 700; }
+.best {
+  display: inline-block; min-width: 3.6ch; padding: 2px 7px; border-radius: 4px;
+  background: var(--best); color: var(--best-ink); font-weight: 800;
+}
+.odds-cell { font-family: var(--mono); font-variant-numeric: tabular-nums; font-weight: 650; }
+.odds-cell.dim { font-weight: 400; }
 .empty { padding: 26px 14px; text-align: center; color: var(--muted); font-size: 12.5px; }
+
+/* ── OddsJam-style odds screen ─────────────────────────────────────────── */
+
+.market-tabs {
+  display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 12px;
+}
+.market-tabs button {
+  appearance: none; border: 1px solid var(--line); background: var(--surface-2);
+  color: var(--ink-2); border-radius: 999px; padding: 7px 14px; cursor: pointer;
+  font: 650 12.5px/1.2 var(--sans);
+}
+.market-tabs button:hover { color: var(--ink); border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
+.market-tabs button.on {
+  background: var(--accent); border-color: var(--accent); color: #fff;
+}
+.screen-toolbar {
+  display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+  margin-bottom: 12px;
+}
+.screen-toolbar select { width: auto; min-width: 140px; }
+.screen-toolbar .eyebrow { margin-right: 2px; }
+.oj-board { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 12.5px; }
+.oj-board thead th {
+  position: sticky; top: 0; z-index: 2; background: var(--surface-2);
+  font: 700 10px/1.3 var(--sans); letter-spacing: 0.04em; text-transform: uppercase;
+  color: var(--muted); border-bottom: 1px solid var(--line); padding: 10px 10px;
+}
+.oj-board th.book, .oj-board td.book {
+  text-align: center; min-width: 72px; border-left: 1px solid var(--line-soft);
+}
+.oj-board tbody tr:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.oj-board tbody tr { cursor: pointer; }
+.oj-board td { padding: 10px; border-bottom: 1px solid var(--line-soft); vertical-align: middle; }
+.oj-game { min-width: 220px; }
+.oj-game b { display: block; font: 700 13.5px/1.25 var(--sans); letter-spacing: -0.01em; }
+.oj-game .when { display: block; margin-top: 2px; font: 400 11px/1.3 var(--mono); color: var(--muted); }
+.oj-side {
+  display: flex; flex-direction: column; gap: 6px; align-items: stretch;
+}
+.oj-side .row {
+  display: flex; justify-content: space-between; align-items: center; gap: 8px;
+  min-height: 22px;
+}
+.oj-side .lbl { color: var(--ink-2); font-size: 11.5px; white-space: nowrap; }
+.oj-side .price { text-align: right; min-width: 4.5ch; }
+.scroll-wrap { max-height: calc(100vh - 220px); overflow: auto; }
+.oj-board th.oj-game, .oj-board td.oj-game {
+  position: sticky; left: 0; z-index: 1; background: var(--surface);
+  box-shadow: 1px 0 0 var(--line-soft);
+}
+.oj-board thead th.oj-game { z-index: 3; background: var(--surface-2); }
+.oj-board tbody tr:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
 /* ── source cards ──────────────────────────────────────────────────────── */
 
@@ -445,37 +574,40 @@ BODY = """
 <div class="shell">
   <aside class="rail">
     <div class="brand">
-      <b>Odds Collector</b>
-      <span id="brand-sub">local pipeline</span>
+      <b>Line shop</b>
+      <span id="brand-sub">odds board</span>
     </div>
 
     <nav class="nav" id="nav" aria-label="Sections">
-      <a href="#overview">Start here</a>
-      <a href="#run">This collection</a>
-      <a href="#sports">Sports &amp; leagues <i id="nav-sports"></i></a>
-      <a href="#sources">Sportsbooks <i id="nav-sources"></i></a>
-      <a href="#events">Fixtures <i id="nav-events"></i></a>
+      <a href="#screen">Odds screen <i id="nav-screen"></i></a>
+      <a href="#arb">Arbitrage <i id="nav-arb"></i></a>
+      <a href="#events">Games <i id="nav-events"></i></a>
       <a href="#odds">All prices <i id="nav-odds"></i></a>
-      <a href="#movement">Price changes <i id="nav-move"></i></a>
+      <a href="#overview">Home</a>
+      <a href="#sources">Books <i id="nav-sources"></i></a>
+      <a href="#movement">Movement <i id="nav-move"></i></a>
+      <span class="nav-gap">Ops</span>
+      <a href="#run">This scrape</a>
+      <a href="#sports">Coverage <i id="nav-sports"></i></a>
       <a href="#quality">Checks <i id="nav-quality"></i></a>
       <a href="#raw">Saved pages <i id="nav-raw"></i></a>
       <a href="#glossary">Glossary</a>
-      <a href="#schema">Field reference</a>
+      <a href="#schema">Schema</a>
     </nav>
 
     <div class="rail-block" id="scrape-block">
-      <label>Collect a new snapshot</label>
+      <label>1 · Fresh scrape</label>
       <select id="scrape-scope" title="What to ask the venues for">
-        <option value="league:MLB" selected>MLB only (fast)</option>
+        <option value="league:MLB" selected>MLB baseball (fast)</option>
         <option value="sport:baseball">All baseball</option>
-        <option value="all">All sports (core)</option>
+        <option value="all">Everything (slower)</option>
       </select>
       <button type="button" id="scrape-btn" class="scrape-btn">Scrape now</button>
       <span class="rail-foot" id="scrape-status">Open via --serve to enable scraping.</span>
     </div>
 
     <div class="rail-block">
-      <label>When it was scraped</label>
+      <label>2 · Which scrape</label>
       <div id="run-list" class="run-list" role="listbox" aria-label="Collections by time"></div>
       <label for="run-pick" class="sr-only">Which collection to show</label>
       <select id="run-pick" aria-hidden="true" tabindex="-1"></select>
@@ -483,7 +615,7 @@ BODY = """
     </div>
 
     <div class="rail-block">
-      <label for="sport-pick">Which sport to show</label>
+      <label for="sport-pick">3 · Sport</label>
       <select id="sport-pick"></select>
       <span class="rail-foot" id="sport-meta" style="margin:0"></span>
     </div>
@@ -494,7 +626,7 @@ BODY = """
   <main>
     <header class="masthead">
       <div>
-        <h1>What the collector grabbed</h1>
+        <h1 id="page-title">Odds screen</h1>
         <p id="lede"></p>
       </div>
       <div id="masthead-pills" class="controls"></div>
@@ -504,97 +636,129 @@ BODY = """
 
     <div class="notice" id="run-notice"></div>
 
-    <section id="overview">
+    <section id="screen">
       <header>
-        <h2>Start here</h2>
-        <p>Three things about betting prices, the four kinds of bet, then a map of the page.
-        About a minute, and the rest of the page will make sense.</p>
+        <h2>Odds screen</h2>
+        <p>One scrape at a time. Games down the left, books across — American odds, yellow = best price.</p>
       </header>
 
-      <div class="card">
-        <div class="card-head"><h3>How to read a price</h3><span class="eyebrow">in order — each builds on the last</span></div>
-        <div class="card-body flush">
-          <div class="tiles">
-            <div class="tile">
-              <span class="ord">1 &middot; the price</span>
-              <b class="big">2.30 &rarr; $230 back</b>
-              <p>Bet $100 at 2.30 and a win returns $230 in total: your $100 back, plus
-              $130 profit.</p>
-              <code>a US book writes this as +130</code>
-            </div>
-            <div class="tile">
-              <span class="ord">2 &middot; the chance</span>
-              <b class="big">1 &divide; 2.30 = 43%</b>
-              <p>Flip the price over and you get roughly how likely the book thinks it is.
-              Short price, likely; long price, unlikely.</p>
-              <code>&minus;150 means stake $150 to profit $100</code>
-            </div>
-            <div class="tile">
-              <span class="ord">3 &middot; the book's cut</span>
-              <b class="big">43% + 61% = 104%</b>
-              <p>Both sides of a bet are priced, and they add up to over 100%. That extra
-              4% is the sportsbook's margin.</p>
-              <code>under 100% would be impossible</code>
-            </div>
-          </div>
-        </div>
+      <div class="market-tabs" id="market-tabs" role="tablist" aria-label="Market"></div>
+
+      <div class="screen-toolbar">
+        <label class="eyebrow" for="league-pick">League</label>
+        <select id="league-pick" aria-label="Filter by league">
+          <option value="">every league</option>
+        </select>
+        <span class="eyebrow" id="screen-note">pick a scrape in the sidebar</span>
       </div>
 
       <div class="card">
-        <div class="card-head"><h3>The four kinds of bet collected</h3><span class="eyebrow">nothing else is stored</span></div>
-        <div class="brief">
-          <p><b>why only four</b> These four exist at every sportsbook in the same form, so
-          their prices can be compared between books. Everything else is counted and left
-          alone — see <a href="#sources">Sportsbooks</a>.</p>
-        </div>
-        <div class="card-body flush">
-          <div class="tiles">
-            <div class="tile"><h4>Who wins</h4>
-              <p>Pick the winning team. Nothing else matters.</p><code>Reds win</code></div>
-            <div class="tile"><h4>Winner with a handicap</h4>
-              <p>One team starts with runs added or taken away, which evens out a mismatch.</p>
-              <code>Reds win by 2 or more</code></div>
-            <div class="tile"><h4>Combined total</h4>
-              <p>Both sides' scores added together, over or under a number. What gets
-              counted depends on the sport: runs, goals, points or games.</p>
-              <code>9 or more runs in the game</code></div>
-            <div class="tile"><h4>One side's total</h4>
-              <p>Just one side's score, over or under a number.</p>
-              <code>Reds score 5 or more</code></div>
-          </div>
-        </div>
-      </div>
-
-      <div class="card">
-        <div class="card-head"><h3>What's on this page</h3><span class="eyebrow">the question each part answers</span></div>
-        <div class="card-body flush">
-          <div class="tour" id="tour">
-            <a href="#run"><i>01</i><b>This collection</b><span>How much was grabbed just now, and did every step work?</span></a>
-            <a href="#sports"><i>02</i><b>Sports &amp; leagues</b><span>Which sports two or more books priced — the ones that can be compared at all.</span></a>
-            <a href="#sources"><i>03</i><b>Sportsbooks</b><span>Which books were read, and what came back from each?</span></a>
-            <a href="#events"><i>04</i><b>Fixtures</b><span>Which fixtures are on, and which books priced them?</span></a>
-            <a href="#odds"><i>05</i><b>All prices</b><span>Every price collected, searchable and sortable.</span></a>
-            <a href="#movement"><i>06</i><b>Price changes</b><span>Which prices moved — the evidence this is a live feed.</span></a>
-            <a href="#quality"><i>07</i><b>Checks</b><span>What was tested, and anything that looked wrong.</span></a>
-            <a href="#raw"><i>08</i><b>Saved pages</b><span>The original files every number here was read from.</span></a>
-            <a href="#glossary"><i>09</i><b>Glossary</b><span>Any betting word used above, in plain English.</span></a>
-            <a href="#schema"><i>10</i><b>Field reference</b><span>What gets stored for one price, for querying the database.</span></a>
-          </div>
+        <div class="card-body flush scroll-wrap">
+          <div id="odds-screen" class="scroll"></div>
         </div>
       </div>
     </section>
 
-    <section id="run">
+    <section id="arb">
       <header>
-        <h2>This collection</h2>
-        <p>One collection is one pass over every venue. The sidebar switches
-        between every collection stored.</p>
+        <h2>Arbitrage</h2>
+        <p>Risk-free cross-book positions in this scrape — same detector as <code>collector arb</code>.</p>
       </header>
 
       <div class="card">
-        <div class="card-head"><h3>The headline numbers</h3><span class="eyebrow">this collection only</span></div>
+        <div class="card-head">
+          <h3>This scrape</h3>
+          <span class="eyebrow" id="arb-summary">scanning…</span>
+        </div>
+        <div class="card-body flush">
+          <div class="stats" id="arb-stats"></div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:14px">
+        <div class="card-head">
+          <h3>Takeable positions</h3>
+          <span class="eyebrow" id="arb-note">newest scrape first; switch scrapes in the sidebar</span>
+        </div>
+        <div class="card-body" id="arb-list"></div>
+      </div>
+
+      <div class="card" style="margin-top:14px">
+        <div class="card-head">
+          <h3>Why other markets were refused</h3>
+          <span class="eyebrow">near-misses the detector rejected on purpose</span>
+        </div>
+        <div class="card-body" id="arb-rejected"></div>
+      </div>
+    </section>
+
+    <section id="overview">
+      <header>
+        <h2>Home</h2>
+        <p>Scrape → pick a scrape → Odds screen to line-shop, Arbitrage for free-money positions.</p>
+      </header>
+
+      <div class="card how-card">
+        <div class="card-head"><h3>How to use this</h3><span class="eyebrow">four steps</span></div>
+        <div class="card-body flush">
+          <div class="tiles how-tiles">
+            <div class="tile">
+              <span class="ord">1</span>
+              <b>Scrape now</b>
+              <p>Left sidebar. Pulls live prices from the books into this computer.</p>
+            </div>
+            <div class="tile">
+              <span class="ord">2</span>
+              <b>Pick a scrape</b>
+              <p>Newest on top. Switch scrapes to keep each snapshot manageable.</p>
+            </div>
+            <div class="tile">
+              <span class="ord">3</span>
+              <b>Line-shop the board</b>
+              <p>Odds screen: games × books. Yellow cell is the best takeable price for that side.</p>
+            </div>
+            <div class="tile">
+              <span class="ord">4</span>
+              <b>Check arbitrage</b>
+              <p>Arbitrage section lists risk-free multi-book positions with stakes and payouts.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h3>Games in this scrape</h3>
+          <span class="eyebrow" id="browse-games-note">click one for every market</span>
+        </div>
+        <div class="card-body">
+          <div id="browse-games" class="game-grid"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h3>At a glance</h3><span class="eyebrow">this scrape only</span></div>
+        <div class="card-body flush"><div class="stats" id="home-stats"></div></div>
+      </div>
+
+      <p class="dim home-more">
+        <a href="#screen">Odds screen</a> ·
+        <a href="#run">This scrape</a> ·
+        <a href="#odds">Search every price</a> ·
+        <a href="#glossary">Glossary</a></p>
+    </section>
+
+    <section id="run">
+      <header>
+        <h2>This scrape</h2>
+        <p>One scrape is one pass that asked every book for prices. Use the sidebar to
+        switch between scrapes you already saved.</p>
+      </header>
+
+      <div class="card">
+        <div class="card-head"><h3>The headline numbers</h3><span class="eyebrow">this scrape only</span></div>
         <div class="brief">
-          <p><b>a price vs a bet</b> One <em>bet</em> — say who wins tonight's game at one
+          <p><b>a price vs a bet</b> One <em>bet</em> — say who wins tonight&rsquo;s game at one
           book — has two or three sides, and each side is one <em>price</em>. That is why
           there are far more prices than bets.</p>
         </div>
@@ -673,13 +837,9 @@ BODY = """
 
     <section id="sources">
       <header>
-        <h2>Where the prices come from</h2>
-        <p>Sportsbooks, betting exchanges and prediction markets, each read straight from
-        its own public website. No paid data provider, no account, no login. They are not
-        the same kind of thing: a book takes the other side of your bet and its margin is
-        already in the price, while an exchange or a prediction market charges a
-        commission on top and does not always refund a game that is called off. Each card
-        says which it is.</p>
+        <h2>Who we asked</h2>
+        <p>Each card is one sportsbook, exchange, or prediction market we pulled from.
+        Click a card for what it returned this scrape.</p>
       </header>
       <div class="brief solo">
         <p><b>what each card shows</b> What kind of venue it is, what it charges, how much
@@ -737,26 +897,32 @@ BODY = """
 
     <section id="events">
       <header>
-        <h2>Fixtures</h2>
-        <p>Which fixtures are on, which books priced them, and then every price for one
-        fixture with the books side by side. Use the sidebar to narrow this to one sport.</p>
+        <h2>Games</h2>
+        <p>Click a game for every market side by side. Prefer the Odds screen for the
+        full board. Filter sport in the sidebar; filter league on the Odds screen.</p>
       </header>
       <div class="card">
         <div class="card-head">
-          <h3>Which books cover which fixtures</h3>
+          <h3>Pick a game</h3>
+          <span class="eyebrow" id="events-games-note">click to compare books</span>
+        </div>
+        <div class="card-body flush"><div id="events-games" class="game-grid"></div></div>
+      </div>
+      <div class="card">
+        <div class="card-head">
+          <h3>Same games, as a coverage grid</h3>
           <div class="controls">
             <label class="eyebrow" for="cov-mode">Break down</label>
             <select id="cov-mode">
-              <option value="source">by venue</option>
+              <option value="source">by book</option>
               <option value="market">by kind of bet</option>
             </select>
           </div>
         </div>
         <div class="brief">
-          <p><b>how to read it</b> One row per fixture. Each cell counts the prices found —
-          darker means more. A dash means that book had nothing for that fixture.</p>
-          <p><b>click any row</b> to open that fixture on its own, with every book's price
-          for it side by side.</p>
+          <p><b>optional detail</b> One row per game. Darker cells mean more prices from that
+          book. A dash means that book had nothing for the game.</p>
+          <p><b>click any row</b> for the same side-by-side view as the cards above.</p>
         </div>
         <div class="card-body flush scroll"><table class="cov" id="coverage"></table></div>
       </div>
@@ -764,16 +930,16 @@ BODY = """
 
     <section id="fixture">
       <div class="headline">
-        <b id="event-title">Pick a fixture</b>
+        <b id="event-title">Pick a game</b>
         <span id="event-sub"></span>
       </div>
       <div class="card">
-        <div class="card-head"><h3>Every bet on this fixture</h3><span class="eyebrow" id="event-count"></span></div>
+        <div class="card-head"><h3>Every price for this game</h3><span class="eyebrow" id="event-count"></span></div>
         <div class="brief">
-          <p><b>one row is one bet</b>, written as a sentence, with each book's price beside
-          it. Hover a row for the shorthand a sportsbook would print.</p>
-          <p><b>green is the best price</b> available. Click any row to open that one bet on
-          its own — every book, and how the price has moved.</p>
+          <p><b>read left to right</b> Each row is one bet, then each book&rsquo;s
+          American odds for that bet.</p>
+          <p><b>yellow means best price</b> for that row. Click a row to zoom into one bet —
+          every book, and whether the price moved.</p>
         </div>
         <div class="card-body flush scroll tall"><table id="event-detail"></table></div>
       </div>
@@ -815,8 +981,8 @@ BODY = """
     <section id="odds">
       <header>
         <h2>All prices</h2>
-        <p>Every price collected, in one table. Ten venues, ten different formats, one
-        set of columns. Prices from a venue that charges commission are shown after it.</p>
+        <p>Every price from this scrape in one searchable table. Start with Today&rsquo;s
+        games if you just want one matchup.</p>
       </header>
       <div class="card">
         <div class="card-head">
@@ -847,12 +1013,12 @@ BODY = """
 
     <section id="movement">
       <header>
-        <h2>Price changes</h2>
-        <p>Prices move as money comes in. Seeing them move is how you know this is a live
-        feed rather than a saved copy.</p>
+        <h2>Did prices move?</h2>
+        <p>Same bet across scrapes. If a number changed, the feed is alive — not a stuck
+        old page.</p>
       </header>
       <div class="card">
-        <div class="card-head"><h3>Every collection so far</h3><span class="eyebrow">prices found, and how long fetching took</span></div>
+        <div class="card-head"><h3>Every scrape so far</h3><span class="eyebrow">prices found, and how long fetching took</span></div>
         <div class="brief">
           <p><b>the bars</b> are how many prices each collection stored. Red means a check
           failed on that one.</p>
@@ -946,10 +1112,56 @@ BODY = """
 
     <section id="glossary">
       <header>
-        <h2>Glossary</h2>
-        <p>Every term used above, in plain words — with the phrase a sportsbook would use.</p>
+        <h2>Plain-English glossary</h2>
+        <p>Skip this until you need it. The game cards work without knowing any of these words.</p>
       </header>
-      <div class="card"><div class="card-body"><div class="gloss" id="glossary-list"></div></div></div>
+      <div class="card">
+        <div class="card-head"><h3>Price numbers in one minute</h3><span class="eyebrow">optional</span></div>
+        <div class="card-body flush">
+          <div class="tiles">
+            <div class="tile">
+              <span class="ord">1 &middot; the price</span>
+              <b class="big">2.30 &rarr; $230 back</b>
+              <p>Bet $100 at 2.30 and a win returns $230 total: your $100 back, plus $130 profit.</p>
+              <code>a US book writes this as +130</code>
+            </div>
+            <div class="tile">
+              <span class="ord">2 &middot; the chance</span>
+              <b class="big">1 &divide; 2.30 &asymp; 43%</b>
+              <p>Flip the price and you get roughly how likely the book thinks it is.</p>
+              <code>&minus;150 means stake $150 to profit $100</code>
+            </div>
+            <div class="tile">
+              <span class="ord">3 &middot; the book's cut</span>
+              <b class="big">43% + 61% = 104%</b>
+              <p>Both sides add up to over 100%. The extra is the sportsbook&rsquo;s margin.</p>
+              <code>under 100% would mean free money</code>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h3>The four kinds of bet this page stores</h3><span class="eyebrow">nothing else</span></div>
+        <div class="card-body flush">
+          <div class="tiles">
+            <div class="tile"><h4>Who wins</h4>
+              <p>Pick the winning team. Nothing else matters.</p><code>Reds win</code></div>
+            <div class="tile"><h4>Winner with a handicap</h4>
+              <p>One team starts ahead or behind so a mismatch is closer.</p>
+              <code>Reds win by 2 or more</code></div>
+            <div class="tile"><h4>Combined total</h4>
+              <p>Both scores added, over or under a number (runs, goals, points&hellip;).</p>
+              <code>9 or more runs in the game</code></div>
+            <div class="tile"><h4>One side&rsquo;s total</h4>
+              <p>Just one team&rsquo;s score, over or under a number.</p>
+              <code>Reds score 5 or more</code></div>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h3>Word list</h3><span class="eyebrow">sportsbook phrasing in tooltips</span></div>
+        <div class="card-body"><div class="gloss" id="glossary-list"></div></div>
+      </div>
     </section>
 
     <section id="schema">
@@ -1324,10 +1536,6 @@ const sidesOf = (r) => [str(r[COL.home_participant]), str(r[COL.away_participant
 function fmtOdds(d) { return d.toFixed(2); }
 function fmtAmerican(a) { return (a > 0 ? '+' : '−') + Math.abs(a); }
 function fmtReturn(d) { return '$' + (d * 100).toFixed(0); }
-function fmtNumber(v, market) {
-  if (v === null || v === undefined) return '';
-  return (mkt(market) === 'spread' && v > 0 ? '+' : '') + (+v).toFixed(1);
-}
 function fmtBytes(n) {
   if (n < 1024) return n + ' B';
   if (n < 1024 * 1024) return (n / 1024).toFixed(0) + ' KB';
@@ -1544,23 +1752,27 @@ function buildSportPicker() {
    can still show which part of the page you are inside. */
 
 const PANELS = {
-  overview:  { title: 'Start here' },
-  run:       { title: 'This collection' },
-  sports:    { title: 'Sports & leagues' },
-  sources:   { title: 'Sportsbooks' },
-  book:      { title: 'One sportsbook', parent: 'sources' },
-  events:    { title: 'Fixtures' },
-  fixture:   { title: 'One fixture', parent: 'events' },
+  screen:    { title: 'Odds screen' },
+  arb:       { title: 'Arbitrage' },
+  overview:  { title: 'Home' },
+  run:       { title: 'This scrape' },
+  sports:    { title: 'Coverage' },
+  sources:   { title: 'Books' },
+  book:      { title: 'One book', parent: 'sources' },
+  events:    { title: "Today's games" },
+  fixture:   { title: 'One game', parent: 'events' },
   bet:       { title: 'One bet', parent: 'events' },
   odds:      { title: 'All prices' },
-  movement:  { title: 'Price changes' },
+  movement:  { title: 'Movement' },
   quality:   { title: 'Checks' },
   raw:       { title: 'Saved pages' },
   glossary:  { title: 'Glossary' },
-  schema:    { title: 'Field reference' },
+  schema:    { title: 'Schema' },
 };
 
-let here = { panel: 'overview', arg: null };
+let here = { panel: 'screen', arg: null };
+let currentMarket = 'moneyline';
+let currentLeague = '';
 
 /** Navigate. Everything else happens in the hashchange handler. */
 function go(hash) {
@@ -1597,7 +1809,7 @@ function parseBetKey(key) {
   };
 }
 
-function panelOf(name) { return PANELS[name] ? name : 'overview'; }
+function panelOf(name) { return PANELS[name] ? name : 'screen'; }
 
 function applyRoute() {
   const raw = (typeof location === 'undefined' ? '' : (location.hash || '')).replace(/^#/, '');
@@ -1626,6 +1838,8 @@ function applyRoute() {
   for (const link of navLinks()) {
     link.setAttribute('aria-current', String(link.getAttribute('href') === '#' + inRail));
   }
+  const title = el('page-title');
+  if (title) title.textContent = PANELS[panel].title;
   renderCrumbs();
   if (typeof window !== 'undefined' && typeof window.scrollTo === 'function') window.scrollTo(0, 0);
 }
@@ -1663,7 +1877,7 @@ function renderCrumbs() {
 /** "Guardians at Reds" for a fixture key, without needing its rows loaded. */
 function fixtureLabel(key) {
   const row = (Q.rows || []).find((r) => str(r[COL.event_key]) === key);
-  if (!row) return txt(key) || 'Fixture';
+  if (!row) return txt(key) || 'Game';
   const [home, away] = sidesOf(row);
   return `${nick(away)} at ${nick(home)}`;
 }
@@ -1693,6 +1907,18 @@ function marketGroups(rows) {
 
 function renderOverview() {
   const run = runById.get(currentRunId);
+  if (!run) {
+    el('lede').textContent = 'No scrapes yet. Hit Scrape now (via --serve) to pull prices.';
+    el('brand-sub').textContent = DATA.meta.db_name || '';
+    el('home-stats').innerHTML = '';
+    el('stat-strip').innerHTML = '';
+    el('flow').innerHTML = '';
+    el('matrix').innerHTML = '';
+    el('browse-games').innerHTML = '<div class="empty">No scrapes yet.</div>';
+    el('masthead-pills').innerHTML = '';
+    el('run-notice').classList.remove('on');
+    return;
+  }
   const rows = currentRows();
   const hasRows = rowsByRun.has(currentRunId);
   // Active only: a suspended price is showing, not offering, so it is not a
@@ -1718,26 +1944,28 @@ function renderOverview() {
   const usableSports = (run.sports || []).filter((entry) => entry.comparable);
   const singleSports = (run.sports || []).filter((entry) => !entry.comparable);
   el('masthead-pills').innerHTML = [
-    `<span class="pill ${run.ok ? 'ok' : 'bad'}"><i></i>${run.ok ? 'all checks passed' : 'checks found problems'}</span>`,
-    `<span class="pill ${producing.length >= 2 ? 'flat' : 'bad'}">${producing.length} of ${health.length} venues responded</span>`,
+    `<span class="pill ${run.ok ? 'ok' : 'bad'}"><i></i>${run.ok ? 'looks healthy' : 'something looked wrong'}</span>`,
+    `<span class="pill ${producing.length >= 2 ? 'flat' : 'bad'}">${producing.length} of ${health.length} books answered</span>`,
     `<span class="pill ${usableSports.length ? 'ok' : 'bad'}"><i></i>${usableSports.length} sport${
-      usableSports.length === 1 ? '' : 's'} comparable across books</span>`,
+      usableSports.length === 1 ? '' : 's'} you can compare</span>`,
     singleSports.length
       ? `<span class="pill warn"><i></i>${singleSports.length} sport${
-          singleSports.length === 1 ? '' : 's'} not comparable</span>`
+          singleSports.length === 1 ? '' : 's'} only one book covered</span>`
       : '',
     currentSport ? `<span class="pill accent">showing ${escapeHtml(sportLabel(currentSport))}</span>` : '',
-    `<span class="pill flat">${runs.length} collection${runs.length === 1 ? '' : 's'} so far</span>`,
+    `<span class="pill flat">${runs.length} scrape${runs.length === 1 ? '' : 's'} saved</span>`,
   ].filter(Boolean).join('');
 
   const notice = el('run-notice');
-  notice.classList.toggle('on', !hasRows);
-  notice.innerHTML = hasRows ? '' :
-    `<b>&#9432;</b><span>This collection's ${run.quote_count.toLocaleString()} prices are not
-     included in this page — only the ${DATA.meta.runs_with_rows} most recent collection(s) carry
-     prices, to keep the file small. The totals below come from its own summary, so the tables
-     further down are empty on purpose. Rebuild with
-     <code>--quote-runs ${DATA.meta.runs_recorded}</code> to include it.</span>`;
+  const thin = !hasRows && (run.quote_count || 0) > 0 && !detailLoaded(currentRunId);
+  notice.classList.toggle('on', thin);
+  notice.innerHTML = thin
+    ? `<b>&#9432;</b><span>This scrape's ${run.quote_count.toLocaleString()} prices are not
+     included in this page — only the ${DATA.meta.runs_with_rows} most recent scrape(s) carry
+     prices, to keep the file small. The totals below come from its own summary, so the board
+     is empty on purpose. Rebuild with
+     <code>--quote-runs ${DATA.meta.runs_recorded}</code> to include it.</span>`
+    : '';
 
   const scoped = currentSport ? ` · ${sportLabel(currentSport)} only` : '';
   const stats = [
@@ -1754,9 +1982,28 @@ function renderOverview() {
     ['problems', run.error_count, run.error_count ? 'see Checks' : 'nothing flagged', run.error_count ? 'is-bad' : 'is-good'],
     ['worth a look', run.warning_count, run.warning_count ? 'see Checks' : 'nothing flagged', run.warning_count ? 'is-warn' : 'is-good'],
   ];
+  // Keep the dense strip on This scrape (tests pin "separate bets" here).
   el('stat-strip').innerHTML = stats.map(([name, value, sub, cls]) =>
     `<div class="stat ${cls || ''}"><span>${escapeHtml(name)}</span><b>${escapeHtml(String(value))}</b><small>${escapeHtml(sub)}</small></div>`
   ).join('');
+
+  // Beginner home strip — same numbers, friendlier labels.
+  const homeStats = [
+    ['games', hasRows ? events.size : run.event_count, `on ${DATA.meta.slate_dates}`],
+    ['prices to compare', (hasRows ? live.length : run.quote_count).toLocaleString(),
+      'from every book that answered' + scoped],
+    ['books that answered', producing.length,
+      producing.length ? producing.map((h) => book(h.key)).join(', ') : 'none yet'],
+    ['sports you can compare', usableSports.length,
+      usableSports.length
+        ? usableSports.map((e) => sportLabel(e.sport)).join(', ')
+        : 'need 2+ books on the same game',
+      usableSports.length ? '' : 'is-warn'],
+  ];
+  el('home-stats').innerHTML = homeStats.map(([name, value, sub, cls]) =>
+    `<div class="stat ${cls || ''}"><span>${escapeHtml(name)}</span><b>${escapeHtml(String(value))}</b><small>${escapeHtml(sub)}</small></div>`
+  ).join('');
+  renderBrowseGames(el('browse-games'), el('browse-games-note'));
 
   const requests = health.reduce((a, h) => a + h.request_count, 0);
   const bytes = health.reduce((a, h) => a + h.raw_bytes, 0);
@@ -1812,6 +2059,450 @@ function renderOverview() {
   ], matrixRows, { empty: 'No prices stored for this collection.' });
 }
 
+/** Best full-game moneyline price per side for a game card snippet. */
+function moneylineBest(event) {
+  const sides = { home: null, away: null, draw: null };
+  for (const r of event.rows) {
+    if (mkt(str(r[COL.market])) !== 'moneyline') continue;
+    if (str(r[COL.period]) !== 'full_game') continue;
+    if (str(r[COL.status]) !== 'active') continue;
+    const sel = str(r[COL.selection]);
+    if (!(sel in sides)) continue;
+    const net = netOdds(r);
+    const prev = sides[sel];
+    if (!prev || net > prev.net) {
+      sides[sel] = { net, american: americanOf(r), src: str(r[COL.source]), row: r };
+    }
+  }
+  return sides;
+}
+
+/** Format a market line without rounding quarter lines to one decimal. */
+function fmtLine(line, market) {
+  if (line === null || line === undefined || !isFinite(+line)) return '';
+  const n = +line;
+  const text = String(n);
+  if (mkt(market) === 'total') return text;
+  return (n > 0 ? '+' : '') + text;
+}
+
+/** Consensus main line for a selection: modal line among non-alternate full-game quotes. */
+function consensusLine(event, market, selection) {
+  const counts = new Map();
+  for (const r of event.rows) {
+    if (mkt(str(r[COL.market])) !== market) continue;
+    if (str(r[COL.period]) !== 'full_game') continue;
+    if (r[COL.is_alternate]) continue;
+    if (str(r[COL.selection]) !== selection) continue;
+    if (r[COL.line] === null || r[COL.line] === undefined) continue;
+    const key = String(+r[COL.line]);
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  let best = null, bestN = -1;
+  for (const [key, n] of counts) {
+    if (n > bestN || (n === bestN && Math.abs(+key) < Math.abs(+best))) {
+      best = key; bestN = n;
+    }
+  }
+  return best === null ? null : +best;
+}
+
+/** Main-line full-game quotes for one market on one event, keyed by book then selection.
+ *
+ *  Moneyline: best takeable price per book.  Spread/total: the book's quote on the
+ *  consensus main line (not the juiciest alternate-looking number an adapter left
+ *  unmarked).  Best-price yellow is computed later and only across the same line. */
+function boardQuotes(event, market) {
+  const byBook = new Map();
+  const targets = new Map();
+  if (market !== 'moneyline') {
+    for (const sel of new Set(event.rows.map((r) => str(r[COL.selection])))) {
+      targets.set(sel, consensusLine(event, market, sel));
+    }
+  }
+  for (const r of event.rows) {
+    if (mkt(str(r[COL.market])) !== market) continue;
+    if (str(r[COL.period]) !== 'full_game') continue;
+    if (r[COL.is_alternate]) continue;
+    const src = str(r[COL.source]);
+    const sel = str(r[COL.selection]);
+    if (!byBook.has(src)) byBook.set(src, new Map());
+    if (market !== 'moneyline') {
+      const want = targets.get(sel);
+      if (want !== null && want !== undefined) {
+        if (r[COL.line] === null || r[COL.line] === undefined) continue;
+        if (+r[COL.line] !== want) continue;
+      } else if (r[COL.line] !== null && r[COL.line] !== undefined) {
+        // No consensus yet — keep the line closest to zero (spreads) / first seen.
+        const held = byBook.get(src).get(sel);
+        if (held && Math.abs(+held[COL.line]) <= Math.abs(+r[COL.line])) continue;
+        byBook.get(src).set(sel, r);
+        continue;
+      }
+    }
+    const held = byBook.get(src).get(sel);
+    if (!held || _betterPrice(r, held)) byBook.get(src).set(sel, r);
+  }
+  return byBook;
+}
+
+function boardSideLabels(event, market) {
+  if (market === 'total') return [['over', 'Over'], ['under', 'Under']];
+  const away = nick(event.awayRaw);
+  const home = nick(event.homeRaw);
+  if (market === 'spread') return [['away', away], ['home', home]];
+  const sides = [['away', away], ['home', home]];
+  if ([...event.rows].some((r) => mkt(str(r[COL.market])) === 'moneyline'
+      && str(r[COL.period]) === 'full_game'
+      && str(r[COL.selection]) === 'draw')) {
+    sides.push(['draw', 'Draw']);
+  }
+  return sides;
+}
+
+/** American odds implied by a decimal payout — always agrees with `$100 returns`. */
+function americanFromDecimal(net) {
+  if (!(net > 1)) return 0;
+  return net >= 2 ? Math.round((net - 1) * 100) : -Math.round(100 / (net - 1));
+}
+
+function priceCell(q, bestNet, comparable) {
+  if (!q) return '<span class="dim">—</span>';
+  const suspended = str(q[COL.status]) !== 'active';
+  const net = netOdds(q);
+  const isBest = !!comparable && !suspended && bestNet !== null && net === bestNet;
+  // Derive American from the same net the board ranks on, so a stored American
+  // that disagrees with the decimal cannot paint a self-contradictory tip.
+  const american = americanFromDecimal(net);
+  const lineBit = (q[COL.line] === null || q[COL.line] === undefined) ? ''
+    : ` <span class="dim">${escapeHtml(fmtLine(q[COL.line], str(q[COL.market])))}</span>`;
+  const cls = `odds-cell price${isBest ? ' best' : ''}${suspended ? ' dim' : ''}`;
+  const tip = `${fmtAmerican(american)} · $100 returns ${fmtReturn(net)}${
+    suspended ? ' · not taking bets' : ''}`;
+  return `<span class="${cls}" title="${escapeHtml(tip)}">${escapeHtml(fmtAmerican(american))}${lineBit}</span>`;
+}
+
+function buildLeaguePicker() {
+  const pick = el('league-pick');
+  if (!pick) return;
+  const leagues = [...new Set(runRows().map((r) => str(r[COL.league])).filter(Boolean))].sort();
+  const sportFiltered = currentSport
+    ? leagues.filter((lg) => runRows().some((r) =>
+        str(r[COL.league]) === lg && str(r[COL.sport]) === currentSport))
+    : leagues;
+  // Clear when the chosen league is not offered under the current sport filter —
+  // otherwise the select shows "every league" while rows stay filtered empty.
+  if (currentLeague && !sportFiltered.includes(currentLeague)) currentLeague = '';
+  pick.innerHTML = ['<option value="">every league</option>'].concat(
+    sportFiltered.map((lg) =>
+      `<option value="${escapeHtml(lg)}">${escapeHtml(leagueLabel(lg))}</option>`)
+  ).join('');
+  pick.value = currentLeague;
+  if (!pick.dataset.bound) {
+    pick.dataset.bound = '1';
+    pick.addEventListener('change', () => {
+      currentLeague = pick.value;
+      renderOddsScreen();
+    });
+  }
+}
+
+function wireMarketTabs() {
+  const tabs = el('market-tabs');
+  const markets = [
+    ['moneyline', 'Moneyline'],
+    ['spread', 'Spread'],
+    ['total', 'Total'],
+  ];
+  tabs.innerHTML = markets.map(([key, label]) =>
+    `<button type="button" role="tab" data-market="${key}" aria-selected="${
+      key === currentMarket ? 'true' : 'false'}" class="${
+      key === currentMarket ? 'on' : ''}">${label}</button>`).join('');
+  tabs.querySelectorAll('[data-market]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      currentMarket = btn.getAttribute('data-market') || 'moneyline';
+      renderOddsScreen();
+    });
+  });
+}
+
+function renderOddsScreen() {
+  const host = el('odds-screen');
+  const note = el('screen-note');
+  const nav = el('nav-screen');
+  const rows = currentRows().filter((r) =>
+    !currentLeague || str(r[COL.league]) === currentLeague);
+  const events = eventSummaries(rows);
+  if (nav) nav.textContent = events.length;
+  buildLeaguePicker();
+  wireMarketTabs();
+
+  if (!events.length) {
+    const run = runById.get(currentRunId);
+    const thin = run && (run.quote_count || 0) > 0 && !detailLoaded(currentRunId);
+    if (note) {
+      note.textContent = thin
+        ? 'this scrape has prices, but they are not embedded in this page'
+        : 'scrape first, then pick the newest scrape in the sidebar';
+    }
+    host.innerHTML = thin
+      ? `<div class="empty">This scrape's ${(run.quote_count || 0).toLocaleString()} prices are not
+         embedded here — only the newest few scrapes carry the board. Rebuild with
+         <code>--quote-runs</code> larger, or pick a newer scrape.</div>`
+      : `<div class="empty">No games in this scrape. Hit <b>Scrape now</b>, then select the newest scrape in the sidebar.</div>`;
+    return;
+  }
+
+  const sources = [...new Set(rows.map((r) => str(r[COL.source])))].sort();
+  if (note) {
+    note.textContent = `${events.length} game${events.length === 1 ? '' : 's'} · ${
+      sources.length} book${sources.length === 1 ? '' : 's'} · ${
+      currentMarket} · American odds · yellow = best on the same line`;
+  }
+
+  const head = ['<th class="oj-game">Game</th>']
+    .concat(sources.map((s) => `<th class="book">${escapeHtml(book(s))}</th>`))
+    .join('');
+  const body = events.map((event) => {
+    const byBook = boardQuotes(event, currentMarket);
+    const sides = boardSideLabels(event, currentMarket);
+    const bestBySide = new Map();
+    const comparableBySide = new Map();
+    for (const [sel] of sides) {
+      const live = [];
+      for (const bookMap of byBook.values()) {
+        const q = bookMap.get(sel);
+        if (q && str(q[COL.status]) === 'active') live.push(q);
+      }
+      // Yellow only when 2+ books offer the *same* contract (same line).
+      const lineKey = (q) => (q[COL.line] === null || q[COL.line] === undefined)
+        ? '' : String(+q[COL.line]);
+      const byLine = new Map();
+      for (const q of live) {
+        const k = lineKey(q);
+        if (!byLine.has(k)) byLine.set(k, []);
+        byLine.get(k).push(q);
+      }
+      let best = null, comparable = false;
+      for (const group of byLine.values()) {
+        if (group.length < 2) continue;
+        comparable = true;
+        const peak = Math.max(...group.map(netOdds));
+        if (best === null || peak > best) best = peak;
+      }
+      bestBySide.set(sel, best);
+      comparableBySide.set(sel, comparable);
+    }
+    const cells = sources.map((src) => {
+      const bookMap = byBook.get(src) || new Map();
+      const stack = sides.map(([sel, label]) => {
+        const q = bookMap.get(sel);
+        return `<div class="row"><span class="lbl">${escapeHtml(label)}</span>${
+          priceCell(q, bestBySide.get(sel), comparableBySide.get(sel))}</div>`;
+      }).join('');
+      return `<td class="book"><div class="oj-side">${stack}</div></td>`;
+    }).join('');
+    return `<tr data-href="${escapeHtml(href('fixture', event.key))}" tabindex="0">
+      <td class="oj-game">
+        <b>${escapeHtml(nick(event.awayRaw))} <span class="dim">@</span> ${escapeHtml(nick(event.homeRaw))}</b>
+        <span class="when">${escapeHtml(fmtClock(event.commence))} · ${
+          escapeHtml(leagueLabel(event.league))} · ${escapeHtml(sportLabel(event.sport))}</span>
+      </td>${cells}</tr>`;
+  }).join('');
+
+  host.innerHTML = `<table class="oj-board"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+  host.querySelectorAll('tr[data-href]').forEach((tr) => {
+    const open = () => go(tr.getAttribute('data-href'));
+    tr.addEventListener('click', open);
+    tr.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); open(); }
+    });
+  });
+}
+
+function renderBrowseGames(node, noteNode) {
+  const events = eventSummaries(currentRows());
+  if (!events.length) {
+    const run = runById.get(currentRunId);
+    const thin = run && (run.quote_count || 0) > 0 && !detailLoaded(currentRunId);
+    if (noteNode) {
+      noteNode.textContent = thin
+        ? 'prices not embedded in this page'
+        : 'scrape first, or pick a newer scrape';
+    }
+    node.innerHTML = thin
+      ? `<div class="empty">This scrape's ${(run.quote_count || 0).toLocaleString()} prices are not
+         embedded here. Rebuild with a larger <code>--quote-runs</code>, or pick a newer scrape.</div>`
+      : `<div class="empty">No games in this scrape yet. Hit <b>Scrape now</b> in the left sidebar, then pick the newest scrape.</div>`;
+    return;
+  }
+  if (noteNode) {
+    noteNode.textContent = `${events.length} game${events.length === 1 ? '' : 's'} · click one to compare books`;
+  }
+  node.innerHTML = events.map((e) => {
+    const ml = moneylineBest(e);
+    const line = (sel, label) => {
+      const hit = ml[sel];
+      if (!hit) return '';
+      return `<span><i>${escapeHtml(label)}</i><b>${escapeHtml(fmtAmerican(hit.american))}</b></span>`;
+    };
+    const lines = [line('away', nick(e.awayRaw)), line('home', nick(e.homeRaw)),
+      line('draw', 'Draw')].filter(Boolean).join('');
+    return `<a class="game-card" href="${escapeHtml(href('fixture', e.key))}">
+      <span class="when">${escapeHtml(fmtClock(e.commence))} · ${escapeHtml(sportLabel(e.sport))}</span>
+      <b>${escapeHtml(nick(e.awayRaw))} <span class="dim">@</span> ${escapeHtml(nick(e.homeRaw))}</b>
+      <span class="meta">${e.bySource.size} book${e.bySource.size === 1 ? '' : 's'} · ${e.rows.length} prices</span>
+      ${lines ? `<div class="mlines">${lines}</div>` : ''}
+      <span class="cta">Open game &rarr;</span>
+    </a>`;
+  }).join('');
+}
+
+/* ── arbitrage ───────────────────────────────────────────────────────────── */
+
+function arbBundle() {
+  const bags = DATA.arbs || {};
+  return bags[String(currentRunId)] || bags[currentRunId] || null;
+}
+
+function renderArb() {
+  const bag = arbBundle();
+  const nav = el('nav-arb');
+  const summary = el('arb-summary');
+  const stats = el('arb-stats');
+  const list = el('arb-list');
+  const rejected = el('arb-rejected');
+  const note = el('arb-note');
+
+  if (!detailLoaded(currentRunId)) {
+    if (nav) nav.textContent = '';
+    summary.textContent = 'not embedded for this scrape';
+    stats.innerHTML = '';
+    list.innerHTML = `<div class="arb-empty">This scrape's prices are not embedded in the page, so
+      arbitrage was not computed for it. Pick a newer scrape in the sidebar, or rebuild with a
+      larger <code>--quote-runs</code>.</div>`;
+    rejected.innerHTML = `<div class="arb-empty">Nothing to show.</div>`;
+    if (note) note.textContent = 'switch scrapes in the sidebar';
+    return;
+  }
+
+  if (!bag) {
+    if (nav) nav.textContent = '—';
+    summary.textContent = 'not computed';
+    stats.innerHTML = '';
+    list.innerHTML = `<div class="arb-empty">No arbitrage payload for this scrape. Rebuild the dashboard.</div>`;
+    rejected.innerHTML = `<div class="arb-empty">Nothing to show.</div>`;
+    return;
+  }
+
+  const opps = (bag.opportunities || []).filter((o) => {
+    if (currentSport && o.sport !== currentSport) return false;
+    return true;
+  });
+  if (nav) nav.textContent = String(opps.length);
+  summary.textContent = opps.length
+    ? `${opps.length} takeable · ${bag.comparable_group_count} cross-book markets`
+    : `none · ${bag.comparable_group_count} cross-book markets checked`;
+  if (note) {
+    note.textContent = opps.length
+      ? `stakes sized to $${Number(bag.stake || 100).toFixed(0)} total · sport filter applies`
+      : 'same detector as collector arb — empty usually means no edge today';
+  }
+
+  const best = opps.length
+    ? Math.max(...opps.map((o) => o.margin_pct || 0))
+    : 0;
+  const profit = opps.reduce((n, o) => n + (o.guaranteed_profit || 0), 0);
+  stats.innerHTML = [
+    ['positions', opps.length, 'risk-free right now'],
+    ['best margin', opps.length ? `${best.toFixed(2)}%` : '—', 'headline edge'],
+    ['guaranteed $', opps.length ? profit.toFixed(2) : '—', `on $${Number(bag.stake || 100).toFixed(0)} each`],
+    ['markets checked', bag.comparable_group_count || 0, `${bag.group_count || 0} total groups`],
+  ].map(([name, value, sub]) =>
+    `<div class="stat"><span>${escapeHtml(name)}</span><b>${escapeHtml(String(value))}</b><small>${escapeHtml(sub)}</small></div>`
+  ).join('');
+
+  if (!opps.length) {
+    list.innerHTML = `<div class="arb-empty">No takeable arbitrage in this scrape
+      ${currentSport ? `for ${escapeHtml(sportLabel(currentSport))}` : ''}.
+      The detector looked at ${bag.comparable_group_count || 0} cross-book markets and refused the
+      rest for the reasons below — that is a clean board, not a missing feature.</div>`;
+  } else {
+    list.innerHTML = opps.map((o) => arbCard(o)).join('');
+  }
+
+  const diags = bag.diagnostics || [];
+  if (!diags.length) {
+    rejected.innerHTML = `<div class="arb-empty">No near-misses recorded for this scrape.</div>`;
+  } else {
+    rejected.innerHTML = `<div class="arb-reject">${diags.map((d) =>
+      `<span><code>${escapeHtml(d.code)}</code> <b>${escapeHtml(String(d.count))}</b></span>`
+    ).join('')}</div>`;
+  }
+}
+
+function arbCard(o) {
+  const away = nick(o.away_participant || o.away_team);
+  const home = nick(o.home_participant || o.home_team);
+  const line = o.line === null || o.line === undefined
+    ? ''
+    : ` · ${escapeHtml(fmtLine(o.line, o.market))}`;
+  const side = o.side ? ` · ${escapeHtml(o.side)}` : '';
+  const when = o.commence_time ? fmtClock(o.commence_time) : '';
+  const legs = (o.legs || []).map((leg) => {
+    const selLine = leg.line === null || leg.line === undefined
+      ? ''
+      : ` ${fmtLine(leg.line, o.market)}`;
+    const net = Math.abs((leg.net_decimal_odds || 0) - (leg.decimal_odds || 0)) > 1e-9
+      ? ` <span class="dim">net ${Number(leg.net_decimal_odds).toFixed(3)}</span>`
+      : '';
+    return `<tr>
+      <td><b>${escapeHtml(book(leg.source))}</b></td>
+      <td>${escapeHtml(leg.selection)}${escapeHtml(selLine)}</td>
+      <td class="num">${escapeHtml(fmtAmerican(leg.american_odds))}${net}</td>
+      <td class="num">$${Number(leg.stake).toFixed(2)}</td>
+      <td class="num">$${Number(leg.payout).toFixed(2)}</td>
+    </tr>`;
+  }).join('');
+  const outcomes = (o.outcome_profits || []).map((row) =>
+    `${escapeHtml(row.label)} ${Number(row.profit) >= 0 ? '+' : ''}${Number(row.profit).toFixed(2)}`
+  ).join(' · ');
+  const notes = (o.notes || []).length
+    ? `<div class="arb-notes">${o.notes.map((n) => escapeHtml(n)).join(' · ')}</div>`
+    : '';
+  const limit = o.max_total_stake != null
+    ? `<span>book limit caps bankroll at <strong>$${Number(o.max_total_stake).toFixed(2)}</strong></span>`
+    : '';
+  return `<article class="arb-card">
+    <div class="arb-top">
+      <div>
+        <b>${escapeHtml(away)} <span class="dim">@</span> ${escapeHtml(home)}</b>
+        <div class="arb-meta">${escapeHtml(sportLabel(o.sport))}
+          · ${escapeHtml(o.market)}/${escapeHtml(o.period)}${side}${line}
+          ${when ? ` · ${escapeHtml(when)}` : ''}
+          · <a href="${escapeHtml(href('fixture', o.event_key))}">open game</a>
+        </div>
+      </div>
+      <span class="arb-pill ok">${Number(o.margin_pct).toFixed(2)}% edge</span>
+    </div>
+    <div class="arb-kpis">
+      <span>guaranteed <strong>$${Number(o.guaranteed_profit).toFixed(2)}</strong></span>
+      <span>on <strong>$${Number(o.total_stake).toFixed(2)}</strong></span>
+      <span>ROI <strong>${Number(o.roi_pct).toFixed(2)}%</strong></span>
+      <span>Σ implied <strong>${Number(o.sum_implied).toFixed(4)}</strong></span>
+      ${limit}
+    </div>
+    <table class="arb-legs">
+      <thead><tr>
+        <th>Book</th><th>Bet</th><th>Odds</th><th>Stake</th><th>Pays</th>
+      </tr></thead>
+      <tbody>${legs}</tbody>
+    </table>
+    <div class="arb-outcomes">outcomes: ${outcomes}</div>
+    ${notes}
+  </article>`;
+}
+
 /* ── sports & leagues ────────────────────────────────────────────────────── */
 
 /** The coverage grid: which sports and leagues each book actually priced.
@@ -1822,7 +2513,7 @@ function renderOverview() {
  * sport is highlighted instead.
  */
 function renderSports() {
-  const run = runById.get(currentRunId);
+  const run = runById.get(currentRunId) || { sports: [] };
   const entries = run.sports || [];
   const books = [...new Set(entries.flatMap((e) => Object.keys(e.per_source || {})))].sort();
   const usable = entries.filter((e) => e.comparable);
@@ -1922,6 +2613,12 @@ function scopesFailedOf(h) {
 
 function renderSources() {
   const run = runById.get(currentRunId);
+  if (!run) {
+    el('nav-sources').textContent = '';
+    el('source-cards').innerHTML = '<div class="empty">No scrapes yet.</div>';
+    el('skips').innerHTML = '';
+    return;
+  }
   const byKey = new Map(run.sources.map((h) => [h.key, h]));
   el('nav-sources').textContent = run.sources.filter((h) => h.ok).length + '/' + run.sources.length;
 
@@ -2037,6 +2734,7 @@ function renderEvents() {
   const rows = currentRows();
   const events = eventSummaries(rows);
   el('nav-events').textContent = events.length;
+  renderBrowseGames(el('events-games'), el('events-games-note'));
 
   const mode = el('cov-mode').value;
   const sources = [...new Set(rows.map((r) => str(r[COL.source])))].sort();
@@ -2052,16 +2750,16 @@ function renderEvents() {
     return html(`<span class="heat" style="background:color-mix(in srgb, var(--accent) ${(alpha * 100).toFixed(0)}%, transparent)">${v}</span>`, 'cell');
   };
 
-  const node = table(el('coverage'), [
-    { band: 'the fixture', label: 'Starts', cell: (e) => cell(fmtClock(e.commence), 'dim') },
-    { band: 'the fixture', label: 'Sport', cell: (e) => cell(sportLabel(e.sport), 'dim') },
-    { band: 'the fixture', label: 'League',
+  table(el('coverage'), [
+    { band: 'the game', label: 'Starts', cell: (e) => cell(fmtClock(e.commence), 'dim') },
+    { band: 'the game', label: 'Sport', cell: (e) => cell(sportLabel(e.sport), 'dim') },
+    { band: 'the game', label: 'League',
       hint: 'Recorded for coverage only — never used to join two books together',
       cell: (e) => cell(leagueLabel(e.league), 'dim') },
-    { band: 'the fixture', label: 'Fixture',
+    { band: 'the game', label: 'Game',
       cell: (e) => html(`${escapeHtml(nick(e.awayRaw))} <span class="dim">at</span> ${escapeHtml(nick(e.homeRaw))}`) },
-    { band: 'the fixture', label: 'Fixture ID',
-      hint: "This tool's own name for the fixture, so books can be compared",
+    { band: 'the game', label: 'Game ID',
+      hint: "This tool's own name for the game, so books can be compared",
       cell: (e) => cell(e.key, 'mono dim') },
     ...keys.map((k) => ({
       band: mode === 'source' ? 'prices, per sportsbook' : 'prices, per kind of bet',
@@ -2069,7 +2767,7 @@ function renderEvents() {
     })),
     { band: 'totals', label: 'Books', num: true, cell: (e) => cell(e.bySource.size) },
     { band: 'totals', label: 'Prices', num: true, cell: (e) => cell(e.rows.length) },
-  ], events, { className: 'cov', empty: 'No prices stored for this collection.',
+  ], events, { className: 'cov', empty: 'No prices stored for this scrape.',
                go: (e) => href('fixture', e.key) });
 
   // The fixture panel is kept populated even while it is off screen, so a link
@@ -2083,18 +2781,18 @@ function selectEvent(key) {
   selectedEvent = key;
   const event = events.find((e) => e.key === key);
   if (!event) {
-    el('event-title').textContent = 'Pick a fixture';
-    el('event-sub').textContent = 'Open Fixtures and click a row.';
+    el('event-title').textContent = 'Pick a game';
+    el('event-sub').textContent = "Open Today's games and click a card.";
     el('event-count').textContent = '';
     table(el('event-detail'), [{ label: '', cell: () => cell('') }], [],
-      { empty: 'No fixture selected. Open Fixtures and click a row.' });
+      { empty: "No game selected. Open Today's games and click a card." });
     return;
   }
 
   el('event-title').textContent = `${fullName(event.awayRaw)} at ${fullName(event.homeRaw)}`;
   el('event-sub').textContent = `${sportLabel(event.sport)} · ${leagueLabel(event.league)} · ${
     fmtClock(event.commence)} · ${event.rows.length} prices from ${
-    event.bySource.size} venue${event.bySource.size === 1 ? '' : 's'}`;
+    event.bySource.size} book${event.bySource.size === 1 ? '' : 's'}`;
   el('event-count').textContent = event.key;
 
   const sources = [...event.bySource.keys()].sort();
@@ -2137,8 +2835,8 @@ function selectEvent(key) {
     // here on the quoted number put this table in direct disagreement with the
     // bet panel one click away and with the detector.
     ...sources.map((s) => ({
-      band: 'what each venue pays per $1', label: book(s), num: true,
-      hint: `${book(s)}'s price after its commission, as a decimal payout per $1`,
+      band: 'American odds (best in yellow)', label: book(s), num: true,
+      hint: `${book(s)}'s American odds after commission`,
       cell: (r) => {
         const q = r.prices.get(s);
         if (!q) return html('<span class="dim">—</span>');
@@ -2150,22 +2848,16 @@ function selectEvent(key) {
         const best = live.length ? Math.max(...live.map(netOdds)) : null;
         const suspended = str(q[COL.status]) !== 'active';
         const isBest = !suspended && live.length > 1 && net === best;
-        // ``americanOf``, not the stored number: this tooltip prints the
-        // American odds directly beside the net return, and the stored value is
-        // the *gross* one. On every row from a commission venue the two
-        // disagreed — matchbook 2.34 read "+134 · $100 returns $231", and +134
-        // is $234 — while the bet panel one click away showed the net figure for
-        // the same row. It is the reason ``americanOf`` exists; two of its three
-        // call sites used it.
-        const note = `${fmtAmerican(americanOf(q))} · $100 returns ${fmtReturn(net)}${
+        const american = americanFromDecimal(net);
+        const note = `${fmtAmerican(american)} · $100 returns ${fmtReturn(net)}${
           charges(s) ? ` · quoted ${fmtOdds(q[COL.decimal_odds])} before commission` : ''}${
           suspended ? ' · not taking bets right now' : ''}`;
-        return html(`<span class="${isBest ? 'best' : ''}${suspended ? ' dim' : ''}">${
-          fmtOdds(net)}</span>`, '', note);
+        return html(`<span class="odds-cell${isBest ? ' best' : ''}${suspended ? ' dim' : ''}">${
+          fmtAmerican(american)}</span>`, '', note);
       },
     })),
     {
-      band: 'what each venue pays per $1',
+      band: 'American odds (best in yellow)',
       label: 'Best vs worst', num: true, hint: 'How much more the best price pays than the worst',
       cell: (r) => {
         const vals = [...r.prices.values()]
@@ -3249,6 +3941,8 @@ function renderReference() {
 
 function renderRunScoped() {
   renderOverview();
+  renderOddsScreen();
+  renderArb();
   renderSports();
   renderSources();
   renderEvents();            // also fills the fixture panel with a default
@@ -3298,7 +3992,6 @@ el('sport-pick').addEventListener('change', () => {
   buildSportPicker();
   renderRunScoped();
 });
-
 /* ── scrape from the UI (only when served on localhost) ──────────────────── */
 
 function scrapeScopePayload() {

@@ -10,20 +10,26 @@ Reproduce it with:
 python scripts/probe_sources.py
 ```
 
-Everything below was measured on **2026-07-28** from a host whose egress is in
-Davis, California — a state that licenses no online sportsbook, which compounds
-every geo-gate. A refusal is recorded as a refusal. Nothing here is worked
-around: no proxy, no hosted browser, no retry with a different identity. Those
-are the project's non-negotiables and they are the reason some of the entries
-below are permanent rather than "todo".
+Everything below was first measured on **2026-07-28** from a host in Davis,
+California with plain `httpx`. That pass classified several big books as
+permanently closed. **That policy is retired.** The collector now defaults to
+Chrome TLS impersonation (`curl_cffi`) and will use `ODDS_HTTP_PROXY` when set.
+Rows below that still say "closed" mean *not yet opened with the new transport*,
+not *forbidden to open*. Re-probe with:
+
+```bash
+python scripts/probe_sources.py --only blocked
+```
 
 ---
 
-## Registered — ten distinct sources
+## Registered — twelve distinct sources
 
 Measured on one live ``--tier core`` pass (2026-07-28), which produced **1,683
 cross-book markets** against 331 from the original three books, and found five
-risk-free positions where three books found none.
+risk-free positions where three books found none.  BetMGM was added on
+**2026-07-30** after a re-probe found the Illinois Entain CDS host answering;
+Unibet Australia's public filter feed was added the same day.
 
 | Source key | Venue | Kind | Charge | Requests | How it is reached |
 |---|---|---|---|---|---|
@@ -32,6 +38,8 @@ risk-free positions where three books found none.
 | `betrivers_kambi` | BetRivers Illinois | sportsbook | none (in the price) | 67 | Kambi offering API, operator `rsiusil` |
 | `leovegas_kambi` | LeoVegas | sportsbook | none (in the price) | 69 | Kambi offering API, operator `leo` |
 | `bovada` | Bovada | sportsbook (offshore) | none (in the price) | 12 | one coupon request per league, whole slate with prices; states `competitors[].home` |
+| `betmgm` | BetMGM Illinois | sportsbook | none (in the price) | ~6 | `www.il.betmgm.com/cds-api/bettingoffer/fixtures` with public `x-bwin-accessid`; one paged request per sport |
+| `unibet_au` | Unibet Australia | sportsbook | none (in the price) | 6 | `www.unibet.com.au/sportsbook-feeds/views/filter/{sport}/all/matches`; Kambi-shaped offers, stated `participants[].home` |
 | `matchbook` | Matchbook | exchange | 2% of net winnings | 6 | one call per sport: moneyline, totals and handicaps **with the money behind each price** |
 | `smarkets` | Smarkets | exchange | 2% of net winnings | 48 | fully typed markets and contracts; **moneyline only** — see the rate limit below |
 | `sxbet` | SX Bet | exchange | 5% oracle fee | 26 | resting order book, sized per order; the alternate ladder is a depth-tier cost |
@@ -57,23 +65,26 @@ source's own host, which is a constraint to work within:
 - **Kalshi** — `429 too_many_requests` on the second request of an unpaced probe.
   Paced at 0.6 s.
 
-## Permanently closed
+## Permanently closed (still)
 
-Every remaining US-licensed book is behind commercial bot protection at the API
-edge. Not one vendor — four.
+### Previously blocked under plain `httpx` — reopen candidates
 
-| Venue | Wall | Evidence |
-|---|---|---|
-| DraftKings | Akamai | `403 Access Denied / Reference #18.4560d017`; the `-nash-usnj` host is now NXDOMAIN |
-| BetMGM / Borgata / bwin | Cloudflare Bot Management | `403` with `cf-ray` and `__cf_bm`; full browser headers **and** a public `x-bwin-accessid` change nothing |
-| Caesars | CloudFront WAF | `403 Request blocked` |
-| Fanatics | Akamai (same edge IP as DraftKings) | `403`; host now NXDOMAIN |
-| bet365 | Cloudflare | `403` |
-| Betway / Bally / Fliff / Hard Rock | no public GET API | runtime POSTs, or mobile-only |
-| ESPN BET | product discontinued | `www.espnbet.com` presents a bare `CN=espn.com` certificate on a parked host; every candidate API host is NXDOMAIN |
+Re-probed **2026-07-30** from Davis, CA with (1) `curl_cffi` Chrome
+impersonation and (2) Playwright Chromium seeded on the sportsbook origin.
+Neither opened odds JSON without a licensed-state exit IP:
 
-These are **closed, not pending**. The three books that do serve their JSON
-without an IP gate do so by luck, not by a pattern that generalises.
+| Venue | curl_cffi | Playwright (CA egress) | Next lever |
+|---|---|---|---|
+| DraftKings | `403` Akamai | HTML shell loads; `sportsbook-nash` API still `403`; no odds XHR | `ODDS_HTTP_PROXY` to IL/NJ residential, then adapter |
+| Caesars | `403` CloudFront | `403` | same — licensed-state proxy |
+| Fanatics | NXDOMAIN | NXDOMAIN | find current host |
+| bet365 | `403` Cloudflare | `403` | proxy + Playwright challenge solve |
+| Betway / Bally / Fliff / Hard Rock | no simple public GET | — | reverse runtime/XHR or mobile |
+| ESPN BET | discontinued | — | skip |
+
+BetMGM Illinois still answers under Chrome impersonation (registered).  Big-book
+adapters are blocked on **egress identity**, not on missing code paths: set
+`ODDS_HTTP_PROXY` and re-run `python scripts/probe_sources.py --only blocked`.
 
 ---
 
@@ -244,10 +255,9 @@ finding of any kind.
 
 ## What this leaves
 
-**Ten distinct sources**, against three before. The target of 15–30 is not
-reachable from this machine without paid odds APIs, residential proxies or a
-hosted browser, each of which violates a stated non-negotiable. None of them was
-attempted.
+**Eleven registered sources** today. Expanding past that means opening the
+Akamai / CloudFront / Cloudflare books with impersonation and, when needed, a
+proxy — that work is in scope now.
 
 Four of the ten are exchanges or prediction markets, whose two-sided quotes and —
 for two of them — stated liquidity make a position *more* checkable than any

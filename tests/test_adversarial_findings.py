@@ -4521,29 +4521,51 @@ class TestTheChargeAndTheSettlementRuleArePinnedPerVenue:
     """
 
     EXPECTED = {
+        "an_bet365": "no commission (the venue's margin is already in the price)",
+        "an_betmgm": "no commission (the venue's margin is already in the price)",
+        "an_betrivers": "no commission (the venue's margin is already in the price)",
+        "an_caesars": "no commission (the venue's margin is already in the price)",
+        "an_draftkings": "no commission (the venue's margin is already in the price)",
+        "an_fanduel": "no commission (the venue's margin is already in the price)",
+        "an_open": "no commission (the venue's margin is already in the price)",
+        "betmgm": "no commission (the venue's margin is already in the price)",
         "betrivers_kambi": "no commission (the venue's margin is already in the price)",
         "bovada": "no commission (the venue's margin is already in the price)",
+        "cloudbet": "no commission (the venue's margin is already in the price)",
         "fanduel": "no commission (the venue's margin is already in the price)",
+        "kalshi": '0.07 × p×(1−p) per contract, charged on entry',
         "leovegas_kambi": "no commission (the venue's margin is already in the price)",
+        "matchbook": '2.00% of net winnings',
+        "onexbet": "no commission (the venue's margin is already in the price)",
         "pinnacle": "no commission (the venue's margin is already in the price)",
-        "matchbook": "2.00% of net winnings",
-        "smarkets": "2.00% of net winnings",
-        "sxbet": "5.00% of net winnings",
-        "kalshi": "0.07 × p×(1−p) per contract, charged on entry",
-        "polymarket": "0.05 × min(p, 1−p) per contract, charged on entry",
+        "polymarket": '0.05 × min(p, 1−p) per contract, charged on entry',
+        "smarkets": '2.00% of net winnings',
+        "sxbet": '5.00% of net winnings',
+        "unibet_au": "no commission (the venue's margin is already in the price)",
     }
 
     REGIMES = {
-        "betrivers_kambi": "void_and_refund",
-        "bovada": "void_and_refund",
-        "fanduel": "void_and_refund",
-        "leovegas_kambi": "void_and_refund",
-        "pinnacle": "void_and_refund",
-        "matchbook": "void_and_refund",
-        "smarkets": "void_and_refund",
-        "sxbet": "void_and_refund",
-        "kalshi": "settle_make_up_game",
-        "polymarket": "resolve_fifty_fifty",
+        "an_bet365": 'void_and_refund',
+        "an_betmgm": 'void_and_refund',
+        "an_betrivers": 'void_and_refund',
+        "an_caesars": 'void_and_refund',
+        "an_draftkings": 'void_and_refund',
+        "an_fanduel": 'void_and_refund',
+        "an_open": 'void_and_refund',
+        "betmgm": 'void_and_refund',
+        "betrivers_kambi": 'void_and_refund',
+        "bovada": 'void_and_refund',
+        "cloudbet": 'void_and_refund',
+        "fanduel": 'void_and_refund',
+        "kalshi": 'settle_make_up_game',
+        "leovegas_kambi": 'void_and_refund',
+        "matchbook": 'void_and_refund',
+        "onexbet": 'void_and_refund',
+        "pinnacle": 'void_and_refund',
+        "polymarket": 'resolve_fifty_fifty',
+        "smarkets": 'void_and_refund',
+        "sxbet": 'void_and_refund',
+        "unibet_au": 'void_and_refund',
     }
 
     def test_every_venues_charge_is_what_it_is(self) -> None:
@@ -4898,17 +4920,24 @@ class TestTheWomensMarkerReachesEveryVenueThatNeedsIt:
     NEEDS_MARKER = (
         "pinnacle", "fanduel", "betrivers_kambi", "leovegas_kambi",
         "smarkets", "matchbook", "sxbet",
+        "an_draftkings", "an_caesars", "an_bet365", "an_open",
+        "an_fanduel", "an_betrivers", "an_betmgm",
     )
 
     #: The rest configure one named competition per route, so a women's fixture
     #: cannot arrive under a men's league key in the first place.
-    IMMUNE = ("bovada", "kalshi", "polymarket")
+    IMMUNE = ("betmgm", "bovada", "cloudbet", "kalshi", "onexbet", "polymarket", "unibet_au")
 
     def test_every_catch_all_adapter_applies_the_marker(self) -> None:
         import importlib
 
         for key in self.NEEDS_MARKER:
-            module = "src.sources.betrivers_kambi" if key.endswith("kambi") else f"src.sources.{key}"
+            if key.endswith("kambi"):
+                module = "src.sources.betrivers_kambi"
+            elif key.startswith("an_"):
+                module = "src.sources.actionnetwork"
+            else:
+                module = f"src.sources.{key}"
             source = importlib.import_module(module)
             assert hasattr(source, "competition_marker"), (
                 f"{key} maps unrecognised competitions to a catch-all league and "
@@ -10844,16 +10873,27 @@ class TestEachVenuesKindIsPinnedBecauseItPicksTheRule:
     #: What each venue is.  Written out rather than derived, because deriving it
     #: from the registry is what left it unpinned in the first place.
     EXPECTED = {
+        "an_bet365": False,
+        "an_betmgm": False,
+        "an_betrivers": False,
+        "an_caesars": False,
+        "an_draftkings": False,
+        "an_fanduel": False,
+        "an_open": False,
+        "betmgm": False,
         "betrivers_kambi": False,
         "bovada": False,
+        "cloudbet": False,
         "fanduel": False,
-        "leovegas_kambi": False,
-        "pinnacle": False,
         "kalshi": True,
+        "leovegas_kambi": False,
         "matchbook": True,
+        "onexbet": False,
+        "pinnacle": False,
         "polymarket": True,
         "smarkets": True,
         "sxbet": True,
+        "unibet_au": False,
     }
 
     def test_every_registered_venue_is_the_kind_it_is(self) -> None:

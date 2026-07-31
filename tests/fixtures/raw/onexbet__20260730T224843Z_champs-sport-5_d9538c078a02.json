@@ -1,0 +1,36 @@
+{
+ "envelope_version": 3,
+ "source": "onexbet",
+ "endpoint": "champs:sport-5",
+ "url": "https://1xbet.com/service-api/LineFeed/GetChampsZip?sport=5&lng=en&tf=2200000&tz=0&country=1",
+ "status_code": 200,
+ "content_type": "application/json; charset=utf-8",
+ "fetched_at": "2026-07-30T22:48:43.460502+00:00",
+ "request_params": {
+  "sport": "5",
+  "lng": "en",
+  "tf": "2200000",
+  "tz": "0",
+  "country": "1"
+ },
+ "headers": {
+  "date": "Thu, 30 Jul 2026 22:48:38 GMT",
+  "content-type": "application/json; charset=utf-8",
+  "server": "cloudflare",
+  "vary": "Accept-Encoding, Accept",
+  "cache-control": "public,max-age=5",
+  "api-supported-versions": "1.0",
+  "x-time-ng": "0.007",
+  "strict-transport-security": "max-age=63072000; includeSubDomains; preload",
+  "server-timing": "wf-uht;dur=0.009",
+  "last-modified": "Thu, 30 Jul 2026 22:48:38 GMT",
+  "cf-cache-status": "EXPIRED",
+  "content-encoding": "zstd",
+  "cf-ray": "a237e9774be8eb32-SJC",
+  "alt-svc": "h3=\":443\"; ma=86400"
+ },
+ "capture_id": "",
+ "sha256": "d9538c078a02d1d1324e28e1a321cb2125a1798f5588dc84529fa4412696343d",
+ "byte_size": 1378,
+ "body": "{\"Id\":0,\"Success\":true,\"Error\":\"\",\"ErrorCode\":0,\"Guid\":\"\",\"Value\":[{\"SI\":5,\"SN\":\"Baseball\",\"SR\":\"\u0411\u0435\u0439\u0441\u0431\u043e\u043b\",\"L\":\"USA. MLB\",\"LR\":\"\u041c\u041b\u0411\",\"LI\":166775,\"CI\":153,\"T\":300,\"GC\":14},{\"SI\":5,\"SN\":\"Baseball\",\"SR\":\"\u0411\u0435\u0439\u0441\u0431\u043e\u043b\",\"L\":\"KBO. South Korea\",\"LR\":\"\u041a\u0412\u041e. \u0427\u0435\u043c\u043f\u0438\u043e\u043d\u0430\u0442 \u042e\u0436\u043d\u043e\u0439 \u041a\u043e\u0440\u0435\u0438\",\"LI\":1886142,\"CI\":215,\"GC\":6},{\"SI\":5,\"SN\":\"Baseball\",\"SR\":\"\u0411\u0435\u0439\u0441\u0431\u043e\u043b\",\"L\":\"Japan. NPB\",\"LR\":\"\u041d\u041f\u0411. \u042f\u043f\u043e\u043d\u0441\u043a\u0430\u044f \u043b\u0438\u0433\u0430 \u0431\u0435\u0439\u0441\u0431\u043e\u043b\u0430\",\"LI\":310679,\"CI\":218,\"GC\":7},{\"SI\":5,\"SN\":\"Baseball\",\"SR\":\"\u0411\u0435\u0439\u0441\u0431\u043e\u043b\",\"L\":\"Minor League Baseball\",\"LR\":\"\u041c\u0430\u043b\u0430\u044f \u0411\u0435\u0439\u0441\u0431\u043e\u043b\u044c\u043d\u0430\u044f \u043b\u0438\u0433\u0430\",\"LI\":48365,\"CI\":153,\"GC\":22},{\"SI\":5,\"SN\":\"Baseball\",\"SR\":\"\u0411\u0435\u0439\u0441\u0431\u043e\u043b\",\"L\":\"Chinese Taipei. CPBL\",\"LR\":\"\u0422\u0430\u0439\u0432\u0430\u043d\u044c. CPBL\",\"LI\":1039223,\"CI\":179,\"GC\":3},{\"SI\":5,\"SN\":\"Baseball\",\"SR\":\"\u0411\u0435\u0439\u0441\u0431\u043e\u043b\",\"L\":\"Czech Republic. Extraliga\",\"LR\":\"\u0427\u0435\u043c\u043f\u0438\u043e\u043d\u0430\u0442 \u0427\u0435\u0445\u0438\u0438. \u042d\u043a\u0441\u0442\u0440\u0430\u043b\u0438\u0433\u0430\",\"LI\":1289147,\"CI\":204,\"GC\":3},{\"SI\":5,\"SN\":\"Baseball\",\"SR\":\"\u0411\u0435\u0439\u0441\u0431\u043e\u043b\",\"L\":\"Japan. NPB. Reserve League\",\"LR\":\"\u041d\u041f\u0411. \u042f\u043f\u043e\u043d\u0441\u043a\u0430\u044f \u0440\u0435\u0437\u0435\u0440\u0432\u043d\u0430\u044f \u043b\u0438\u0433\u0430\",\"LI\":1888300,\"CI\":218,\"GC\":2},{\"SI\":5,\"SN\":\"Baseball\",\"SR\":\"\u0411\u0435\u0439\u0441\u0431\u043e\u043b\",\"L\":\"KBO. Futures League\",\"LR\":\"\u041a\u0412\u041e. Futures League\",\"LI\":2869016,\"CI\":215,\"GC\":8},{\"SI\":5,\"SN\":\"Baseball\",\"SR\":\"\u0411\u0435\u0439\u0441\u0431\u043e\u043b\",\"L\":\"Mexico. LMB\",\"LR\":\"\u0427\u0435\u043c\u043f\u0438\u043e\u043d\u0430\u0442 \u041c\u0435\u043a\u0441\u0438\u043a\u0438. LMB\",\"LI\":2231490,\"CI\":120,\"GC\":9}]}"
+}

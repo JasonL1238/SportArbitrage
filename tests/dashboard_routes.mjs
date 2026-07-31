@@ -20,7 +20,10 @@ function make(id) {
     },
     set innerHTML(v) { this._html = v; }, get innerHTML() { return this._html; },
     setAttribute() {}, getAttribute(n) { return n === 'href' ? '#overview' : null; },
-    addEventListener() {}, querySelectorAll() { return []; }, querySelector() { return null; },
+    _listeners: {},
+    addEventListener(type, fn) { (this._listeners[type] ||= []).push(fn); },
+    dispatch(type) { for (const fn of this._listeners[type] || []) fn(); },
+    querySelectorAll() { return []; }, querySelector() { return null; },
     replaceWith(other) { nodes.set(other.id || id, other); },
     insertAdjacentHTML() {}, appendChild() {},
   };
@@ -74,7 +77,7 @@ for (const name of Object.keys(globalThis.__PANELS)) {
 
 // An unknown hash must land somewhere real rather than on a blank page.
 visit('#no-such-panel');
-if (on().join() !== 'overview') problems.push(`unknown hash showed [${on().join(', ')}]`);
+if (on().join() !== 'screen') problems.push(`unknown hash showed [${on().join(', ')}]`);
 
 // Real keys out of the payload: a fixture, a book, and a bet.
 const COL = globalThis.__COL;
@@ -82,10 +85,17 @@ const row = data.quotes.rows[0];
 const fixtureKey = data.strings[row[COL.event_key]];
 const bookKey = data.runs[0].sources[0].key;
 const betKey = globalThis.__betKeyOf(row);
+// Point the page at the run that owns the sample row.  The newest scrape may
+// be thin (summary only), and fixture drill-down only sees the selected run.
+const pick = nodes.get('run-pick');
+if (pick) {
+  pick.value = String(row[COL.run_id]);
+  pick.dispatch('change');
+}
 
 visit('#fixture/' + encodeURIComponent(fixtureKey));
 if (!text('event-detail')) problems.push('fixture panel rendered nothing');
-if (!text('event-title').trim() || text('event-title').startsWith('Pick a fixture')) {
+if (!text('event-title').trim() || text('event-title').startsWith('Pick a')) {
   problems.push(`fixture title not resolved: ${JSON.stringify(text('event-title'))}`);
 }
 
@@ -99,8 +109,10 @@ for (const id of ['bet-books', 'bet-sides', 'bet-history']) {
 }
 if (text('bet-title').startsWith('Pick a')) problems.push('bet title not resolved');
 const crumbs = text('crumbs');
-if (!crumbs.includes('Fixtures')) problems.push(`bet trail missing its parent: ${JSON.stringify(crumbs)}`);
-
+const crumbsPlain = crumbs.replace(/&#39;/g, "'").replace(/&rsquo;/g, "'");
+if (!crumbsPlain.includes("Today's games")) {
+  problems.push(`bet trail missing its parent: ${JSON.stringify(crumbs)}`);
+}
 // Nothing may leak a placeholder into a detail panel.
 const rendered = ['crumbs', 'event-title', 'event-sub', 'event-detail', 'book-title', 'book-stats',
   'book-mix', 'bet-title', 'bet-sub', 'bet-spread', 'bet-books', 'bet-sides', 'bet-history']

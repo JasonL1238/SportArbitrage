@@ -1634,7 +1634,7 @@ def _cmd_collect(args: argparse.Namespace) -> int:
                     leagues=leagues,
                     tier=tier,
                 )
-            except Exception as exc:  # noqa: BLE001
+            except Exception:  # noqa: BLE001
                 # Unattended operation is a requirement, and only the quote
                 # insert used to be protected: a locked database, a disk error
                 # writing a raw capture, or a bug in one adapter's own

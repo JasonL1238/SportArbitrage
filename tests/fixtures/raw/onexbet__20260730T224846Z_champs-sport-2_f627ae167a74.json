@@ -1,0 +1,36 @@
+{
+ "envelope_version": 3,
+ "source": "onexbet",
+ "endpoint": "champs:sport-2",
+ "url": "https://1xbet.com/service-api/LineFeed/GetChampsZip?sport=2&lng=en&tf=2200000&tz=0&country=1",
+ "status_code": 200,
+ "content_type": "application/json; charset=utf-8",
+ "fetched_at": "2026-07-30T22:48:46.880328+00:00",
+ "request_params": {
+  "sport": "2",
+  "lng": "en",
+  "tf": "2200000",
+  "tz": "0",
+  "country": "1"
+ },
+ "headers": {
+  "date": "Thu, 30 Jul 2026 22:48:42 GMT",
+  "content-type": "application/json; charset=utf-8",
+  "server": "cloudflare",
+  "vary": "Accept-Encoding, Accept",
+  "cache-control": "public,max-age=5",
+  "api-supported-versions": "1.0",
+  "x-time-ng": "0.010",
+  "strict-transport-security": "max-age=63072000; includeSubDomains; preload",
+  "server-timing": "wf-uht;dur=0.013",
+  "last-modified": "Thu, 30 Jul 2026 22:48:42 GMT",
+  "cf-cache-status": "EXPIRED",
+  "content-encoding": "zstd",
+  "cf-ray": "a237e98c9f1eeb32-SJC",
+  "alt-svc": "h3=\":443\"; ma=86400"
+ },
+ "capture_id": "",
+ "sha256": "f627ae167a74c9f70fc2124f4b720a867534bb3403d239fd6a5d3282e838b226",
+ "byte_size": 3093,
+ "body": "{\"Id\":0,\"Success\":true,\"Error\":\"\",\"ErrorCode\":0,\"Guid\":\"\",\"Value\":[{\"SI\":2,\"SN\":\"Ice Hockey\",\"SR\":\"\u0425\u043e\u043a\u043a\u0435\u0439\",\"L\":\"NHL\",\"LI\":30619,\"CI\":153,\"T\":300,\"GC\":31,\"CHIMG\":\"51f82662ecca5e12ce6e6eb7ce70ba08.PNG\"},{\"SI\":2,\"SN\":\"Ice Hockey\",\"SR\":\"\u0425\u043e\u043a\u043a\u0435\u0439\",\"L\":\"Kontinental Hockey League\",\"LR\":\"\u041a\u0425\u041b\",\"LI\":3355,\"CI\":225,\"T\":300,\"GC\":8,\"CHIMG\":\"9af23e42915f10afd2be47b9ca3db017.png\"},{\"SI\":2,\"SN\":\"Ice Hockey\",\"SR\":\"\u0425\u043e\u043a\u043a\u0435\u0439\",\"L\":\"Friendlies U20. National Teams\",\"LR\":\"\u0422\u043e\u0432\u0430\u0440\u0438\u0449\u0435\u0441\u043a\u0438\u0435 \u043c\u0430\u0442\u0447\u0438 \u0434\u043e 20 \u043b\u0435\u0442. \u0421\u0431\u043e\u0440\u043d\u044b\u0435\",\"LI\":1288841,\"CI\":225,\"GC\":2,\"CHIMG\":\"5e88ce1115da3cab86bf0804d17871b1.png\"},{\"SI\":2,\"SN\":\"Ice Hockey\",\"SR\":\"\u0425\u043e\u043a\u043a\u0435\u0439\",\"L\":\"Club Friendlies\",\"LR\":\"\u0422\u043e\u0432\u0430\u0440\u0438\u0449\u0435\u0441\u043a\u0438\u0435 \u043c\u0430\u0442\u0447\u0438 \u043a\u043b\u0443\u0431\u043e\u0432\",\"LI\":1164241,\"CI\":225,\"GC\":2,\"CHIMG\":\"ba5ce34d525ae4a3b4fe020d48f0234c.png\"},{\"SI\":2,\"SN\":\"Ice Hockey\",\"SR\":\"\u0425\u043e\u043a\u043a\u0435\u0439\",\"L\":\"Pavel Belyayev Memorial Tournament\",\"LR\":\"\u0422\u0443\u0440\u043d\u0438\u0440 \u0438\u043c\u0435\u043d\u0438 \u041f.\u0418. \u0411\u0435\u043b\u044f\u0435\u0432\u0430\",\"LI\":1285119,\"CI\":1,\"GC\":2},{\"SI\":2,\"SN\":\"Ice Hockey\",\"SR\":\"\u0425\u043e\u043a\u043a\u0435\u0439\",\"L\":\"Tournament Magnitka Open\",\"LR\":\"\u0422\u0443\u0440\u043d\u0438\u0440 \u041c\u0430\u0433\u043d\u0438\u0442\u043a\u0430 \u041e\u0443\u043f\u0435\u043d\",\"LI\":2699538,\"CI\":1,\"GC\":7},{\"SI\":2,\"SN\":\"Ice Hockey\",\"SR\":\"\u0425\u043e\u043a\u043a\u0435\u0439\",\"L\":\"Tournament Magnitka Open. Winner\",\"LR\":\"\u0422\u0443\u0440\u043d\u0438\u0440 \u041c\u0430\u0433\u043d\u0438\u0442\u043a\u0430 \u041e\u0443\u043f\u0435\u043d. \u041f\u043e\u0431\u0435\u0434\u0438\u0442\u0435\u043b\u044c\",\"LI\":2919083,\"CI\":1,\"GC\":1},{\"SI\":2,\"SN\":\"Ice Hockey\",\"SR\":\"\u0425\u043e\u043a\u043a\u0435\u0439\",\"L\":\"Australia. AIHL\",\"LR\":\"\u0427\u0435\u043c\u043f\u0438\u043e\u043d\u0430\u0442 \u0410\u0432\u0441\u0442\u0440\u0430\u043b\u0438\u0438. AIHL\",\"LI\":1516499,\"CI\":4,\"GC\":5},{\"SI\":2,\"SN\":\"Ice Hockey\",\"SR\":\"\u0425\u043e\u043a\u043a\u0435\u0439\",\"L\":\"Czech Republic. Extraliga\",\"LR\":\"\u0427\u0435\u043c\u043f\u0438\u043e\u043d\u0430\u0442 \u0427\u0435\u0445\u0438\u0438. \u042d\u043a\u0441\u0442\u0440\u0430\u043b\u0438\u0433\u0430\",\"LI\":1329569,\"CI\":204,\"GC\":7},{\"SI\":2,\"SN\":\"Ice Hockey\",\"SR\":\"\u0425\u043e\u043a\u043a\u0435\u0439\",\"L\":\"Germany. DEL\",\"LR\":\"\u0427\u0435\u043c\u043f\u0438\u043e\u043d\u0430\u0442 \u0413\u0435\u0440\u043c\u0430\u043d\u0438\u0438\",\"LI\":104035,\"CI\":53,\"GC\":7},{\"SI\":2,\"SN\":\"Ice Hockey\",\"SR\":\"\u0425\u043e\u043a\u043a\u0435\u0439\",\"L\":\"New Zealand Championship. NZIHL\",\"LR\":\"\u0427\u0435\u043c\u043f\u0438\u043e\u043d\u0430\u0442 \u041d\u043e\u0432\u043e\u0439 \u0417\u0435\u043b\u0430\u043d\u0434\u0438\u0438. NZIHL\",\"LI\":1929400,\"CI\":135,\"GC\":2},{\"SI\":2,\"SN\":\"Ice Hockey\",\"SR\":\"\u0425\u043e\u043a\u043a\u0435\u0439\",\"L\":\"New Zealand Championship. NZWIHL. Women\",\"LR\":\"\u0427\u0435\u043c\u043f\u0438\u043e\u043d\u0430\u0442 \u041d\u043e\u0432\u043e\u0439 \u0417\u0435\u043b\u0430\u043d\u0434\u0438\u0438. NZWIHL. \u0416\u0435\u043d\u0449\u0438\u043d\u044b\",\"LI\":3003029,\"CI\":135,\"GC\":2},{\"SI\":2,\"SN\":\"Ice Hockey\",\"SR\":\"\u0425\u043e\u043a\u043a\u0435\u0439\",\"L\":\"Slovakia. Extraliga\",\"LR\":\"\u0427\u0435\u043c\u043f\u0438\u043e\u043d\u0430\u0442 \u0421\u043b\u043e\u0432\u0430\u043a\u0438\u0438. \u042d\u043a\u0441\u0442\u0440\u0430\u043b\u0438\u0433\u0430\",\"LI\":26279,\"CI\":171,\"GC\":6},{\"SI\":2,\"SN\":\"Ice Hockey\",\"SR\":\"\u0425\u043e\u043a\u043a\u0435\u0439\",\"L\":\"Sweden. Elitserien\",\"LR\":\"\u0427\u0435\u043c\u043f\u0438\u043e\u043d\u0430\u0442 \u0428\u0432\u0435\u0446\u0438\u0438. \u0421\u0425\u041b\",\"LI\":1388257,\"CI\":207,\"GC\":7},{\"SI\":2,\"SN\":\"Ice Hockey\",\"SR\":\"\u0425\u043e\u043a\u043a\u0435\u0439\",\"L\":\"Switzerland. National League\",\"LR\":\"\u0427\u0435\u043c\u043f\u0438\u043e\u043d\u0430\u0442 \u0428\u0432\u0435\u0439\u0446\u0430\u0440\u0438\u0438\",\"LI\":1617765,\"CI\":206,\"GC\":7},{\"SI\":2,\"SN\":\"Ice Hockey\",\"SR\":\"\u0425\u043e\u043a\u043a\u0435\u0439\",\"L\":\"Tsyplakov Cup\",\"LR\":\"\u041a\u0443\u0431\u043e\u043a \u0426\u044b\u043f\u043b\u0430\u043a\u043e\u0432\u0430\",\"LI\":2271579,\"CI\":22,\"GC\":4},{\"SI\":2,\"SN\":\"Ice Hockey\",\"SR\":\"\u0425\u043e\u043a\u043a\u0435\u0439\",\"L\":\"Dream League\",\"LI\":2009267,\"CI\":225,\"T\":50,\"GC\":8,\"CHIMG\":\"28a2e760e4eb4d1cdc67b6457c1dc86c.PNG\"},{\"SI\":2,\"SN\":\"Ice Hockey\",\"SR\":\"\u0425\u043e\u043a\u043a\u0435\u0439\",\"L\":\"RHL\",\"LI\":2454428,\"CI\":1,\"GC\":29},{\"SI\":2,\"SN\":\"Ice Hockey\",\"SR\":\"\u0425\u043e\u043a\u043a\u0435\u0439\",\"L\":\"USA. UAHL\",\"LR\":\"\u0421\u0428\u0410. UAHL\",\"LI\":3006401,\"CI\":153,\"GC\":4}]}"
+}

@@ -81,7 +81,7 @@ records it as healthy.
 
 Use `src.sources._common.SourceClient` rather than calling `httpx` directly: it
 paces per host, retries only what is worth retrying (honouring the server's own
-`Retry-After`), sends an honest User-Agent, and captures every response — including
+`Retry-After`), sends a browser-matched User-Agent, and captures every response — including
 the refusals — before anything interprets them. Where a venue states a rate limit,
 pass `host_interval` and pace to it; three of the ten do.
 

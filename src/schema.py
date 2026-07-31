@@ -22,7 +22,6 @@ once, and a book's spelling can change without moving an event.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 

@@ -62,10 +62,6 @@ RAW_DIR = Path(_lookup("RAW_DIR", str(DATA_DIR / "raw"))).expanduser()
 DB_PATH = Path(_lookup("DB_PATH", str(DATA_DIR / "collector.sqlite3"))).expanduser()
 
 
-class BadSetting(RuntimeError):
-    """An environment variable holds a value this pipeline cannot honour."""
-
-
 #: Every ``ODDS_*`` value that could not be honoured, as ready-to-print lines.
 #:
 #: Recorded rather than raised.  This module is imported at the top of every

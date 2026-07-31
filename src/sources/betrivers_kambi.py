@@ -79,7 +79,7 @@ import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Iterable, Iterator, Sequence
+from typing import Any, Iterable, Iterator, Mapping, Sequence
 
 import httpx
 
@@ -508,17 +508,6 @@ def _resolve_endpoint(endpoint: str) -> tuple[str, str]:
         f"{SOURCE_KEY}: cannot tell which league the stored endpoint "
         f"{endpoint!r} belongs to"
     )
-
-
-def endpoint_operator(endpoint: str) -> str | None:
-    """The Kambi tenant named in a stored label, or ``None`` for a legacy one."""
-    parts = endpoint.split(":")
-    kind = parts[0]
-    if kind == _LISTVIEW_KIND and len(parts) >= 3:
-        return parts[1]
-    if kind == _BETOFFER_KIND and len(parts) >= 4:
-        return parts[1]
-    return None
 
 
 # ── the adapter ──────────────────────────────────────────────────────────────

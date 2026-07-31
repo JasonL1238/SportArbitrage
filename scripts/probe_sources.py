@@ -3,21 +3,16 @@
 
 A **script**, deliberately not a test.  What it measures is a fact about the
 network from wherever it is run — which endpoints answer, which refuse, and how —
-and that changes with the host, the day and the jurisdiction.  A test that
-asserted any of it would fail for reasons that have nothing to do with the code.
+and that changes with the host, the day, the jurisdiction, and the transport.
 
-What it is for is the opposite of a test: producing the evidence behind
-``docs/SOURCE_FEASIBILITY.md``, so that a wall is documented once rather than
-rediscovered every few months by someone writing an adapter for a host that has
-never answered.
+Default transport matches the collector: Chrome TLS impersonation via
+``curl_cffi``, plus ``ODDS_HTTP_PROXY`` when set.  Use this to decide which
+blocked books are ready for an adapter.
 
     python scripts/probe_sources.py                 # reachability, one line each
     python scripts/probe_sources.py --verbose       # with the first bytes of each reply
-    python scripts/probe_sources.py --only kambi    # one family
-
-Nothing here bypasses anything.  A refusal is recorded as a refusal; there is no
-retry with different headers, no proxy, no browser.  The whole point of the
-output is to say honestly what this machine cannot reach.
+    python scripts/probe_sources.py --only blocked  # DK / Caesars / Fanatics / bet365
+    python scripts/probe_sources.py --plain         # old plain httpx baseline
 """
 from __future__ import annotations
 
@@ -36,6 +31,7 @@ import httpx
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.sources._common import USER_AGENT  # noqa: E402
+from src.sources.transport import proxy_url  # noqa: E402
 
 TIMEOUT = 25.0
 
@@ -121,51 +117,114 @@ CANDIDATES: tuple[Candidate, ...] = (
               {"marketFilterId": "def", "lang": "en"}, expect="events",
               counts=lambda p: f"{sum(len(g.get('events') or []) for g in p)} event(s)"
               if isinstance(p, list) else "?"),
+    Candidate("sportsbook", "betmgm",
+              "https://www.il.betmgm.com/cds-api/bettingoffer/fixtures",
+              {"x-bwin-accessid": "ZTg4YWEwMTgtZTlhYy00MWRkLWIzYWYtZjMzODI5ZDE0Mjc5",
+               "lang": "en-us", "country": "US", "userCountry": "US",
+               "subdivision": "US-Illinois", "fixtureTypes": "Standard",
+               "state": "Latest", "offerMapping": "Filtered",
+               "offerCategories": "Gridable", "fixtureCategories": "Gridable",
+               "sortBy": "Tags", "take": "3", "sportIds": "23"},
+              expect="fixtures", counts=_len("fixtures"),
+              note="registered as betmgm"),
+    Candidate("sportsbook", "cloudbet",
+              "https://www.cloudbet.com/sports-api/c/v6/sports/events",
+              {"limit": "3", "sport": "baseball"}, expect="sports",
+              counts=lambda p: (
+                  f"{sum(len(c.get('events') or []) for s in (p.get('sports') or []) for c in (s.get('competitions') or []))} event(s)"
+                  if isinstance(p, dict) else "?"
+              ),
+              note="registered as cloudbet; detail hop needed for markets"),
+    Candidate("sportsbook", "onexbet",
+              "https://1xbet.com/service-api/LineFeed/Get1x2_VZip",
+              {"sports": "5", "count": "5", "lng": "en", "tf": "2200000",
+               "tz": "0", "mode": "4", "country": "1"},
+              expect="Value", counts=_len("Value"),
+              note="registered as onexbet"),
+    Candidate("sportsbook", "unibet_au",
+              "https://www.unibet.com.au/sportsbook-feeds/views/filter/"
+              "baseball/all/matches",
+              {"includeParticipants": "true"},
+              expect="layout",
+              counts=lambda p: (
+                  f"{sum(len(e.get('events') or []) for s in ((p.get('layout') or {}).get('sections') or []) for w in s.get('widgets') or [] for e in ((w.get('matches') or {}).get('groups') or []))} event(s)"
+                  if isinstance(p, dict) else "?"
+              ),
+              note="registered as unibet_au"),
 
-    # ── refused: recorded so nobody writes an adapter for them again ─────────
+    # ── reopen candidates (blocked under plain httpx; try impersonation) ────
     Candidate("blocked", "draftkings",
-              "https://sportsbook-nash-usnj.draftkings.com/sites/US-NJ-SB/api/v5/eventgroups/84240",
-              {"format": "json"}, note="Akamai; host has also gone NXDOMAIN"),
-    Candidate("blocked", "betmgm",
-              "https://sports.nj.betmgm.com/cds-api/bettingoffer/fixtures",
-              {"x-bwin-accessid": "public", "lang": "en-us", "country": "US"},
-              note="Cloudflare Bot Management (cf-ray, __cf_bm)"),
+              "https://sportsbook-nash.draftkings.com/sites/US-IL-SB/api/v5/eventgroups/84240",
+              {"format": "json"}, note="Akamai; also try sportscontent markets path"),
+    Candidate("blocked", "draftkings-sportscontent",
+              "https://sportsbook-nash.draftkings.com/sites/US-SB/api/sportscontent/"
+              "controldata/client/desktop/visit/locale/en-us/"
+              "markets/v3/marketsByEventGroupIds",
+              {"isBatchable": "false", "eventGroupIds": "84240"},
+              note="path a real browser hits for MLB markets"),
     Candidate("blocked", "caesars",
               "https://api.americanwagering.com/regions/us/locations/nj/brands/czr/sb/v3/sports",
-              note="CloudFront WAF"),
+              note="CloudFront WAF under plain httpx"),
     Candidate("blocked", "fanatics",
               "https://api.sportsbook.fanatics.com/api/sportsbook/v1/events",
-              note="Akamai, same edge as DraftKings"),
+              note="Akamai under plain httpx"),
     Candidate("blocked", "bet365",
               "https://www.bet365.com/SportsBook.API/web", {"lid": "1", "zid": "0"},
-              note="Cloudflare"),
+              note="Cloudflare under plain httpx"),
     Candidate("gone", "espnbet",
               "https://api.espnbet.com/v1/sportsbook/events",
               note="product discontinued; parked host presents a CN=espn.com certificate"),
 )
 
 
-def probe(candidate: Candidate, *, verbose: bool) -> tuple[str, str]:
+def probe(candidate: Candidate, *, verbose: bool, plain: bool = False) -> tuple[str, str]:
     """``(verdict, detail)`` for one candidate.  Never raises."""
-    headers = {"User-Agent": USER_AGENT, "Accept": "application/json"}
+    from src.sources.browser import browser_enabled, build_browser_client
+    from src.sources.transport import build_default_client
+
+    headers = {"User-Agent": USER_AGENT, "Accept": "application/json, text/plain, */*"}
     try:
-        response = httpx.get(
-            candidate.url, params=candidate.params, timeout=TIMEOUT,
-            follow_redirects=True, headers=headers,
-        )
-    except httpx.HTTPError as exc:
+        if plain:
+            response = httpx.get(
+                candidate.url, params=candidate.params, timeout=TIMEOUT,
+                follow_redirects=True, headers=headers,
+            )
+            status = response.status_code
+            body = response.text
+            content_type = response.headers.get("content-type")
+        else:
+            seed = None
+            # Seed DK/Caesars with their sportsbook origin so the edge can mint cookies.
+            if "draftkings.com" in candidate.url:
+                seed = "https://sportsbook.draftkings.com/"
+            elif "americanwagering.com" in candidate.url:
+                seed = "https://www.caesars.com/sportsbook-and-casino"
+            session = (
+                build_browser_client(timeout=TIMEOUT, seed_url=seed)
+                if browser_enabled()
+                else build_default_client(timeout=TIMEOUT)
+            )
+            try:
+                response = session.get(
+                    candidate.url, params=candidate.params or None, headers=headers,
+                )
+            finally:
+                session.close()
+            status = response.status_code
+            body = response.text
+            content_type = response.headers.get("content-type")
+    except Exception as exc:
         return "UNREACHABLE", f"{type(exc).__name__}: {exc}"
 
-    body = response.text
-    if response.status_code != 200:
+    if status != 200:
         marker = _refusal_marker(body)
-        return f"HTTP {response.status_code}", marker or body.strip()[:120]
+        return f"HTTP {status}", marker or body.strip()[:120]
 
     try:
         payload = json.loads(body)
     except ValueError:
         marker = _refusal_marker(body)
-        return "NOT JSON", marker or f"{len(body)} bytes of {response.headers.get('content-type')}"
+        return "NOT JSON", marker or f"{len(body)} bytes of {content_type}"
 
     detail = candidate.counts(payload) if candidate.counts else f"{len(body)} bytes"
     if verbose:
@@ -197,9 +256,20 @@ def main(argv: list[str] | None = None) -> int:
         prog="python scripts/probe_sources.py", description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--only", help="probe one family (kambi, exchange, prediction, ...)")
+    parser.add_argument("--only", help="probe one family (kambi, exchange, prediction, blocked, ...)")
     parser.add_argument("--verbose", action="store_true", help="show the first bytes of each reply")
+    parser.add_argument(
+        "--plain", action="store_true",
+        help="use plain httpx (old baseline) instead of Chrome impersonation",
+    )
+    parser.add_argument(
+        "--browser", action="store_true",
+        help="use Playwright Chromium (sets ODDS_FETCH_MODE=browser for this run)",
+    )
     args = parser.parse_args(argv)
+    if args.browser:
+        import os
+        os.environ["ODDS_FETCH_MODE"] = "browser"
 
     chosen = [c for c in CANDIDATES if not args.only or c.family == args.only]
     if not chosen:
@@ -207,21 +277,26 @@ def main(argv: list[str] | None = None) -> int:
         print(f"no candidates in family {args.only!r}; known: {families}", file=sys.stderr)
         return 1
 
-    print(f"{'family':<11} {'candidate':<18} {'verdict':<12} detail")
-    print("-" * 100)
+    if args.plain:
+        mode = "plain httpx"
+    elif args.browser:
+        mode = "Playwright Chromium"
+    else:
+        mode = "curl_cffi Chrome impersonation"
+    proxy = proxy_url()
+    print(f"transport: {mode}" + (f" via {proxy}" if proxy else " (no proxy)"))
+    print(f"{'family':<11} {'candidate':<28} {'verdict':<12} detail")
+    print("-" * 110)
     reachable = 0
     for candidate in chosen:
-        verdict, detail = probe(candidate, verbose=args.verbose)
+        verdict, detail = probe(candidate, verbose=args.verbose, plain=args.plain)
         reachable += verdict == "OK"
-        print(f"{candidate.family:<11} {candidate.name:<18} {verdict:<12} {detail}")
+        print(f"{candidate.family:<11} {candidate.name:<28} {verdict:<12} {detail}")
         if candidate.note:
-            print(f"{'':<11} {'':<18} {'':<12} note: {candidate.note}")
-    print("-" * 100)
+            print(f"{'':<11} {'':<28} {'':<12} note: {candidate.note}")
+    print("-" * 110)
     print(f"{reachable} of {len(chosen)} candidate(s) answered with usable JSON")
-    print(
-        "\nA refusal here is recorded, never worked around: no proxy, no browser, no "
-        "retry with a different identity.  See docs/SOURCE_FEASIBILITY.md."
-    )
+    print("\nNext lever on a refusal: ODDS_HTTP_PROXY, then browser-cookie bootstrap / Playwright.")
     return 0
 
 

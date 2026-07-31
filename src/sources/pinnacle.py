@@ -41,7 +41,6 @@ nonsense price.
 from __future__ import annotations
 
 import logging
-import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Iterable, Sequence
@@ -85,7 +84,6 @@ from src.sources._common import (
 from src.sources.base import ParseOutcome
 from src.sources.guards import (
     CoverageCappedError,
-    EmptyResponseError,
     FormatChangeError,
     SourceError,
     require_list,

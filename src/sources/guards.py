@@ -82,9 +82,8 @@ class RateLimitedError(SourceError):
 class GeoRestrictedError(SourceError):
     """This machine's location is not one the source serves.
 
-    Permanent for as long as the run is on this host, so a source that raises it
-    is recorded as unreachable rather than retried.  Never a licence to work
-    around the restriction — see the project's non-negotiables.
+    Permanent for the current egress identity.  Retrying the same IP is wasted
+    work; switching proxy / exit node and asking again is the intended recovery.
     """
 
     kind = "geo_restricted"

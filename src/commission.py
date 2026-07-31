@@ -150,6 +150,17 @@ COMMISSIONS: dict[str, Commission] = {
     "betrivers_kambi": NO_COMMISSION,
     "leovegas_kambi": NO_COMMISSION,
     "bovada": NO_COMMISSION,
+    "betmgm": NO_COMMISSION,
+    "cloudbet": NO_COMMISSION,
+    "onexbet": NO_COMMISSION,
+    "an_draftkings": NO_COMMISSION,
+    "an_caesars": NO_COMMISSION,
+    "an_bet365": NO_COMMISSION,
+    "an_open": NO_COMMISSION,
+    "an_fanduel": NO_COMMISSION,
+    "an_betrivers": NO_COMMISSION,
+    "an_betmgm": NO_COMMISSION,
+    "unibet_au": NO_COMMISSION,
     # ── betting exchanges: a share of net winnings ────────────────────────────
     # CHECK AGAINST YOUR OWN ACCOUNT before staking a Matchbook leg.  Matchbook
     # has changed its standard commission more than once (it has been both above
@@ -183,9 +194,3 @@ def net_decimal_odds(
     source_key: str, decimal_odds: float, table: Mapping[str, Commission] | None = None
 ) -> float:
     return commission_for(source_key, table).net_decimal(decimal_odds)
-
-
-def charging_sources(table: Mapping[str, Commission] | None = None) -> tuple[str, ...]:
-    """Sources whose quoted price is not the price you are paid."""
-    entries = table if table is not None else COMMISSIONS
-    return tuple(sorted(key for key, model in entries.items() if not model.is_free))

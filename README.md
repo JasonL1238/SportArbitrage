@@ -1,19 +1,19 @@
 # Multi-sport odds collector
 
 A local pipeline that continuously collects real pregame betting data for **six
-sports** from **ten venues** — five sportsbooks, three betting exchanges and two
+sports** from **eleven venues** — six sportsbooks, three betting exchanges and two
 prediction markets — and normalizes it into one validated schema.
 
-Every source is a **public endpoint of the venue's own website**, fetched
-directly with `httpx`. There are no third-party odds APIs, data vendors, scraping
-services, proxies, hosted browsers, accounts, API keys, or paid tiers — and
-nothing that could later require payment. The only dependencies are `httpx` and
-`pydantic`; storage is stdlib `sqlite3`.
+Every source is a **public endpoint of the venue's own website**. The goal is
+coverage: scrape whatever answers. The default HTTP stack is **Chrome TLS
+impersonation** via `curl_cffi` (not plain `httpx`), which is what opens Akamai /
+CloudFront / Cloudflare edges that reject a stock Python client. Set
+`ODDS_HTTP_PROXY` (or `HTTPS_PROXY`) when an exit IP is still geo-blocked.
+`httpx` remains for tests and injectable mocks; storage is stdlib `sqlite3`.
 
-Nothing here logs in, defeats a CAPTCHA, or works around a geo-block or bot
-protection. When a source returns a challenge, login page, or block, the run
-records it as a failure for that source and moves on. Where a venue states a rate
-limit, the collector paces itself to it rather than routing around it.
+A block is a transport problem, not a stop sign. Rate limits are still paced so
+a run does not burn the exit node; geo and bot walls are routed around with the
+strongest client fingerprint (and proxy) available.
 
 **A source is a counterparty, not a hostname.** Kambi fronts BetRivers, LeoVegas
 and a dozen others from one CDN, and most of those tenants answer with
@@ -52,7 +52,7 @@ containers only and produces no rows until October. See **Support status**.
 
 ## Sources
 
-Ten registered venues, of three kinds. The kind is not decoration: a sportsbook
+Eleven registered venues, of three kinds. The kind is not decoration: a sportsbook
 posts a price it will take the other side of, an exchange shows you somebody
 else's order with a size and a commission, and a prediction market shows a
 contract price with an entry fee. The arbitrage engine prices all three
@@ -76,6 +76,8 @@ disappears and what is left is a one-sided bet for the whole stake.
 | `betrivers_kambi` | sportsbook | `eu-offering-api.kambicdn.com/offering/v2018/rsiusil/{listView,betoffer}` |
 | `leovegas_kambi` | sportsbook | the same Kambi API under operator `leo` — a different book on one platform, [verified distinct](docs/SOURCE_FEASIBILITY.md) |
 | `bovada` | sportsbook | `www.bovada.lv/services/sports/event/coupon/events/A/description/{path}` — one request per league, states `competitors[].home` |
+| `betmgm` | sportsbook | `www.il.betmgm.com/cds-api/bettingoffer/fixtures` — public `x-bwin-accessid`, one paged request per sport |
+| `unibet_au` | sportsbook | `www.unibet.com.au/sportsbook-feeds/views/filter/{sport}/all/matches` — one request per sport, Kambi-shaped offers with stated home/away |
 | `matchbook` | exchange | `www.matchbook.com/edge/rest/{navigation,events}` — moneyline, totals and handicaps in one call, **with the money behind each price** |
 | `smarkets` | exchange | `api.smarkets.com/v3/{events,markets,contracts,quotes}` — fully typed; moneyline only, within the venue's 20/min limit |
 | `sxbet` | exchange | `api.sx.bet/{markets/active,orders}` — a resting order book; every price is one counterparty's offer, with its own size |
@@ -101,10 +103,15 @@ missing because it was not asked for is never reported as a market that vanished
 
 ```bash
 pip install -r requirements-dev.txt
+python -m playwright install chromium              # for ODDS_FETCH_MODE=browser
 
 python -m src.collector collect                    # one pass over all venues and sports
 python -m src.collector collect --tier core        # slate endpoints only — a few requests per source
-python scripts/probe_sources.py                    # which candidate sources answer, and which refuse
+python scripts/probe_sources.py                    # curl_cffi Chrome impersonation
+python scripts/probe_sources.py --browser          # Playwright Chromium
+python scripts/probe_sources.py --only blocked     # DK / Caesars / Fanatics / bet365
+# ODDS_HTTP_PROXY=http://user:pass@host:port       # residential exit in a licensed state
+# ODDS_FETCH_MODE=browser                          # force Playwright for the collector
 python -m src.collector collect --sport hockey     # or narrow it
 python -m src.collector runs                       # recent runs + per-sport coverage
 python -m src.collector show --limit 20            # normalized rows
@@ -391,8 +398,8 @@ src/
     guards.py      empty / blocked / CAPTCHA / login / format-change detection
     registry.py    which sources exist, and how to build one
     _common.py     shared fetch layer: pacing, retries, capture, scope tallies
-    fanduel.py  pinnacle.py  betrivers_kambi.py  bovada.py
-    matchbook.py  smarkets.py  sxbet.py  kalshi.py  polymarket.py
+    fanduel.py  pinnacle.py  betrivers_kambi.py  bovada.py  betmgm.py
+    unibet_au.py  matchbook.py  smarkets.py  sxbet.py  kalshi.py  polymarket.py
 docs/
   INPUT_CONTRACT.md      what a scraper must deliver, executable as a test
   SOURCE_FEASIBILITY.md  what each venue actually serves, and what was measured

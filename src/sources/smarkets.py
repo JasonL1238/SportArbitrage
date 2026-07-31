@@ -365,7 +365,6 @@ class SmarketsAdapter:
             # discarding them turned "page 2 of 3 timed out" into "this whole
             # sport returned nothing" — 4 of 6 requests thrown away on a run
             # that reported OK.
-            before = len(raws)
             self._last_event_count = 0
             try:
                 self._fetch_sport(sport, tier, into=raws)
