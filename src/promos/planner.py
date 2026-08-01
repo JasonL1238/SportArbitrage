@@ -52,8 +52,10 @@ from src.arb import (
     WIN,
     MarketGroup,
     _counterparties,
+    _fixture_outliers,
     _return_multiplier,
     _uses_both_failover_feeds,
+    arb_margin,
     contract_shape,
     counterparty_groups,
     group_key,
@@ -121,8 +123,10 @@ _QUALIFYING_SUMMARY = re.compile(
     # window crossed whole clauses, so "Bet $50 first bet, if it loses get $50
     # back" parsed as a bet-and-get and its conditional refund was priced as
     # credit that always arrives.
-    r"(?:\s+(?:or\s+more|or\s+greater|\+))?"
-    r"\s*[,:]?\s*(?:and\s+|then\s+|to\s+)?"
+    # "$5+", "$5 or more", "$5 minimum" — the plus sign is written flush
+    # against the amount, so a mandatory space made that alternative dead.
+    r"(?:\s*\+|\s+(?:or\s+more|or\s+greater|minimum|min))?"
+    r"\s*[,:&]?\s*(?:and\s+|&\s*|then\s+|to\s+|-\s*)?"
     r"(?:get|receive|earn)\s+(?:up\s+to\s+)?\$",
     re.IGNORECASE,
 )
@@ -254,8 +258,24 @@ def _drop_group(
 ) -> None:
     """Record a group dropped before any book was indexed, per source."""
     context.unusable[reason] += 1
+    by_source = context.dropped_groups.setdefault(reason, {})
     for source in {row.source for row in rows}:
-        context.dropped_by_source.setdefault(source, Counter())[reason] += 1
+        by_source.setdefault(source, set()).add(key)
+
+
+def _dropped_over(context: "_PlanContext", promo_keys: Sequence[str]) -> Counter:
+    """Pre-index drops for a brand, deduped per market rather than per feed.
+
+    A market both feeds saw counts once; a market only one feed saw still
+    counts.  Maxing the per-feed counters got the first right and the second
+    wrong.
+    """
+    out: Counter = Counter()
+    for reason, groups in context.dropped_groups.items():
+        hit = {key for source in promo_keys for key in groups.get(source, ())}
+        if hit:
+            out[reason] = len(hit)
+    return out
 
 
 def _merge_counts(into: Counter, counts: Mapping[str, int]) -> None:
@@ -336,7 +356,11 @@ class _PlanContext:
     #: to a book the collection genuinely missed — which points the operator at
     #: the collector when the real answer is "you are looking at a stale run".
     #: On live data four hours after a scrape that was 16 of 60 offers.
-    dropped_by_source: dict[str, Counter] = field(default_factory=dict)
+    dropped_groups: dict[str, dict[str, set]] = field(default_factory=dict)
+    #: Groups a source was excluded from for describing a different fixture, or
+    #: for pricing its own complete market below 1.0 — a parse fault either way,
+    #: reported per source so the offer whose book it is can say so.
+    excluded_groups: dict[str, set] = field(default_factory=dict)
     #: Groups a source was *excluded* from for publishing two prices for one
     #: selection at one alternate status.  Indexed separately from
     #: ``groups_by_source`` precisely because the source is not in that index —
@@ -423,6 +447,43 @@ def _build_context(
         for source in faulted:
             best.pop(source, None)
 
+        # Two exclusions the arb detector applies and this module's docstring
+        # claims parity with.  Both are about a book whose rows are not the bet
+        # they appear to be, so a plan drawn from one is not the plan printed.
+        #
+        # A source describing a different fixture from the consensus: with the
+        # home and away sides inverted at one book, the "hedge" backs the same
+        # team as the promo leg.  The detector's comment calls it "cheap to
+        # check and catastrophic to miss: two legs that both back the same team
+        # lose the entire bankroll together" — measured here at a $110 swing
+        # per $100 of credit against a printed floor of +$57.62.
+        outliers = {source for source in _fixture_outliers(rows) if source in best}
+        # A book whose own complete market prices below 1.0 has been mispaired
+        # by the parser.  Judged on quoted prices, as the detector judges it:
+        # the question is whether the parse paired them correctly, and
+        # commission is not part of that.  Left in, it inflated a printed
+        # conversion from ~44% to 58%.
+        self_crossed: set[str] = set()
+        for source in sorted(best):
+            shape = shapes.get(source) or frozenset()
+            selections = best[source]
+            if not shape or not set(selections) >= set(shape):
+                continue
+            if arb_margin(
+                [selections[selection].decimal_odds for selection in shape]
+            ) > _EPSILON:
+                self_crossed.add(source)
+        for source in outliers | self_crossed:
+            best.pop(source, None)
+        if outliers:
+            context.excluded_groups.setdefault(
+                "legs_disagree_on_the_game", set()
+            ).add(key)
+        if self_crossed:
+            context.excluded_groups.setdefault(
+                "source_prices_itself_to_lose", set()
+            ).add(key)
+
         view = _GroupView(
             key=key,
             sport=sport,
@@ -442,11 +503,10 @@ def _build_context(
         # enters ``best``, so it looks identical to a book that was not
         # collected.  "Nothing you can take right now" and "we never saw this
         # book" are different facts and get different sentences.
+        suspended = context.dropped_groups.setdefault("no_active_price", {})
         for source in rows_by_source:
             if source not in best and source not in faulted:
-                context.dropped_by_source.setdefault(source, Counter())[
-                    "no_active_price"
-                ] += 1
+                suspended.setdefault(source, set()).add(key)
 
     return context
 
@@ -588,9 +648,13 @@ def _scan(
     # sport, an unmodelled line — counted for this book too.  Without them a
     # book that is half stale reports fewer refusals than it had, and the
     # caveat pointing at these counts explains less than it claims to.
-    for source in promo_keys:
-        _merge_counts(skipped, context.dropped_by_source.get(source, Counter()))
-
+    #
+    # Summed over the *union of groups*, not maxed over the feeds.  A brand's
+    # two feeds price overlapping but different slates, so ``max`` under-counts
+    # by everything only the smaller feed saw — on live data 54 reported
+    # against 82 real.  Counting per group is the same dedup the faulted
+    # counters use, and is right whether the feeds overlap fully or not at all.
+    _merge_counts(skipped, _dropped_over(context, promo_keys))
     promo_set = [key for key in promo_keys if key in context.groups_by_source]
     if not promo_set:
         return []
@@ -599,6 +663,17 @@ def _scan(
         {key for source in promo_set for key in context.groups_by_source[source]},
         key=str,
     )
+
+    # Books thrown out of the markets this one plays in.  Counted per market:
+    # the exclusion is a fact about the market, not about the promo book, and
+    # it is why an otherwise-hedgeable game came back with no hedge.
+    played = set(group_keys) | {
+        key for source in promo_keys for key in context.faulted_by_source.get(source, ())
+    }
+    for reason, groups in context.excluded_groups.items():
+        hit = len(groups & played)
+        if hit:
+            skipped[reason] = max(skipped.get(reason, 0), hit)
 
     candidates: list[_Candidate] = []
     for key in group_keys:
@@ -702,6 +777,16 @@ def _scan(
                         or is_redundant_pair(source, promo_source)
                     ):
                         skipped["same_counterparty"] += 1
+                        continue
+                    # Freshness is a per-source fact once the promo leg is
+                    # fixed, so it belongs here with the other pre-filters.
+                    # Left to the combo loop it let four stale-but-better books
+                    # fill the four-deep window and hide a viable +$56.34 plan,
+                    # reporting only ``observation_spread ×4`` — the same
+                    # truncate-before-gating defect round 3 fixed for
+                    # counterparties, on the neighbouring gate.
+                    if abs(quote.observed_at - promo_quote.observed_at) > MAX_OBSERVATION_SPREAD:
+                        skipped["observation_spread"] += 1
                         continue
                     usable.append((source, quote))
                 pools.append(usable[:_HEDGE_CANDIDATES_PER_SELECTION])
@@ -861,6 +946,17 @@ def _solve(
     )
     if any(leg.stake <= 0 for leg in hedge_legs):
         return None
+    # A leg above the size the venue publishes cannot be placed as printed, so
+    # the floor computed from it is not a floor.  The arb detector caps a
+    # position at the stated limits (``_fits`` / ``max_total_stake``); here the
+    # promo stake is fixed by the offer — you cannot part-use a bonus bet — so
+    # the honest answer is to refuse the assignment and count it.  Measured on
+    # live data: a $481.44 "worst case" resting on a $1018.56 leg at a book
+    # advertising $40.
+    for leg in hedge_legs:
+        limit = leg.quote.limit_amount
+        if limit is not None and leg.stake > limit + _EPSILON:
+            return None
 
     legs = (promo_leg, *hedge_legs)
     profits = _outcome_profits(
@@ -982,9 +1078,10 @@ def _plan_for_offer(
             key for source_key in promo_keys
             for key in context.faulted_by_source.get(source_key, ())
         })
-        dropped: Counter = Counter()
-        for source_key in promo_keys:
-            _merge_counts(dropped, context.dropped_by_source.get(source_key, Counter()))
+        dropped = _dropped_over(context, promo_keys)
+        for reason, groups in context.excluded_groups.items():
+            if groups:
+                dropped[reason] = max(dropped.get(reason, 0), len(groups))
         if faulted:
             # The book *did* produce rows; every one of its markets was thrown
             # out for publishing two prices for one selection.  Saying "no rows"
@@ -997,7 +1094,7 @@ def _plan_for_offer(
                 "same selection — a parser fault, not a quiet book; no game can "
                 "be named until it is fixed"
             )
-        elif dropped.get("no_active_price") and len(dropped) == 1:
+        elif dropped.get("no_active_price") and len(dropped) == 1:  # noqa: SIM114
             count = dropped["no_active_price"]
             out["skipped"] = dict(sorted(dropped.items()))
             out["caveats"].append(
@@ -1006,10 +1103,14 @@ def _plan_for_offer(
                 "plan with right now, which is not the same as the book being "
                 "missing"
             )
-        elif dropped.get("already_started"):
+        elif dropped.get("already_started") and len(dropped) == 1:
             # The commonest case by far on a page built some hours after its
             # scrape.  Reporting it as "no rows" sent the reader to the
-            # collector for a run that is simply old.
+            # collector for a run that is simply old.  Guarded on being the
+            # *only* reason, because "every one of this book's 5" was printed
+            # beside a skipped map reading ``already_started 5, no_active_price
+            # 2`` — a sentence contradicting its own evidence.  Mixed causes
+            # fall through to the enumerating branch below.
             count = dropped["already_started"]
             out["skipped"] = dict(sorted(dropped.items()))
             out["caveats"].append(
@@ -1042,10 +1143,6 @@ def _plan_for_offer(
         )
 
     min_dec = parse_min_odds(view.get("min_odds"))
-    if min_dec is not None:
-        out["caveats"].append(
-            f"stated minimum odds {view.get('min_odds')} applied to the promo-side leg"
-        )
 
     skipped: Counter = Counter()
 
@@ -1083,9 +1180,28 @@ def _plan_for_offer(
         reward in {"bonus_bets", "free_bet"}
     )
 
-    if kind in {PromoKind.ODDS_BOOST, PromoKind.PROFIT_BOOST}:
+    if kind is PromoKind.PARLAY_BOOST:
+        # Genuinely unpriceable here, and now enforced rather than asserted in a
+        # comment: the previous dispatch let a parlay boost whose reward_type
+        # read ``bonus_bets`` fall through to conversion and print a card
+        # telling the operator to hedge a single moneyline — priced as though
+        # the promo were a bonus bet.  Correlated parlay legs are not modelled
+        # anywhere in this codebase, and inventing a settlement model for them
+        # is how a phantom guarantee gets published.
+        out["caveats"].append(
+            "a parlay boost pays on correlated legs, which this planner does "
+            "not model — no hedge is computed and the playbook below stands"
+        )
+    elif kind in {PromoKind.ODDS_BOOST, PromoKind.PROFIT_BOOST} or reward == "boost":
         _plan_boost(out, context, promo_keys, skipped, boost_pct, bonus_amount, min_dec)
-    elif kind in {PromoKind.NO_SWEAT, PromoKind.RISK_FREE} or reward == "no_sweat":
+    elif kind in {PromoKind.NO_SWEAT, PromoKind.RISK_FREE} or reward in {
+        "no_sweat",
+        "risk_free",
+    }:
+        # ``risk_free`` is the label the enricher writes for "risk-free bet"
+        # copy.  The *kind* was handled and the reward was not, so those offers
+        # fell past every branch and printed nothing at all — no plan and no
+        # sentence, which is the one outcome this module exists to avoid.
         _plan_no_sweat(out, context, promo_keys, skipped, conversions, bonus_amount, min_dec)
     elif kind is PromoKind.DEPOSIT_MATCH or (reward == "site_credit" and not bonus_like):
         _plan_rollover(out, context, promo_keys, skipped, bonus_amount, wagering, min_dec)
@@ -1097,11 +1213,33 @@ def _plan_for_offer(
             )
         else:
             _plan_conversion(out, skipped, conversions, bonus_amount, min_dec, context)
-    # PARLAY_BOOST stays text-only on purpose: correlated parlay legs are not
-    # modelled anywhere in this codebase, and pretending a hedge exists for a
-    # parlay would be inventing a settlement model.  REFERRAL / LOYALTY / OTHER
-    # have no priceable mechanics at all.
+    elif reward == "cash":
+        out["caveats"].append(
+            "the reward is cash rather than credit, so there is nothing to "
+            "convert — take it and bet it however you like"
+        )
+    else:
+        # Every remaining combination lands here with its reason named.  It used
+        # to fall off the end: 19 (kind, reward) pairs the enricher really does
+        # produce returned no plan, no caveat and an empty skipped map, which is
+        # indistinguishable from a bug.
+        described = f"{kind.value.replace('_', ' ')}"
+        if reward:
+            described += f" paying {reward.replace('_', ' ')}"
+        out["caveats"].append(
+            f"this offer reads as a {described}, which has no priceable "
+            "mechanics to hedge — the playbook below is the whole answer"
+        )
 
+    # Only claimed once a scan has actually applied it.  Printed before the
+    # dispatch, it appeared on referral/loyalty/parlay offers that never scan
+    # anything — a sentence about a promo-side leg that does not exist, and one
+    # the code elsewhere treats as load-bearing.
+    if min_dec is not None and out["strategy"] not in {"text_only", "no_odds_coverage"}:
+        out["caveats"].insert(
+            0,
+            f"stated minimum odds {view.get('min_odds')} applied to the promo-side leg",
+        )
     out["skipped"] = {reason: count for reason, count in sorted(skipped.items())}
     if (
         not out["plans"]

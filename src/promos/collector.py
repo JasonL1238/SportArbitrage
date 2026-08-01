@@ -570,6 +570,12 @@ def _cmd_plan(args: argparse.Namespace) -> int:
                   + (f"  ev={plan['expected_value']:+.2f}" if plan.get("expected_value") is not None else ""))
             for item in concrete:
                 line = "" if item.get("line") is None else f" {item['line']:+g}"
+                # A team total names whose total it is, or the two sides of one
+                # fixture print as identical lines.
+                if item.get("side"):
+                    team = (item["home_team"] if item["side"] == "home"
+                            else item["away_team"])
+                    line = f" ({team}){line}"
                 print(
                     f"  {item['away_team']} at {item['home_team']} — "
                     f"{item['market']}{line} {item['period']}"

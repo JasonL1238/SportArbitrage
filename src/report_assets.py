@@ -2787,6 +2787,16 @@ function promoPlanCardHtml(plan) {
     ? `<span class="pill flat">${plan.step === 'qualify' ? 'step 1 · qualify' : 'step 2 · convert'}</span> `
     : '';
   const marketBits = [String(plan.market || '').replace(/_/g, ' ')];
+  // Whose total this is.  ``side`` is non-null for exactly one market — a team
+  // total — and without it the two sides of one fixture rendered as two
+  // character-for-character identical cards.  Neither could be placed: nothing
+  // on screen said whether the over belonged to the home or the away team, and
+  // taking one card's promo leg with the other's hedge is two uncorrelated
+  // bets that can both lose against a printed guarantee.
+  if (plan.side) {
+    const team = plan.side === 'home' ? plan.home_team : plan.away_team;
+    marketBits.push(team ? `${team}` : String(plan.side));
+  }
   if (plan.line !== null && plan.line !== undefined) marketBits.push(fmtLine(plan.line, plan.market));
   marketBits.push(String(plan.period || '').replace(/_/g, ' '));
   const legs = (plan.legs || []).map((leg) => {

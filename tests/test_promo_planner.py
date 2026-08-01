@@ -169,41 +169,45 @@ class TestBonusConversionArithmetic:
     def test_three_way_conversion_hedges_both_other_outcomes(self):
         """Soccer: the longest side converts best, and both others get hedged.
 
-        Credit on DRAW 5.1 → T = 410; h_home = 410/2.0 = 205, h_away =
-        410/3.9 = 105.13; every outcome pays 410 − 310.13 = 99.87.  That beats
-        putting the credit on AWAY 4.0 (conversion 90.00), and the planner must
-        discover it rather than take the first side it saw.
+        Credit on DRAW 4.4 → T = 340; h_home = 340/1.88 = 180.85, h_away =
+        340/3.6 = 94.44; every outcome pays 340 − 275.29 = 64.71.  That beats
+        putting the credit on AWAY 3.7 (63.59), and the planner must discover it
+        rather than take the first side it saw.
+
+        Both books hold an edge on their own three-way market — a book whose own
+        prices sum below 1.0 has been mispaired by the parser and is excluded,
+        so an unrealistic fixture would test nothing but that exclusion.
         """
         quotes = [
             make_quote(
                 source="draftkings", sport=Sport.SOCCER, league="EPL",
                 event_key="SOCCER-ars@SOCCER-che:2026-07-28",
-                selection=Selection.AWAY, decimal_odds=4.0,
+                selection=Selection.AWAY, decimal_odds=3.7,
             ),
             make_quote(
                 source="draftkings", sport=Sport.SOCCER, league="EPL",
                 event_key="SOCCER-ars@SOCCER-che:2026-07-28",
-                selection=Selection.HOME, decimal_odds=2.05,
+                selection=Selection.HOME, decimal_odds=1.90,
             ),
             make_quote(
                 source="draftkings", sport=Sport.SOCCER, league="EPL",
                 event_key="SOCCER-ars@SOCCER-che:2026-07-28",
-                selection=Selection.DRAW, decimal_odds=5.1,
+                selection=Selection.DRAW, decimal_odds=4.4,
             ),
             make_quote(
                 source="fanduel", sport=Sport.SOCCER, league="EPL",
                 event_key="SOCCER-ars@SOCCER-che:2026-07-28",
-                selection=Selection.HOME, decimal_odds=2.0,
+                selection=Selection.HOME, decimal_odds=1.88,
             ),
             make_quote(
                 source="fanduel", sport=Sport.SOCCER, league="EPL",
                 event_key="SOCCER-ars@SOCCER-che:2026-07-28",
-                selection=Selection.DRAW, decimal_odds=5.0,
+                selection=Selection.DRAW, decimal_odds=4.3,
             ),
             make_quote(
                 source="fanduel", sport=Sport.SOCCER, league="EPL",
                 event_key="SOCCER-ars@SOCCER-che:2026-07-28",
-                selection=Selection.AWAY, decimal_odds=3.9,
+                selection=Selection.AWAY, decimal_odds=3.6,
             ),
         ]
         out = _plans([_offer()], quotes)
@@ -213,14 +217,14 @@ class TestBonusConversionArithmetic:
         assert best["legs"][0]["source"] == "draftkings"
         assert best["legs"][0]["selection"] == "draw"
         stakes = {leg["selection"]: leg["stake"] for leg in best["legs"]}
-        assert stakes["home"] == pytest.approx(205.0)
-        assert stakes["away"] == pytest.approx(105.13)
-        assert best["guaranteed_cash"] == pytest.approx(99.87)
+        assert stakes["home"] == pytest.approx(180.85)
+        assert stakes["away"] == pytest.approx(94.44)
+        assert best["guaranteed_cash"] == pytest.approx(64.69)
         assert {label for label, _ in best["outcome_profits"]} == {"away", "draw", "home"}
-        # The runner-up is the credit on AWAY 4.0: T = 300, hedges 150 + 60,
-        # every outcome 300 − 210 = 90.
+        # The runner-up is the credit on AWAY 3.7: T = 270, hedges 143.62 at
+        # 1.88 and 62.79 at 4.3, every outcome 270 − 206.41 = 63.59.
         away = next(p for p in ranked if p["legs"][0]["selection"] == "away")
-        assert away["guaranteed_cash"] == pytest.approx(90.0)
+        assert away["guaranteed_cash"] == pytest.approx(63.59)
 
     def test_push_window_floor_is_zero_but_ranked_on_settled(self):
         """An NFL two-way moneyline can void on a tie: guaranteed 0, settled 66.66.
@@ -638,16 +642,16 @@ class TestBothFeedsOfOneFailoverPairCannotBeStitched:
         # draw-priced window is refused earlier, for a different reason, and
         # would hide the gate this class is about.
         return [
-            q("fanduel", Selection.DRAW, 5.0),
-            q("fanduel", Selection.HOME, 2.05),
-            q("fanduel", Selection.AWAY, 3.8),
+            q("fanduel", Selection.DRAW, 4.4),
+            q("fanduel", Selection.HOME, 1.90),
+            q("fanduel", Selection.AWAY, 3.7),
             # One book, two feeds, disagreeing — exactly one of these is live.
-            q("betmgm", Selection.HOME, 2.10),
-            q("betmgm", Selection.AWAY, 3.60),
-            q("betmgm", Selection.DRAW, 4.8),
-            q("an_betmgm", Selection.HOME, 2.02),
-            q("an_betmgm", Selection.AWAY, 4.00),
-            q("an_betmgm", Selection.DRAW, 4.7),
+            q("betmgm", Selection.HOME, 1.92),
+            q("betmgm", Selection.AWAY, 3.55),
+            q("betmgm", Selection.DRAW, 4.2),
+            q("an_betmgm", Selection.HOME, 1.88),
+            q("an_betmgm", Selection.AWAY, 3.75),
+            q("an_betmgm", Selection.DRAW, 4.1),
         ]
 
     def test_the_two_hedge_legs_never_come_from_both_feeds(self):
@@ -680,11 +684,11 @@ class TestBothFeedsOfOneFailoverPairCannotBeStitched:
         best = out["plans"]["fanduel|fd-1"]["plans"][0]
         hedges = {leg["source"] for leg in best["legs"] if leg["role"] == "hedge"}
         assert len(hedges) == 1, hedges
-        # an_betmgm's pair (2.02 / 4.00) is the better single feed: $100 credit
-        # on the 5.0 draw returns $400 profit, hedged 400/4.00 = $100.00 on away
-        # and 400/2.02 = $198.02 on home, so every settled outcome pays
-        # 400 − 298.02 = $101.98.
-        assert best["guaranteed_cash"] == pytest.approx(101.98, abs=0.01)
+        # an_betmgm's pair (1.88 / 3.75) is the better single feed: $100 credit
+        # on the 4.4 draw returns $340 profit, hedged 340/3.75 = $90.67 on away
+        # and 340/1.88 = $180.85 on home, so every settled outcome pays
+        # 340 − 271.52 = $68.48.
+        assert best["guaranteed_cash"] == pytest.approx(68.48, abs=0.01)
 
 
 class TestTiedPricesPickTheSameRowWhateverTheOrder:
@@ -1334,3 +1338,273 @@ class TestTheStatedMinimumIsReadAgainstThePriceTheBookShows:
         plan = out["plans"]["smarkets|ex-1"]
         assert plan["skipped"].get("below_min_odds", 0) == 0, plan["skipped"]
         assert plan["plans"], plan
+
+
+# ── round 4 adversarial findings ─────────────────────────────────────────────
+
+
+class TestTwoLegsNeverBackTheSameTeam:
+    """The detector's fixture-outlier gate, which this module claimed parity with.
+
+    With one book's home and away inverted, the "hedge" backs the same team as
+    the promo leg — measured at a $110 swing per $100 of credit against a
+    printed floor of +$57.62.  Reachable through the real reconciler whenever a
+    league is unknown to it.
+    """
+
+    def _inverted(self):
+        key = "MLB-PHI@MLB-MIA:2026-07-28"
+        return [
+            make_quote(source="draftkings", selection=Selection.HOME, decimal_odds=2.1,
+                       event_key=key),
+            make_quote(source="draftkings", selection=Selection.AWAY, decimal_odds=1.9,
+                       event_key=key),
+            # bovada has the two participants the other way round.
+            make_quote(source="bovada", selection=Selection.AWAY, decimal_odds=2.1,
+                       event_key=key, home_participant="MLB-PHI",
+                       away_participant="MLB-MIA", home_team="Philadelphia Phillies",
+                       away_team="Miami Marlins"),
+            make_quote(source="bovada", selection=Selection.HOME, decimal_odds=1.9,
+                       event_key=key, home_participant="MLB-PHI",
+                       away_participant="MLB-MIA", home_team="Philadelphia Phillies",
+                       away_team="Miami Marlins"),
+        ]
+
+    def test_the_outlier_book_is_not_used_as_a_hedge(self):
+        plan = _the_plan(_plans([_offer()], self._inverted()))
+        for concrete in plan["plans"]:
+            assert all(leg["source"] != "bovada" for leg in concrete["legs"]), concrete
+
+    def test_the_exclusion_is_counted(self):
+        plan = _the_plan(_plans([_offer()], self._inverted()))
+        assert plan["skipped"].get("legs_disagree_on_the_game", 0) >= 1, plan["skipped"]
+
+
+class TestABookPricingItselfToLoseIsExcluded:
+    """A book whose own complete market sums below 1.0 was mispaired by the parser.
+
+    Left in, it inflated a printed conversion from ~44% to 58%.  The detector
+    deletes such a book and carries on; so does this.
+    """
+
+    def _crossed(self):
+        return [
+            # draftkings' own two-way sums to 0.909 — impossible for a real book.
+            make_quote(source="draftkings", selection=Selection.HOME, decimal_odds=2.2),
+            make_quote(source="draftkings", selection=Selection.AWAY, decimal_odds=2.2),
+            make_quote(source="bovada", selection=Selection.AWAY, decimal_odds=1.95),
+            make_quote(source="bovada", selection=Selection.HOME, decimal_odds=1.95),
+        ]
+
+    def test_the_mispaired_book_produces_no_plan(self):
+        plan = _the_plan(_plans([_offer()], self._crossed()))
+        assert plan["plans"] == [], plan["plans"]
+        assert plan["skipped"].get("source_prices_itself_to_lose", 0) >= 1, plan["skipped"]
+
+
+class TestAHedgeAboveTheBooksStatedSizeIsRefused:
+    """A leg the venue will not accept is not a hedge, and its floor is not a floor.
+
+    Measured on live data: a $481.44 "worst case" resting on a $1018.56 leg at a
+    book advertising $40, with an empty caveat list.
+    """
+
+    def _slate(self, limit):
+        return [
+            make_quote(source="draftkings", selection=Selection.AWAY, decimal_odds=3.0),
+            make_quote(source="matchbook", selection=Selection.HOME, decimal_odds=1.5,
+                       limit_amount=limit),
+        ]
+
+    def test_a_hedge_over_the_published_size_is_not_printed(self):
+        plan = _the_plan(_plans([_offer()], self._slate(limit=40.0)))
+        assert plan["plans"] == [], plan["plans"]
+
+    def test_the_same_market_plans_when_the_size_is_there(self):
+        plan = _the_plan(_plans([_offer()], self._slate(limit=500.0)))
+        assert plan["plans"], plan["skipped"]
+        assert plan["plans"][0]["legs"][1]["stake"] == pytest.approx(133.33)
+
+    def test_an_unstated_limit_is_not_treated_as_zero(self):
+        plan = _the_plan(_plans([_offer()], self._slate(limit=None)))
+        assert plan["plans"], plan["skipped"]
+
+
+class TestDropCountsSpanBothFeedsOfABrand:
+    """Two feeds price overlapping but different slates.
+
+    Maxing the per-feed counters got the shared markets right and under-counted
+    everything only one feed saw — 54 reported against 82 real on live data.
+    """
+
+    def _split_stale(self):
+        started = AS_OF - timedelta(hours=1)
+        rows = []
+        for index, source in enumerate(("betmgm", "betmgm", "an_betmgm", "an_betmgm")):
+            key = f"MLB-A{index}@MLB-B{index}:2026-07-28"
+            rows += [
+                make_quote(source=source, selection=Selection.AWAY, decimal_odds=3.0,
+                           event_key=key, home_participant=f"MLB-B{index}",
+                           away_participant=f"MLB-A{index}", commence_time=started),
+                make_quote(source="fanduel", selection=Selection.HOME, decimal_odds=1.5,
+                           event_key=key, home_participant=f"MLB-B{index}",
+                           away_participant=f"MLB-A{index}", commence_time=started),
+            ]
+        return rows
+
+    def test_markets_only_one_feed_saw_are_still_counted(self):
+        plan = _the_plan(
+            _plans([_offer(source="betmgm")], self._split_stale()),
+            key="betmgm|offer-1",
+        )
+        # Four distinct stale markets: two at each feed, none shared.
+        assert plan["skipped"].get("already_started") == 4, plan["skipped"]
+
+
+class TestAMixedCauseNeverClaimsEveryOne:
+    """"Every one of this book's 5" printed beside a map reading 5 + 2.
+
+    A sentence contradicting its own evidence; mixed causes now enumerate.
+    """
+
+    def _mixed(self):
+        started = AS_OF - timedelta(hours=1)
+        rows = []
+        for index in range(2):
+            key = f"MLB-S{index}@MLB-T{index}:2026-07-28"
+            rows += [
+                make_quote(source="draftkings", selection=Selection.AWAY, decimal_odds=3.0,
+                           event_key=key, home_participant=f"MLB-T{index}",
+                           away_participant=f"MLB-S{index}", commence_time=started),
+                make_quote(source="fanduel", selection=Selection.HOME, decimal_odds=1.5,
+                           event_key=key, home_participant=f"MLB-T{index}",
+                           away_participant=f"MLB-S{index}", commence_time=started),
+            ]
+        # A live market where the promo book's only price is suspended.
+        live = "MLB-NYY@MLB-BOS:2026-07-29"
+        rows += [
+            make_quote(source="draftkings", selection=Selection.AWAY, decimal_odds=3.0,
+                       event_key=live, home_participant="MLB-BOS",
+                       away_participant="MLB-NYY", status=QuoteStatus.SUSPENDED),
+            make_quote(source="fanduel", selection=Selection.HOME, decimal_odds=1.5,
+                       event_key=live, home_participant="MLB-BOS",
+                       away_participant="MLB-NYY"),
+        ]
+        return rows
+
+    def test_both_causes_are_named_and_neither_claims_all(self):
+        plan = _the_plan(_plans([_offer()], self._mixed()))
+        assert plan["strategy"] == "no_odds_coverage"
+        assert plan["skipped"].get("already_started") == 2
+        assert plan["skipped"].get("no_active_price") == 1
+        joined = " ".join(plan["caveats"])
+        assert "every one" not in joined, joined
+        assert "already started ×2" in joined and "no active price ×1" in joined, joined
+
+
+class TestAStaleCrowdCannotHideAViableHedge:
+    """Freshness is a per-source fact and belongs with the other pre-filters.
+
+    Left to the combo loop it let four stale-but-better books fill the four-deep
+    window and hide a viable plan, reporting only ``observation_spread ×4``.
+    """
+
+    def _slate(self):
+        stale = AS_OF - timedelta(seconds=600)
+        rows = [make_quote(source="draftkings", selection=Selection.AWAY, decimal_odds=2.1)]
+        for source in ("bovada", "caesars", "hardrock", "betmgm"):
+            rows.append(make_quote(source=source, selection=Selection.HOME,
+                                   decimal_odds=2.5, observed_at=stale))
+        rows.append(make_quote(source="fanduel", selection=Selection.HOME, decimal_odds=2.05))
+        return rows
+
+    def test_the_fresh_hedge_survives_four_stale_better_ones(self):
+        plan = _the_plan(_plans([_offer()], self._slate()))
+        assert plan["plans"], plan["skipped"]
+        assert plan["plans"][0]["legs"][1]["source"] == "fanduel"
+
+    def test_the_stale_books_are_still_counted(self):
+        plan = _the_plan(_plans([_offer()], self._slate()))
+        assert plan["skipped"].get("observation_spread") == 4, plan["skipped"]
+
+
+class TestEveryKindAndRewardCombinationSaysSomething:
+    """"No plan" and "no plan, for this reason" are different facts.
+
+    Nineteen (kind, reward) pairs the enricher really produces returned no plan,
+    no caveat and an empty skipped map — indistinguishable from a bug.
+    """
+
+    REWARDS = ("bonus_bets", "free_bet", "site_credit", "cash", "boost",
+               "no_sweat", "risk_free", "")
+
+    def _slate(self):
+        return [
+            make_quote(source="draftkings", selection=Selection.AWAY, decimal_odds=3.0),
+            make_quote(source="fanduel", selection=Selection.HOME, decimal_odds=1.5),
+        ]
+
+    @pytest.mark.parametrize("kind", [k.value for k in PromoKind])
+    @pytest.mark.parametrize("reward", REWARDS)
+    def test_a_plan_or_a_reason_always_comes_back(self, kind, reward):
+        plan = _the_plan(_plans([_offer(kind=kind, reward_type=reward)], self._slate()))
+        assert plan["plans"] or plan["caveats"], (kind, reward, plan)
+
+    def test_a_risk_free_reward_reaches_the_no_sweat_planner(self):
+        """The kind was handled and the reward was forgotten — the enricher
+        writes ``risk_free`` for "risk-free bet" copy."""
+        plan = _the_plan(_plans(
+            [_offer(kind="other", reward_type="risk_free")], self._slate()
+        ))
+        assert plan["strategy"] in {"no_sweat_hedge", "text_only"}, plan["strategy"]
+        # Either a priced insurance plan or a stated reason — never the silence
+        # this combination used to answer with.
+        assert plan["plans"] or plan["caveats"], plan
+
+    def test_a_parlay_boost_is_never_priced_as_a_bonus_bet(self):
+        """The comment claimed this; the dispatch did not enforce it."""
+        plan = _the_plan(_plans(
+            [_offer(kind="parlay_boost", reward_type="bonus_bets")], self._slate()
+        ))
+        assert plan["plans"] == [], plan["plans"]
+        assert any("correlated" in c for c in plan["caveats"]), plan["caveats"]
+
+
+class TestTheMinimumOddsCaveatOnlyAppearsWhenItWasApplied:
+    """A sentence about a promo-side leg that does not exist is worse than none."""
+
+    def _slate(self):
+        return [
+            make_quote(source="draftkings", selection=Selection.AWAY, decimal_odds=3.0),
+            make_quote(source="fanduel", selection=Selection.HOME, decimal_odds=1.5),
+        ]
+
+    def test_a_referral_offer_does_not_claim_a_promo_leg(self):
+        plan = _the_plan(_plans(
+            [_offer(kind="referral", reward_type="", min_odds="-200")], self._slate()
+        ))
+        assert not any("minimum odds" in c for c in plan["caveats"]), plan["caveats"]
+
+    def test_a_scanning_strategy_still_says_so(self):
+        plan = _the_plan(_plans([_offer(min_odds="-200")], self._slate()))
+        assert any("minimum odds" in c for c in plan["caveats"]), plan["caveats"]
+
+
+class TestTheQualifyingPatternReadsTheFormsVenuesWrite:
+    """The narrowed pattern lost "$5+" and "&" — a silently downgraded strategy."""
+
+    @pytest.mark.parametrize(
+        ("summary", "expected"),
+        [
+            ("Bet $5+, get $150 in bonus bets", 5.0),
+            ("Bet $5+ and get $150 in bonus bets", 5.0),
+            ("Bet $5 & get $150 in bonus bets", 5.0),
+            ("Bet $5 minimum, get $200 in bonus bets", 5.0),
+            ("Bet $5 - get $200 in bonus bets", 5.0),
+            ("Bet $5 or more, get $150 in bonus bets", 5.0),
+            # Still refused: a conditional refund is not a bet-and-get.
+            ("Bet $50 first bet, if it loses get $50 back", None),
+        ],
+    )
+    def test_the_written_forms_parse(self, summary, expected):
+        assert parse_qualifying_stake(summary) == expected
