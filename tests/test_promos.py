@@ -608,3 +608,147 @@ def test_draftkings_filters_racing_and_chrome_noise() -> None:
     assert outcome.skipped.get("non_sports_product", 0) >= 1
     assert outcome.skipped.get("non_offer_chrome", 0) >= 1
     assert outcome.skipped.get("duplicate_referral", 0) >= 1
+
+
+# ── the `plan` command ───────────────────────────────────────────────────────
+
+
+class TestThePlanCommand:
+    """``python -m src.promos plan`` — the CLI had no coverage at all.
+
+    Emptying its offer list before the print loop left the whole suite green,
+    so every one of its refusals, filters and exit codes was unpinned.
+    """
+
+    @pytest.fixture()
+    def seeded(self, tmp_path, monkeypatch):
+        """One promo run at smarkets, one odds run its book can be hedged in."""
+        from datetime import timedelta
+
+        from src import settings as settings_mod
+        from src.promos.base import PromoSourceHealth
+        from src.schema import Selection
+        from src.sources.base import SourceHealth
+        from src.store import Store
+        from tests.conftest import make_quote
+
+        promo_db = tmp_path / "promos.sqlite3"
+        odds_db = tmp_path / "odds.sqlite3"
+        monkeypatch.setattr(settings_mod, "PROMO_DB_PATH", promo_db)
+        monkeypatch.setattr(settings_mod, "DB_PATH", odds_db)
+
+        observed = datetime.now(UTC)
+        commence = observed + timedelta(hours=6)
+        quotes = [
+            make_quote(source="smarkets", selection=Selection.AWAY, decimal_odds=3.0,
+                       observed_at=observed, commence_time=commence),
+            make_quote(source="fanduel", selection=Selection.HOME, decimal_odds=1.5,
+                       observed_at=observed, commence_time=commence),
+        ]
+        class _Findings:
+            """Storage reads attributes off whatever it is handed."""
+
+            def __init__(self, rows):
+                self.quote_count = len(rows)
+                self.event_count = len({q.event_key for q in rows})
+                self.errors = []
+                self.warnings = []
+                self.findings = []
+                self.ok = True
+
+        odds = Store(odds_db)
+        run_id = odds.start_run(observed)
+        odds.save_quotes(run_id, quotes)
+        for key in ("smarkets", "fanduel"):
+            odds.save_health(run_id, SourceHealth(source_key=key, ok=True, checked_at=observed))
+        odds.finish_run(run_id, finished_at=observed, report=_Findings(quotes))
+        odds.close()
+
+        promos = PromoStore(promo_db)
+        promo_run = promos.start_run()
+        promos.finish_run(
+            promo_run, ok=True,
+            offers=[PromoOffer(
+                source="smarkets", offer_id="credit", kind=PromoKind.BONUS_BET,
+                title="Bonus bets", observed_at=observed,
+                bonus_amount=100.0, reward_type="bonus_bets",
+            )],
+            health=[PromoSourceHealth(source_key="smarkets", ok=True,
+                                      checked_at=observed, offer_count=1)],
+        )
+        promos.close()
+        return promo_run
+
+    def _run(self, argv):
+        from src.promos.collector import main
+        return main(argv)
+
+    def test_a_plan_is_printed_for_a_covered_book(self, seeded, capsys):
+        assert self._run(["plan"]) == 0
+        out = capsys.readouterr().out
+        assert "smarkets" in out
+        assert "bonus_conversion" in out
+
+    def test_an_unknown_source_is_refused_not_answered_with_silence(self, seeded, capsys):
+        """A typo — or the zsh trap where `--source 'a b'` is one argument —
+        used to filter every offer away and print "no offer produced a concrete
+        plan", which reads as a verdict on the promos rather than on the
+        command line."""
+        assert self._run(["plan", "--source", "bogus"]) == 1
+        captured = capsys.readouterr()
+        assert "no offers from: bogus" in captured.err
+        assert "smarkets" in captured.err, "the message must say what is available"
+
+    def test_the_one_argument_quoting_trap_is_refused(self, seeded, capsys):
+        assert self._run(["plan", "--source", "smarkets fanduel"]) == 1
+        assert "no offers from: smarkets fanduel" in capsys.readouterr().err
+
+    def test_a_known_source_still_works(self, seeded, capsys):
+        assert self._run(["plan", "--source", "smarkets"]) == 0
+        assert "smarkets" in capsys.readouterr().out
+
+    def test_a_nonexistent_run_is_refused(self, seeded, capsys):
+        assert self._run(["plan", "--run", "999"]) == 1
+        captured = capsys.readouterr()
+        assert "no promo run #999" in captured.err
+        assert f"#{seeded}" in captured.err, "the message must name the runs that exist"
+
+    def test_run_zero_is_answered_not_silently_replaced(self, seeded, capsys):
+        """``--run 0`` is a value the operator typed; a falsy test swapped it
+        for the latest run and answered a question nobody asked."""
+        assert self._run(["plan", "--run", "0"]) == 1
+        assert "no promo run #0" in capsys.readouterr().err
+
+    def test_limit_zero_prints_nothing_rather_than_everything(self, seeded, capsys):
+        assert self._run(["plan", "--limit", "0"]) == 0
+        out = capsys.readouterr().out
+        assert "promo run #" in out, "the header still reports what was planned"
+        assert "bonus_conversion" not in out, "--limit 0 must print no offers"
+        # Asking for zero lines is not a verdict on the offers, which planned
+        # perfectly well — the run above proves it.
+        assert "no offer produced a concrete plan" not in out, out
+
+    def test_a_run_older_than_the_listing_window_is_still_accepted(
+        self, seeded, capsys, tmp_path,
+    ):
+        """``--run`` validation must be an existence check, not a top-N listing.
+
+        Validating against ``list_runs(limit=N)`` — ``ORDER BY id DESC LIMIT N``
+        — reported every run outside the newest N as "not stored", the exact
+        false verdict the validation was added to prevent.
+        """
+        from src import settings as settings_mod
+
+        store = PromoStore(settings_mod.PROMO_DB_PATH)
+        try:
+            for _ in range(30):
+                extra = store.start_run()
+                store.finish_run(extra, ok=True, offers=[], health=[])
+        finally:
+            store.close()
+
+        # ``seeded`` is now far outside any plausible listing window.
+        assert self._run(["plan", "--run", str(seeded)]) == 0
+        captured = capsys.readouterr()
+        assert "no promo run" not in captured.err, captured.err
+        assert f"promo run #{seeded}" in captured.out

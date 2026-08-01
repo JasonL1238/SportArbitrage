@@ -472,6 +472,143 @@ def _cmd_runs(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_plan(args: argparse.Namespace) -> int:
+    """Concrete usage plans: latest promo run priced against the latest odds run.
+
+    The same computation the dashboard embeds — same quotes, same event
+    reconciliation, same counterparty gate — so this command and the page
+    cannot disagree about what a promo is worth.
+    """
+    from datetime import UTC, datetime
+
+    from src.arb import counterparty_groups, merge_counterparty_groups
+    from src.events import reconcile_event_keys
+    from src.promos.planner import build_promo_plans
+    from src.store import Store
+
+    promo_store = PromoStore(settings.PROMO_DB_PATH)
+    odds_store = Store(settings.DB_PATH)
+    try:
+        # ``is None`` rather than falsy: ``--run 0`` is a value the operator
+        # typed and must be answered, not silently replaced by the latest run.
+        promo_run = args.run if args.run is not None else promo_store.latest_run_id()
+        if promo_run is None:
+            print("no promo runs stored yet — run `python -m src.promos collect` first",
+                  file=sys.stderr)
+            return 1
+        # An existence check, not a listing: ``list_runs`` is
+        # ``ORDER BY id DESC LIMIT n``, so capping it made every run outside the
+        # newest n report as "not stored" — a false verdict of exactly the kind
+        # this validation was added to prevent.  The listing is only for the
+        # hint that names a few real runs.
+        stored_runs = {row["id"] for row in promo_store.list_runs(limit=10)}
+        if not promo_store.run_exists(promo_run):
+            # A run id that does not exist read as a run holding no offers, and
+            # exited 0 — indistinguishable from "every offer was gated out".
+            known = ", ".join(f"#{run}" for run in sorted(stored_runs, reverse=True)[:10])
+            print(
+                f"no promo run #{promo_run} is stored; known runs: {known or 'none'}",
+                file=sys.stderr,
+            )
+            return 1
+        odds_run = odds_store.latest_run_id()
+        if odds_run is None:
+            print("no odds runs stored yet — run `python -m src.collector collect` first",
+                  file=sys.stderr)
+            return 1
+        offers = promo_store.offers_for_run(promo_run)
+        if args.source:
+            # Validated against what the run actually holds.  An unknown key —
+            # a typo, or the zsh trap where `--source 'a b'` arrives as one
+            # argument rather than two — filtered every offer away and printed
+            # "no offer produced a concrete plan", which reads as a verdict on
+            # the promos rather than on the command line.
+            available = {row["source"] for row in offers}
+            wanted = set(args.source)
+            unknown = sorted(wanted - available)
+            if unknown:
+                print(
+                    f"promo run #{promo_run} has no offers from: {', '.join(unknown)}; "
+                    f"it holds: {', '.join(sorted(available)) or 'nothing'}",
+                    file=sys.stderr,
+                )
+                return 1
+            offers = [row for row in offers if row["source"] in wanted]
+        quotes = odds_store.load_quotes(odds_run)
+        everything, _ = reconcile_event_keys(quotes)
+        recorded = odds_store.recorded_counterparty_groups(odds_run)
+        built = build_promo_plans(
+            offers,
+            everything,
+            as_of=datetime.now(UTC),
+            one_counterparty=merge_counterparty_groups(
+                {} if recorded else counterparty_groups(everything),
+                recorded,
+            ),
+        )
+        print(
+            f"promo run #{promo_run} × odds run #{odds_run}: "
+            f"{len(offers)} offers over {built['meta']['group_count']} priceable markets"
+        )
+        shown = 0
+        for row in offers:
+            key = f"{row['source']}|{row['offer_id']}"
+            plan = built["plans"].get(key)
+            if plan is None:
+                continue
+            concrete = plan.get("plans") or []
+            if not concrete and not args.verbose:
+                continue
+            # ``is not None``: ``--limit 0`` means print none, not print every
+            # one.  Under a truthiness test the two swapped places.
+            if args.limit is not None and shown >= args.limit:
+                break
+            shown += 1
+            label = row.get("summary") or row["title"]
+            print(f"\n[{row['source']}] {row['kind']}: {label[:78]}")
+            print(f"  strategy: {plan['strategy']}"
+                  + (f"  ev={plan['expected_value']:+.2f}" if plan.get("expected_value") is not None else ""))
+            for item in concrete:
+                line = "" if item.get("line") is None else f" {item['line']:+g}"
+                print(
+                    f"  {item['away_team']} at {item['home_team']} — "
+                    f"{item['market']}{line} {item['period']}"
+                    + (f"  [{item['step']}]" if item.get("step") else "")
+                )
+                for leg in item["legs"]:
+                    tag = "credit" if leg["stake_kind"] == "bonus" else "cash"
+                    print(
+                        f"    {leg['role']:5} {leg['source']:16} {leg['selection']:5} "
+                        f"@ {leg['decimal_odds']:.3f} stake {leg['stake']:.2f} ({tag})"
+                    )
+                worst = item["guaranteed_cash"]
+                settled = item["settled_cash"]
+                extras = []
+                if item.get("conversion_pct") is not None:
+                    extras.append(f"conversion {item['conversion_pct']:.1f}%")
+                if item.get("breakeven_boost_pct") is not None:
+                    extras.append(f"needs {item['breakeven_boost_pct']:.1f}%+ boost")
+                if item.get("cost_per_100_wagered") is not None:
+                    extras.append(f"cost {item['cost_per_100_wagered']:.2f}/$100")
+                extra = ("  " + ", ".join(extras)) if extras else ""
+                print(f"    worst {worst:+.2f}, settles {settled:+.2f}{extra}")
+            for caveat in plan.get("caveats", []):
+                print(f"  note: {caveat}")
+            skipped = plan.get("skipped") or {}
+            if skipped:
+                gates = ", ".join(f"{k}×{v}" for k, v in skipped.items())
+                print(f"  gated out: {gates}")
+        if shown == 0 and args.limit != 0:
+            # ``--limit 0`` asked for no lines printed; that is not a verdict on
+            # the offers, which may all have planned perfectly well.
+            print("\nno offer produced a concrete plan; run with --verbose to see why "
+                  "each was gated out")
+    finally:
+        promo_store.close()
+        odds_store.close()
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     refusal = settings.refuse_bad_settings()
     if refusal is not None:
@@ -508,6 +645,22 @@ def main(argv: Sequence[str] | None = None) -> int:
     runs = sub.add_parser("runs", help="list recent promo runs")
     runs.add_argument("--limit", type=int, default=10)
     runs.set_defaults(func=_cmd_runs)
+
+    plan = sub.add_parser(
+        "plan",
+        help="price each stored offer against the latest odds run's games",
+    )
+    plan.add_argument("--run", type=int, help="promo run id (default: latest)")
+    plan.add_argument(
+        "--source",
+        action="append",
+        help="repeatable; only plan offers from these promo sources",
+    )
+    plan.add_argument("--limit", type=int, default=20,
+                      help="most offers to print (default 20)")
+    plan.add_argument("--verbose", "-v", action="store_true",
+                      help="also print offers whose every market was gated out")
+    plan.set_defaults(func=_cmd_plan)
 
     args = parser.parse_args(argv)
     if args.command is None:

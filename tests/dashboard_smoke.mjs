@@ -97,6 +97,21 @@ try {
     globalThis.__americanOf = americanOf;
     globalThis.__consensusLine = consensusLine;
     globalThis.__fmtAmerican = fmtAmerican;
+    globalThis.__promoPlanHtml = promoPlanHtml;
+    globalThis.__promoDetailHtml = promoDetailHtml;
+    globalThis.__renderPromos = renderPromos;
+    globalThis.__promoMoney = promoMoney;
+    globalThis.__setPromoPlans = (plans, meta) => { PROMOS.plans = plans; PROMOS.plan_meta = meta; };
+    globalThis.__setPromoOffers = (offers) => { PROMOS.offers = offers; };
+    globalThis.__setPromoRun = (run) => { PROMOS.run = run; };
+    globalThis.__promoSnapshot = { run: PROMOS.run, offers: PROMOS.offers,
+                                   plans: PROMOS.plans, plan_meta: PROMOS.plan_meta };
+    globalThis.__restorePromos = () => {
+      PROMOS.run = globalThis.__promoSnapshot.run;
+      PROMOS.offers = globalThis.__promoSnapshot.offers;
+      PROMOS.plans = globalThis.__promoSnapshot.plans;
+      PROMOS.plan_meta = globalThis.__promoSnapshot.plan_meta;
+    };
   `)();
 } catch (err) {
   errors.push(err);
@@ -1046,5 +1061,205 @@ if (process.argv[3]) {
   console.log(problems.length
     ? 'OVERVIEW CARDS WRONG: ' + problems.join('; ')
     : 'overview cards use distinct refusals; overview cards name truncated scopes');
+  if (problems.length) process.exit(1);
+}
+
+// Promo plans — the detail panel renders the planner's stored numbers, verbatim.
+// The case is the planner's own hand-computed conversion: $100 credit at 3.0
+// hedged with $133.33 at 1.5.  Every figure asserted here is written down, not
+// read back from the code that renders it.
+//
+// Each metric carries a DIFFERENT number on purpose.  The first version of this
+// fixture set guaranteed_cash, settled_cash and conversion_pct all to 66.66, so
+// rendering any one of them from any other passed — and ten separate render
+// defects shipped green past this file, including the leg roles being swapped,
+// which would tell the operator to put the free credit at the hedge book and
+// real cash at the promo book.
+{
+  const problems = [];
+  const plan = {
+    event_key: 'MLB-PHI@MLB-MIA:2026-07-28', sport: 'baseball', league: 'MLB',
+    home_team: 'Miami Marlins', away_team: 'Philadelphia Phillies',
+    commence_time: '2026-07-28T22:41:00+00:00', market: 'moneyline', period: 'full_game',
+    side: null, line: null,
+    legs: [
+      { role: 'promo', source: 'draftkings', selection: 'away', line: null,
+        decimal_odds: 3.0, american_odds: 200, net_odds: 3.0, stake: 100.0,
+        stake_kind: 'bonus', is_alternate: false, observed_at: '2026-07-28T07:00:00+00:00' },
+      { role: 'hedge', source: 'fanduel', selection: 'home', line: null,
+        decimal_odds: 1.5, american_odds: -200, net_odds: 1.5, stake: 133.33,
+        stake_kind: 'cash', is_alternate: false, observed_at: '2026-07-28T07:00:00+00:00' },
+    ],
+    // A push window: the floor over every outcome is 0 while the floor over the
+    // outcomes where the promo leg settles is 66.66.  Three distinct numbers.
+    outcome_profits: [['away', 71.41], ['home', 71.40], ['push', 0.0]],
+    guaranteed_cash: 0.0, settled_cash: 66.66, quote_age_seconds: 120,
+    notes: ['priced with the stated 50% boost applied'], conversion_pct: 61.25,
+  };
+  globalThis.__setPromoPlans({
+    'draftkings|smoke-plan': {
+      strategy: 'bonus_conversion', book: ['draftkings', 'an_draftkings'],
+      plans: [plan], skipped: { below_min_odds: 2 },
+      caveats: ['the credit is treated as a single stake-not-returned bet'],
+      unit: { kind: 'bonus_credit', amount: 100.0, assumed: false },
+    },
+    'betmgm_on|smoke-dry': {
+      strategy: 'no_odds_coverage', book: [], plans: [], skipped: {},
+      caveats: ['no odds feed covers this book'], unit: null,
+    },
+    // Gated-out-with-counts: the ordinary "nothing today" state.  Its caveat
+    // points at the counts, so the counts have to be on the page.
+    'fanduel|smoke-gated': {
+      strategy: 'bonus_conversion', book: ['fanduel'], plans: [],
+      skipped: { same_counterparty: 7, observation_spread: 3 },
+      caveats: ["no hedgeable market on this book passed every gate; the counts in 'skipped' say what was refused and why"],
+      unit: { kind: 'bonus_credit', amount: 100.0, assumed: true },
+    },
+  }, { odds_run_id: 7 });
+
+  const html = globalThis.__promoPlanHtml({ source: 'draftkings', offer_id: 'smoke-plan' });
+  for (const expected of [
+    'Convert the credit through a real market',
+    'Philadelphia Phillies at Miami Marlins',
+    '$100.00', '$133.33',                    // the stakes, verbatim
+    '61.3% conversion',                      // conversion_pct, not either floor
+    'worst case $0.00',                      // guaranteed_cash, the all-outcomes floor
+    'if it settles $66.66',                  // settled_cash, by its own wording:
+                                             // a bare '$66.66' was also produced
+                                             // by the outcomes line below, so the
+                                             // pill could be deleted outright
+    'outcomes: away $71.41',                 // the outcome table, its own numbers
+    'DraftKings', 'FanDuel',                 // books by label, not key
+    '+200', '−200',                          // both legs' prices
+    'credit',                                // the bonus stake is tagged as credit
+    'priced with the stated 50% boost applied',   // notes reach the card
+    'push',                                  // every settlement outcome is listed
+    'the credit is treated as a single stake-not-returned bet',  // caveats, with plans
+    'gated out: below min odds ×2',
+    '2m old at build',
+  ]) {
+    if (!html.includes(expected)) problems.push(`plan card missing ${JSON.stringify(expected)}`);
+  }
+  if (html.includes('NaN') || html.includes('undefined')) {
+    problems.push('plan card rendered NaN/undefined');
+  }
+  // Roles are load-bearing: which leg takes the credit and which takes cash.
+  // Asserted per row, because the strategy heading also contains the word
+  // "credit" and a whole-string index comparison quietly passed on that.
+  // Cut each row at its close: the trailing row would otherwise carry the
+  // rest of the card, including the caveat that contains the word 'credit'.
+  const rows = html.split('<tr>').slice(1).map((r) => r.split('</tr>')[0]);
+  const promoRow = rows.find((r) => r.includes('DraftKings')) || '';
+  const hedgeRow = rows.find((r) => r.includes('FanDuel')) || '';
+  if (!promoRow || !hedgeRow) problems.push('a leg row is missing from the card');
+  if (!/>promo</.test(promoRow)) problems.push("the DraftKings leg is not labelled promo");
+  if (!/>hedge</.test(hedgeRow)) problems.push("the FanDuel leg is not labelled hedge");
+  if (!promoRow.includes('credit')) problems.push('the promo leg is not tagged as credit');
+  if (hedgeRow.includes('credit')) problems.push('the cash hedge is tagged as credit');
+  if (!promoRow.includes('$100.00')) problems.push('the promo stake is not on the promo leg');
+  if (!hedgeRow.includes('$133.33')) problems.push('the hedge stake is not on the hedge leg');
+  // Which side each leg is on, by team.  Rows are located by book label, so
+  // swapping the home/away branches of promoSelectionLabel renamed both legs
+  // with the smoke green — and following the card would put the credit and the
+  // cash on the SAME side of the game.
+  if (!promoRow.includes('Philadelphia Phillies')) {
+    problems.push('the away-selection promo leg does not name the away team');
+  }
+  if (!hedgeRow.includes('Miami Marlins')) {
+    problems.push('the home-selection hedge leg does not name the home team');
+  }
+
+  // Counts must reach the page in the no-plans state — that is the state whose
+  // own caveat promises them.
+  const gated = globalThis.__promoPlanHtml({ source: 'fanduel', offer_id: 'smoke-gated' });
+  if (gated.includes('plan-card')) problems.push('a gated-out offer must not render a card');
+  for (const expected of ['same counterparty ×7', 'observation spread ×3']) {
+    if (!gated.includes(expected)) {
+      problems.push(`gated-out offer missing count ${JSON.stringify(expected)}`);
+    }
+  }
+
+  const dry = globalThis.__promoPlanHtml({ source: 'betmgm_on', offer_id: 'smoke-dry' });
+  if (dry.includes('plan-card')) problems.push('no-coverage offer must not render a plan card');
+  if (!dry.includes('no odds feed covers this book')) {
+    problems.push('no-coverage offer lost its reason');
+  }
+  const none = globalThis.__promoPlanHtml({ source: 'draftkings', offer_id: 'nonexistent' });
+  if (none !== '') problems.push('an offer with no plan entry must render nothing extra');
+
+  // Scraped text is data, never markup — and never a signal either.  An offer
+  // whose caveat contains the literal "plan-card" must not be mistaken for one
+  // that has cards, and script tags must not survive into the page.
+  globalThis.__setPromoPlans({
+    'draftkings|smoke-xss': {
+      strategy: 'bonus_conversion', book: ['draftkings'],
+      plans: [{ ...plan, home_team: '<img src=x onerror=alert(1)>' }],
+      skipped: {}, caveats: ['<script>alert(2)</script>'], unit: null,
+    },
+    'draftkings|smoke-sniff': {
+      strategy: 'bonus_conversion', book: ['draftkings'], plans: [], skipped: {},
+      caveats: ['the terms mention a plan-card promotion'], unit: null,
+    },
+  }, { odds_run_id: 7 });
+  const xss = globalThis.__promoPlanHtml({ source: 'draftkings', offer_id: 'smoke-xss' });
+  if (xss.includes('<img') || xss.includes('<script>')) {
+    problems.push('scraped plan text reached the page as markup');
+  }
+  const sniffed = globalThis.__promoDetailHtml({
+    source: 'draftkings', offer_id: 'smoke-sniff', title: 'Sniff', usage_guidance: '',
+  });
+  if (!sniffed.includes('No strategy generated for this offer.')) {
+    problems.push('an offer with no cards lost its fallback to a substring match');
+  }
+  // …and the mirror case, where cards really are present: the concrete legs
+  // lead and the text playbook follows under its own heading.  Without this the
+  // whole has-cards branch could be pinned false and nothing noticed.
+  const withCards = globalThis.__promoDetailHtml({
+    source: 'draftkings', offer_id: 'smoke-xss', title: 'Cards',
+    usage_guidance: 'generic advice text',
+  });
+  if (!withCards.includes('<h4>Playbook</h4>')) {
+    problems.push('an offer with cards did not demote the generic playbook');
+  }
+  if (withCards.includes('Best way to use')) {
+    problems.push('an offer with cards still led with the generic heading');
+  }
+  if (!(withCards.indexOf('plan-card') < withCards.indexOf('generic advice text'))) {
+    problems.push('the concrete plan does not lead the generic playbook');
+  }
+
+  // The list note separates "computed, all gated out" from "never computed".
+  const noteFor = (meta) => {
+    globalThis.__setPromoRun({ id: 4, started_at: '2026-07-28T07:00:00+00:00',
+                               finished_at: '2026-07-28T07:01:00+00:00',
+                               ok: true, offer_count: 1, source_count: 1 });
+    globalThis.__setPromoOffers([{ source: 'draftkings', offer_id: 'smoke-plan',
+                                   kind: 'bonus_bet', title: 'x' }]);
+    globalThis.__setPromoPlans({}, meta);
+    globalThis.__renderPromos();
+    return nodes.get('promo-list-note')?.textContent || '';
+  };
+  if (!noteFor({ odds_run_id: 7 }).includes('plans priced from odds run #7')) {
+    problems.push('a successful plan run is not named');
+  }
+  for (const [meta, want] of [
+    [{ reason: 'no_odds_run' }, 'no plans: no odds run'],
+    [{ reason: 'empty_odds_run', odds_run_id: 3 }, 'no plans: empty odds run'],
+    [{ reason: 'planner_failed: ValueError' }, 'no plans: planner failed'],
+  ]) {
+    const got = noteFor(meta);
+    if (!got.includes(want)) problems.push(`meta ${JSON.stringify(meta)} → ${JSON.stringify(got)}`);
+  }
+
+  if (globalThis.__promoMoney(-10) !== '−$10.00') {
+    problems.push(`promoMoney(-10) → ${globalThis.__promoMoney(-10)}`);
+  }
+  // Put the page's own promo state back: this block fabricates a run, offers
+  // and plans, and anything appended after it would otherwise render a
+  // synthetic one-offer panel and believe it.
+  globalThis.__restorePromos();
+  console.log(problems.length
+    ? 'PROMO PLAN RENDER WRONG: ' + problems.join('; ')
+    : 'promo plan cards render the planner\'s numbers verbatim (7 shapes)');
   if (problems.length) process.exit(1);
 }

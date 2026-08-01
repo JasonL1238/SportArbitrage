@@ -543,12 +543,36 @@ def test_page_reaches_no_network(populated: Store) -> None:
     assert references == []
     for forbidden in ("@import", "XMLHttpRequest", "WebSocket", "//fonts."):
         assert forbidden not in page
-    # ``fetch('/api/collect')`` is the Scrape button's call to the local
-    # ``--serve`` control plane.  It is same-origin localhost only, and the
-    # button stays disabled on ``file://``.  Any other fetch is still banned.
-    assert page.count("fetch(") == 1
-    assert "fetch('/api/collect'" in page
-    assert "fetch('http" not in page and 'fetch("http' not in page
+    # ``fetch('/api/…')`` calls are the scrape/plan buttons talking to the local
+    # ``--serve`` control plane.  They are same-origin localhost only, and the
+    # buttons stay disabled on ``file://``.  Rather than pinning how many there
+    # are — a count that went stale every time an endpoint was added, while
+    # saying nothing about *where* they reach — every fetch target must be a
+    # string literal naming a same-origin ``/api/`` path.  A template literal,
+    # a variable, or an absolute URL all fail the match and the test.
+    #
+    # Audited over the page's *code*, not its data: the JSON payload embeds
+    # scraped text, and a venue's promo terms have carried that venue's own
+    # telemetry script — ``fetch(ajaxurl, …)`` — as inert, escaped string data.
+    # Counting data as code makes the guard fail on what a book wrote, not on
+    # what this page does.
+    code = re.sub(
+        r'<script type="application/json" id="report-data">[\s\S]*?</script>',
+        "",
+        page,
+    )
+    fetch_targets = re.findall(r"""fetch\(\s*(['"])(.*?)\1""", code)
+    assert fetch_targets, "the serve control plane's fetch calls have vanished"
+    assert code.count("fetch(") == len(fetch_targets), (
+        "a fetch() whose target is not a plain string literal cannot be "
+        "audited for same-origin; use a literal '/api/...' path"
+    )
+    for _, target in fetch_targets:
+        assert target.startswith("/api/"), (
+            f"fetch target {target!r} is not a same-origin /api/ path"
+        )
+    assert "fetch('/api/collect'" in code
+    assert "fetch('http" not in code and 'fetch("http' not in code
 
     # Then the script: it builds links at runtime, and every one of them must be
     # an in-page anchor.  A generated href is the one way an offline page could
@@ -967,6 +991,372 @@ def test_promo_payload_and_build_report_include_promos(
     data = report_mod.build_report(populated, max_quote_rows=50)
     assert "promos" in data
     assert data["promos"]["offers"][0]["kind"] == "signup_bonus"
+    # DraftKings has no rows in the populated odds store, so the wiring must say
+    # so per offer rather than dropping the plans key or inventing legs.
+    plan = data["promos"]["plans"]["draftkings|welcome"]
+    assert plan["strategy"] == "no_odds_coverage"
+    assert plan["plans"] == []
+    assert data["promos"]["plan_meta"]["odds_run_id"] == max(data["detail_runs"])
+
+
+def test_promo_plans_ride_the_report_payload_end_to_end(
+    populated: Store, tmp_path, monkeypatch,
+) -> None:
+    """An offer at a book the odds store covers gets concrete legs in the page data.
+
+    Through the real wiring — promo store on disk, odds store on disk,
+    ``build_report`` — not by calling the planner directly.  ``generated_at``
+    is pinned before the slate's first pitch because plans refuse games that
+    have already started, and "the fixture aged past its own games" must not
+    read as "the wiring broke".
+    """
+    from src import report as report_mod
+    from src import settings as settings_mod
+    from src.promos.base import PromoSourceHealth
+    from src.promos.schema import PromoKind, PromoOffer
+    from src.promos.store import PromoStore
+
+    promo_db = tmp_path / "promos.sqlite3"
+    monkeypatch.setattr(settings_mod, "PROMO_DB_PATH", promo_db)
+    monkeypatch.setattr(report_mod.settings, "PROMO_DB_PATH", promo_db)
+
+    store = PromoStore(promo_db)
+    run_id = store.start_run()
+    store.finish_run(
+        run_id,
+        ok=True,
+        offers=[
+            PromoOffer(
+                source="smarkets",
+                offer_id="credit-drop",
+                kind=PromoKind.BONUS_BET,
+                title="£100 in free bets",
+                observed_at=datetime.now(UTC),
+                bonus_amount=100.0,
+                reward_type="bonus_bets",
+            )
+        ],
+        health=[
+            PromoSourceHealth(
+                source_key="smarkets", ok=True,
+                checked_at=datetime.now(UTC), offer_count=1,
+            )
+        ],
+    )
+    store.close()
+
+    data = report_mod.build_report(
+        populated,
+        max_quote_rows=50,
+        generated_at=datetime(2026, 7, 28, 8, 0, tzinfo=UTC),
+    )
+    plan = data["promos"]["plans"]["smarkets|credit-drop"]
+    assert plan["strategy"] == "bonus_conversion", plan
+    assert plan["plans"], plan["skipped"]
+    best = plan["plans"][0]
+    legs = best["legs"]
+    assert legs[0]["role"] == "promo"
+    assert legs[0]["source"] == "smarkets"
+    assert legs[0]["stake_kind"] == "bonus"
+    assert all(leg["source"] != "smarkets" for leg in legs[1:])
+    assert best["guaranteed_cash"] == pytest.approx(
+        min(profit for _, profit in best["outcome_profits"])
+    )
+    assert data["promos"]["plan_meta"]["odds_run_id"] == max(data["detail_runs"])
+    # The page's own JSON round-trip.
+    json.dumps(data["promos"]["plans"])
+
+
+def test_a_planner_failure_does_not_take_the_page_down(
+    populated: Store, tmp_path, monkeypatch,
+) -> None:
+    """The promos panel predates plans and must survive without them.
+
+    ``_promo_plans`` catches everything the planner can raise, and until this
+    test nothing held it there: narrowing the ``except`` to a type the planner
+    never raises left the whole suite green.  The page then died on an offer
+    the planner happened to choke on — the promo scrape and every odds panel
+    lost with it.
+    """
+    from src import report as report_mod
+    from src import settings as settings_mod
+    from src.promos.base import PromoSourceHealth
+    from src.promos.schema import PromoKind, PromoOffer
+    from src.promos.store import PromoStore
+
+    promo_db = tmp_path / "promos.sqlite3"
+    monkeypatch.setattr(settings_mod, "PROMO_DB_PATH", promo_db)
+    monkeypatch.setattr(report_mod.settings, "PROMO_DB_PATH", promo_db)
+    store = PromoStore(promo_db)
+    run_id = store.start_run()
+    store.finish_run(
+        run_id, ok=True,
+        offers=[PromoOffer(
+            source="smarkets", offer_id="boom", kind=PromoKind.BONUS_BET,
+            title="Boom", observed_at=datetime.now(UTC),
+            bonus_amount=100.0, reward_type="bonus_bets",
+        )],
+        health=[PromoSourceHealth(
+            source_key="smarkets", ok=True, checked_at=datetime.now(UTC), offer_count=1,
+        )],
+    )
+    store.close()
+
+    def explode(*args, **kwargs):
+        raise RuntimeError("planner exploded")
+
+    import src.promos.planner as planner_mod
+    monkeypatch.setattr(planner_mod, "build_promo_plans", explode)
+
+    data = report_mod.build_report(
+        populated, max_quote_rows=50,
+        generated_at=datetime(2026, 7, 28, 8, 0, tzinfo=UTC),
+    )
+    # The page still builds, the offer still shows, and the reason is named.
+    assert data["promos"]["offers"], "the offer was lost with the plan"
+    assert data["promos"]["plans"] == {}
+    reason = data["promos"]["plan_meta"]["reason"]
+    assert reason.startswith("planner_failed"), reason
+    assert "planner exploded" in reason
+    # And it renders.
+    page = report_mod.render_page(data)
+    assert "report-data" in page and page.startswith("<!")
+
+
+def test_an_empty_odds_run_is_reported_as_a_failure_not_a_success(
+    populated: Store, tmp_path, monkeypatch,
+) -> None:
+    """``empty_odds_run`` is the one no-plan state that carries a run id.
+
+    The panel's note reads ``reason`` only when there is no ``odds_run_id``, so
+    this state announced itself as "plans priced from odds run #N".  Pinned at
+    the payload, where the note's inputs come from.
+    """
+    from src import report as report_mod
+    from src import settings as settings_mod
+    from src.promos.base import PromoSourceHealth
+    from src.promos.schema import PromoKind, PromoOffer
+    from src.promos.store import PromoStore
+
+    promo_db = tmp_path / "promos.sqlite3"
+    monkeypatch.setattr(settings_mod, "PROMO_DB_PATH", promo_db)
+    monkeypatch.setattr(report_mod.settings, "PROMO_DB_PATH", promo_db)
+    store = PromoStore(promo_db)
+    run_id = store.start_run()
+    store.finish_run(
+        run_id, ok=True,
+        offers=[PromoOffer(
+            source="smarkets", offer_id="x", kind=PromoKind.BONUS_BET,
+            title="X", observed_at=datetime.now(UTC),
+            bonus_amount=100.0, reward_type="bonus_bets",
+        )],
+        health=[PromoSourceHealth(
+            source_key="smarkets", ok=True, checked_at=datetime.now(UTC), offer_count=1,
+        )],
+    )
+    store.close()
+
+    monkeypatch.setattr(populated, "load_quotes", lambda *a, **k: [])
+    data = report_mod.build_report(
+        populated, max_quote_rows=50,
+        generated_at=datetime(2026, 7, 28, 8, 0, tzinfo=UTC),
+    )
+    meta = data["promos"]["plan_meta"]
+    assert meta["reason"] == "empty_odds_run", meta
+    assert data["promos"]["plans"] == {}
+
+
+
+def test_the_serve_response_carries_plans_not_a_hardcoded_absence(
+    populated: Store, tmp_path, monkeypatch,
+) -> None:
+    """``--serve``'s promo response prices against the stored odds run.
+
+    It called the payload builder with no odds store at all, so it always
+    answered ``plans: {}`` with ``reason: no_odds_run`` — a hardcoded claim
+    that there was no odds run, in the one serve path that never reloads the
+    page afterwards.  Nothing covered either serve handler.
+    """
+    from src import report as report_mod
+    from src import settings as settings_mod
+    from src.promos.base import PromoSourceHealth
+    from src.promos.schema import PromoKind, PromoOffer
+    from src.promos.store import PromoStore
+
+    promo_db = tmp_path / "promos.sqlite3"
+    monkeypatch.setattr(settings_mod, "PROMO_DB_PATH", promo_db)
+    monkeypatch.setattr(report_mod.settings, "PROMO_DB_PATH", promo_db)
+    # The serve helper opens the odds store from settings, as the server does.
+    monkeypatch.setattr(settings_mod, "DB_PATH", populated.path)
+    monkeypatch.setattr(report_mod.settings, "DB_PATH", populated.path)
+
+    store = PromoStore(promo_db)
+    run_id = store.start_run()
+    store.finish_run(
+        run_id, ok=True,
+        offers=[PromoOffer(
+            source="smarkets", offer_id="credit", kind=PromoKind.BONUS_BET,
+            title="Credit", observed_at=datetime.now(UTC),
+            bonus_amount=100.0, reward_type="bonus_bets",
+        )],
+        health=[PromoSourceHealth(
+            source_key="smarkets", ok=True, checked_at=datetime.now(UTC), offer_count=1,
+        )],
+    )
+    store.close()
+
+    payload = report_mod._promo_payload_for_serve()
+    assert payload["offers"], "the serve response lost the offers"
+    meta = payload["plan_meta"]
+    assert meta is not None
+    assert meta.get("reason") != "no_odds_run", (
+        "the serve response claims there is no odds run while one is stored"
+    )
+    assert meta.get("odds_run_id") is not None
+
+
+def test_the_serve_response_degrades_rather_than_failing_the_scrape(
+    tmp_path, monkeypatch,
+) -> None:
+    """An unreadable odds database must not fail a promo scrape's response."""
+    from src import report as report_mod
+    from src import settings as settings_mod
+
+    monkeypatch.setattr(settings_mod, "PROMO_DB_PATH", tmp_path / "promos.sqlite3")
+    monkeypatch.setattr(report_mod.settings, "PROMO_DB_PATH", tmp_path / "promos.sqlite3")
+    broken = tmp_path / "not-a-database.sqlite3"
+    broken.write_text("this is not sqlite")
+    monkeypatch.setattr(settings_mod, "DB_PATH", broken)
+    monkeypatch.setattr(report_mod.settings, "DB_PATH", broken)
+
+    payload = report_mod._promo_payload_for_serve()
+    assert payload["plans"] == {}
+    assert payload["offers"] == []
+
+
+
+def test_the_serve_promo_endpoint_answers_with_plans(
+    populated: Store, tmp_path, monkeypatch,
+) -> None:
+    """Drive the real ``--serve`` handler over a real socket.
+
+    Neither serve handler had any test at all, so the promo endpoint's payload
+    was free to disagree with the page's.  The scrape itself is stubbed — no
+    network — but the request, the handler, the JSON and the payload builder
+    are the real ones.
+    """
+    import http.server
+    import json as json_mod
+    import threading
+    import urllib.request
+
+    from src import report as report_mod
+    from src import settings as settings_mod
+    from src.promos.base import PromoSourceHealth
+    from src.promos.schema import PromoKind, PromoOffer
+    from src.promos.store import PromoStore
+
+    promo_db = tmp_path / "promos.sqlite3"
+    monkeypatch.setattr(settings_mod, "PROMO_DB_PATH", promo_db)
+    monkeypatch.setattr(report_mod.settings, "PROMO_DB_PATH", promo_db)
+    monkeypatch.setattr(settings_mod, "DB_PATH", populated.path)
+    monkeypatch.setattr(report_mod.settings, "DB_PATH", populated.path)
+
+    store = PromoStore(promo_db)
+    run_id = store.start_run()
+    store.finish_run(
+        run_id, ok=True,
+        offers=[PromoOffer(
+            source="smarkets", offer_id="credit", kind=PromoKind.BONUS_BET,
+            title="Credit", observed_at=datetime.now(UTC),
+            bonus_amount=100.0, reward_type="bonus_bets",
+        )],
+        health=[PromoSourceHealth(
+            source_key="smarkets", ok=True, checked_at=datetime.now(UTC), offer_count=1,
+        )],
+    )
+    store.close()
+
+    # No network: the scrape is a stub, the rows above stand in for its result.
+    monkeypatch.setattr(
+        report_mod, "_run_promos_from_ui",
+        lambda **kwargs: {"offer_count": 1, "sources": ["smarkets"]},
+    )
+
+    page = tmp_path / "dashboard.html"
+    page.write_text(render_page(build_report(populated)), encoding="utf-8")
+
+    captured: dict = {}
+    real_server = http.server.ThreadingHTTPServer
+
+    class _Capturing(real_server):
+        def __init__(self, address, handler):
+            super().__init__(address, handler)
+            captured["server"] = self
+
+    monkeypatch.setattr(http.server, "ThreadingHTTPServer", _Capturing)
+
+    thread = threading.Thread(
+        target=report_mod._serve,
+        args=(page, 0),
+        kwargs=dict(open_browser=False, run_limit=5,
+                    quote_runs=2, max_quote_rows=50),
+        daemon=True,
+    )
+    thread.start()
+    for _ in range(200):
+        if "server" in captured:
+            break
+        import time
+        time.sleep(0.01)
+    assert "server" in captured, "the server never started"
+    server = captured["server"]
+    port = server.server_address[1]
+    try:
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/promos/collect",
+            data=b"{}",
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=30) as response:
+            payload = json_mod.loads(response.read())
+    finally:
+        server.shutdown()
+
+    assert payload["ok"] is True, payload
+    promos = payload["promos"]
+    assert promos["offers"], "the endpoint answered without the offers"
+    meta = promos["plan_meta"]
+    assert meta is not None and meta.get("reason") != "no_odds_run", (
+        "the endpoint claims no odds run while one is stored"
+    )
+    assert meta.get("odds_run_id") is not None
+    assert promos["plans"], "the endpoint answered with no plans"
+
+
+def test_report_tests_never_read_the_developers_promo_database(tmp_path) -> None:
+    """The autouse isolation is in force, and is checked rather than assumed.
+
+    ``build_report`` reads ``settings.PROMO_DB_PATH`` itself, so without the
+    fixture in ``tests/conftest.py`` every report test silently renders whatever
+    was last scraped into ``data/promos.sqlite3`` — which is how a venue's own
+    telemetry script came to be counted as page code.
+    """
+    from src import report as report_mod
+    from src import settings as settings_mod
+
+    default = Path("data/promos.sqlite3").resolve()
+    for module in (settings_mod, report_mod.settings):
+        active = Path(module.PROMO_DB_PATH).resolve()
+        assert active != default, (
+            "a report test is pointed at the real promo database; the autouse "
+            "_hermetic_promo_db fixture in tests/conftest.py is not in force"
+        )
+        assert not active.exists(), (
+            "the isolated promo database should not exist unless a test built it"
+        )
+
 
 
 # ── the pieces this file deliberately stubs ──────────────────────────────────

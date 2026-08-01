@@ -241,6 +241,15 @@ select, input[type="search"], input[type="text"] {
   font: 400 11px/1.4 var(--mono); color: var(--muted);
 }
 .promo-detail .pill-row { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 8px; }
+.plan-card {
+  border: 1px solid var(--line-soft); border-radius: 6px;
+  padding: 8px 10px; margin: 6px 0 10px;
+}
+.plan-card h5 { margin: 0 0 2px; font: 600 12.5px/1.4 var(--sans); color: var(--ink); }
+.plan-card .plan-sub { margin: 0 0 6px; font: 400 11.5px/1.4 var(--sans); color: var(--muted); }
+.plan-card table { width: auto; min-width: 60%; margin: 4px 0; }
+.plan-card td, .plan-card th { padding: 2px 10px 2px 0; font-size: 12px; }
+.plan-card .plan-outcomes { margin: 4px 0 0; font: 400 11.5px/1.4 var(--mono); color: var(--ink-2); }
 .promo-health {
   display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px;
 }
@@ -1400,7 +1409,8 @@ const Q = DATA.quotes;              // { columns, rows } — rows across several
 const COL = {};
 Q.columns.forEach((name, i) => { COL[name] = i; });
 const NET_ODDS = 'net_decimal_odds';
-let PROMOS = DATA.promos || { run: null, offers: [], health: [], kinds: [] };
+let PROMOS = DATA.promos
+  || { run: null, offers: [], health: [], kinds: [], plans: {}, plan_meta: null };
 
 const el = (id) => document.getElementById(id);
 const txt = (v) => (v === null || v === undefined ? '' : String(v));
@@ -2738,6 +2748,132 @@ function ensurePromoFilters() {
   if ([...sources].includes(sourceVal)) sourceSel.value = sourceVal;
 }
 
+/* Concrete usage plans, computed in Python from the same run the arb panel
+   prices.  This code renders the stored numbers and computes none of them —
+   the movement table taught what happens when the page re-derives a figure
+   the pipeline also derives. */
+const PROMO_STRATEGY_LABEL = {
+  bonus_conversion: 'Convert the credit through a real market',
+  qualify_then_convert: 'Qualify, then convert the credit',
+  no_sweat_hedge: 'Protected bet, hedged elsewhere',
+  boost_locked: 'This boost locks a profit at current prices',
+  boost_breakeven: 'Smallest boost that would lock a profit',
+  rollover_grind: 'Grind the rollover at minimum vig',
+};
+
+function promoMoney(v) {
+  const n = Number(v);
+  if (!isFinite(n)) return '—';
+  return (n < 0 ? '−$' : '$') + Math.abs(n).toFixed(2);
+}
+
+function promoAge(seconds) {
+  const n = Number(seconds);
+  if (!isFinite(n) || n < 0) return '';
+  if (n < 90) return `${Math.round(n)}s`;
+  if (n < 5400) return `${Math.round(n / 60)}m`;
+  return `${(n / 3600).toFixed(1)}h`;
+}
+
+function promoSelectionLabel(plan, leg) {
+  if (leg.selection === 'home') return plan.home_team || 'Home';
+  if (leg.selection === 'away') return plan.away_team || 'Away';
+  if (leg.selection === 'draw') return 'Draw';
+  return String(leg.selection || '').replace(/^./, (c) => c.toUpperCase());
+}
+
+function promoPlanCardHtml(plan) {
+  const stepBadge = plan.step
+    ? `<span class="pill flat">${plan.step === 'qualify' ? 'step 1 · qualify' : 'step 2 · convert'}</span> `
+    : '';
+  const marketBits = [String(plan.market || '').replace(/_/g, ' ')];
+  if (plan.line !== null && plan.line !== undefined) marketBits.push(fmtLine(plan.line, plan.market));
+  marketBits.push(String(plan.period || '').replace(/_/g, ' '));
+  const legs = (plan.legs || []).map((leg) => {
+    const line = (leg.line !== null && leg.line !== undefined && plan.market !== 'moneyline')
+      ? ` ${fmtLine(leg.line, plan.market)}` : '';
+    return `<tr>
+      <td><span class="pill flat">${leg.role === 'promo' ? 'promo' : 'hedge'}</span></td>
+      <td>${escapeHtml(promoBookLabel(leg.source))}</td>
+      <td>${escapeHtml(promoSelectionLabel(plan, leg))}${escapeHtml(line)}</td>
+      <td>${escapeHtml(fmtAmerican(leg.american_odds))}</td>
+      <td>${promoMoney(leg.stake)}${leg.stake_kind === 'bonus' ? ' <span class="dim">credit</span>' : ''}</td>
+    </tr>`;
+  }).join('');
+  const metrics = [];
+  if (plan.conversion_pct !== null && plan.conversion_pct !== undefined) {
+    metrics.push(`${Number(plan.conversion_pct).toFixed(1)}% conversion`);
+  }
+  if (plan.breakeven_boost_pct !== null && plan.breakeven_boost_pct !== undefined) {
+    metrics.push(`needs a ${Number(plan.breakeven_boost_pct).toFixed(1)}%+ boost`);
+  }
+  if (plan.cost_per_100_wagered !== null && plan.cost_per_100_wagered !== undefined) {
+    metrics.push(`${promoMoney(plan.cost_per_100_wagered)} cost per $100 wagered`);
+  }
+  if (plan.qualifying_cost !== null && plan.qualifying_cost !== undefined) {
+    metrics.push(`qualifying round-trip ${promoMoney(plan.qualifying_cost)}`);
+  }
+  metrics.push(`worst case ${promoMoney(plan.guaranteed_cash)}`);
+  if (plan.settled_cash !== plan.guaranteed_cash) {
+    metrics.push(`if it settles ${promoMoney(plan.settled_cash)}`);
+  }
+  const age = promoAge(plan.quote_age_seconds);
+  const outcomes = (plan.outcome_profits || [])
+    .map(([label, profit]) => `${String(label).replace(/_/g, ' ')} ${promoMoney(profit)}`)
+    .join(' · ');
+  const notes = (plan.notes || [])
+    .map((n) => `<p class="plan-sub">${escapeHtml(n)}</p>`).join('');
+  return `<div class="plan-card">
+    <h5>${stepBadge}${escapeHtml(plan.away_team || '')} at ${escapeHtml(plan.home_team || '')}</h5>
+    <p class="plan-sub">${escapeHtml(marketBits.filter(Boolean).join(' · '))}
+      · ${escapeHtml(fmtClock(plan.commence_time))}${age ? ` · quotes ${escapeHtml(age)} old at build` : ''}</p>
+    <table><tbody>${legs}</tbody></table>
+    <div class="pill-row">${metrics.map((m) => `<span class="pill flat">${escapeHtml(m)}</span>`).join('')}</div>
+    ${outcomes ? `<p class="plan-outcomes">outcomes: ${escapeHtml(outcomes)}</p>` : ''}
+    ${notes}
+  </div>`;
+}
+
+function promoPlanHtml(o) {
+  const entry = (PROMOS.plans || {})[promoOfferKey(o)];
+  if (!entry) return '';
+  const caveats = (entry.caveats || [])
+    .map((c) => `<p class="dim">${escapeHtml(c)}</p>`).join('');
+  const skippedText = Object.entries(entry.skipped || {})
+    .map(([reason, count]) => `${String(reason).replace(/_/g, ' ')} ×${count}`)
+    .join(' · ');
+  const skippedHtml = skippedText
+    ? `<p class="dim">gated out: ${escapeHtml(skippedText)}</p>` : '';
+  const label = PROMO_STRATEGY_LABEL[entry.strategy];
+  if (!label || !(entry.plans || []).length) {
+    // No concrete plan — the caveats say why (no odds feed, every market
+    // gated out, refund unmeasurable), and the text playbook below stands.
+    //
+    // The counts ship with them.  One of those caveats is "the counts in
+    // 'skipped' say what was refused and why", and this branch used to return
+    // the caveats alone — so the ordinary "nothing to do today" state pointed
+    // the reader at evidence the page never rendered.  The counts were only
+    // reachable in the with-plans branch below, which is the one case where
+    // they explain the least.
+    return caveats + skippedHtml;
+  }
+  const bits = [];
+  if (entry.unit && entry.unit.amount !== null && entry.unit.amount !== undefined) {
+    bits.push(`sized for ${promoMoney(entry.unit.amount)}${entry.unit.assumed ? ' (assumed)' : ''}`);
+  }
+  if (entry.refund_conversion_pct !== null && entry.refund_conversion_pct !== undefined) {
+    bits.push(`refund valued at ${Number(entry.refund_conversion_pct).toFixed(1)}%`);
+  }
+  if (entry.expected_value !== null && entry.expected_value !== undefined) {
+    bits.push(`net value ${promoMoney(entry.expected_value)}`);
+  }
+  return `<h4>${escapeHtml(label)}</h4>
+    ${bits.length ? `<p class="plan-sub">${escapeHtml(bits.join(' · '))}</p>` : ''}
+    ${(entry.plans || []).map(promoPlanCardHtml).join('')}
+    ${caveats}
+    ${skippedHtml}`;
+}
+
 function promoDetailHtml(o) {
   const summary = o.summary || o.title || '';
   const eligible = (o.eligible_regions || []).join(', ') || 'not stated';
@@ -2761,9 +2897,24 @@ function promoDetailHtml(o) {
   const notes = o.eligibility_notes
     ? `<p><b>Eligibility notes:</b> ${escapeHtml(o.eligibility_notes)}</p>`
     : '';
-  const guidance = o.usage_guidance
-    ? `<h4>Best way to use</h4><p>${escapeHtml(o.usage_guidance)}</p>`
-    : '<h4>Best way to use</h4><p class="dim">No strategy generated for this offer.</p>';
+  const planHtml = promoPlanHtml(o);
+  // Asked of the data, not sniffed out of the rendered string.  ``escapeHtml``
+  // escapes the quotes around ``class="plan-card"`` but not the substring
+  // itself, so any offer whose caveat, note or team name happened to contain
+  // "plan-card" flipped this true with no cards on screen — which suppressed
+  // the "No strategy generated for this offer." fallback entirely and inverted
+  // the block order.
+  const planEntry = (PROMOS.plans || {})[promoOfferKey(o)];
+  const hasCards = !!(planEntry && (planEntry.plans || []).length
+                      && PROMO_STRATEGY_LABEL[planEntry.strategy]);
+  // Concrete legs first when the planner produced them; the generic playbook
+  // stays underneath (it covers the parts prices cannot: opt-ins, expiry,
+  // account state).  Without cards, the playbook leads and the planner's
+  // caveats say why nothing concrete was possible.
+  const playbook = o.usage_guidance
+    ? `${hasCards ? '<h4>Playbook</h4>' : '<h4>Best way to use</h4>'}<p>${escapeHtml(o.usage_guidance)}</p>`
+    : (hasCards ? '' : '<h4>Best way to use</h4><p class="dim">No strategy generated for this offer.</p>');
+  const guidance = hasCards ? planHtml + playbook : playbook + planHtml;
   return `<div class="promo-detail" id="promo-detail">
     <h4>${escapeHtml(summary)}</h4>
     ${pills}
@@ -2847,9 +2998,26 @@ function renderPromos() {
   });
 
   if (listNote) {
-    listNote.textContent = filtered.length === offers.length
+    const meta = PROMOS.plan_meta;
+    // Say where the concrete plans came from — or why there are none.  A
+    // panel that silently mixes "no plans computed" with "computed and all
+    // gated out" hides the difference that matters.
+    // ``reason`` is tested first.  It was tested second, behind a truthy
+    // ``odds_run_id`` — and ``empty_odds_run`` is the one failure that carries
+    // a run id, so the single state meaning "the odds run this priced against
+    // held no quotes" reported itself as "plans priced from odds run #N".  The
+    // note exists precisely to separate "computed, all gated out" from "never
+    // computed", and it got that backwards on the case where it mattered.
+    const planNote = !meta
+      ? ''
+      : (meta.reason
+        ? ` · no plans: ${String(meta.reason).replace(/_/g, ' ')}`
+        : (meta.odds_run_id
+          ? ` · plans priced from odds run #${meta.odds_run_id}`
+          : ''));
+    listNote.textContent = (filtered.length === offers.length
       ? `${offers.length} total · click a row for usage tips`
-      : `${filtered.length} of ${offers.length} · click a row for usage tips`;
+      : `${filtered.length} of ${offers.length} · click a row for usage tips`) + planNote;
   }
 
   if (!filtered.length) {

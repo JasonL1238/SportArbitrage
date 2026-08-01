@@ -1134,17 +1134,30 @@ def build_report(
         ],
         "strings": strings,
         # Sibling DB — signup bonuses / boosts / free bets.  Never mixed into quotes.
-        "promos": _promo_payload(),
+        "promos": _promo_payload(store, quote_run_ids=detail_ids, as_of=generated_at),
     }
 
 
-def _promo_payload() -> dict[str, Any]:
+def _promo_payload(
+    odds_store: Store | None = None,
+    *,
+    quote_run_ids: Sequence[int] = (),
+    as_of: datetime | None = None,
+) -> dict[str, Any]:
     """Latest promo-collection snapshot for the dashboard Promos panel.
 
     Reads the separate promo SQLite file.  A missing or empty store is a normal
     state (operator has not scraped bonuses yet), not an error.
+
+    Given an odds store and at least one embedded quote run, each offer also
+    gets a concrete usage plan built from that run's games — the same quotes,
+    the same event reconciliation, and the same counterparty gate the arb panel
+    uses, so the promo panel cannot name a hedge the arb panel would refuse.
     """
-    empty: dict[str, Any] = {"run": None, "offers": [], "health": [], "kinds": []}
+    empty: dict[str, Any] = {
+        "run": None, "offers": [], "health": [], "kinds": [],
+        "plans": {}, "plan_meta": None,
+    }
     try:
         from src.promos.schema import PromoKind
         from src.promos.store import PromoStore
@@ -1202,14 +1215,109 @@ def _promo_payload() -> dict[str, Any]:
                 }
             )
         health = store.health_for_run(run_id)
+        plans, plan_meta = _promo_plans(odds_store, offers, quote_run_ids, as_of)
         return {
             "run": run,
             "offers": offers,
             "health": health,
             "kinds": empty["kinds"],
+            "plans": plans,
+            "plan_meta": plan_meta,
         }
     finally:
         store.close()
+
+
+def _promo_payload_for_serve() -> dict[str, Any]:
+    """Promo panel payload for a ``--serve`` response, plans included.
+
+    The page builds its own payload against the runs it embedded; a serve
+    response has no such context, so it opens the odds store and prices against
+    the newest stored run.
+
+    Every odds-side failure gets its **own** reason.  Answering all of them with
+    the plan-less payload made each one say ``no_odds_run`` — the panel
+    claiming there is no odds run while an odds database sits there with a real,
+    actionable error (a schema too old for this build, say) that the operator
+    never sees.  That is the exact sentence the plans here were added to stop
+    printing, and routing errors through the same fallback reinstated it.
+
+    Today the ``reload`` that follows a successful scrape replaces the page, so
+    these plans are usually discarded — but the response is what the panel would
+    render if it ever stopped reloading, and a payload that is discarded should
+    still be true.
+    """
+    def _failed(exc: BaseException) -> dict[str, Any]:
+        payload = _promo_payload()
+        if payload.get("plan_meta") is not None or payload.get("offers"):
+            payload["plan_meta"] = {
+                "reason": f"odds_store_unreadable: {type(exc).__name__}: {exc}"
+            }
+        return payload
+
+    try:
+        odds_store = Store(settings.DB_PATH)
+    except Exception as exc:  # noqa: BLE001
+        return _failed(exc)
+    try:
+        run_id = odds_store.latest_run_id()
+        if run_id is None:
+            # The honest ``no_odds_run``: a readable store with nothing in it.
+            return _promo_payload()
+        return _promo_payload(
+            odds_store, quote_run_ids=(run_id,), as_of=datetime.now(UTC)
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _failed(exc)
+    finally:
+        # The page's own build closes its store; this one opened its own.
+        try:
+            odds_store.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _promo_plans(
+    odds_store: Store | None,
+    offers: Sequence[Mapping[str, Any]],
+    quote_run_ids: Sequence[int],
+    as_of: datetime | None,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Concrete usage plans for the promo panel, or an empty map with a reason.
+
+    Failure to plan must never take the page down — the promos panel predates
+    the planner and stays useful without it — but it must also never be silent:
+    ``plan_meta`` carries either the run the plans were built from or the
+    reason there are none.
+    """
+    if not offers:
+        return {}, None
+    if odds_store is None or not quote_run_ids or as_of is None:
+        return {}, {"reason": "no_odds_run"}
+    try:
+        from src.promos.planner import build_promo_plans
+
+        # The newest embedded run — the same slate the arb panel prices.
+        run_id = max(quote_run_ids)
+        quotes = odds_store.load_quotes(run_id)
+        if not quotes:
+            return {}, {"reason": "empty_odds_run", "odds_run_id": run_id}
+        everything, _ = reconcile_event_keys(quotes)
+        recorded = odds_store.recorded_counterparty_groups(run_id)
+        built = build_promo_plans(
+            offers,
+            everything,
+            as_of=as_of,
+            one_counterparty=merge_counterparty_groups(
+                {} if recorded else counterparty_groups(everything),
+                recorded,
+            ),
+        )
+        meta = dict(built["meta"])
+        meta["odds_run_id"] = run_id
+        return built["plans"], meta
+    except Exception as exc:  # noqa: BLE001 — the panel degrades, the page survives
+        return {}, {"reason": f"planner_failed: {type(exc).__name__}: {exc}"}
 
 
 def _blank_sport(sport: str) -> dict[str, Any]:
@@ -2469,7 +2577,13 @@ def _serve(
                     "collect": collected,
                     "dashboard": rebuilt,
                     "reload": reload,
-                    "promos": _promo_payload(),
+                    # Priced against the newest stored odds run, like the page
+                    # itself.  Calling this with no store hardcoded
+                    # ``plans: {}`` / ``reason: no_odds_run`` into the one serve
+                    # path that does not reload afterwards, so the panel would
+                    # have claimed there was no odds run while one sat in the
+                    # database.
+                    "promos": _promo_payload_for_serve(),
                 })
             except Exception as exc:  # noqa: BLE001
                 err = f"{type(exc).__name__}: {exc}"

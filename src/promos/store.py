@@ -339,6 +339,19 @@ class PromoStore:
             out.append(item)
         return out
 
+    def run_exists(self, run_id: int) -> bool:
+        """Is this run id stored?
+
+        An existence check, so callers validating an operator-supplied
+        ``--run`` do not have to page through ``list_runs``: that is
+        ``ORDER BY id DESC LIMIT n``, so a capped listing reports every older
+        run as missing.
+        """
+        row = self._conn.execute(
+            "SELECT 1 FROM promo_runs WHERE id = ? LIMIT 1", (run_id,)
+        ).fetchone()
+        return row is not None
+
     def latest_run_id(self) -> int | None:
         row = self._conn.execute("SELECT MAX(id) AS id FROM promo_runs").fetchone()
         return int(row["id"]) if row and row["id"] is not None else None

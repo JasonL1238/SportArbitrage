@@ -22,6 +22,43 @@ FIXTURE_RAW_DIR = Path(__file__).parent / "fixtures" / "raw"
 FIXTURE_DATE = "2026-07-28"
 
 
+@pytest.fixture(autouse=True)
+def _hermetic_promo_db(tmp_path, monkeypatch):
+    """Point the promo sidecar at a per-test path that does not exist.
+
+    Suite-wide, because the leak is: :func:`src.report.build_report` reads
+    :data:`src.settings.PROMO_DB_PATH` itself — no argument carries it — so
+    *any* test that builds a report renders whatever the developer last
+    scraped into ``data/promos.sqlite3``.  That is how a venue's own telemetry
+    script, stored as text in an offer's terms, came to be counted as page code
+    by ``test_page_reaches_no_network``.
+
+    The promo planner made the stakes higher rather than leaving them equal:
+    those tests now run the whole planning engine over that live data crossed
+    with their own odds run, and :func:`src.report._promo_plans` swallows
+    planner exceptions by design — so a machine-specific fault would be
+    invisible rather than loud.  A missing file is the promos panel's normal
+    empty state, so no test's meaning changes; tests that want promo rows build
+    their own store at this same path.
+    """
+    import src.settings as settings_mod
+
+    promo_db = tmp_path / "promos-hermetic.sqlite3"
+    monkeypatch.setattr(settings_mod, "PROMO_DB_PATH", promo_db)
+    # ``src.report`` does ``from src import settings``, so it holds the same
+    # module object patched above — no second patch is needed, and asserting
+    # that keeps a future split of the two from passing silently.
+    try:
+        import src.report as report_mod
+    except Exception:  # noqa: BLE001 — tests that never import the report
+        return promo_db
+    assert report_mod.settings is settings_mod, (
+        "src.report no longer shares the settings module; this fixture must "
+        "patch it separately or report tests will read the real promo database"
+    )
+    return promo_db
+
+
 def _load(source: str) -> list[RawResponse]:
     store = RawStore(FIXTURE_RAW_DIR)
     paths = sorted(FIXTURE_RAW_DIR.glob(f"{source}__*.json"))
