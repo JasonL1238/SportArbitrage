@@ -744,6 +744,10 @@ def test_the_page_script_runs_and_fills_every_region(populated: Store, tmp_path)
     assert "script ran clean" in result.stdout
     assert "svg well-formed" in result.stdout
     assert "plain English ok" in result.stdout
+    # The promo-plan block's own message.  Without this the whole block — every
+    # guard rounds 2-4 added to it — could be deleted and this driver would not
+    # notice, because it only ever asserted its neighbours' output.
+    assert "promo plan cards render" in result.stdout
     # This page embeds every run, so the truncation branch is unreachable here
     # and the harness says so rather than passing silently.
     assert "truncation not exercised" in result.stdout
@@ -1167,6 +1171,38 @@ def test_an_empty_odds_run_is_reported_as_a_failure_not_a_success(
 
 
 
+def _store_with_future_games(tmp_path) -> Store:
+    """An odds run whose games are always ahead of the wall clock.
+
+    The serve path prices with ``datetime.now(UTC)``, and a fixture pinned to a
+    calendar date silently stops producing plans the day it passes — which is
+    what happened to both serve tests on 2026-07-28.  They kept passing on an
+    empty result, so the handler could have stopped pricing altogether.
+    """
+    from src.sources.base import SourceHealth
+
+    store = Store(tmp_path / "future.sqlite3")
+    observed = datetime.now(UTC)
+    commence = observed + timedelta(hours=6)
+    quotes = []
+    for source, selection, odds in (
+        ("smarkets", Selection.AWAY, 3.0),
+        ("fanduel", Selection.HOME, 1.5),
+    ):
+        quotes.append(make_quote(
+            source=source, selection=selection, decimal_odds=odds,
+            observed_at=observed, commence_time=commence,
+        ))
+    run_id = store.start_run(observed)
+    store.save_quotes(run_id, quotes)
+    for source in ("smarkets", "fanduel"):
+        store.save_health(run_id, SourceHealth(
+            source_key=source, ok=True, checked_at=observed,
+        ))
+    store.finish_run(run_id, finished_at=observed, report=_Findings(quotes))
+    return store
+
+
 def test_the_serve_response_carries_plans_not_a_hardcoded_absence(
     populated: Store, tmp_path, monkeypatch,
 ) -> None:
@@ -1187,8 +1223,9 @@ def test_the_serve_response_carries_plans_not_a_hardcoded_absence(
     monkeypatch.setattr(settings_mod, "PROMO_DB_PATH", promo_db)
     monkeypatch.setattr(report_mod.settings, "PROMO_DB_PATH", promo_db)
     # The serve helper opens the odds store from settings, as the server does.
-    monkeypatch.setattr(settings_mod, "DB_PATH", populated.path)
-    monkeypatch.setattr(report_mod.settings, "DB_PATH", populated.path)
+    odds = _store_with_future_games(tmp_path)
+    monkeypatch.setattr(settings_mod, "DB_PATH", odds.path)
+    monkeypatch.setattr(report_mod.settings, "DB_PATH", odds.path)
 
     store = PromoStore(promo_db)
     run_id = store.start_run()
@@ -1212,13 +1249,69 @@ def test_the_serve_response_carries_plans_not_a_hardcoded_absence(
     assert meta.get("reason") != "no_odds_run", (
         "the serve response claims there is no odds run while one is stored"
     )
-    assert meta.get("odds_run_id") is not None
+    assert meta.get("odds_run_id") == odds.latest_run_id(), (
+        "the serve response priced against a run that is not the newest"
+    )
+    # Concrete legs, not merely a map keyed by offer: ``plans`` is truthy
+    # whenever an offer exists, so asserting on it alone passed for years of
+    # wall-clock drift with nothing priced at all.
+    entry = payload["plans"]["smarkets|credit"]
+    assert entry["plans"], (payload["plan_meta"], entry)
+    assert entry["plans"][0]["legs"][0]["source"] == "smarkets"
 
 
 def test_the_serve_response_degrades_rather_than_failing_the_scrape(
     tmp_path, monkeypatch,
 ) -> None:
-    """An unreadable odds database must not fail a promo scrape's response."""
+    """An unreadable odds database must not fail a promo scrape's response.
+
+    With a stored offer, not an empty promo store: the reason is only attached
+    when there is something to explain, so an empty store meant this test could
+    never observe ``odds_store_unreadable`` — the string it exists to pin had
+    never once been produced.
+    """
+    from src import report as report_mod
+    from src import settings as settings_mod
+    from src.promos.base import PromoSourceHealth
+    from src.promos.schema import PromoKind, PromoOffer
+    from src.promos.store import PromoStore
+
+    promo_db = tmp_path / "promos.sqlite3"
+    monkeypatch.setattr(settings_mod, "PROMO_DB_PATH", promo_db)
+    monkeypatch.setattr(report_mod.settings, "PROMO_DB_PATH", promo_db)
+    store = PromoStore(promo_db)
+    run_id = store.start_run()
+    store.finish_run(
+        run_id, ok=True,
+        offers=[PromoOffer(
+            source="smarkets", offer_id="credit", kind=PromoKind.BONUS_BET,
+            title="Credit", observed_at=datetime.now(UTC),
+            bonus_amount=100.0, reward_type="bonus_bets",
+        )],
+        health=[PromoSourceHealth(
+            source_key="smarkets", ok=True, checked_at=datetime.now(UTC), offer_count=1,
+        )],
+    )
+    store.close()
+
+    broken = tmp_path / "not-a-database.sqlite3"
+    broken.write_text("this is not sqlite")
+    monkeypatch.setattr(settings_mod, "DB_PATH", broken)
+    monkeypatch.setattr(report_mod.settings, "DB_PATH", broken)
+
+    payload = report_mod._promo_payload_for_serve()
+    # The scrape's own result survives; only the plans are lost.
+    assert payload["offers"], "an odds-side failure took the promo rows with it"
+    assert payload["plans"] == {}
+    reason = payload["plan_meta"]["reason"]
+    assert reason.startswith("odds_store_unreadable"), reason
+    assert reason != "no_odds_run", (
+        "an unreadable odds database is reported as there being no odds run"
+    )
+
+
+def test_an_empty_promo_store_needs_no_explanation(tmp_path, monkeypatch) -> None:
+    """No offers, nothing to explain — and no invented reason either."""
     from src import report as report_mod
     from src import settings as settings_mod
 

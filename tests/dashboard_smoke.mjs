@@ -1228,6 +1228,65 @@ if (process.argv[3]) {
     problems.push('the concrete plan does not lead the generic playbook');
   }
 
+  // Every strategy renders its own card, its own heading and its own metric.
+  // Only bonus_conversion had ever been rendered by anything, so deleting the
+  // other five labels — which also gates hasCards — made every stake, leg and
+  // floor those strategies compute vanish from the panel with the suite green.
+  const legPair = [
+    { role: 'promo', source: 'draftkings', selection: 'away', line: null,
+      decimal_odds: 3.0, american_odds: 200, net_odds: 3.0, stake: 100.0,
+      stake_kind: 'cash', is_alternate: false, observed_at: '2026-07-28T07:00:00+00:00' },
+    { role: 'hedge', source: 'fanduel', selection: 'home', line: null,
+      decimal_odds: 1.5, american_odds: -200, net_odds: 1.5, stake: 133.33,
+      stake_kind: 'cash', is_alternate: false, observed_at: '2026-07-28T07:00:00+00:00' },
+  ];
+  const card = (extra) => ({ ...plan, legs: legPair, notes: [], conversion_pct: null,
+                             ...extra });
+  const strategyCases = [
+    ['qualify_then_convert', { step: 'qualify', qualifying_cost: 0.5 },
+     ['Qualify', 'step 1 · qualify', 'qualifying round-trip $0.50']],
+    ['qualify_then_convert', { step: 'convert', conversion_pct: 61.25 },
+     ['step 2 · convert', '61.3% conversion']],
+    ['no_sweat_hedge', {}, ['Protected bet', 'refund valued at 40.0%']],
+    ['boost_locked', {}, ['locks a profit']],
+    ['boost_breakeven', { breakeven_boost_pct: 12.5 }, ['needs a 12.5%+ boost']],
+    ['rollover_grind', { cost_per_100_wagered: 2.25 }, ['$2.25 cost per $100 wagered']],
+  ];
+  for (const [strategy, extra, expectations] of strategyCases) {
+    globalThis.__setPromoPlans({
+      'draftkings|s': {
+        strategy, book: ['draftkings'], plans: [card(extra)], skipped: {},
+        caveats: [], unit: { kind: 'bonus_credit', amount: 100.0, assumed: false },
+        refund_conversion_pct: strategy === 'no_sweat_hedge' ? 40.0 : null,
+      },
+    }, { odds_run_id: 7 });
+    const out = globalThis.__promoPlanHtml({ source: 'draftkings', offer_id: 's' });
+    if (!out.includes('plan-card')) {
+      problems.push(`${strategy} rendered no card at all`);
+      continue;
+    }
+    for (const want of expectations) {
+      if (!out.includes(want)) {
+        problems.push(`${strategy} card missing ${JSON.stringify(want)}`);
+      }
+    }
+    if (out.includes('NaN') || out.includes('undefined')) {
+      problems.push(`${strategy} card rendered NaN/undefined`);
+    }
+  }
+  // Every strategy the planner can emit must have a heading; an unlabelled one
+  // silently renders nothing.
+  for (const strategy of ['bonus_conversion', 'qualify_then_convert', 'no_sweat_hedge',
+                          'boost_locked', 'boost_breakeven', 'rollover_grind']) {
+    globalThis.__setPromoPlans({
+      'draftkings|s': { strategy, book: [], plans: [card({})], skipped: {},
+                        caveats: [], unit: null },
+    }, { odds_run_id: 7 });
+    if (!globalThis.__promoPlanHtml({ source: 'draftkings', offer_id: 's' }).includes('plan-card')) {
+      problems.push(`strategy ${strategy} has no label, so its plans do not render`);
+    }
+  }
+
   // The list note separates "computed, all gated out" from "never computed".
   const noteFor = (meta) => {
     globalThis.__setPromoRun({ id: 4, started_at: '2026-07-28T07:00:00+00:00',
@@ -1260,6 +1319,6 @@ if (process.argv[3]) {
   globalThis.__restorePromos();
   console.log(problems.length
     ? 'PROMO PLAN RENDER WRONG: ' + problems.join('; ')
-    : 'promo plan cards render the planner\'s numbers verbatim (7 shapes)');
+    : 'promo plan cards render the planner\'s numbers verbatim (all 6 strategies, 7 shapes)');
   if (problems.length) process.exit(1);
 }

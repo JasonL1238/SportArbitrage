@@ -131,6 +131,17 @@ _QUALIFYING_SUMMARY = re.compile(
     re.IGNORECASE,
 )
 
+#: A refund dressed as a bet-and-get.  The connective narrowing caught the form
+#: where the condition precedes ``get``; this catches the commoner one where it
+#: trails, which otherwise priced a second-chance offer as credit that always
+#: arrives — roughly double its real value, since the credit lands only when
+#: the qualifying bet loses.
+_CONDITIONAL_REFUND = re.compile(
+    r"\b(?:if\s+(?:your|it|the)\b|second\s+chance|money\s+back|"
+    r"back\s+in\s+(?:bonus|free)\b|refund)",
+    re.IGNORECASE,
+)
+
 _BOOST_PERCENT = re.compile(r"(\d{1,3})\s*%\s*(?:profit\s+|odds\s+)?boost", re.IGNORECASE)
 
 _WAGERING_MULTIPLE = re.compile(r"(\d+(?:\.\d+)?)\s*x", re.IGNORECASE)
@@ -175,6 +186,8 @@ def parse_qualifying_stake(summary: str | None) -> float | None:
     m = _QUALIFYING_SUMMARY.match(summary)
     if not m:
         return None
+    if _CONDITIONAL_REFUND.search(summary):
+        return None
     try:
         value = float(m.group(1).replace(",", ""))
     except ValueError:
@@ -209,6 +222,19 @@ def parse_wagering_multiple(text: str | None) -> float | None:
 # ── brand → stakeable odds feeds ─────────────────────────────────────────────
 
 _REGISTERED_KEYS = frozenset(descriptor.key for descriptor in SOURCES)
+
+#: Venues whose prices are a resting order book rather than a book's own line.
+#: They are judged net of fee for self-crossing, exactly as
+#: :func:`src.arb.find_opportunities` judges them: a sum below 1.0 at a
+#: sportsbook is evidence about the parser, but at an order book it only means
+#: two strangers left orders there, and "crossed" is a question about prices
+#: **after** the venue's charge.
+_ORDER_DRIVEN = frozenset(
+    descriptor.key for descriptor in SOURCES
+    if getattr(descriptor, "kind", None) is not None
+    and str(getattr(descriptor.kind, "value", descriptor.kind))
+    in {"exchange", "prediction_market"}
+)
 
 
 def stakeable_odds_sources(promo_source: str) -> tuple[str, ...]:
@@ -278,6 +304,23 @@ def _dropped_over(context: "_PlanContext", promo_keys: Sequence[str]) -> Counter
     return out
 
 
+def _over_stated_limit(legs: Sequence["_Leg"]) -> bool:
+    """Does any leg exceed the size its venue publishes?
+
+    Checked wherever stakes are produced, not once in the solver: conversions
+    are solved at :data:`PLAN_UNIT` and then scaled to the offer's real amount,
+    so a hedge that fitted a $200 limit at $100 of credit is a $1333 leg at
+    $1000 of credit.  The solver's check passed and the scaled plan was printed
+    anyway — the very defect the check was added for, surviving for every
+    offer whose bonus is not exactly $100, which is nearly all of them.
+    """
+    for leg in legs:
+        limit = leg.quote.limit_amount
+        if limit is not None and leg.stake > limit + _EPSILON:
+            return True
+    return False
+
+
 def _merge_counts(into: Counter, counts: Mapping[str, int]) -> None:
     """Fold one scan's gate counts into an offer's, taking the **larger**.
 
@@ -297,7 +340,7 @@ def _merge_counts(into: Counter, counts: Mapping[str, int]) -> None:
 
 def _row_rank(
     row: Quote, commissions: Mapping[str, Commission] | None
-) -> tuple[float, float, bool, str]:
+) -> tuple[float, float, bool]:
     """Total order over one book's rows for one selection, best first.
 
     Price decides; everything after it exists so that *ties* decide the same
@@ -309,12 +352,18 @@ def _row_rank(
     all.  Freshest wins the tie, then the main line over an alternate, then the
     market id as a last resort so the order is total rather than merely
     usually-decisive.
+
+    Three keys are enough to be total, and a fourth would be unreachable: two
+    rows sharing ``(source, selection, is_alternate)`` are caught by the
+    duplicate fingerprint above and never reach this comparison, so the only
+    pair it ever sees is a main line against an alternate — which the third key
+    already separates.  A market-id tiebreak sat here looking load-bearing and
+    could be deleted with the whole suite green, because nothing can reach it.
     """
     return (
         net_decimal(row, commissions),
         row.observed_at.timestamp(),
         not row.is_alternate,
-        row.source_market_id or "",
     )
 
 
@@ -360,7 +409,7 @@ class _PlanContext:
     #: Groups a source was excluded from for describing a different fixture, or
     #: for pricing its own complete market below 1.0 — a parse fault either way,
     #: reported per source so the offer whose book it is can say so.
-    excluded_groups: dict[str, set] = field(default_factory=dict)
+    excluded_groups: dict[str, dict[str, set]] = field(default_factory=dict)
     #: Groups a source was *excluded* from for publishing two prices for one
     #: selection at one alternate status.  Indexed separately from
     #: ``groups_by_source`` precisely because the source is not in that index —
@@ -469,20 +518,31 @@ def _build_context(
             selections = best[source]
             if not shape or not set(selections) >= set(shape):
                 continue
-            if arb_margin(
-                [selections[selection].decimal_odds for selection in shape]
-            ) > _EPSILON:
+            if source in _ORDER_DRIVEN:
+                from src.validation import ORDER_BOOK_CROSSING_TOLERANCE
+
+                net_sum = sum(
+                    1.0 / net_decimal(selections[selection], context.commissions)
+                    for selection in shape
+                )
+                crossed = net_sum < 1.0 - ORDER_BOOK_CROSSING_TOLERANCE
+            else:
+                crossed = arb_margin(
+                    [selections[selection].decimal_odds for selection in shape]
+                ) > _EPSILON
+            if crossed:
                 self_crossed.add(source)
         for source in outliers | self_crossed:
             best.pop(source, None)
-        if outliers:
-            context.excluded_groups.setdefault(
-                "legs_disagree_on_the_game", set()
-            ).add(key)
-        if self_crossed:
-            context.excluded_groups.setdefault(
-                "source_prices_itself_to_lose", set()
-            ).add(key)
+        for reason, sources in (
+            ("legs_disagree_on_the_game", outliers),
+            ("source_prices_itself_to_lose", self_crossed),
+        ):
+            if not sources:
+                continue
+            by_source = context.excluded_groups.setdefault(reason, {})
+            for source in sources:
+                by_source.setdefault(source, set()).add(key)
 
         view = _GroupView(
             key=key,
@@ -504,8 +564,9 @@ def _build_context(
         # collected.  "Nothing you can take right now" and "we never saw this
         # book" are different facts and get different sentences.
         suspended = context.dropped_groups.setdefault("no_active_price", {})
+        excluded_here = faulted | outliers | self_crossed
         for source in rows_by_source:
-            if source not in best and source not in faulted:
+            if source not in best and source not in excluded_here:
                 suspended.setdefault(source, set()).add(key)
 
     return context
@@ -670,8 +731,10 @@ def _scan(
     played = set(group_keys) | {
         key for source in promo_keys for key in context.faulted_by_source.get(source, ())
     }
-    for reason, groups in context.excluded_groups.items():
-        hit = len(groups & played)
+    for reason, by_source in context.excluded_groups.items():
+        hit = len({
+            key for groups in by_source.values() for key in groups if key in played
+        })
         if hit:
             skipped[reason] = max(skipped.get(reason, 0), hit)
 
@@ -681,6 +744,9 @@ def _scan(
         _, market, period, _, line = key
 
         behind = _counterparties(view.rows, context.one_counterparty)
+        # Counted once per (book, selection) for this market rather than once
+        # per promo side considered, so one stale book reads as one refusal.
+        stale_here: set[tuple[str, Selection]] = set()
 
         # The promo book's contract.  In a window where books price the draw, a
         # two-way moneyline is ambiguous about ties — the arb detector refuses
@@ -786,10 +852,20 @@ def _scan(
                     # truncate-before-gating defect round 3 fixed for
                     # counterparties, on the neighbouring gate.
                     if abs(quote.observed_at - promo_quote.observed_at) > MAX_OBSERVATION_SPREAD:
-                        skipped["observation_spread"] += 1
+                        stale_here.add((source, selection))
                         continue
                     usable.append((source, quote))
-                pools.append(usable[:_HEDGE_CANDIDATES_PER_SELECTION])
+                window = usable[:_HEDGE_CANDIDATES_PER_SELECTION]
+                if usable:
+                    freshest = max(usable, key=lambda item: item[1].observed_at)
+                    if freshest not in window:
+                        # Price alone can fill the window with rows that each
+                        # pair with the promo leg and not with each other; the
+                        # combination gate then rejects every one and reports
+                        # only ``observation_spread``, while a fully
+                        # simultaneous plan sat one row outside the window.
+                        window = [*window, freshest]
+                pools.append(window)
             if any(not pool for pool in pools):
                 skipped["no_hedge_price"] += 1
                 continue
@@ -845,6 +921,7 @@ def _scan(
                     stake=stake,
                     boost_percent=boost_percent,
                     refund_rate=refund_rate,
+                    refusals=skipped,
                 )
                 if candidate is None:
                     continue
@@ -852,6 +929,10 @@ def _scan(
                     best_candidate = candidate
             if best_candidate is not None:
                 candidates.append(best_candidate)
+        if stale_here:
+            skipped["observation_spread"] = (
+                skipped.get("observation_spread", 0) + len(stale_here)
+            )
 
     candidates.sort(
         key=lambda c: (
@@ -892,6 +973,7 @@ def _solve(
     stake: float,
     boost_percent: float | None,
     refund_rate: float,
+    refusals: Counter,
 ) -> _Candidate | None:
     """Solve hedge stakes for one assignment and price every outcome.
 
@@ -912,6 +994,7 @@ def _solve(
         promo_leg = _Leg(promo_quote, _round_cents(stake), promo_net, "promo", MODE_BONUS)
     elif mode == MODE_BOOSTED:
         if boost_percent is None:
+            refusals["boost_percent_unknown"] += 1
             return None
         boosted_net = 1.0 + (promo_net - 1.0) * (1.0 + boost_percent / 100.0)
         # Cash stake S at boosted odds n_b: wins collect S·n_b (stake back plus
@@ -945,6 +1028,7 @@ def _solve(
         for (source, quote), net in zip(combo, hedge_nets)
     )
     if any(leg.stake <= 0 for leg in hedge_legs):
+        refusals["hedge_stake_rounds_to_zero"] += 1
         return None
     # A leg above the size the venue publishes cannot be placed as printed, so
     # the floor computed from it is not a floor.  The arb detector caps a
@@ -953,10 +1037,9 @@ def _solve(
     # the honest answer is to refuse the assignment and count it.  Measured on
     # live data: a $481.44 "worst case" resting on a $1018.56 leg at a book
     # advertising $40.
-    for leg in hedge_legs:
-        limit = leg.quote.limit_amount
-        if limit is not None and leg.stake > limit + _EPSILON:
-            return None
+    if _over_stated_limit(hedge_legs):
+        refusals["hedge_over_stated_limit"] += 1
+        return None
 
     legs = (promo_leg, *hedge_legs)
     profits = _outcome_profits(
@@ -1079,9 +1162,17 @@ def _plan_for_offer(
             for key in context.faulted_by_source.get(source_key, ())
         })
         dropped = _dropped_over(context, promo_keys)
-        for reason, groups in context.excluded_groups.items():
-            if groups:
-                dropped[reason] = max(dropped.get(reason, 0), len(groups))
+        # This book's *own* exclusions only.  Counting every market where any
+        # book was thrown out attributed other venues' parse faults to a book
+        # that never priced those games — and in this branch it has no markets
+        # of its own, so the number was pure noise.
+        for reason, by_source in context.excluded_groups.items():
+            mine = {
+                key for source_key in promo_keys
+                for key in by_source.get(source_key, ())
+            }
+            if mine:
+                dropped[reason] = max(dropped.get(reason, 0), len(mine))
         if faulted:
             # The book *did* produce rows; every one of its markets was thrown
             # out for publishing two prices for one selection.  Saying "no rows"
@@ -1180,7 +1271,15 @@ def _plan_for_offer(
         reward in {"bonus_bets", "free_bet"}
     )
 
-    if kind is PromoKind.PARLAY_BOOST:
+    # A boost *kind* whose reward is credit is a bet-and-get wearing a boost
+    # label, and the boost branch priced it as one: a live $300 bonus-bet drop
+    # was presented as a boost hunt with a −$1.95 worst case and no mention of
+    # the $300, and a $250 *credit* became "risk $250 of your own money".  Five
+    # of sixty live offers carry this shape.  Reward wins when it names a credit
+    # type, since that is the concrete thing the operator receives.
+    credit_reward = reward in {"bonus_bets", "free_bet", "site_credit"}
+
+    if kind is PromoKind.PARLAY_BOOST and not credit_reward:
         # Genuinely unpriceable here, and now enforced rather than asserted in a
         # comment: the previous dispatch let a parlay boost whose reward_type
         # read ``bonus_bets`` fall through to conversion and print a card
@@ -1192,7 +1291,18 @@ def _plan_for_offer(
             "a parlay boost pays on correlated legs, which this planner does "
             "not model — no hedge is computed and the playbook below stands"
         )
-    elif kind in {PromoKind.ODDS_BOOST, PromoKind.PROFIT_BOOST} or reward == "boost":
+    elif kind is PromoKind.PARLAY_BOOST:
+        # The qualifying parlay is not modelled, but the credit it pays is an
+        # ordinary bonus bet once it lands.  Price the conversion only, and say
+        # which half is missing rather than discarding both.
+        out["caveats"].append(
+            "the qualifying leg is a parlay, which this planner does not "
+            "model — only the conversion of the credit it pays is priced below"
+        )
+        _plan_conversion(out, skipped, conversions, bonus_amount, min_dec, context)
+    elif (
+        kind in {PromoKind.ODDS_BOOST, PromoKind.PROFIT_BOOST} and not credit_reward
+    ) or reward == "boost":
         _plan_boost(out, context, promo_keys, skipped, boost_pct, bonus_amount, min_dec)
     elif kind in {PromoKind.NO_SWEAT, PromoKind.RISK_FREE} or reward in {
         "no_sweat",
@@ -1223,11 +1333,13 @@ def _plan_for_offer(
         # to fall off the end: 19 (kind, reward) pairs the enricher really does
         # produce returned no plan, no caveat and an empty skipped map, which is
         # indistinguishable from a bug.
-        described = f"{kind.value.replace('_', ' ')}"
+        label = kind.value.replace("_", " ")
+        article = "an" if label[:1] in "aeiou" else "a"
+        described = f"{article} {label}"
         if reward:
             described += f" paying {reward.replace('_', ' ')}"
         out["caveats"].append(
-            f"this offer reads as a {described}, which has no priceable "
+            f"this offer reads as {described}, which has no priceable "
             "mechanics to hedge — the playbook below is the whole answer"
         )
 
@@ -1280,7 +1392,11 @@ def _plan_conversion(
     candidates = [c for c in conversions(min_dec) if c.settled_floor > _EPSILON]
     scale = amount / PLAN_UNIT
     for candidate in candidates[:MAX_PLANS_PER_OFFER]:
-        payload = _candidate_payload(_rescale(candidate, scale), as_of=context.as_of)
+        scaled = _rescale(candidate, scale)
+        if scaled is None:
+            skipped["hedge_over_stated_limit"] += 1
+            continue
+        payload = _candidate_payload(scaled, as_of=context.as_of)
         payload["conversion_pct"] = round(candidate.settled_floor / PLAN_UNIT * 100.0, 2)
         out["plans"].append(payload)
     out["caveats"].append(
@@ -1322,14 +1438,18 @@ def _plan_qualify_then_convert(
     best_rate = 0.0
     for candidate in conversion[: max(0, MAX_PLANS_PER_OFFER - len(out["plans"]))]:
         scale = bonus_amount / PLAN_UNIT
-        payload = _candidate_payload(_rescale(candidate, scale), as_of=context.as_of)
+        scaled = _rescale(candidate, scale)
+        if scaled is None:
+            skipped["hedge_over_stated_limit"] += 1
+            continue
+        payload = _candidate_payload(scaled, as_of=context.as_of)
         payload["step"] = "convert"
         payload["conversion_pct"] = round(candidate.settled_floor / PLAN_UNIT * 100.0, 2)
         out["plans"].append(payload)
     if conversion:
         best_rate = conversion[0].settled_floor / PLAN_UNIT
     if qualify and conversion:
-        cost = -min(qualify[0].settled_floor, 0.0)
+        cost = max(-min(qualify[0].settled_floor, 0.0), 0.0)
         out["expected_value"] = round(bonus_amount * best_rate - cost, 2)
         out["caveats"].append(
             f"net of the qualifying round-trip: ${bonus_amount:g} of credit at the "
@@ -1452,7 +1572,30 @@ def _plan_boost(
         rows.append((max(needed, 0.0), candidate))
     rows.sort(key=lambda item: (item[0], item[1].view.key[0]))
     for needed, candidate in rows[:MAX_PLANS_PER_OFFER]:
-        payload = _candidate_payload(candidate, as_of=context.as_of)
+        # Re-solve at the boost being advertised.  The candidates above come
+        # from the *cash* scan, so their hedge stakes were sized for the
+        # unboosted price and the hedge-wins outcome does not contain the boost
+        # at all — the printed floor was invariant in the boost percentage.
+        # The card said "needs a 1.6%+ boost" beside "worst case −$0.92", and no
+        # boost, however large, made those stakes reach the first claim: 11 of
+        # 18 such cards on a live run contradicted themselves that way.
+        boosted = _solve(
+            candidate.view,
+            promo_selection=candidate.promo_leg.quote.selection,
+            promo_quote=candidate.promo_leg.quote,
+            promo_net=candidate.promo_leg.net_odds,
+            combo=tuple((leg.quote.source, leg.quote) for leg in candidate.hedge_legs),
+            hedge_nets=[leg.net_odds for leg in candidate.hedge_legs],
+            shape=frozenset(leg.quote.selection for leg in candidate.legs),
+            mode=MODE_BOOSTED,
+            stake=stake,
+            boost_percent=needed,
+            refund_rate=0.0,
+            refusals=skipped,
+        )
+        if boosted is None:
+            continue
+        payload = _candidate_payload(boosted, as_of=context.as_of)
         payload["breakeven_boost_pct"] = round(needed, 2)
         out["plans"].append(payload)
 
@@ -1491,7 +1634,7 @@ def _plan_rollover(
     )
 
 
-def _rescale(candidate: _Candidate, scale: float) -> _Candidate:
+def _rescale(candidate: _Candidate, scale: float) -> _Candidate | None:
     """Scale a per-unit candidate to the offer's stated dollars.
 
     Stakes scale linearly, so re-rounding to cents after scaling keeps the
@@ -1499,6 +1642,8 @@ def _rescale(candidate: _Candidate, scale: float) -> _Candidate:
     scaled legs rather than multiplied, so rounding never compounds.
     """
     if abs(scale - 1.0) < _EPSILON:
+        # No re-check: at scale 1.0 the stakes are the ones ``_solve`` already
+        # measured against the venue's limit.  Only scaling can break it.
         return candidate
     promo = candidate.promo_leg
     scaled_promo = _Leg(promo.quote, _round_cents(promo.stake * scale), promo.net_odds,
@@ -1508,6 +1653,8 @@ def _rescale(candidate: _Candidate, scale: float) -> _Candidate:
         for leg in candidate.hedge_legs
     )
     legs = (scaled_promo, *scaled_hedges)
+    if _over_stated_limit(scaled_hedges):
+        return None
     shape = frozenset(leg.quote.selection for leg in legs)
     profits = _outcome_profits(candidate.view, legs, shape=shape)
     rounded = tuple((label, round(profit, 2)) for label, profit in profits)
