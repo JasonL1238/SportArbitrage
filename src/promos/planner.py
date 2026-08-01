@@ -137,8 +137,14 @@ _QUALIFYING_SUMMARY = re.compile(
 #: arrives — roughly double its real value, since the credit lands only when
 #: the qualifying bet loses.
 _CONDITIONAL_REFUND = re.compile(
-    r"\b(?:if\s+(?:your|it|the)\b|second\s+chance|money\s+back|"
-    r"back\s+in\s+(?:bonus|free)\b|refund)",
+    r"\b(?:second\s+chance|money\s+back|bet\s+reset"
+    # "if/when/should/unless your bet loses", in any of the orderings venues
+    # write.  Anchored on a win/lose word so that ordinary copy mentioning
+    # "back in bonus bets" — a parlay rebate, a refunded fee — is not swept up:
+    # a false positive silently drops the qualifying leg.
+    r"|(?:if|when|should|unless)\s+(?:your|it|the)\b[^.;]{0,48}?"
+    r"\b(?:lose|loses|losing|lost|wins?|won)\b"
+    r"|on\s+a\s+losing\b)",
     re.IGNORECASE,
 )
 
@@ -319,6 +325,20 @@ def _over_stated_limit(legs: Sequence["_Leg"]) -> bool:
         if limit is not None and leg.stake > limit + _EPSILON:
             return True
     return False
+
+
+def _refuse_market(skipped: Counter, reason: str, candidate: "_Candidate") -> None:
+    """Record a refusal that happened after the scan, once per market.
+
+    Scan counts reach an offer through :func:`_merge_counts`, which takes the
+    larger because two scans of one slate see the same refusal twice.  Adding a
+    per-candidate tally straight onto that produced a number that was neither —
+    under a caveat promising the counts say what was refused.
+    """
+    marker = f"__markets__{reason}"
+    seen = skipped.get(marker, 0) + 1
+    skipped[marker] = seen
+    skipped[reason] = max(skipped.get(reason, 0), seen)
 
 
 def _merge_counts(into: Counter, counts: Mapping[str, int]) -> None:
@@ -745,7 +765,9 @@ def _scan(
 
         behind = _counterparties(view.rows, context.one_counterparty)
         # Counted once per (book, selection) for this market rather than once
-        # per promo side considered, so one stale book reads as one refusal.
+        # per promo side considered — so a stale book on a three-way market is
+        # three refusals, one per price it offered, not the nine that counting
+        # per promo side produced.
         stale_here: set[tuple[str, Selection]] = set()
 
         # The promo book's contract.  In a window where books price the draw, a
@@ -1002,7 +1024,7 @@ def _solve(
         target = stake * boosted_net
         promo_leg = _Leg(promo_quote, _round_cents(stake), boosted_net, "promo", MODE_BOOSTED)
         notes.append(
-            f"priced with the stated {boost_percent:g}% boost applied to the "
+            f"priced with the stated {round(boost_percent, 2):g}% boost applied to the "
             f"quoted {promo_quote.decimal_odds:.2f}"
         )
     elif mode == MODE_CASH:
@@ -1278,6 +1300,13 @@ def _plan_for_offer(
     # of sixty live offers carry this shape.  Reward wins when it names a credit
     # type, since that is the concrete thing the operator receives.
     credit_reward = reward in {"bonus_bets", "free_bet", "site_credit"}
+    # Only true stake-not-returned credit converts.  Site credit is cash that
+    # needs clearing, and ``_plan_rollover`` two branches below is where the
+    # rest of the dispatch sends it.
+    parlay_credit = kind is PromoKind.PARLAY_BOOST and reward in {
+        "bonus_bets",
+        "free_bet",
+    }
 
     if kind is PromoKind.PARLAY_BOOST and not credit_reward:
         # Genuinely unpriceable here, and now enforced rather than asserted in a
@@ -1291,7 +1320,7 @@ def _plan_for_offer(
             "a parlay boost pays on correlated legs, which this planner does "
             "not model — no hedge is computed and the playbook below stands"
         )
-    elif kind is PromoKind.PARLAY_BOOST:
+    elif parlay_credit:
         # The qualifying parlay is not modelled, but the credit it pays is an
         # ordinary bonus bet once it lands.  Price the conversion only, and say
         # which half is missing rather than discarding both.
@@ -1304,10 +1333,14 @@ def _plan_for_offer(
         kind in {PromoKind.ODDS_BOOST, PromoKind.PROFIT_BOOST} and not credit_reward
     ) or reward == "boost":
         _plan_boost(out, context, promo_keys, skipped, boost_pct, bonus_amount, min_dec)
-    elif kind in {PromoKind.NO_SWEAT, PromoKind.RISK_FREE} or reward in {
-        "no_sweat",
-        "risk_free",
-    }:
+    elif (
+        kind in {PromoKind.NO_SWEAT, PromoKind.RISK_FREE}
+        or reward in {"no_sweat", "risk_free"}
+        # Copy whose reward is conditional on losing *is* a no-sweat, whatever
+        # the enricher labelled it.  Priced as a plain bonus it valued credit
+        # that arrives only on a loss as credit in hand.
+        or _CONDITIONAL_REFUND.search(summary)
+    ):
         # ``risk_free`` is the label the enricher writes for "risk-free bet"
         # copy.  The *kind* was handled and the reward was not, so those offers
         # fell past every branch and printed nothing at all — no plan and no
@@ -1352,7 +1385,10 @@ def _plan_for_offer(
             0,
             f"stated minimum odds {view.get('min_odds')} applied to the promo-side leg",
         )
-    out["skipped"] = {reason: count for reason, count in sorted(skipped.items())}
+    out["skipped"] = {
+        reason: count for reason, count in sorted(skipped.items())
+        if not reason.startswith("__markets__")
+    }
     if (
         not out["plans"]
         and out["strategy"] not in {"text_only", "no_odds_coverage"}
@@ -1391,11 +1427,14 @@ def _plan_conversion(
         )
     candidates = [c for c in conversions(min_dec) if c.settled_floor > _EPSILON]
     scale = amount / PLAN_UNIT
-    for candidate in candidates[:MAX_PLANS_PER_OFFER]:
+    survivors = []
+    for candidate in candidates:
         scaled = _rescale(candidate, scale)
         if scaled is None:
-            skipped["hedge_over_stated_limit"] += 1
+            _refuse_market(skipped, "hedge_over_stated_limit", candidate)
             continue
+        survivors.append((candidate, scaled))
+    for candidate, scaled in survivors[:MAX_PLANS_PER_OFFER]:
         payload = _candidate_payload(scaled, as_of=context.as_of)
         payload["conversion_pct"] = round(candidate.settled_floor / PLAN_UNIT * 100.0, 2)
         out["plans"].append(payload)
@@ -1433,15 +1472,19 @@ def _plan_qualify_then_convert(
         payload["step"] = "qualify"
         # The qualifying round-trip usually costs the vig; its settled floor is
         # that cost, signed.
-        payload["qualifying_cost"] = round(-min(qualify[0].settled_floor, 0.0), 2)
+        payload["qualifying_cost"] = round(-min(qualify[0].settled_floor, 0.0) or 0.0, 2)
         out["plans"].append(payload)
     best_rate = 0.0
-    for candidate in conversion[: max(0, MAX_PLANS_PER_OFFER - len(out["plans"]))]:
-        scale = bonus_amount / PLAN_UNIT
+    scale = bonus_amount / PLAN_UNIT
+    convert_survivors = []
+    for candidate in conversion:
         scaled = _rescale(candidate, scale)
         if scaled is None:
-            skipped["hedge_over_stated_limit"] += 1
+            _refuse_market(skipped, "hedge_over_stated_limit", candidate)
             continue
+        convert_survivors.append((candidate, scaled))
+    room = max(0, MAX_PLANS_PER_OFFER - len(out["plans"]))
+    for candidate, scaled in convert_survivors[:room]:
         payload = _candidate_payload(scaled, as_of=context.as_of)
         payload["step"] = "convert"
         payload["conversion_pct"] = round(candidate.settled_floor / PLAN_UNIT * 100.0, 2)
@@ -1449,7 +1492,7 @@ def _plan_qualify_then_convert(
     if conversion:
         best_rate = conversion[0].settled_floor / PLAN_UNIT
     if qualify and conversion:
-        cost = max(-min(qualify[0].settled_floor, 0.0), 0.0)
+        cost = -min(qualify[0].settled_floor, 0.0) or 0.0
         out["expected_value"] = round(bonus_amount * best_rate - cost, 2)
         out["caveats"].append(
             f"net of the qualifying round-trip: ${bonus_amount:g} of credit at the "
@@ -1570,8 +1613,9 @@ def _plan_boost(
             continue
         needed = ((breakeven_net - 1.0) / (base - 1.0) - 1.0) * 100.0
         rows.append((max(needed, 0.0), candidate))
-    rows.sort(key=lambda item: (item[0], item[1].view.key[0]))
-    for needed, candidate in rows[:MAX_PLANS_PER_OFFER]:
+    rows.sort(key=lambda item: (item[0], -item[1].settled_floor, item[1].view.key[0]))
+    boosted_rows = []
+    for needed, candidate in rows:
         # Re-solve at the boost being advertised.  The candidates above come
         # from the *cash* scan, so their hedge stakes were sized for the
         # unboosted price and the hedge-wins outcome does not contain the boost
@@ -1594,7 +1638,10 @@ def _plan_boost(
             refusals=skipped,
         )
         if boosted is None:
+            _refuse_market(skipped, "hedge_over_stated_limit", candidate)
             continue
+        boosted_rows.append((needed, boosted))
+    for needed, boosted in boosted_rows[:MAX_PLANS_PER_OFFER]:
         payload = _candidate_payload(boosted, as_of=context.as_of)
         payload["breakeven_boost_pct"] = round(needed, 2)
         out["plans"].append(payload)

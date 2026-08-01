@@ -1287,6 +1287,89 @@ if (process.argv[3]) {
     }
   }
 
+  // A spread and a team total.  Every plan fixture until now was a moneyline
+  // with line: null and side: null, so the card's market-line and side
+  // branches never executed — and both are the ones the source comments call
+  // catastrophic: the away side's sign inverted, or two sides of one fixture
+  // rendering character-identical.
+  const spreadPlan = {
+    ...plan, market: 'spread', line: -1.5, side: null,
+    legs: [
+      { role: 'promo', source: 'draftkings', selection: 'away', line: 1.5,
+        decimal_odds: 3.0, american_odds: 200, net_odds: 3.0, stake: 100.0,
+        stake_kind: 'bonus', is_alternate: false, observed_at: '2026-07-28T07:00:00+00:00' },
+      { role: 'hedge', source: 'fanduel', selection: 'home', line: -1.5,
+        decimal_odds: 1.5, american_odds: -200, net_odds: 1.5, stake: 133.33,
+        stake_kind: 'cash', is_alternate: false, observed_at: '2026-07-28T07:00:00+00:00' },
+    ],
+    notes: [], conversion_pct: 61.25,
+  };
+  globalThis.__setPromoPlans({
+    'draftkings|spread': {
+      strategy: 'bonus_conversion', book: ['draftkings'], plans: [spreadPlan],
+      skipped: {}, caveats: [], unit: null,
+    },
+  }, { odds_run_id: 7 });
+  // The market line only — the card heading names both teams, so a substring
+  // check over the whole card is satisfied by the heading whichever team the
+  // side branch picked, and the plan-level line is satisfied by the per-leg one.
+  const planSub = (html) => {
+    const m = html.match(/<p class="plan-sub">([^<]*)</);
+    return m ? m[1] : '';
+  };
+  const spreadHtml = globalThis.__promoPlanHtml({ source: 'draftkings', offer_id: 'spread' });
+  {
+    const sub = planSub(spreadHtml);
+    for (const want of ['spread', '-1.5']) {
+      if (!sub.includes(want)) {
+        problems.push(`spread market line missing ${JSON.stringify(want)} (got ${JSON.stringify(sub)})`);
+      }
+    }
+  }
+  {
+    const rows = spreadHtml.split('<tr>').slice(1).map((r) => r.split('</tr>')[0]);
+    const promoRow = rows.find((r) => r.includes('DraftKings')) || '';
+    const hedgeRow = rows.find((r) => r.includes('FanDuel')) || '';
+    // Opposite signs, each from its own leg.  Rendering the group's canonical
+    // line on both would put the hedge on the same side of the game.
+    if (!promoRow.includes('+1.5')) problems.push('the away leg lost its +1.5');
+    if (!hedgeRow.includes('-1.5')) problems.push('the home leg lost its -1.5');
+    if (promoRow.includes('-1.5')) problems.push('the away leg carries the home sign');
+  }
+
+  const teamTotal = (side) => ({
+    ...plan, market: 'team_total', line: 4.5, side,
+    legs: [
+      { role: 'promo', source: 'draftkings', selection: 'over', line: 4.5,
+        decimal_odds: 3.0, american_odds: 200, net_odds: 3.0, stake: 100.0,
+        stake_kind: 'bonus', is_alternate: false, observed_at: '2026-07-28T07:00:00+00:00' },
+      { role: 'hedge', source: 'fanduel', selection: 'under', line: 4.5,
+        decimal_odds: 1.5, american_odds: -200, net_odds: 1.5, stake: 133.33,
+        stake_kind: 'cash', is_alternate: false, observed_at: '2026-07-28T07:00:00+00:00' },
+    ],
+    notes: [], conversion_pct: 61.25,
+  });
+  globalThis.__setPromoPlans({
+    'draftkings|tt-home': { strategy: 'bonus_conversion', book: [], skipped: {},
+                            caveats: [], unit: null, plans: [teamTotal('home')] },
+    'draftkings|tt-away': { strategy: 'bonus_conversion', book: [], skipped: {},
+                            caveats: [], unit: null, plans: [teamTotal('away')] },
+  }, { odds_run_id: 7 });
+  const ttHome = globalThis.__promoPlanHtml({ source: 'draftkings', offer_id: 'tt-home' });
+  const ttAway = globalThis.__promoPlanHtml({ source: 'draftkings', offer_id: 'tt-away' });
+  if (ttHome === ttAway) {
+    problems.push('the two sides of one team total render identically');
+  }
+  if (!planSub(ttHome).includes('Miami Marlins')) {
+    problems.push(`the home team total names ${JSON.stringify(planSub(ttHome))}`);
+  }
+  if (!planSub(ttAway).includes('Philadelphia Phillies')) {
+    problems.push(`the away team total names ${JSON.stringify(planSub(ttAway))}`);
+  }
+  if (planSub(ttHome).includes('Philadelphia')) {
+    problems.push('the home team total names the away team');
+  }
+
   // The list note separates "computed, all gated out" from "never computed".
   const noteFor = (meta) => {
     globalThis.__setPromoRun({ id: 4, started_at: '2026-07-28T07:00:00+00:00',
@@ -1319,6 +1402,6 @@ if (process.argv[3]) {
   globalThis.__restorePromos();
   console.log(problems.length
     ? 'PROMO PLAN RENDER WRONG: ' + problems.join('; ')
-    : 'promo plan cards render the planner\'s numbers verbatim (all 6 strategies, 7 shapes)');
+    : 'promo plan cards render the planner\'s numbers verbatim (6 strategies, 3 markets, 7 shapes)');
   if (problems.length) process.exit(1);
 }

@@ -620,14 +620,18 @@ class TestThePlanCommand:
     so every one of its refusals, filters and exit codes was unpinned.
     """
 
-    @pytest.fixture()
-    def seeded(self, tmp_path, monkeypatch):
-        """One promo run at smarkets, one odds run its book can be hedged in."""
+    def _seed(self, tmp_path, monkeypatch, *, market="moneyline",
+              hedge_source="fanduel", promo_source="smarkets"):
+        """One promo run at smarkets, one odds run its book can be hedged in.
+
+        Parameterised on the market so the CLI can be exercised on a spread and
+        a team total, not only the moneyline every earlier test used.
+        """
         from datetime import timedelta
 
         from src import settings as settings_mod
         from src.promos.base import PromoSourceHealth
-        from src.schema import Selection
+        from src.schema import Market, Selection, Side
         from src.sources.base import SourceHealth
         from src.store import Store
         from tests.conftest import make_quote
@@ -639,12 +643,47 @@ class TestThePlanCommand:
 
         observed = datetime.now(UTC)
         commence = observed + timedelta(hours=6)
-        quotes = [
-            make_quote(source="smarkets", selection=Selection.AWAY, decimal_odds=3.0,
-                       observed_at=observed, commence_time=commence),
-            make_quote(source="fanduel", selection=Selection.HOME, decimal_odds=1.5,
-                       observed_at=observed, commence_time=commence),
-        ]
+        shared = dict(observed_at=observed, commence_time=commence)
+        if market == "spread":
+            quotes = [
+                make_quote(source=promo_source, market=Market.SPREAD,
+                           selection=Selection.AWAY, line=1.5, decimal_odds=3.0, **shared),
+                make_quote(source=hedge_source, market=Market.SPREAD,
+                           selection=Selection.HOME, line=-1.5, decimal_odds=1.5, **shared),
+            ]
+        elif market == "push":
+            # An NFL two-way moneyline: a tie after overtime voids both legs, so
+            # the all-outcomes floor is zero while the settled floor is real.
+            # Without a market where they differ, swapping the two labels is an
+            # equivalent transformation and cannot be tested.
+            from src.schema import Sport
+            quotes = [
+                make_quote(source=promo_source, sport=Sport.FOOTBALL, league="NFL",
+                           event_key="NFL-NYJ@NFL-NE:2026-07-28",
+                           home_participant="NFL-NE", away_participant="NFL-NYJ",
+                           home_team="New England", away_team="New York Jets",
+                           selection=Selection.AWAY, decimal_odds=3.0, **shared),
+                make_quote(source=hedge_source, sport=Sport.FOOTBALL, league="NFL",
+                           event_key="NFL-NYJ@NFL-NE:2026-07-28",
+                           home_participant="NFL-NE", away_participant="NFL-NYJ",
+                           home_team="New England", away_team="New York Jets",
+                           selection=Selection.HOME, decimal_odds=1.5, **shared),
+            ]
+        elif market == "team_total":
+            quotes = [
+                make_quote(source=promo_source, market=Market.TEAM_TOTAL, side=Side.HOME,
+                           selection=Selection.OVER, line=4.5, decimal_odds=3.0, **shared),
+                make_quote(source=hedge_source, market=Market.TEAM_TOTAL, side=Side.HOME,
+                           selection=Selection.UNDER, line=4.5, decimal_odds=1.5, **shared),
+            ]
+        else:
+            quotes = [
+                make_quote(source=promo_source, selection=Selection.AWAY,
+                           decimal_odds=3.0, **shared),
+                make_quote(source=hedge_source, selection=Selection.HOME,
+                           decimal_odds=1.5, **shared),
+            ]
+
         class _Findings:
             """Storage reads attributes off whatever it is handed."""
 
@@ -659,7 +698,7 @@ class TestThePlanCommand:
         odds = Store(odds_db)
         run_id = odds.start_run(observed)
         odds.save_quotes(run_id, quotes)
-        for key in ("smarkets", "fanduel"):
+        for key in (promo_source, hedge_source):
             odds.save_health(run_id, SourceHealth(source_key=key, ok=True, checked_at=observed))
         odds.finish_run(run_id, finished_at=observed, report=_Findings(quotes))
         odds.close()
@@ -669,19 +708,136 @@ class TestThePlanCommand:
         promos.finish_run(
             promo_run, ok=True,
             offers=[PromoOffer(
-                source="smarkets", offer_id="credit", kind=PromoKind.BONUS_BET,
+                source=promo_source, offer_id="credit", kind=PromoKind.BONUS_BET,
                 title="Bonus bets", observed_at=observed,
                 bonus_amount=100.0, reward_type="bonus_bets",
             )],
-            health=[PromoSourceHealth(source_key="smarkets", ok=True,
+            health=[PromoSourceHealth(source_key=promo_source, ok=True,
                                       checked_at=observed, offer_count=1)],
         )
         promos.close()
         return promo_run
 
+    @pytest.fixture()
+    def seeded(self, tmp_path, monkeypatch):
+        return self._seed(tmp_path, monkeypatch)
+
     def _run(self, argv):
         from src.promos.collector import main
         return main(argv)
+
+    def test_every_leg_is_printed_with_its_stake_role_and_money_kind(
+        self, seeded, capsys,
+    ):
+        """The lines the operator actually acts on.
+
+        The only CLI assertion was on the header and the strategy name, both of
+        which sit above this block — so the whole leg table could be emptied,
+        the stakes printed as odds, or the credit/cash tag inverted, with the
+        suite green.
+        """
+        assert self._run(["plan"]) == 0
+        out = capsys.readouterr().out
+        legs = [line for line in out.splitlines() if line.startswith("    promo ")
+                or line.startswith("    hedge ")]
+        assert legs, out
+        promo = next(line for line in legs if line.startswith("    promo "))
+        hedge = next(line for line in legs if line.startswith("    hedge "))
+        # The promo leg is the issuing book, staked as credit; the hedge is
+        # elsewhere, staked as cash.  Inverting the tag sends real money to the
+        # wrong book.
+        assert "smarkets" in promo
+        assert "(credit)" in promo and "(credit)" not in hedge
+        assert "(cash)" in hedge
+        # $100 of credit at smarkets' 3.0 pays net 2.96 after its commission,
+        # so the profit is $196 and the hedge is 196/1.5 = $130.67.  The CLI
+        # runs with the real fee table, unlike the planner's own unit tests —
+        # the stake, not the price, which is what a stake/odds mix-up prints.
+        assert "stake 100.00" in promo, promo
+        assert "stake 130.67" in hedge, hedge
+        assert "@ 3.000" in promo and "@ 1.500" in hedge
+        # The two floors are different numbers and must not swap: "worst" is
+        # the all-outcomes floor, "settles" the floor where the promo leg
+        # actually settles.  On a pushable market they differ by the whole
+        # position, and printing one under the other's label reverses which
+        # guarantee the operator is reading.
+        assert "worst " in out and "settles " in out
+        worst_line = next(line for line in out.splitlines() if "worst " in line)
+        import re as _re
+        worst, settles = _re.search(
+            r"worst ([+-][\d.]+), settles ([+-][\d.]+)", worst_line
+        ).groups()
+        assert float(worst) <= float(settles) + 1e-9, worst_line
+
+    def test_the_two_floors_are_not_interchangeable(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        """On a pushable market they differ by the whole position.
+
+        "worst" is the floor over every outcome; "settles" is the floor over
+        the outcomes where the promo leg actually settles.  Printing one under
+        the other's label reverses which guarantee is being read, and every
+        earlier fixture had them equal.
+        """
+        self._seed(tmp_path, monkeypatch, market="push")
+        assert self._run(["plan"]) == 0
+        out = capsys.readouterr().out
+        line = next(l for l in out.splitlines() if "worst " in l)
+        import re as _re
+        worst, settles = _re.search(
+            r"worst ([+-][\d.]+), settles ([+-][\d.]+)", line
+        ).groups()
+        assert float(worst) < float(settles), line
+        assert float(worst) == pytest.approx(0.0, abs=0.01), line
+
+    def test_a_spread_plan_prints_each_sides_own_signed_line(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        """No CLI test had ever used a spread, a total or a team total.
+
+        The two sides of one spread carry opposite signs; printing the group's
+        canonical line on both would send the hedge to the same side of the
+        game.
+        """
+        seeded = self._seed(tmp_path, monkeypatch, market="spread")
+        assert self._run(["plan"]) == 0
+        out = capsys.readouterr().out
+        assert "spread" in out
+        assert "+1.5" in out or "-1.5" in out, out
+        legs = [line for line in out.splitlines() if line.startswith("    promo ")
+                or line.startswith("    hedge ")]
+        assert len(legs) >= 2, out
+
+    def test_a_team_total_plan_names_whose_total_it_is(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        """Without the side, the two sides of one fixture print identically and
+        neither can be placed."""
+        self._seed(tmp_path, monkeypatch, market="team_total")
+        assert self._run(["plan"]) == 0
+        out = capsys.readouterr().out
+        assert "team_total" in out
+        # The team whose total it is, in parentheses beside the line.
+        assert "(Miami Marlins)" in out or "(Philadelphia Phillies)" in out, out
+
+    def test_verbose_shows_offers_that_produced_nothing(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        """``--verbose`` is the "why did nothing come back" mode and no test
+        passed it, so its branch had one arm only."""
+        # FanDuel's only "hedge" here is Action Network's view of FanDuel —
+        # the same counterparty, so nothing is placeable and the offer is
+        # invisible without --verbose.
+        self._seed(tmp_path, monkeypatch, promo_source="fanduel",
+                   hedge_source="an_fanduel")
+        assert self._run(["plan"]) == 0
+        quiet = capsys.readouterr().out
+        assert "strategy:" not in quiet, quiet
+        assert self._run(["plan", "--verbose"]) == 0
+        loud = capsys.readouterr().out
+        assert "strategy:" in loud, loud
+        # And it says why, which is the whole point of the mode.
+        assert "gated out:" in loud or "note:" in loud, loud
 
     def test_a_plan_is_printed_for_a_covered_book(self, seeded, capsys):
         assert self._run(["plan"]) == 0

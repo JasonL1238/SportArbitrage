@@ -2025,3 +2025,270 @@ class TestOneStaleBookCountsOnce:
         # One book, three selections — three (book, selection) refusals, not the
         # nine that counting per promo side produced.
         assert plan["skipped"].get("observation_spread") == 3, plan["skipped"]
+
+
+# ── round 6 adversarial findings ─────────────────────────────────────────────
+
+
+def _many_markets(hedge_limit=None, hedge_source="bovada", spare_source="onexbet"):
+    """Four markets: three whose hedge carries a limit, one whose hedge does not.
+
+    The three limited ones rank above the spare on conversion, so anything that
+    truncates before gating loses the only market that survives scaling.
+    """
+    rows = []
+    for index, (promo_odds, hedge_odds) in enumerate(
+        [(3.5, 1.40), (3.4, 1.42), (3.3, 1.44)]
+    ):
+        key = f"MLB-L{index}@MLB-M{index}:2026-07-28"
+        rows += [
+            make_quote(source="draftkings", selection=Selection.HOME,
+                       decimal_odds=promo_odds, event_key=key,
+                       home_participant=f"MLB-M{index}", away_participant=f"MLB-L{index}"),
+            make_quote(source=hedge_source, selection=Selection.AWAY,
+                       decimal_odds=hedge_odds, event_key=key, limit_amount=hedge_limit,
+                       home_participant=f"MLB-M{index}", away_participant=f"MLB-L{index}"),
+        ]
+    spare = "MLB-SP@MLB-SQ:2026-07-28"
+    rows += [
+        make_quote(source="draftkings", selection=Selection.HOME, decimal_odds=3.2,
+                   event_key=spare, home_participant="MLB-SQ", away_participant="MLB-SP"),
+        make_quote(source=spare_source, selection=Selection.AWAY, decimal_odds=1.46,
+                   event_key=spare, home_participant="MLB-SQ", away_participant="MLB-SP"),
+    ]
+    return rows, spare
+
+
+class TestGatingHappensBeforeTruncation:
+    """Filter, then take the best N — the third time this pattern has bitten.
+
+    Rounds 3 and 4 fixed it for the counterparty and freshness gates; round 5's
+    own new limit gate landed the same way.  Three markets refused at ranks 1-3
+    hid a viable +$739 plan at rank 4, and the offer printed "no hedgeable
+    market on this book passed every gate".
+    """
+
+    def test_a_viable_market_below_the_refused_ones_still_prints(self):
+        rows, spare = _many_markets(hedge_limit=250.0)
+        plan = _the_plan(_plans([_offer(bonus_amount=1000.0)], rows))
+        assert plan["plans"], plan["skipped"]
+        assert plan["plans"][0]["event_key"] == spare, [
+            p["event_key"] for p in plan["plans"]
+        ]
+
+    def test_the_refusals_are_still_counted(self):
+        rows, _ = _many_markets(hedge_limit=250.0)
+        plan = _the_plan(_plans([_offer(bonus_amount=1000.0)], rows))
+        assert plan["skipped"].get("hedge_over_stated_limit", 0) >= 1, plan["skipped"]
+
+    def test_no_false_claim_that_nothing_passed(self):
+        rows, _ = _many_markets(hedge_limit=250.0)
+        plan = _the_plan(_plans([_offer(bonus_amount=1000.0)], rows))
+        assert not any("passed every gate" in c for c in plan["caveats"]), plan["caveats"]
+
+    def test_the_boost_re_solve_gates_before_truncating_too(self):
+        """The refused markets must rank strictly above the survivor.
+
+        Three already-profitable markets (0% needed) sort ahead of one needing
+        a real boost; their *boosted* stakes exceed the hedge's published size
+        while their cash stakes did not, so the re-solve refuses exactly the
+        top three.
+        """
+        # Cash hedges of 98.0-100.0 fit the $103 limit, so these three survive
+        # the scan and become candidates; the *boosted* re-solve needs
+        # 103.1-105.3 and refuses them.  They need ~10.8% and so sort above the
+        # spare's 23.5%, which is what makes truncate-before-gating fatal.
+        rows = []
+        for index, (promo_odds, hedge_odds) in enumerate(
+            [(1.95, 1.95), (1.94, 1.96), (1.93, 1.97)]
+        ):
+            key = f"MLB-P{index}@MLB-Q{index}:2026-07-28"
+            rows += [
+                make_quote(source="draftkings", selection=Selection.HOME,
+                           decimal_odds=promo_odds, event_key=key,
+                           home_participant=f"MLB-Q{index}",
+                           away_participant=f"MLB-P{index}"),
+                make_quote(source="bovada", selection=Selection.AWAY,
+                           decimal_odds=hedge_odds, event_key=key, limit_amount=103.0,
+                           home_participant=f"MLB-Q{index}",
+                           away_participant=f"MLB-P{index}"),
+            ]
+        spare = "MLB-SP@MLB-SQ:2026-07-28"
+        rows += [
+            make_quote(source="draftkings", selection=Selection.HOME, decimal_odds=1.90,
+                       event_key=spare, home_participant="MLB-SQ",
+                       away_participant="MLB-SP"),
+            make_quote(source="onexbet", selection=Selection.AWAY, decimal_odds=1.90,
+                       event_key=spare, home_participant="MLB-SQ",
+                       away_participant="MLB-SP"),
+        ]
+        offer = _offer(kind="odds_boost", reward_type="boost", bonus_amount=None)
+        plan = _the_plan(_plans([offer], rows))
+        assert plan["strategy"] == "boost_breakeven"
+        assert plan["skipped"].get("hedge_over_stated_limit", 0) >= 1, plan["skipped"]
+        assert plan["plans"], plan["skipped"]
+        assert any(p["event_key"] == spare for p in plan["plans"]), [
+            p["event_key"] for p in plan["plans"]
+        ]
+
+
+class TestAlreadyProfitableBoostMarketsRankOnMoney:
+    """Every market needing no boost clamps to 0.0, so the event key decided.
+
+    A +$50 card lost to a +$5 one alphabetically.
+    """
+
+    def test_the_richest_zero_boost_market_leads(self):
+        rows = []
+        # Four markets that already lock, in ascending profit; the richest sorts
+        # last by event key, so only a money-aware tiebreak surfaces it.
+        for index, (promo_odds, hedge_odds) in enumerate(
+            [(2.10, 2.10), (2.20, 2.05), (2.40, 1.95), (2.60, 1.90)]
+        ):
+            key = f"MLB-{chr(97 + index)}A@MLB-{chr(97 + index)}B:2026-07-28"
+            rows += [
+                make_quote(source="draftkings", selection=Selection.HOME,
+                           decimal_odds=promo_odds, event_key=key,
+                           home_participant=f"MLB-{chr(97 + index)}B",
+                           away_participant=f"MLB-{chr(97 + index)}A"),
+                make_quote(source="bovada", selection=Selection.AWAY,
+                           decimal_odds=hedge_odds, event_key=key,
+                           home_participant=f"MLB-{chr(97 + index)}B",
+                           away_participant=f"MLB-{chr(97 + index)}A"),
+            ]
+        offer = _offer(kind="odds_boost", reward_type="boost", bonus_amount=None)
+        plans = _the_plan(_plans([offer], rows))["plans"]
+        assert plans, "no boost cards at all"
+        floors = [p["guaranteed_cash"] for p in plans]
+        assert floors == sorted(floors, reverse=True), floors
+
+
+class TestSiteCreditIsNotConvertedAsABonusBet:
+    """The same $250 must not be worth two different amounts by promo kind.
+
+    Site credit is cash needing rollover — the dispatch says so two branches
+    down — but a parlay boost paying site credit was routed to conversion and
+    valued at $162.50 against $250 everywhere else.
+    """
+
+    def _slate(self):
+        return [
+            make_quote(source="draftkings", selection=Selection.AWAY, decimal_odds=3.0),
+            make_quote(source="fanduel", selection=Selection.HOME, decimal_odds=1.5),
+        ]
+
+    @pytest.mark.parametrize("kind", ["parlay_boost", "odds_boost", "profit_boost",
+                                      "other", "deposit_match"])
+    def test_site_credit_is_always_a_rollover(self, kind):
+        plan = _the_plan(_plans(
+            [_offer(kind=kind, reward_type="site_credit", bonus_amount=250.0,
+                    wagering_requirement="1x")],
+            self._slate(),
+        ))
+        assert plan["strategy"] == "rollover_grind", (kind, plan["strategy"])
+
+    def test_a_parlay_paying_bonus_bets_still_converts(self):
+        plan = _the_plan(_plans(
+            [_offer(kind="parlay_boost", reward_type="bonus_bets", bonus_amount=300.0)],
+            self._slate(),
+        ))
+        assert plan["strategy"] == "bonus_conversion"
+
+
+class TestAConditionalRewardIsPricedAsInsurance:
+    """Refusing to parse the qualifying stake was not enough.
+
+    The offer still reached plain conversion, which prices the whole reward as
+    credit in hand — the same dollar figure either way — with nothing saying
+    the credit only lands when the qualifying bet loses.
+    """
+
+    def _slate(self):
+        return [
+            make_quote(source="draftkings", selection=Selection.AWAY, decimal_odds=3.0),
+            make_quote(source="fanduel", selection=Selection.HOME, decimal_odds=1.5),
+        ]
+
+    def test_a_second_chance_offer_is_valued_as_a_refund(self):
+        offer = _offer(
+            summary="Bet $50, get $50 back in bonus bets if your first bet loses",
+            bonus_amount=50.0,
+        )
+        plan = _the_plan(_plans([offer], self._slate()))
+        assert plan["strategy"] in {"no_sweat_hedge", "text_only"}, plan["strategy"]
+        assert plan.get("refund_conversion_pct") is not None or plan["caveats"]
+
+    def test_unconditional_copy_is_untouched(self):
+        offer = _offer(summary="Bet $5, get $150 in bonus bets", bonus_amount=150.0)
+        plan = _the_plan(_plans([offer], self._slate()))
+        assert plan["strategy"] == "qualify_then_convert", plan["strategy"]
+
+    @pytest.mark.parametrize(
+        ("summary", "conditional"),
+        [
+            ("Bet $50, get $50 back in bonus bets if your first bet loses", True),
+            ("Bet $50, get $50 as a bonus bet when your first bet loses", True),
+            ("Bet $50, get up to $50 back should your first bet lose", True),
+            ("Bet $50, get $50 in bonus bets on a losing first bet", True),
+            ("Bet $100, get $100 in bonus bets unless your bet wins", True),
+            ("Bet $25, get $25 money back", True),
+            # Innocent uses of the same words: a rebate and a fee refund.
+            ("Bet $5, get $150 in bonus bets plus 10% back in bonus bets on parlays",
+             False),
+            ("Bet $10, get $100 in bonus bets; we refund the transfer fee", False),
+        ],
+    )
+    def test_only_real_conditions_are_detected(self, summary, conditional):
+        parsed = parse_qualifying_stake(summary)
+        assert (parsed is None) is conditional, (summary, parsed)
+
+
+class TestThePrintedBoostMatchesThePillAboveIt:
+    """The note fed an unrounded float straight onto the card.
+
+    The pill read "needs a 0.0%+ boost" and the note under it read "priced with
+    the stated 4.44089e-14% boost" — two numbers for one quantity, one in
+    scientific notation.
+    """
+
+    def test_no_note_prints_scientific_notation(self):
+        rows = [
+            make_quote(source="draftkings", selection=Selection.AWAY, decimal_odds=1.9),
+            make_quote(source="fanduel", selection=Selection.HOME, decimal_odds=1.9),
+        ]
+        offer = _offer(kind="odds_boost", reward_type="boost", bonus_amount=None)
+        for concrete in _the_plan(_plans([offer], rows))["plans"]:
+            for note in concrete["notes"]:
+                assert "e-" not in note and "e+" not in note, note
+
+    def test_the_note_and_the_pill_agree(self):
+        rows = [
+            make_quote(source="draftkings", selection=Selection.AWAY, decimal_odds=1.9),
+            make_quote(source="fanduel", selection=Selection.HOME, decimal_odds=1.9),
+        ]
+        offer = _offer(kind="odds_boost", reward_type="boost", bonus_amount=None)
+        card = _the_plan(_plans([offer], rows))["plans"][0]
+        boost = card["breakeven_boost_pct"]
+        assert any(f"{round(boost, 2):g}% boost" in note for note in card["notes"]), (
+            card["breakeven_boost_pct"], card["notes"]
+        )
+
+
+class TestTheQualifyingCostNeverPrintsNegativeZero:
+    """``max(-0.0, 0.0)`` returns ``-0.0`` — the clamp was a no-op for exactly
+    the input it was added to normalise, and the live card said "$-0.00"."""
+
+    def test_a_free_round_trip_costs_zero_not_minus_zero(self):
+        rows = [
+            make_quote(source="draftkings", selection=Selection.AWAY, decimal_odds=3.0),
+            make_quote(source="fanduel", selection=Selection.HOME, decimal_odds=1.5),
+        ]
+        offer = _offer(summary="Bet $5, get $150 in bonus bets", bonus_amount=150.0)
+        plan = _the_plan(_plans([offer], rows))
+        for caveat in plan["caveats"]:
+            assert "$-0.00" not in caveat, caveat
+        qualify = next((p for p in plan["plans"] if p.get("step") == "qualify"), None)
+        if qualify is not None:
+            import math
+            assert not math.copysign(1.0, qualify["qualifying_cost"]) < 0 or \
+                qualify["qualifying_cost"] != 0.0, qualify["qualifying_cost"]
