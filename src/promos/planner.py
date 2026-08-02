@@ -936,7 +936,7 @@ def _scan(
                 and draw_is_priced(view.sport, period)
                 and Selection.DRAW not in shape
             ):
-                skipped["ambiguous_tie_settlement"] += 1
+                _record_refused_market(skipped, "ambiguous_tie_settlement", view.key)
                 continue
             if promo_shape is None:
                 promo_shape = shape
@@ -945,7 +945,7 @@ def _scan(
                 # the same derivation as above means one of them does not price
                 # the draw — already refused by the check above, so this is
                 # belt-and-braces rather than a distinct reason.
-                skipped["ambiguous_tie_settlement"] += 1
+                _record_refused_market(skipped, "ambiguous_tie_settlement", view.key)
                 continue
             for selection, quote in table.items():
                 promo_rows.setdefault(selection, (source, quote))
@@ -968,10 +968,10 @@ def _scan(
                 # second "shape_mismatch" reason used to sit in the else, where
                 # it could never increment: a gate the reader believes exists
                 # and the counts can never report.
-                skipped["ambiguous_tie_settlement"] += 1
+                _record_refused_market(skipped, "ambiguous_tie_settlement", view.key)
                 continue
             if regime_for(source) is not promo_regime:
-                skipped["regime_mismatch"] += 1
+                _record_refused_market(skipped, "regime_mismatch", view.key)
                 continue
             for selection, quote in table.items():
                 hedge_tables[selection].append((source, quote))
@@ -991,7 +991,7 @@ def _scan(
                 min_promo_decimal is not None
                 and promo_quote.decimal_odds < min_promo_decimal - _EPSILON
             ):
-                skipped["below_min_odds"] += 1
+                _record_refused_market(skipped, "below_min_odds", view.key)
                 continue
 
             hedge_selections = sorted(promo_shape - {promo_selection}, key=lambda s: s.value)
@@ -1014,7 +1014,7 @@ def _scan(
                         behind.get(source, source) == promo_who
                         or is_redundant_pair(source, promo_source)
                     ):
-                        skipped["same_counterparty"] += 1
+                        _record_refused_market(skipped, "same_counterparty", view.key)
                         continue
                     # Freshness is a per-source fact once the promo leg is
                     # fixed, so it belongs here with the other pre-filters.
@@ -1052,7 +1052,7 @@ def _scan(
                             window = [*window, edge]
                 pools.append(window)
             if any(not pool for pool in pools):
-                skipped["no_hedge_price"] += 1
+                _record_refused_market(skipped, "no_hedge_price", view.key)
                 continue
 
             ranked: list[_Candidate] = []
@@ -1076,12 +1076,12 @@ def _scan(
                 # on every arb position, applied here to every plan.
                 sources = [promo_source, *(source for source, _ in combo)]
                 if _uses_both_failover_feeds(sources):
-                    skipped["both_failover_feeds"] += 1
+                    _record_refused_market(skipped, "both_failover_feeds", view.key)
                     continue
                 legs_quotes = [promo_quote, *(quote for _, quote in combo)]
                 observed = [quote.observed_at for quote in legs_quotes]
                 if max(observed) - min(observed) > MAX_OBSERVATION_SPREAD:
-                    skipped["observation_spread"] += 1
+                    _record_refused_market(skipped, "observation_spread", view.key)
                     continue
 
                 promo_net = net_decimal(promo_quote, context.commissions)
@@ -1091,7 +1091,7 @@ def _scan(
                 # stale quote or a palpable error, not a plan.
                 cash_sum = 1.0 / promo_net + sum(1.0 / net for net in hedge_nets)
                 if cash_sum < 1.0 - REFUSE_MARGIN:
-                    skipped["implausible_price"] += 1
+                    _record_refused_market(skipped, "implausible_price", view.key)
                     continue
 
                 candidate = _solve(
@@ -1127,9 +1127,11 @@ def _scan(
                 keep = _FALLBACKS_PER_MARKET if stake_is_provisional else 1
                 candidates.extend(ranked[:keep])
         if stale_here:
-            skipped["observation_spread"] = (
-                skipped.get("observation_spread", 0) + len(stale_here)
-            )
+            # The market, not the (source, selection) pairs: this tally sits
+            # in the same map as every other reason and must carry the same
+            # unit, or a three-way board reports more refusals than it has
+            # prices.
+            _record_refused_market(skipped, "observation_spread", view.key)
 
     candidates.sort(
         key=lambda c: (
@@ -1638,7 +1640,9 @@ def _plan_conversion(
             f"the offer does not state a dollar amount; figures are per ${PLAN_UNIT:g} "
             "of credit and scale linearly"
         )
-    candidates = [c for c in conversions(min_dec) if c.settled_floor > _EPSILON]
+    priced = conversions(min_dec)
+    candidates = [c for c in priced if c.settled_floor > _EPSILON]
+    _note_unprofitable(out, priced, candidates)
     scale = amount / PLAN_UNIT
     survivors = _rescale_survivors(candidates, scale, skipped)
     for candidate, scaled in survivors[:MAX_PLANS_PER_OFFER]:
@@ -1673,7 +1677,9 @@ def _plan_qualify_then_convert(
     # already passes it, and the caveat this offer prints says the minimum was
     # "applied to the promo-side leg".  Passing ``None`` here printed convert
     # cards whose promo leg sat below the number the caveat claimed to enforce.
-    conversion = [c for c in conversions(min_dec) if c.settled_floor > _EPSILON]
+    priced = conversions(min_dec)
+    conversion = [c for c in priced if c.settled_floor > _EPSILON]
+    _note_unprofitable(out, priced, conversion)
     if qualify:
         payload = _candidate_payload(qualify[0], as_of=context.as_of)
         payload["step"] = "qualify"
@@ -1920,6 +1926,31 @@ def _plan_rollover(
     out["caveats"].append(
         "grind rollover through the lowest-cost two-sided market, hedging each "
         "round; the cost shown is the vig per $100 pushed through"
+    )
+
+
+def _note_unprofitable(
+    out: dict[str, Any], priced: Sequence[_Candidate], kept: Sequence[_Candidate],
+) -> None:
+    """Say so when hedgeable markets were dropped for not clearing a profit.
+
+    ``_plan_no_sweat`` and ``_plan_boost`` both carry a "no market … locks a
+    profit" sentence for exactly this; the two conversion builders dropped the
+    same candidates silently.  That produced two wrong states.  With every
+    market hedgeable and no floor positive, the offer printed zero plans, an
+    empty ``skipped`` and only the boilerplate caveat — no reason at all, and
+    the CLI's "run with --verbose to see why" then said nothing.  With one
+    further unhedgeable market on the slate, the counts became non-empty and
+    the summary sentence fired: "the counts in 'skipped' say what was refused
+    and why", over markets that were hedgeable and are in no count.
+    """
+    dropped = len(priced) - len(kept)
+    if dropped <= 0:
+        return
+    out["caveats"].append(
+        f"{dropped} hedgeable market{'s' if dropped != 1 else ''} on this book "
+        "priced a conversion that does not clear a profit at today's hedge "
+        "prices, so they are not listed; they are not in the counts below"
     )
 
 

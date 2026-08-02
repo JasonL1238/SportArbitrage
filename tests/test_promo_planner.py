@@ -896,11 +896,19 @@ class TestTheHedgePoolIsGatedBeforeItIsTruncated:
         assert best["guaranteed_cash"] == pytest.approx(66.66, abs=0.02)
 
     def test_the_excluded_mirrors_are_still_counted(self):
+        """One market, one refusal — the unit every other reason uses.
+
+        This asserted 4, the number of (promo side x hedge source) *assignments*
+        the gate rejected on a single market.  Mixed into a map whose post-scan
+        reasons count markets, that let a three-way board report 18
+        ``same_counterparty`` refusals over 3 games, beside a caveat promising
+        the counts say what was refused.
+        """
         out = build_promo_plans(
             [_offer()], self._slate(), as_of=AS_OF, commissions={},
             one_counterparty=self._mirrors(),
         )
-        assert _the_plan(out)["skipped"].get("same_counterparty") == 4
+        assert _the_plan(out)["skipped"].get("same_counterparty") == 1
 
 
 class TestQualifyingStakeReadsTheVenuesOwnWording:
@@ -1562,8 +1570,13 @@ class TestAStaleCrowdCannotHideAViableHedge:
         assert plan["plans"][0]["legs"][1]["source"] == "fanduel"
 
     def test_the_stale_books_are_still_counted(self):
+        """One market, one refusal — see the note on the mirror tally.
+
+        Counting the four stale (source, selection) pairs put this reason in a
+        different unit from the post-scan reasons sharing the map.
+        """
         plan = _the_plan(_plans([_offer()], self._slate()))
-        assert plan["skipped"].get("observation_spread") == 4, plan["skipped"]
+        assert plan["skipped"].get("observation_spread") == 1, plan["skipped"]
 
 
 class TestEveryKindAndRewardCombinationSaysSomething:
@@ -2022,9 +2035,11 @@ class TestOneStaleBookCountsOnce:
             q("bovada", Selection.DRAW, 4.20, stale),
         ]
         plan = _the_plan(_plans([_offer()], rows))
-        # One book, three selections — three (book, selection) refusals, not the
-        # nine that counting per promo side produced.
-        assert plan["skipped"].get("observation_spread") == 3, plan["skipped"]
+        # One market, one refusal.  This asserted 3 — the (book, selection)
+        # pairs — which was already an improvement on the 9 that counting per
+        # promo side produced, but still a different unit from the post-scan
+        # reasons sharing this map.  A refusal count is a count of markets.
+        assert plan["skipped"].get("observation_spread") == 1, plan["skipped"]
 
 
 # ── round 6 adversarial findings ─────────────────────────────────────────────
@@ -3702,3 +3717,134 @@ class TestAnUnplaceableHedgeDoesNotTakeTheMarketDownWithIt:
         plan = _the_plan(_plans([_offer(bonus_amount=150.0)], slate))
         assert plan["plans"] == [], plan["plans"]
         assert plan["skipped"].get("stake_over_stated_limit", 0) >= 1, plan["skipped"]
+
+
+class TestEveryRefusalReasonCountsMarkets:
+    """One map, one unit — the caveat beside it vouches for the whole map.
+
+    Post-scan reasons went through ``_record_refused_market`` and counted
+    markets; the scan-loop reasons were raw ``+= 1`` per *assignment tried*.
+    So `no_hedge_price` counted promo selections (2 or 3 a market) and
+    `same_counterparty` counted (promo side x hedge side x source) — six a
+    market on a three-way. A book pricing three games reported twenty-seven
+    refusals, with the same three markets double-counted across two reasons,
+    under "the counts in 'skipped' say what was refused and why".
+
+    The commit that unified the post-scan phases said "every phase records the
+    same unit"; it had only ever touched one side of the map.
+    """
+
+    MIRROR = {"*": [frozenset({"betrivers_kambi", "leovegas_kambi"})]}
+
+    def _slate(self, markets, *, three_way):
+        rows = []
+        for i in range(markets):
+            if three_way:
+                shared = dict(sport=Sport.SOCCER, league="EPL",
+                              event_key=f"SOCCER-a{i}@SOCCER-h{i}:2026-07-28")
+                prices = ((Selection.AWAY, 3.7), (Selection.HOME, 1.9),
+                          (Selection.DRAW, 4.4))
+            else:
+                shared = dict(event_key=f"MLB-A{i}@MLB-H{i}:2026-07-28")
+                prices = ((Selection.AWAY, 3.0), (Selection.HOME, 1.5))
+            shared.update(home_participant=f"H{i}", away_participant=f"A{i}",
+                          observed_at=AS_OF)
+            # Only the promo book and its own mirror price these, so every
+            # market is refused and none can plan.
+            for source in ("betrivers_kambi", "leovegas_kambi"):
+                for selection, odds in prices:
+                    rows.append(make_quote(source=source, selection=selection,
+                                           decimal_odds=odds, **shared))
+        return rows
+
+    def _skipped(self, markets, *, three_way):
+        offer = _offer(source="betrivers_kambi")
+        out = build_promo_plans(
+            [offer], self._slate(markets, three_way=three_way), as_of=AS_OF,
+            commissions={}, one_counterparty=self.MIRROR,
+        )
+        return out["plans"]["betrivers_kambi|offer-1"]["skipped"]
+
+    @pytest.mark.parametrize("three_way", [False, True])
+    @pytest.mark.parametrize("markets", [1, 3])
+    def test_no_reason_exceeds_the_number_of_markets(self, markets, three_way):
+        skipped = self._skipped(markets, three_way=three_way)
+        assert skipped, "a board where nothing can plan must say why"
+        for reason, count in skipped.items():
+            assert count <= markets, (reason, count, markets, dict(skipped))
+
+    def test_the_shape_of_the_market_does_not_change_the_count(self):
+        """A three-way tries more assignments per market, not more markets."""
+        two = self._skipped(3, three_way=False)
+        three = self._skipped(3, three_way=True)
+        assert two.get("same_counterparty") == three.get("same_counterparty") == 3, (
+            dict(two), dict(three))
+
+    def test_the_count_tracks_the_number_of_markets(self):
+        one = self._skipped(1, three_way=True)
+        three = self._skipped(3, three_way=True)
+        assert one.get("same_counterparty") == 1, dict(one)
+        assert three.get("same_counterparty") == 3, dict(three)
+
+
+class TestAHedgeableMarketThatClearsNothingSaysSo:
+    """Two states, both silent, both now explained.
+
+    ``_plan_no_sweat`` and ``_plan_boost`` each carry a "no market … locks a
+    profit" sentence; the two conversion builders dropped the same candidates
+    with no count and no caveat.  With every market hedgeable and no floor
+    positive that produced zero plans, an empty ``skipped`` and only the
+    boilerplate — no reason at all, and the CLI's "run with --verbose to see
+    why" then said nothing.  Add one unhedgeable market and the counts turn
+    non-empty, firing "the counts in 'skipped' say what was refused and why"
+    over markets that were hedgeable and are in no count.
+    """
+
+    def _flat_three_way(self, tag):
+        """A board whose hedge side alone prices over 100%: hedgeable, unprofitable."""
+        event = f"SOCCER-a{tag}@SOCCER-h{tag}:2026-07-28"
+        return [
+            make_quote(source=source, sport=Sport.SOCCER, league="EPL",
+                       event_key=event, home_participant=f"h{tag}",
+                       away_participant=f"a{tag}", selection=selection,
+                       decimal_odds=1.50, observed_at=AS_OF)
+            for source in ("draftkings", "fanduel")
+            for selection in (Selection.HOME, Selection.AWAY, Selection.DRAW)
+        ]
+
+    def test_the_offer_says_why_it_printed_nothing(self):
+        plan = _the_plan(_plans([_offer()], self._flat_three_way("1")))
+        assert plan["plans"] == [], plan["plans"]
+        assert any("does not clear a profit" in c for c in plan["caveats"]), (
+            plan["caveats"])
+
+    def test_the_sentence_counts_the_markets_it_dropped(self):
+        slate = self._flat_three_way("1") + self._flat_three_way("2")
+        plan = _the_plan(_plans([_offer()], slate))
+        note = next(c for c in plan["caveats"] if "does not clear a profit" in c)
+        assert note.startswith("6 hedgeable markets"), note
+
+    def test_a_board_that_does_clear_a_profit_says_nothing_of_the_kind(self):
+        """The sentence must not appear where nothing was dropped."""
+        slate = [
+            make_quote(source="draftkings", selection=Selection.AWAY, decimal_odds=3.0),
+            make_quote(source="fanduel", selection=Selection.HOME, decimal_odds=1.5),
+        ]
+        plan = _the_plan(_plans([_offer()], slate))
+        assert plan["plans"], plan["skipped"]
+        assert not any("does not clear a profit" in c for c in plan["caveats"]), (
+            plan["caveats"])
+
+    def test_the_bet_and_get_builder_says_it_too(self):
+        """Its own copy of the drop was silent for the same reason.
+
+        The two conversion builders share the filter; pinning only one left the
+        other deletable green.
+        """
+        slate = self._flat_three_way("1")
+        offer = _offer(kind="bet_and_get", bonus_amount=150.0,
+                       summary="Bet $5, get $150 in bonus bets")
+        plan = _the_plan(_plans([offer], slate))
+        assert plan["strategy"] == "qualify_then_convert", plan["strategy"]
+        assert any("does not clear a profit" in c for c in plan["caveats"]), (
+            plan["caveats"])

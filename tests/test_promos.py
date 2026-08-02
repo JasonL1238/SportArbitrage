@@ -1020,3 +1020,36 @@ class TestThePlanCommand:
         assert gate, f"the CLI planned with the gate switched off: {seen!r}"
         pairs = [frozenset(group) for groups in gate.values() for group in groups]
         assert frozenset({"betrivers_kambi", "leovegas_kambi"}) in pairs, gate
+
+    def test_the_header_names_the_home_and_away_teams_the_right_way_round(
+        self, seeded, capsys,
+    ):
+        """The header is the CLI's *only* mapping from side to team name.
+
+        Each leg row prints a bare ``away`` / ``home``, so if the header reads
+        "Miami at Philadelphia" when the truth is "Philadelphia at Miami", the
+        operator puts the credit on the wrong club.  Swapping the two was green
+        across the whole suite: priced with the project's own fee table the
+        position becomes -$42.47 / +$261.34 against a printed floor of +$65.33.
+        """
+        assert self._run(["plan"]) == 0
+        out = capsys.readouterr().out
+        assert "Philadelphia Phillies at Miami Marlins" in out, out
+        assert "Miami Marlins at Philadelphia Phillies" not in out, out
+
+    def test_the_promo_leg_names_the_side_the_price_belongs_to(self, seeded, capsys):
+        """The header and the leg rows must agree about which side is which.
+
+        The fixture prices the *away* side at 3.00 and the home side nowhere
+        near it, so a leg row saying ``away`` beside a header naming the home
+        team first would send the stake to a price that does not exist.
+        """
+        assert self._run(["plan"]) == 0
+        out = capsys.readouterr().out
+        header = next(l for l in out.splitlines() if " at " in l and "—" in l)
+        away_team = header.split(" at ")[0].strip()
+        assert away_team == "Philadelphia Phillies", header
+        promo = next(l for l in out.splitlines()
+                     if l.startswith("    promo ") and "@" in l)
+        assert " away " in promo, promo
+        assert "3.000" in promo, promo
