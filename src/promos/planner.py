@@ -945,6 +945,17 @@ def _scan(
                 # the same derivation as above means one of them does not price
                 # the draw — already refused by the check above, so this is
                 # belt-and-braces rather than a distinct reason.
+                #
+                # Currently unreachable, and deliberately kept.  ``shapes`` is
+                # built from the group's single sport/market/period, so the only
+                # per-source variation ``arb.contract_shape`` can produce is a
+                # moneyline in a draw window, which the check above already
+                # removes.  That invariant lives in *another module*: were
+                # ``contract_shape`` to gain a second axis of variation, this
+                # branch is what stops two feeds pricing different contracts
+                # from being joined, and its absence would be a silently wrong
+                # plan rather than a loud failure.  A local dead guard gets
+                # deleted; one whose premise is imported does not.
                 _record_refused_market(skipped, "ambiguous_tie_settlement", view.key)
                 continue
             for selection, quote in table.items():
@@ -1193,9 +1204,14 @@ def _solve(
         target = (promo_net - 1.0) * stake
         promo_leg = _Leg(promo_quote, _round_cents(stake), promo_net, "promo", MODE_BONUS)
     elif mode == MODE_BOOSTED:
-        if boost_percent is None:
-            _record_refused_market(refusals, "boost_percent_unknown", view.key)
-            return None
+        # Not a counted refusal: ``boost_percent_unknown`` could never appear in
+        # ``skipped``, so it read as a live refusal path that no board could
+        # reach.  Both callers of this mode supply a number — ``_plan_boost``'s
+        # locked branch runs under ``if boost_pct is not None``, and its
+        # breakeven re-solve passes a computed float — and both are in this
+        # file, so the invariant is local and an assertion states it where the
+        # dead reason string only obscured it.
+        assert boost_percent is not None, "boosted mode needs a boost percentage"
         boosted_net = 1.0 + (promo_net - 1.0) * (1.0 + boost_percent / 100.0)
         # Cash stake S at boosted odds n_b: wins collect S·n_b (stake back plus
         # boosted winnings).  h_s·n_s = S·n_b equalises the settled outcomes.

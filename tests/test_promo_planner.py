@@ -3848,3 +3848,152 @@ class TestAHedgeableMarketThatClearsNothingSaysSo:
         assert plan["strategy"] == "qualify_then_convert", plan["strategy"]
         assert any("does not clear a profit" in c for c in plan["caveats"]), (
             plan["caveats"])
+
+
+class TestTheBreakevenRankingDecidesWhichMarketsYouSee:
+    """Only ``MAX_PLANS_PER_OFFER`` cards survive, so the sort order *is* the
+    selection.
+
+    Reversing the primary key was green across the whole suite. It is not an
+    equivalent mutant: on a multi-market board the needed-boost figures are
+    genuinely distinct, so reversing drops the market needing no boost at all
+    and promotes the hardest one to the top of the card list — under a caveat
+    reading "ranked by the smallest boost that locks a profit".
+    """
+
+    def _slate(self):
+        rows = []
+        # Four markets whose breakeven boosts differ: the hedge prices get
+        # steadily worse, so the boost needed to clear a profit rises.
+        for i, hedge in enumerate((1.80, 1.70, 1.62, 1.55)):
+            shared = dict(event_key=f"MLB-A{i}@MLB-H{i}:2026-07-28",
+                          home_participant=f"H{i}", away_participant=f"A{i}",
+                          observed_at=AS_OF)
+            rows.append(make_quote(source="draftkings", selection=Selection.AWAY,
+                                   decimal_odds=2.30, **shared))
+            rows.append(make_quote(source="draftkings", selection=Selection.HOME,
+                                   decimal_odds=1.70, **shared))
+            rows.append(make_quote(source="fanduel", selection=Selection.HOME,
+                                   decimal_odds=hedge, **shared))
+        return rows
+
+    def _cards(self):
+        offer = _offer(kind="odds_boost", reward_type="boost", bonus_amount=100.0,
+                       summary="Odds boost on any game")
+        plan = _the_plan(_plans([offer], self._slate()))
+        assert plan["strategy"] == "boost_breakeven", plan["strategy"]
+        return plan["plans"]
+
+    def test_the_cards_are_ordered_by_the_smallest_boost_first(self):
+        needed = [c["breakeven_boost_pct"] for c in self._cards()]
+        assert needed == sorted(needed), needed
+
+    def test_the_easiest_market_is_not_dropped_by_the_cap(self):
+        """With more markets than cards, the cheapest boost must survive."""
+        cards = self._cards()
+        assert cards, "the board should produce breakeven cards"
+        assert len(cards) <= MAX_PLANS_PER_OFFER, len(cards)
+        offer = _offer(kind="odds_boost", reward_type="boost", bonus_amount=100.0,
+                       summary="Odds boost on any game")
+        plan = _the_plan(_plans([offer], self._slate()))
+        every = plan["plans"]
+        assert every[0]["breakeven_boost_pct"] == min(
+            c["breakeven_boost_pct"] for c in every), [
+                c["breakeven_boost_pct"] for c in every]
+
+    def _diverging_slate(self):
+        """Markets whose floors tie but whose needed boosts differ.
+
+        The floor is ``S(P-1)/v`` and the needed boost goes as ``1/P``, with
+        ``P = (base-1)(hedge-1)``, so equal floors at different ``P`` make the
+        primary and secondary sort keys disagree.  Without such a board the two
+        keys move together and dropping the primary entirely is invisible — the
+        first version of this class ranked correctly by accident.  The event
+        keys are named so that alphabetical order puts the *hardest* market
+        first, which is what a floor-only sort would print.
+        """
+        rows = []
+        for tag, promo_odds, hedge_odds, other in (
+            ("zz", 1.90, 2.00, 2.05),
+            ("aa", 1.2667, 4.00, 4.60),
+        ):
+            shared = dict(event_key=f"MLB-{tag}A@MLB-{tag}H:2026-07-28",
+                          home_participant=f"{tag}H", away_participant=f"{tag}A",
+                          observed_at=AS_OF)
+            rows += [
+                make_quote(source="draftkings", selection=Selection.AWAY,
+                           decimal_odds=promo_odds, **shared),
+                make_quote(source="draftkings", selection=Selection.HOME,
+                           decimal_odds=other, **shared),
+                make_quote(source="fanduel", selection=Selection.HOME,
+                           decimal_odds=hedge_odds, **shared),
+                make_quote(source="fanduel", selection=Selection.AWAY,
+                           decimal_odds=promo_odds * 0.98, **shared),
+            ]
+        return rows
+
+    def test_the_smallest_boost_leads_even_when_the_floors_tie(self):
+        offer = _offer(kind="odds_boost", reward_type="boost", bonus_amount=100.0,
+                       summary="Odds boost on any game")
+        plan = _the_plan(_plans([offer], self._diverging_slate()))
+        assert plan["strategy"] == "boost_breakeven", plan["strategy"]
+        cards = plan["plans"]
+        needed = [c["breakeven_boost_pct"] for c in cards]
+        floors = [c["guaranteed_cash"] for c in cards]
+        # The premise: the floors really do tie, so only the boost figure can
+        # order these.  If this ever stops holding the test below proves less
+        # than it claims, so it is asserted rather than assumed.
+        assert len(set(floors)) == 1, floors
+        assert len(set(needed)) > 1, needed
+        assert needed == sorted(needed), needed
+
+
+class TestTheHedgeWindowIsWideEnoughToMatter:
+    """4→8, 4→2 *and* 4→1 were all green.
+
+    Honest scope: only the degenerate width is pinned, and it is pinned on the
+    constant rather than through behaviour.  Every per-source gate already runs
+    before the truncation, so on the boards reachable here the pool is filtered
+    down to its usable rows before the width is applied — and the both-ends
+    freshness hatch appends the worst-priced row as well whenever the
+    timestamps tie.  I could not construct a board where width 2 loses a plan
+    that width 4 finds, so 4→2 stays unpinned and is recorded as such rather
+    than covered by a test that would pass for the wrong reason.
+
+    Width 1 is different in kind: it turns the by-price window into "take the
+    single best and hope", which is the shape every gate-before-truncate defect
+    in this file came from, so it is refused outright.
+    """
+
+    def test_the_window_holds_more_than_one_price(self):
+        from src.promos.planner import _HEDGE_CANDIDATES_PER_SELECTION
+        assert _HEDGE_CANDIDATES_PER_SELECTION >= 2, _HEDGE_CANDIDATES_PER_SELECTION
+
+    def test_a_combination_gate_cannot_empty_the_pool_unnoticed(self):
+        """Four books priced as palpable errors must not hide the sane one.
+
+        ``implausible_price`` is a *combination* gate, so it runs after the
+        by-price truncation — the classic shape.  The plan must still be found,
+        and the refusal must be counted.
+        """
+        rows = [
+            make_quote(source="draftkings", selection=Selection.AWAY,
+                       decimal_odds=3.00, observed_at=AS_OF),
+            make_quote(source="draftkings", selection=Selection.HOME,
+                       decimal_odds=1.50, observed_at=AS_OF),
+        ]
+        for i, source in enumerate(("betmgm", "caesars", "espnbet", "fanatics")):
+            rows.append(make_quote(source=source, selection=Selection.HOME,
+                                   decimal_odds=3.00 - i * 0.02, observed_at=AS_OF))
+            rows.append(make_quote(source=source, selection=Selection.AWAY,
+                                   decimal_odds=1.40, observed_at=AS_OF))
+        rows.append(make_quote(source="fanduel", selection=Selection.HOME,
+                               decimal_odds=1.55, observed_at=AS_OF))
+        rows.append(make_quote(source="fanduel", selection=Selection.AWAY,
+                               decimal_odds=2.60, observed_at=AS_OF))
+        plan = _the_plan(_plans([_offer()], rows))
+        assert plan["plans"], plan["skipped"]
+        hedges = {leg["source"] for card in plan["plans"]
+                  for leg in card["legs"] if leg["role"] == "hedge"}
+        assert hedges == {"fanduel"}, hedges
+        assert plan["skipped"].get("implausible_price", 0) >= 1, plan["skipped"]
