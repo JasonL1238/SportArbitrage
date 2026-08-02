@@ -22,4 +22,5 @@ jobs:
           python-version: "3.13"
           cache: pip
       - run: pip install -r requirements-dev.txt
+      - run: python scripts/check_agent_docs.py
       - run: python -m pytest tests/ -q
