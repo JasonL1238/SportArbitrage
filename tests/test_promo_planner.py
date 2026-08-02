@@ -2764,13 +2764,16 @@ class TestAHalfLoseRefundsNothing:
 
     def _quarter(self):
         return [
-            # 1.25, not 0.25: a quarter line rounding to zero cannot be landed
-            # on in baseball (extra innings), so it enumerates no half-push and
-            # the branch under test is never reached.
+            # Two things the fixture has to get right.  1.25 rather than 0.25:
+            # a quarter line rounding to zero cannot be landed on in baseball,
+            # so it enumerates no half-push at all.  And the promo leg must sit
+            # on the half-*losing* side — with it on the winning side the rule
+            # under test is never evaluated against it, and the assertion is
+            # satisfied by the half-win rule instead.
             make_quote(source="draftkings", market=Market.SPREAD,
-                       selection=Selection.AWAY, line=1.25, decimal_odds=3.0),
+                       selection=Selection.HOME, line=-1.25, decimal_odds=3.0),
             make_quote(source="fanduel", market=Market.SPREAD,
-                       selection=Selection.HOME, line=-1.25, decimal_odds=2.0),
+                       selection=Selection.AWAY, line=1.25, decimal_odds=2.0),
         ]
 
     def test_the_half_push_outcome_is_not_credited_with_the_refund(self):
@@ -2785,10 +2788,16 @@ class TestAHalfLoseRefundsNothing:
         # The refund is credited only where the promo leg outright loses; the
         # half-push keeps half the stake and settles the rest, so it must sit
         # well below the fully-refunded branch.
-        # The half-push keeps half the promo stake and settles the rest, so it
-        # must not be credited the full refund: crediting it there lifted this
-        # outcome to the level of the outright-loss branch.
-        assert outcomes[half[0]] < max(outcomes.values()), outcomes
+        # The promo leg half-loses here.  Half the stake comes back and the
+        # other half is gone — but no *refund* is credited, because the bet did
+        # not lose outright.  Crediting it lifted this outcome five-fold.
+        # The outright-loss branch carries the refund; the half-push does not.
+        # So the gap between them is at least the refund's whole value —
+        # crediting the half-push closed that gap to almost nothing.
+        stake = cards[0]["legs"][0]["stake"]
+        refund = plan["refund_conversion_pct"] / 100.0 * stake
+        settled = max(outcomes.values())
+        assert settled - outcomes[half[0]] >= refund - 0.01, (outcomes, refund)
 
 
 class TestTheStartedGameBoundary:
@@ -3086,3 +3095,51 @@ class TestTheRefundIsValuedAtARateTheSizeCanReach:
             return
         # 66.7% is market 0's rate and needs a $1333 hedge at a $200 book.
         assert plan["refund_conversion_pct"] < 66.0, plan["refund_conversion_pct"]
+
+
+class TestTwoOffersFromOneBookDoNotShareAMinimumOddsScan:
+    """The conversion cache is keyed on the stated minimum, and must be.
+
+    Without it, two offers from one book share a scan: an offer with no stated
+    floor lends its cheap markets to one that has a floor of −125, printing a
+    promo leg at 1.60 under a caveat claiming −125 was applied.  The operator
+    stakes credit at a price the promo's own terms void.
+    """
+
+    def _slate(self):
+        return [
+            # A short price, below a −125 (1.80) floor.
+            make_quote(source="draftkings", selection=Selection.AWAY, decimal_odds=1.60,
+                       event_key="MLB-Z0@MLB-Y0:2026-07-28",
+                       home_participant="MLB-Y0", away_participant="MLB-Z0"),
+            make_quote(source="fanduel", selection=Selection.HOME, decimal_odds=2.70,
+                       event_key="MLB-Z0@MLB-Y0:2026-07-28",
+                       home_participant="MLB-Y0", away_participant="MLB-Z0"),
+        ]
+
+    def test_the_constrained_offer_does_not_borrow_the_others_markets(self):
+        offers = [
+            _offer(offer_id="free", min_odds=None),
+            _offer(offer_id="floored", min_odds="-125"),
+        ]
+        out = _plans(offers, self._slate())
+        floored = out["plans"]["draftkings|floored"]
+        for concrete in floored["plans"]:
+            assert concrete["legs"][0]["decimal_odds"] >= 1.8 - 1e-9, concrete["legs"]
+        assert floored["skipped"].get("below_min_odds", 0) >= 1, floored["skipped"]
+
+    def test_the_order_of_the_offers_does_not_matter(self):
+        forward = _plans([_offer(offer_id="free", min_odds=None),
+                          _offer(offer_id="floored", min_odds="-125")], self._slate())
+        backward = _plans([_offer(offer_id="floored", min_odds="-125"),
+                           _offer(offer_id="free", min_odds=None)], self._slate())
+        assert (forward["plans"]["draftkings|floored"]
+                == backward["plans"]["draftkings|floored"])
+
+    def test_the_unconstrained_offer_still_gets_its_plan(self):
+        offers = [
+            _offer(offer_id="free", min_odds=None),
+            _offer(offer_id="floored", min_odds="-125"),
+        ]
+        out = _plans(offers, self._slate())
+        assert out["plans"]["draftkings|free"]["plans"], out["plans"]["draftkings|free"]

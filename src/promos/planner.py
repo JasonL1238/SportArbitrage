@@ -377,13 +377,7 @@ def _refuse_market(skipped: Counter, reason: str, candidate: "_Candidate") -> No
     existed in the boost path, and 3 where 5 markets were refused in the
     conversion path.
     """
-    # Keyed on the market, not tallied: with two scans at different stakes a
-    # market can be refused in the qualify scan, survive the convert scan and
-    # be refused again at rescale.  Counting each refusal reported 2 on a
-    # one-market slate — the round-7 defect relocated from the ``max`` to
-    # the ``+``.
-    seen = _post_scan_markets(skipped).setdefault(reason, set())
-    seen.add(str(candidate.view.key))
+    _record_refused_market(skipped, reason, candidate.view.key)
 
 
 #: Where :func:`_refuse_market` parks the market keys it has refused, keyed by
@@ -392,7 +386,19 @@ def _refuse_market(skipped: Counter, reason: str, candidate: "_Candidate") -> No
 _POST_SCAN_MARKETS = "__post_markets__"
 
 
-def _post_scan_markets(skipped: Counter) -> dict[str, set]:
+def _record_refused_market(skipped: Counter, reason: str, market_key) -> None:
+    """Note that one market was refused for one reason.
+
+    Every phase records the same unit.  The scan counts refused *assignments*
+    — many per market, and two scans of one slate see each twice — while the
+    rescale counts markets; adding those gave a number that was neither, and
+    maxing them under-reported.  A market refused in both phases is one
+    refused market, and that is what the caveat beside these counts promises.
+    """
+    _refused_markets(skipped).setdefault(reason, set()).add(str(market_key))
+
+
+def _refused_markets(skipped: Counter) -> dict[str, set]:
     holder = skipped.get(_POST_SCAN_MARKETS)
     if not isinstance(holder, dict):
         holder = {}
@@ -414,8 +420,9 @@ def _settle_counts(skipped: Counter) -> dict[str, int]:
         if key == _POST_SCAN_MARKETS or key.startswith(_POST_SCAN):
             continue
         out[key] = count
+    # Market-keyed reasons are the size of the union, whichever phase saw them.
     for reason, keys in markets.items():
-        out[reason] = max(out.get(reason, 0), len(keys))
+        out[reason] = len(keys)
     return dict(sorted(out.items()))
 
 
@@ -432,6 +439,14 @@ def _merge_counts(into: Counter, counts: Mapping[str, int]) -> None:
     what was refused.
     """
     for reason, count in counts.items():
+        if reason == _POST_SCAN_MARKETS:
+            # The refused-market sets ride along on the same counter; they
+            # union rather than max, because two scans naming different
+            # markets refused both of them.
+            holder = _refused_markets(into)
+            for key, keys in (count or {}).items():
+                holder.setdefault(key, set()).update(keys)
+            continue
         if count > into.get(reason, 0):
             into[reason] = count
 
@@ -1094,7 +1109,7 @@ def _solve(
         promo_leg = _Leg(promo_quote, _round_cents(stake), promo_net, "promo", MODE_BONUS)
     elif mode == MODE_BOOSTED:
         if boost_percent is None:
-            refusals["boost_percent_unknown"] += 1
+            _record_refused_market(refusals, "boost_percent_unknown", view.key)
             return None
         boosted_net = 1.0 + (promo_net - 1.0) * (1.0 + boost_percent / 100.0)
         # Cash stake S at boosted odds n_b: wins collect S·n_b (stake back plus
@@ -1128,7 +1143,7 @@ def _solve(
         for (source, quote), net in zip(combo, hedge_nets)
     )
     if any(leg.stake <= 0 for leg in hedge_legs):
-        refusals["hedge_stake_rounds_to_zero"] += 1
+        _record_refused_market(refusals, "hedge_stake_rounds_to_zero", view.key)
         return None
     # A leg above the size the venue publishes cannot be placed as printed, so
     # the floor computed from it is not a floor.  The arb detector caps a
@@ -1143,7 +1158,7 @@ def _solve(
     # resting on a $250 leg at a book advertising $40 — the mirror of the
     # defect this gate was added for, left un-mirrored for three rounds.
     if _over_stated_limit(legs):
-        refusals["stake_over_stated_limit"] += 1
+        _record_refused_market(refusals, "stake_over_stated_limit", view.key)
         return None
     profits = _outcome_profits(
         view,
@@ -1761,8 +1776,10 @@ def _plan_boost(
             refusals=resolve_refusals,
         )
         if boosted is None:
-            for reason in resolve_refusals:
-                _refuse_market(skipped, reason, candidate)
+            # The re-solve records into its own counter; fold its refused
+            # markets into the offer's, keyed the same way.
+            for reason in list(_refused_markets(resolve_refusals)):
+                _record_refused_market(skipped, reason, candidate.view.key)
             resolve_refusals.clear()
             continue
         resolve_refusals.clear()
