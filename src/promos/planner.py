@@ -139,29 +139,48 @@ _QUALIFYING_SUMMARY = re.compile(
 _CONDITIONAL_REFUND = re.compile(
     r"\b(?:"
     # Named second-chance products.
-    r"second\s+chance|2nd\s+chance|bet\s+reset|money\s+back"
+    r"second\s+chance|2nd\s+chance|bet\s+reset|money\s+back|stake\s+refund"
     # "…if/when/should your bet loses", any ordering.
     r"|(?:if|when|should)\s+(?:your|it|the)\b[^.;]{0,48}?\b(?:lose|loses|losing|lost)\b"
     # "…unless it wins" — a loss condition stated the other way round.
     r"|unless\s+(?:your|it|the)\b[^.;]{0,48}?\b(?:wins?|won)\b"
-    # "if lose", "on a losing bet", "on your first losing wager".
     r"|if\s+lose\b|on\s+(?:a|your)\b[^.;]{0,24}?\blosing\b"
-    # "refunded as credit", "get $50 refunded" — a refund is by definition
-    # contingent, and dropping these alternatives re-opened the hole round 5
-    # closed.
-    r"|refunded?\b"
+    # A refund word only when a loss sits in the same clause, either order.
+    # A bare participle was overwhelmingly the void/postponement/fee sentence
+    # ("wagers refunded on postponement", "withdrawal fees are refunded"),
+    # which routed an ordinary bet-and-get into the insurance model; and it
+    # matched only ``refunded``, missing ``refund``/``refunds`` where the real
+    # mechanic is usually written.
+    r"|(?:refunds?|refunded)\b[^.;]{0,60}?\b(?:lose|loses|losing|lost)\b"
+    r"|(?:lose|loses|losing|lost)\b[^.;]{0,60}?\b(?:refunds?|refunded)\b"
     r")",
     re.IGNORECASE,
 )
 
-#: The mirror case, and NOT a refund: credit that arrives only if the
-#: qualifying bet *wins*.  Routing it to the loss-refund model inverted the
-#: sign of the guarantee; pricing it as ordinary credit is right, but the
-#: card has to say the credit is not certain.
+#: Credit that arrives only if the qualifying bet *wins*.  Consulted only when
+#: no loss condition is present: copy that spells out both branches — "if it
+#: loses you get it back; if it wins you keep the winnings", which is how
+#: venues ordinarily write a safety net — is a refund, and letting the win
+#: clause veto that priced a real second-chance offer as credit in hand.  On
+#: live offers that overstated the guarantee by 54-62%, staked credit the
+#: operator does not hold, and attached a caveat contradicting the offer's own
+#: title ("$1500 Bonus Bets If Lose").
 _WIN_CONDITIONAL = re.compile(
     r"\b(?:if|when|should|once)\s+(?:your|it|the)\b[^.;]{0,48}?\b(?:wins?|won)\b",
     re.IGNORECASE,
 )
+
+
+def _reward_is_loss_contingent(summary: str) -> bool:
+    """Does the reward arrive only when the qualifying bet loses?"""
+    return bool(_CONDITIONAL_REFUND.search(summary))
+
+
+def _reward_is_win_contingent(summary: str) -> bool:
+    """Only when a win is named and no loss condition is — a loss wins ties."""
+    return bool(
+        _WIN_CONDITIONAL.search(summary) and not _CONDITIONAL_REFUND.search(summary)
+    )
 
 _BOOST_PERCENT = re.compile(r"(\d{1,3})\s*%\s*(?:profit\s+|odds\s+)?boost", re.IGNORECASE)
 
@@ -358,20 +377,45 @@ def _refuse_market(skipped: Counter, reason: str, candidate: "_Candidate") -> No
     existed in the boost path, and 3 where 5 markets were refused in the
     conversion path.
     """
-    skipped[f"{_POST_SCAN}{reason}"] += 1
+    # Keyed on the market, not tallied: with two scans at different stakes a
+    # market can be refused in the qualify scan, survive the convert scan and
+    # be refused again at rescale.  Counting each refusal reported 2 on a
+    # one-market slate — the round-7 defect relocated from the ``max`` to
+    # the ``+``.
+    seen = _post_scan_markets(skipped).setdefault(reason, set())
+    seen.add(str(candidate.view.key))
+
+
+#: Where :func:`_refuse_market` parks the market keys it has refused, keyed by
+#: reason.  Lives on the counter so it travels with the offer without changing
+#: any signature; stripped by :func:`_settle_counts`.
+_POST_SCAN_MARKETS = "__post_markets__"
+
+
+def _post_scan_markets(skipped: Counter) -> dict[str, set]:
+    holder = skipped.get(_POST_SCAN_MARKETS)
+    if not isinstance(holder, dict):
+        holder = {}
+        skipped[_POST_SCAN_MARKETS] = holder
+    return holder
 
 
 def _settle_counts(skipped: Counter) -> dict[str, int]:
-    """Fold post-scan tallies into the scan counts and drop the bookkeeping."""
+    """Fold post-scan refusals into the scan counts and drop the bookkeeping.
+
+    Max within a phase (two scans of one slate see the same refusal twice),
+    add across phases (the scan and the rescale refuse different markets) —
+    and *per market*, so a market refused in both phases counts once.
+    """
+    markets = skipped.get(_POST_SCAN_MARKETS)
+    markets = markets if isinstance(markets, dict) else {}
     out: dict[str, int] = {}
     for key, count in skipped.items():
-        if key.startswith(_POST_SCAN):
+        if key == _POST_SCAN_MARKETS or key.startswith(_POST_SCAN):
             continue
-        out[key] = count + skipped.get(f"{_POST_SCAN}{key}", 0)
-    for key, count in skipped.items():
-        if key.startswith(_POST_SCAN):
-            reason = key[len(_POST_SCAN):]
-            out.setdefault(reason, count)
+        out[key] = count
+    for reason, keys in markets.items():
+        out[reason] = max(out.get(reason, 0), len(keys))
     return dict(sorted(out.items()))
 
 
@@ -1093,11 +1137,14 @@ def _solve(
     # the honest answer is to refuse the assignment and count it.  Measured on
     # live data: a $481.44 "worst case" resting on a $1018.56 leg at a book
     # advertising $40.
-    if _over_stated_limit(hedge_legs):
-        refusals["hedge_over_stated_limit"] += 1
-        return None
-
     legs = (promo_leg, *hedge_legs)
+    # Every leg, not just the hedges: the promo stake scales with the offer
+    # amount exactly as a hedge's does, so a $250 bonus printed a guarantee
+    # resting on a $250 leg at a book advertising $40 — the mirror of the
+    # defect this gate was added for, left un-mirrored for three rounds.
+    if _over_stated_limit(legs):
+        refusals["stake_over_stated_limit"] += 1
+        return None
     profits = _outcome_profits(
         view,
         legs,
@@ -1105,7 +1152,7 @@ def _solve(
         refund_rate=refund_rate,
         refund_base=refund_base,
     )
-    rounded = tuple((label, round(profit, 2)) for label, profit in profits)
+    rounded = tuple((label, round(profit, 2) or 0.0) for label, profit in profits)
     floor = min(profit for _, profit in rounded)
     settled = _settled_floor(promo_selection, rounded, view, shape)
     return _Candidate(
@@ -1373,10 +1420,7 @@ def _plan_for_offer(
         # Copy whose reward is conditional on losing *is* a no-sweat, whatever
         # the enricher labelled it.  Priced as a plain bonus it valued credit
         # that arrives only on a loss as credit in hand.
-        or (
-            _CONDITIONAL_REFUND.search(summary)
-            and not _WIN_CONDITIONAL.search(summary)
-        )
+        or _reward_is_loss_contingent(summary)
     ):
         # ``risk_free`` is the label the enricher writes for "risk-free bet"
         # copy.  The *kind* was handled and the reward was not, so those offers
@@ -1427,9 +1471,9 @@ def _plan_for_offer(
     # land, and a bet-and-get card otherwise reads as though it does.  The
     # loss-conditional case has a model (`_plan_no_sweat`); this one does not,
     # so the honest move is to price it and say what the price assumes.
-    if _WIN_CONDITIONAL.search(summary) and out["strategy"] not in {
-        "text_only",
-        "no_odds_coverage",
+    if _reward_is_win_contingent(summary) and out["strategy"] in {
+        "bonus_conversion",
+        "qualify_then_convert",
     }:
         out["caveats"].append(
             "this credit arrives only if the qualifying bet wins, so the "
@@ -1489,7 +1533,7 @@ def _plan_conversion(
     for candidate in candidates:
         scaled = _rescale(candidate, scale)
         if scaled is None:
-            _refuse_market(skipped, "hedge_over_stated_limit", candidate)
+            _refuse_market(skipped, "stake_over_stated_limit", candidate)
             continue
         survivors.append((candidate, scaled))
     for candidate, scaled in survivors[:MAX_PLANS_PER_OFFER]:
@@ -1538,7 +1582,7 @@ def _plan_qualify_then_convert(
     for candidate in conversion:
         scaled = _rescale(candidate, scale)
         if scaled is None:
-            _refuse_market(skipped, "hedge_over_stated_limit", candidate)
+            _refuse_market(skipped, "stake_over_stated_limit", candidate)
             continue
         convert_survivors.append((candidate, scaled))
     room = max(0, MAX_PLANS_PER_OFFER - len(out["plans"]))
@@ -1582,7 +1626,23 @@ def _plan_no_sweat(
             "refund cannot be valued; the generic playbook below applies"
         )
         return
-    rate = conversion[0].settled_floor / PLAN_UNIT
+    # Valued at a rate the offer's own size can actually reach: the ranked
+    # list still holds markets whose hedge breaks the venue's published size
+    # once the credit is scaled, and quoting one of those put $42 of an
+    # unbackable guarantee on the card.
+    stake_guess = float(bonus_amount) if bonus_amount else PLAN_UNIT
+    usable = [
+        candidate for candidate in conversion
+        if _rescale(candidate, stake_guess / PLAN_UNIT) is not None
+    ]
+    if not usable:
+        out["strategy"] = "text_only"
+        out["caveats"].append(
+            "no market on this book can absorb a conversion at this size, so "
+            "the refund cannot be valued; the generic playbook below applies"
+        )
+        return
+    rate = usable[0].settled_floor / PLAN_UNIT
     out["strategy"] = "no_sweat_hedge"
     stake = float(bonus_amount) if bonus_amount else PLAN_UNIT
     out["unit"] = {"kind": "protected_stake", "amount": stake, "assumed": bonus_amount is None}
@@ -1766,11 +1826,11 @@ def _rescale(candidate: _Candidate, scale: float) -> _Candidate | None:
         for leg in candidate.hedge_legs
     )
     legs = (scaled_promo, *scaled_hedges)
-    if _over_stated_limit(scaled_hedges):
+    if _over_stated_limit(legs):
         return None
     shape = frozenset(leg.quote.selection for leg in legs)
     profits = _outcome_profits(candidate.view, legs, shape=shape)
-    rounded = tuple((label, round(profit, 2)) for label, profit in profits)
+    rounded = tuple((label, round(profit, 2) or 0.0) for label, profit in profits)
     floor = min(profit for _, profit in rounded)
     settled = _settled_floor(scaled_promo.quote.selection, rounded, candidate.view, shape)
     return _Candidate(

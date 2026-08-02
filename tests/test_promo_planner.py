@@ -1456,7 +1456,7 @@ class TestAHedgeAboveTheBooksStatedSizeIsRefused:
         # Counted, not silently dropped: the summary caveat is guarded on this
         # map being non-empty, so an uncounted refusal left the offer with no
         # plan, no count and no sentence at all.
-        assert plan["skipped"].get("hedge_over_stated_limit", 0) >= 1, plan["skipped"]
+        assert plan["skipped"].get("stake_over_stated_limit", 0) >= 1, plan["skipped"]
 
     def test_the_same_market_plans_when_the_size_is_there(self):
         plan = _the_plan(_plans([_offer()], self._slate(limit=500.0)))
@@ -1868,7 +1868,7 @@ class TestTheStatedLimitSurvivesRescaling:
     def test_the_refusal_is_counted_rather_than_silent(self):
         plan = _the_plan(_plans([_offer(bonus_amount=1000.0)], self._slate()))
         assert plan["plans"] == []
-        assert plan["skipped"].get("hedge_over_stated_limit", 0) >= 1, plan["skipped"]
+        assert plan["skipped"].get("stake_over_stated_limit", 0) >= 1, plan["skipped"]
 
     def test_the_same_offer_plans_when_the_size_is_there(self):
         plan = _the_plan(_plans([_offer(bonus_amount=1000.0)],
@@ -2079,7 +2079,7 @@ class TestGatingHappensBeforeTruncation:
     def test_the_refusals_are_still_counted(self):
         rows, _ = _many_markets(hedge_limit=250.0)
         plan = _the_plan(_plans([_offer(bonus_amount=1000.0)], rows))
-        assert plan["skipped"].get("hedge_over_stated_limit", 0) >= 1, plan["skipped"]
+        assert plan["skipped"].get("stake_over_stated_limit", 0) >= 1, plan["skipped"]
 
     def test_no_false_claim_that_nothing_passed(self):
         rows, _ = _many_markets(hedge_limit=250.0)
@@ -2125,7 +2125,7 @@ class TestGatingHappensBeforeTruncation:
         offer = _offer(kind="odds_boost", reward_type="boost", bonus_amount=None)
         plan = _the_plan(_plans([offer], rows))
         assert plan["strategy"] == "boost_breakeven"
-        assert plan["skipped"].get("hedge_over_stated_limit", 0) >= 1, plan["skipped"]
+        assert plan["skipped"].get("stake_over_stated_limit", 0) >= 1, plan["skipped"]
         assert plan["plans"], plan["skipped"]
         assert any(p["event_key"] == spare for p in plan["plans"]), [
             p["event_key"] for p in plan["plans"]
@@ -2499,18 +2499,34 @@ class TestAWinConditionalRewardIsNotInsurance:
         ))
         assert plan["strategy"] in {"no_sweat_hedge", "text_only"}, plan["strategy"]
 
-    def test_copy_matching_both_detectors_is_not_treated_as_insurance(self):
-        """"refunded … if your bet wins" trips the refund words and the win
-        condition at once — which is exactly what the guard is for."""
-        summary = "Bet $5, get $200 refunded in bonus bets if your bet wins"
+    def test_copy_naming_both_branches_is_still_insurance(self):
+        """Venues ordinarily spell out both branches of a safety net.
+
+        "If it loses you get it back.  If it wins, you keep the winnings." is a
+        refund, and letting the win clause veto it priced a real second-chance
+        offer as credit in hand — overstating two live offers' guarantees by
+        54% and 62%, staking credit the operator does not hold, and attaching a
+        caveat contradicting a title that reads "If Lose".
+        """
+        summary = (
+            "Bet $50 safety net. If it loses you get $50 back. "
+            "If it wins, you keep the winnings."
+        )
         from src.promos.planner import _CONDITIONAL_REFUND, _WIN_CONDITIONAL
 
         assert _CONDITIONAL_REFUND.search(summary), "the fixture must trip both"
         assert _WIN_CONDITIONAL.search(summary), "the fixture must trip both"
         plan = _the_plan(_plans(
-            [_offer(summary=summary, bonus_amount=200.0)], self._slate()
+            [_offer(summary=summary, bonus_amount=50.0)], self._slate()
         ))
-        assert plan["strategy"] != "no_sweat_hedge", plan["strategy"]
+        assert plan["strategy"] in {"no_sweat_hedge", "text_only"}, plan["strategy"]
+        assert not any("only if the qualifying bet wins" in c for c in plan["caveats"]), (
+            plan["caveats"]
+        )
+        for concrete in plan["plans"]:
+            assert concrete["legs"][0]["stake_kind"] == "cash", (
+                "the qualifying stake is the operator's own money"
+            )
 
     @pytest.mark.parametrize(
         ("summary", "is_refund"),
@@ -2655,7 +2671,7 @@ class TestRefusalCountsAddAcrossPhasesAndMaxWithinOne:
         """Five markets on the board, every one refused at scan time."""
         plan = _the_plan(_plans([_offer()], self._limited(5, limit=40.0)))
         assert plan["plans"] == []
-        assert plan["skipped"].get("hedge_over_stated_limit") == 5, plan["skipped"]
+        assert plan["skipped"].get("stake_over_stated_limit") == 5, plan["skipped"]
 
     def test_refusals_at_rescale_are_counted_too(self):
         """A limit the $100 scan clears and the scaled stake does not.
@@ -2667,14 +2683,14 @@ class TestRefusalCountsAddAcrossPhasesAndMaxWithinOne:
         plan = _the_plan(_plans([_offer(bonus_amount=1000.0)],
                                 self._limited(4, limit=200.0)))
         assert plan["plans"] == []
-        assert plan["skipped"].get("hedge_over_stated_limit") == 4, plan["skipped"]
+        assert plan["skipped"].get("stake_over_stated_limit") == 4, plan["skipped"]
 
     def test_a_two_scan_strategy_does_not_double_them(self):
         plan = _the_plan(_plans(
             [_offer(kind="no_sweat", reward_type="no_sweat")],
             self._limited(5, limit=40.0),
         ))
-        counted = plan["skipped"].get("hedge_over_stated_limit", 0)
+        counted = plan["skipped"].get("stake_over_stated_limit", 0)
         assert counted <= 5, plan["skipped"]
 
     def test_the_bookkeeping_keys_never_reach_the_payload(self):
@@ -2830,7 +2846,7 @@ class TestTheStatedLimitBoundary:
     def test_a_cent_over_the_limit_is_refused(self):
         plan = _the_plan(_plans([_offer()], self._slate(limit=133.32)))
         assert plan["plans"] == [], plan["plans"]
-        assert plan["skipped"].get("hedge_over_stated_limit", 0) >= 1
+        assert plan["skipped"].get("stake_over_stated_limit", 0) >= 1
 
 
 class TestTheFirstPartyFeedSuppliesThePromoLeg:
@@ -2855,3 +2871,218 @@ class TestTheFirstPartyFeedSuppliesThePromoLeg:
         assert promo["source"] == "betmgm", promo
         assert promo["decimal_odds"] == pytest.approx(3.0)
         assert not any("Action Network" in c for c in plan["caveats"]), plan["caveats"]
+
+
+# ── round 8 adversarial findings ─────────────────────────────────────────────
+
+
+class TestASafetyNetNamingBothBranchesStaysInsurance:
+    """Venues spell out both branches; the loss branch is what decides.
+
+    Letting the win clause veto the refund model priced two real live offers as
+    credit in hand — overstating their guarantees by 54% and 62%, flipping the
+    promo leg from cash to credit the operator does not hold, and attaching a
+    caveat saying "only if the qualifying bet wins" to an offer titled
+    "$1500 Bonus Bets If Lose".
+    """
+
+    BOTH = ("Bet $50 safety net. If it loses you get $50 back. "
+            "If it wins, you keep the winnings.")
+
+    def _slate(self):
+        return [
+            make_quote(source="draftkings", selection=Selection.AWAY, decimal_odds=3.0),
+            make_quote(source="fanduel", selection=Selection.HOME, decimal_odds=1.5),
+        ]
+
+    def test_the_loss_branch_decides(self):
+        plan = _the_plan(_plans(
+            [_offer(summary=self.BOTH, kind="no_sweat", reward_type="no_sweat",
+                    bonus_amount=50.0)],
+            self._slate(),
+        ))
+        assert plan["strategy"] in {"no_sweat_hedge", "text_only"}, plan["strategy"]
+
+    def test_the_promo_leg_is_the_operators_own_money(self):
+        plan = _the_plan(_plans(
+            [_offer(summary=self.BOTH, bonus_amount=50.0)], self._slate()
+        ))
+        for concrete in plan["plans"]:
+            assert concrete["legs"][0]["stake_kind"] == "cash", concrete["legs"]
+
+    def test_no_win_caveat_lands_on_a_loss_conditional_offer(self):
+        plan = _the_plan(_plans(
+            [_offer(summary=self.BOTH, bonus_amount=50.0)], self._slate()
+        ))
+        assert not any("only if the qualifying bet wins" in c for c in plan["caveats"])
+
+
+class TestRefundWordsNeedALossBesideThem:
+    """A bare participle was the void/postponement/fee sentence.
+
+    It routed an ordinary bet-and-get into the insurance model — discarding the
+    credit and telling the operator to risk their own cash — while missing
+    "refund" and "refunds", where the real mechanic is usually written.
+    """
+
+    @pytest.mark.parametrize(
+        ("summary", "is_refund"),
+        [
+            ("Bet $5, get $150 in bonus bets. Wagers refunded on postponement.", False),
+            ("Your stake will be refunded if the game is postponed", False),
+            ("Withdrawal fees are refunded monthly", False),
+            ("Any bet on a void market is refunded automatically", False),
+            ("Stake refund up to $100 on your first wager", True),
+            ("Get a full refund if you lose your first bet", True),
+            ("Bet $25, get $25 refunded in bonus bets on your first losing bet", True),
+        ],
+    )
+    def test_only_loss_context_counts(self, summary, is_refund):
+        from src.promos.planner import _reward_is_loss_contingent
+
+        assert _reward_is_loss_contingent(summary) is is_refund, summary
+
+    def test_a_postponement_sentence_does_not_discard_the_credit(self):
+        rows = [
+            make_quote(source="draftkings", selection=Selection.AWAY, decimal_odds=3.0),
+            make_quote(source="fanduel", selection=Selection.HOME, decimal_odds=1.5),
+        ]
+        offer = _offer(
+            summary="Bet $5, get $150 in bonus bets. Wagers refunded on postponement.",
+            bonus_amount=150.0,
+        )
+        plan = _the_plan(_plans([offer], rows))
+        assert plan["strategy"] == "qualify_then_convert", plan["strategy"]
+
+
+class TestTheWinCaveatOnlyLandsWhereCreditWasPriced:
+    """It was appended on every priced strategy.
+
+    On a no-sweat card — whose entire floor comes from a refund paid when the
+    promo leg *loses* — it directly contradicted the model beside it, and on a
+    boost card there is no credit at all.
+    """
+
+    def _slate(self):
+        return [
+            make_quote(source="draftkings", selection=Selection.AWAY, decimal_odds=3.0),
+            make_quote(source="fanduel", selection=Selection.HOME, decimal_odds=1.5),
+        ]
+
+    @pytest.mark.parametrize(
+        ("kind", "reward", "summary"),
+        [
+            ("profit_boost", "boost", "Get 50% profit boost when your team wins"),
+            ("no_sweat", "no_sweat",
+             "Safety net up to $100. If your bet wins, you keep the profit."),
+            ("deposit_match", "site_credit",
+             "Credit unlocks when your first bet wins."),
+        ],
+    )
+    def test_no_win_caveat_outside_the_credit_models(self, kind, reward, summary):
+        plan = _the_plan(_plans(
+            [_offer(kind=kind, reward_type=reward, summary=summary,
+                    bonus_amount=100.0, wagering_requirement="1x")],
+            self._slate(),
+        ))
+        assert not any("only if the qualifying bet wins" in c for c in plan["caveats"]), (
+            kind, reward, plan["caveats"]
+        )
+
+    def test_it_still_lands_on_a_win_conditional_bet_and_get(self):
+        plan = _the_plan(_plans(
+            [_offer(summary="Bet $5, get $200 in bonus bets if your bet wins",
+                    bonus_amount=200.0)],
+            self._slate(),
+        ))
+        assert any("only if the qualifying bet wins" in c for c in plan["caveats"]), (
+            plan["caveats"]
+        )
+
+
+class TestOneMarketRefusedTwiceIsOneRefusal:
+    """Two scans at different stakes can refuse the same market twice.
+
+    The qualify scan refuses it, the convert scan keeps it, the rescale refuses
+    it again — one market, reported as two.
+    """
+
+    def test_a_single_market_counts_once(self):
+        rows = [
+            make_quote(source="draftkings", selection=Selection.AWAY, decimal_odds=3.0),
+            make_quote(source="fanduel", selection=Selection.HOME, decimal_odds=1.5,
+                       limit_amount=150.0),
+        ]
+        offer = _offer(summary="Bet $1000, get $120 in bonus bets", bonus_amount=120.0)
+        plan = _the_plan(_plans([offer], rows))
+        assert plan["skipped"].get("stake_over_stated_limit") == 1, plan["skipped"]
+
+
+class TestThePromoLegRespectsItsOwnBooksSize:
+    """The gate covered hedges only, for three rounds.
+
+    The promo stake scales with the offer amount exactly as a hedge's does, so
+    a $250 bonus printed a guarantee resting on a $250 leg at a book
+    advertising $40 — with an empty skipped map, so nothing said why.
+    """
+
+    def _slate(self, promo_limit):
+        return [
+            make_quote(source="draftkings", selection=Selection.AWAY, decimal_odds=3.0,
+                       limit_amount=promo_limit),
+            make_quote(source="fanduel", selection=Selection.HOME, decimal_odds=1.5),
+        ]
+
+    def test_a_promo_leg_over_its_books_size_is_refused(self):
+        plan = _the_plan(_plans([_offer(bonus_amount=250.0)], self._slate(40.0)))
+        assert plan["plans"] == [], plan["plans"]
+        assert plan["skipped"].get("stake_over_stated_limit", 0) >= 1, plan["skipped"]
+
+    def test_an_unscaled_promo_leg_is_gated_too(self):
+        """At $100 the credit is not rescaled, so ``_rescale`` never runs.
+
+        Without this the solver-level check is redundant on every fixture that
+        scales, and reverting it leaves the suite green.
+        """
+        plan = _the_plan(_plans([_offer(bonus_amount=100.0)], self._slate(40.0)))
+        assert plan["plans"] == [], plan["plans"]
+        assert plan["skipped"].get("stake_over_stated_limit", 0) >= 1, plan["skipped"]
+
+    def test_the_same_offer_plans_when_the_book_takes_it(self):
+        plan = _the_plan(_plans([_offer(bonus_amount=250.0)], self._slate(500.0)))
+        assert plan["plans"], plan["skipped"]
+        assert plan["plans"][0]["legs"][0]["stake"] == pytest.approx(250.0)
+
+
+class TestTheRefundIsValuedAtARateTheSizeCanReach:
+    """The no-sweat rate came from the ranked list, like its two siblings did.
+
+    Its scan never rescales, so a large protected stake was valued at a
+    per-$100 conversion no market on the slate can absorb — $42 of an
+    unbackable guarantee on the card.
+    """
+
+    def test_the_quoted_conversion_is_achievable_at_this_size(self):
+        rows = [
+            # Richest per-$100 conversion, at a book that publishes $200.
+            make_quote(source="draftkings", selection=Selection.HOME, decimal_odds=3.0,
+                       event_key="MLB-N0@MLB-O0:2026-07-28",
+                       home_participant="MLB-O0", away_participant="MLB-N0"),
+            make_quote(source="fanduel", selection=Selection.AWAY, decimal_odds=1.5,
+                       event_key="MLB-N0@MLB-O0:2026-07-28", limit_amount=200.0,
+                       home_participant="MLB-O0", away_participant="MLB-N0"),
+            # Poorer, but unlimited.
+            make_quote(source="draftkings", selection=Selection.HOME, decimal_odds=2.2,
+                       event_key="MLB-N1@MLB-O1:2026-07-28",
+                       home_participant="MLB-O1", away_participant="MLB-N1"),
+            make_quote(source="betmgm", selection=Selection.AWAY, decimal_odds=1.95,
+                       event_key="MLB-N1@MLB-O1:2026-07-28",
+                       home_participant="MLB-O1", away_participant="MLB-N1"),
+        ]
+        offer = _offer(kind="no_sweat", reward_type="no_sweat", bonus_amount=1000.0)
+        plan = _the_plan(_plans([offer], rows))
+        if plan["strategy"] != "no_sweat_hedge":
+            assert plan["caveats"], plan
+            return
+        # 66.7% is market 0's rate and needs a $1333 hedge at a $200 book.
+        assert plan["refund_conversion_pct"] < 66.0, plan["refund_conversion_pct"]

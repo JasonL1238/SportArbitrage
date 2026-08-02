@@ -594,9 +594,13 @@ def _cmd_plan(args: argparse.Namespace) -> int:
                     leg_line = ""
                     if leg.get("line") is not None and item["market"] != "moneyline":
                         leg_line = f" {leg['line']:+g}"
+                    # One padded field for selection-and-line together: the
+                    # width belongs to the pair, not to the line alone, or a
+                    # five-letter selection ("under") shifts every column after
+                    # it relative to a four-letter one ("over").
+                    side = f"{leg['selection']}{leg_line}"
                     print(
-                        f"    {leg['role']:5} {leg['source']:16} "
-                        f"{leg['selection']}{leg_line:8} "
+                        f"    {leg['role']:5} {leg['source']:16} {side:14} "
                         f"@ {leg['decimal_odds']:.3f} stake {leg['stake']:.2f} ({tag})"
                     )
                 worst = item["guaranteed_cash"]
