@@ -3579,3 +3579,126 @@ class TestTheBreakevenScanCountsWhatItDrops:
                        summary="Odds boost on any game")
         plan = _the_plan(_plans([offer], rows))
         assert plan["skipped"].get("promo_price_too_short_to_boost", 0) >= 1, plan["skipped"]
+
+
+class TestWinOrLoseIsNotALossCondition:
+    """"win or lose" is the phrase that means *unconditional*.
+
+    Widening the refund pattern's subject set to include ``you`` made its
+    48-character window span the standard welcome-offer clause — "when you
+    place your first $5 bet - win or lose" — because a loss word sits inside
+    it.  The commonest bet-and-get wording in the market was then priced as
+    insurance: a $5 qualifier became a card telling the operator to stake $150
+    of their own cash behind a $233 hedge, $383 at risk for a $66.66 floor and
+    no caveat at all, where the truth is $15 at risk for $100.
+    """
+
+    UNCONDITIONAL = [
+        "Bet $5, get $150 in bonus bets when you place your first $5 bet - win or lose",
+        "Bet $5, get $200 in bonus bets when you bet on any game, win or lose",
+        "Get $150 in bonus bets if you place a $5 wager, win or lose",
+        "You get the bonus whether you win or lose",
+        "Bet $10 and get $50 regardless of the outcome",
+    ]
+
+    @pytest.mark.parametrize("summary", UNCONDITIONAL)
+    def test_it_is_not_read_as_insurance(self, summary):
+        from src.promos.planner import _reward_is_loss_contingent
+        assert not _reward_is_loss_contingent(summary), summary
+
+    @pytest.mark.parametrize("summary", UNCONDITIONAL)
+    def test_it_is_not_read_as_win_contingent_either(self, summary):
+        from src.promos.planner import _reward_is_win_contingent
+        assert not _reward_is_win_contingent(summary), summary
+
+    @pytest.mark.parametrize("summary", [
+        "If you lose your first bet, get up to $1,000 back in bonus bets",
+        "Get $150 in bonus bets if your first bet settles as a loss",
+        "Bet $5, get $200 in bonus bets if your first bet doesn't win",
+        "No sweat first bet up to $1,500 - not a winner? Get your stake back",
+    ])
+    def test_a_real_loss_condition_still_reads_as_one(self, summary):
+        """The veto must not swallow the offers it sits beside."""
+        from src.promos.planner import _reward_is_loss_contingent
+        assert _reward_is_loss_contingent(summary), summary
+
+    def test_the_offer_plans_as_a_bet_and_get(self):
+        quotes = [
+            make_quote(source="draftkings", selection=Selection.AWAY, decimal_odds=3.0),
+            make_quote(source="fanduel", selection=Selection.HOME, decimal_odds=1.5),
+        ]
+        offer = _offer(kind="bet_and_get", bonus_amount=150.0,
+                       summary=self.UNCONDITIONAL[0])
+        plan = _the_plan(_plans([offer], quotes))
+        assert plan["strategy"] == "qualify_then_convert", plan["strategy"]
+        assert plan["unit"]["kind"] == "bet_and_get", plan["unit"]
+        assert plan.get("expected_value"), plan
+
+
+class TestAnUnplaceableHedgeDoesNotTakeTheMarketDownWithIt:
+    """The limit gate cannot run at a stake nobody places — nor after the
+    winner is picked.
+
+    The conversion scan is solved once at ``PLAN_UNIT`` and cached across every
+    offer on the book, so the published-limit gate is deferred to ``_rescale``.
+    Keeping only the best-priced assignment per market then let one the offer's
+    real size cannot place *shadow* a legal runner-up, and ``_rescale`` deleted
+    the market rather than the assignment: zero plans and "no hedgeable market
+    on this book passed every gate" printed over a placeable +$100.
+
+    This is the board exchange depth actually produces — best price, thin book;
+    next tick down, deep book — and ``limit_amount`` is populated by exactly
+    those venues (matchbook, kalshi, pinnacle, sxbet).
+    """
+
+    def _slate(self):
+        return [
+            make_quote(source="draftkings", selection=Selection.AWAY, decimal_odds=3.00),
+            make_quote(source="draftkings", selection=Selection.HOME, decimal_odds=1.45),
+            # Best price, $50 of depth.
+            make_quote(source="fanduel", selection=Selection.HOME, decimal_odds=1.55,
+                       limit_amount=50.0),
+            # A tick worse, effectively unlimited.
+            make_quote(source="betmgm", selection=Selection.HOME, decimal_odds=1.50,
+                       limit_amount=100000.0),
+        ]
+
+    def test_the_placeable_runner_up_is_planned(self):
+        plan = _the_plan(_plans([_offer(bonus_amount=150.0)], self._slate()))
+        assert plan["plans"], plan["skipped"]
+        card = plan["plans"][0]
+        hedges = [leg for leg in card["legs"] if leg["role"] == "hedge"]
+        assert [leg["source"] for leg in hedges] == ["betmgm"], card["legs"]
+        assert card["guaranteed_cash"] == pytest.approx(100.0, abs=0.01), card
+
+    def test_no_leg_exceeds_the_size_its_venue_publishes(self):
+        plan = _the_plan(_plans([_offer(bonus_amount=150.0)], self._slate()))
+        limits = {q.source: q.limit_amount for q in self._slate()}
+        for card in plan["plans"]:
+            for leg in card["legs"]:
+                cap = limits.get(leg["source"])
+                if cap is not None:
+                    assert leg["stake"] <= cap + 1e-9, leg
+
+    def test_a_market_that_planned_is_not_also_counted_as_refused(self):
+        """The loser of a market that went on to plan is not a refusal.
+
+        Counting it would put one market in both the plans list and the tally
+        the caveat says explains why nothing printed.
+        """
+        plan = _the_plan(_plans([_offer(bonus_amount=150.0)], self._slate()))
+        assert plan["plans"], plan["skipped"]
+        assert "stake_over_stated_limit" not in plan["skipped"], plan["skipped"]
+
+    def test_a_market_no_assignment_can_place_is_still_refused(self):
+        """The fallback must not become a way to smuggle an oversized leg."""
+        slate = [
+            make_quote(source="draftkings", selection=Selection.AWAY, decimal_odds=3.00),
+            make_quote(source="fanduel", selection=Selection.HOME, decimal_odds=1.55,
+                       limit_amount=5.0),
+            make_quote(source="betmgm", selection=Selection.HOME, decimal_odds=1.50,
+                       limit_amount=5.0),
+        ]
+        plan = _the_plan(_plans([_offer(bonus_amount=150.0)], slate))
+        assert plan["plans"] == [], plan["plans"]
+        assert plan["skipped"].get("stake_over_stated_limit", 0) >= 1, plan["skipped"]

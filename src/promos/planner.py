@@ -87,6 +87,12 @@ PLAN_UNIT = 100.0
 #: widening this only slows the scan.
 _HEDGE_CANDIDATES_PER_SELECTION = 4
 
+#: How many assignments to keep per market when the scan's stake is
+#: provisional.  The published-limit gate cannot run at a stake nobody places,
+#: so it runs later at the offer's real size — and a market must carry spares,
+#: or the best-priced-but-unplaceable assignment takes the market down with it.
+_FALLBACKS_PER_MARKET = 4
+
 #: Modes the stake solver knows.  ``bonus`` is stake-not-returned credit,
 #: ``cash`` is real money, ``boosted`` is real money whose winnings are
 #: multiplied before settlement.
@@ -181,8 +187,38 @@ _WIN_CONDITIONAL = re.compile(
 )
 
 
+#: Copy that states the reward arrives *whatever* happens.  These are fixed
+#: idioms — "win or lose", "whether it wins or loses", "regardless of the
+#: outcome" — and every one of them names a loss inside the window
+#: ``_CONDITIONAL_REFUND`` scans, so widening that pattern's subject set to
+#: include ``you`` made the commonest bet-and-get wording in the market read as
+#: insurance: "get $150 in bonus bets when you place your first $5 bet — win or
+#: lose" routed a $5 qualifier into ``_plan_no_sweat``, printing a card that
+#: staked $383 of the operator's own money for a $66.66 floor, with no caveat,
+#: where the truth is $15 at risk for $100.  An unconditional phrase vetoes the
+#: loss reading outright: it is a statement about *both* branches, so neither
+#: branch is a condition.
+_UNCONDITIONAL_REWARD = re.compile(
+    r"\b(?:"
+    r"win\s+or\s+lose|lose\s+or\s+win|won\s+or\s+lost"
+    r"|whether\s+(?:or\s+not\s+)?(?:you|it|they|your)\b[^.;]{0,32}?\b(?:wins?|won)\b"
+    r"|regardless\s+of\s+(?:the\s+)?(?:outcome|result|whether)"
+    r"|no\s+matter\s+(?:the\s+)?(?:outcome|result|what|if)"
+    r"|either\s+way"
+    r")",
+    re.IGNORECASE,
+)
+
+
 def _reward_is_loss_contingent(summary: str) -> bool:
-    """Does the reward arrive only when the qualifying bet loses?"""
+    """Does the reward arrive only when the qualifying bet loses?
+
+    An explicit "win or lose" wins over any loss word beside it: the phrase
+    exists precisely to say the reward is unconditional, so a loss named in the
+    same breath is one half of a promise, not a condition.
+    """
+    if _UNCONDITIONAL_REWARD.search(summary):
+        return False
     return bool(_CONDITIONAL_REFUND.search(summary))
 
 
@@ -236,7 +272,11 @@ def parse_qualifying_stake(summary: str | None) -> float | None:
     m = _QUALIFYING_SUMMARY.match(summary)
     if not m:
         return None
-    if _CONDITIONAL_REFUND.search(summary):
+    # Through ``_reward_is_loss_contingent``, not the raw pattern: an explicit
+    # "win or lose" means the reward is unconditional, and reading the loss word
+    # inside it as a condition threw away the qualifying stake — the one number
+    # that makes this a bet-and-get rather than an insurance play.
+    if _reward_is_loss_contingent(summary):
         return None
     try:
         value = float(m.group(1).replace(",", ""))
@@ -1015,7 +1055,7 @@ def _scan(
                 skipped["no_hedge_price"] += 1
                 continue
 
-            best_candidate: _Candidate | None = None
+            ranked: list[_Candidate] = []
             for combo in _product(pools):
                 # Hedges at the promo book's own counterparty are already out —
                 # that test is per-source and was applied when the pools were
@@ -1071,10 +1111,21 @@ def _scan(
                 )
                 if candidate is None:
                     continue
-                if best_candidate is None or candidate.metric > best_candidate.metric + _EPSILON:
-                    best_candidate = candidate
-            if best_candidate is not None:
-                candidates.append(best_candidate)
+                ranked.append(candidate)
+            if ranked:
+                ranked.sort(key=lambda c: -c.metric)
+                # One winner per market when the stake is real, because the
+                # limit gate has already run inside ``_solve`` and every
+                # candidate here is placeable.  When it is provisional that gate
+                # is deferred to ``_rescale``, so the best-priced assignment can
+                # be one the offer's real size cannot place — and keeping it
+                # alone let it *shadow* a legal runner-up on the same market,
+                # which ``_rescale`` then deleted along with the market.
+                # Measured: a $50-limit hedge at 1.55 beat a six-figure-limit
+                # hedge at 1.50, and a $150 offer printed zero plans and "no
+                # hedgeable market passed every gate" over a placeable +$100.
+                keep = _FALLBACKS_PER_MARKET if stake_is_provisional else 1
+                candidates.extend(ranked[:keep])
         if stale_here:
             skipped["observation_spread"] = (
                 skipped.get("observation_spread", 0) + len(stale_here)
@@ -1589,13 +1640,7 @@ def _plan_conversion(
         )
     candidates = [c for c in conversions(min_dec) if c.settled_floor > _EPSILON]
     scale = amount / PLAN_UNIT
-    survivors = []
-    for candidate in candidates:
-        scaled = _rescale(candidate, scale)
-        if scaled is None:
-            _refuse_market(skipped, "stake_over_stated_limit", candidate)
-            continue
-        survivors.append((candidate, scaled))
+    survivors = _rescale_survivors(candidates, scale, skipped)
     for candidate, scaled in survivors[:MAX_PLANS_PER_OFFER]:
         payload = _candidate_payload(scaled, as_of=context.as_of)
         payload["conversion_pct"] = round(candidate.settled_floor / PLAN_UNIT * 100.0, 2)
@@ -1638,13 +1683,7 @@ def _plan_qualify_then_convert(
         out["plans"].append(payload)
     best_rate = 0.0
     scale = bonus_amount / PLAN_UNIT
-    convert_survivors = []
-    for candidate in conversion:
-        scaled = _rescale(candidate, scale)
-        if scaled is None:
-            _refuse_market(skipped, "stake_over_stated_limit", candidate)
-            continue
-        convert_survivors.append((candidate, scaled))
+    convert_survivors = _rescale_survivors(conversion, scale, skipped)
     room = max(0, MAX_PLANS_PER_OFFER - len(out["plans"]))
     for candidate, scaled in convert_survivors[:room]:
         payload = _candidate_payload(scaled, as_of=context.as_of)
@@ -1695,12 +1734,11 @@ def _plan_no_sweat(
     # This comprehension discarded markets with no ``_refuse_market`` call, so
     # a book whose every conversion broke its hedge's published size reported
     # ``skipped={}`` and printed an empty "gated out:" line in the CLI.
-    usable = []
-    for candidate in conversion:
-        if _rescale(candidate, stake_guess / PLAN_UNIT) is None:
-            _refuse_market(skipped, "stake_over_stated_limit", candidate)
-            continue
-        usable.append(candidate)
+    usable = [
+        candidate
+        for candidate, _ in _rescale_survivors(
+            conversion, stake_guess / PLAN_UNIT, skipped)
+    ]
     if not usable:
         out["strategy"] = "text_only"
         out["caveats"].append(
@@ -1883,6 +1921,39 @@ def _plan_rollover(
         "grind rollover through the lowest-cost two-sided market, hedging each "
         "round; the cost shown is the vig per $100 pushed through"
     )
+
+
+def _rescale_survivors(
+    candidates: Sequence[_Candidate], scale: float, skipped: Counter,
+) -> list[tuple[_Candidate, _Candidate]]:
+    """The best assignment per market that the offer's real size can place.
+
+    The provisional scan keeps several assignments per market precisely so this
+    can fall through to a placeable one.  Ranked order is preserved, so the
+    first survivor for a market is the best-priced one that fits.
+
+    A market is counted as refused only when *every* assignment on it failed —
+    counting the loser of a market that went on to plan would put a market in
+    both the plans list and the refusal tally, under a caveat saying the counts
+    explain why nothing was printed.
+    """
+    survivors: list[tuple[_Candidate, _Candidate]] = []
+    planned: set = set()
+    refused: dict = {}
+    for candidate in candidates:
+        key = (candidate.view.key, candidate.promo_leg.quote.selection)
+        if key in planned:
+            continue
+        scaled = _rescale(candidate, scale)
+        if scaled is None:
+            refused.setdefault(key, candidate)
+            continue
+        planned.add(key)
+        refused.pop(key, None)
+        survivors.append((candidate, scaled))
+    for candidate in refused.values():
+        _refuse_market(skipped, "stake_over_stated_limit", candidate)
+    return survivors
 
 
 def _rescale(candidate: _Candidate, scale: float) -> _Candidate | None:
