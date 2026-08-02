@@ -16,7 +16,6 @@ import pytest
 from src.arb import find_opportunities
 from src.promos.planner import (
     MAX_PLANS_PER_OFFER,
-    PLAN_UNIT,
     build_promo_plans,
     parse_boost_percent,
     parse_min_odds,
@@ -25,7 +24,7 @@ from src.promos.planner import (
     stakeable_odds_sources,
 )
 from src.promos.schema import PromoKind, PromoOffer
-from src.schema import Market, Period, Selection, Sport, QuoteStatus
+from src.schema import Market, Selection, Sport, QuoteStatus
 
 from .conftest import make_quote
 
@@ -1060,7 +1059,8 @@ class TestAStaleRunIsNotReportedAsAMissingBook:
         assert plan["skipped"] == {}
 
     def test_a_partly_stale_book_carries_the_count(self):
-        started = AS_OF - timedelta(hours=1)
+        # The started game comes from ``_started_slate``; this test adds a live
+        # one beside it, so it needs no timestamp of its own.
         live_key = "MLB-NYY@MLB-BOS:2026-07-29"
         quotes = self._started_slate() + [
             make_quote(source="draftkings", selection=Selection.AWAY, decimal_odds=3.0,

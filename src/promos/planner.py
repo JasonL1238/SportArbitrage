@@ -102,8 +102,6 @@ MODE_BOOSTED = "boosted"
 
 _EPSILON = 1e-9
 
-_CENT = 0.01
-
 
 # ── offer-text parsing ───────────────────────────────────────────────────────
 
@@ -809,7 +807,7 @@ def _settled_floor(promo_selection: Selection, outcome_profits: Sequence[tuple[s
     event_key, market, period, _, line = view.key
     outcomes = settlement_outcomes(view.sport, market, period, line, shape)
     settled: list[float] = []
-    for (label, results), (_, profit) in zip(outcomes, outcome_profits):
+    for (_, results), (_, profit) in zip(outcomes, outcome_profits):
         if results[promo_selection] == PUSH:
             continue
         settled.append(profit)
@@ -1006,8 +1004,16 @@ def _scan(
                 continue
 
             hedge_selections = sorted(promo_shape - {promo_selection}, key=lambda s: s.value)
-            if not hedge_selections:
-                continue
+            # An assertion, not a bare ``continue``.  ``arb.contract_shape``
+            # returns two or three selections for every (sport, market, period),
+            # so removing the promo side always leaves at least one — the branch
+            # was unreachable, uncounted, and therefore invisible to the "every
+            # dropped record is counted" rule.  It still guards something real:
+            # an empty pool list makes ``any(not pool for pool in pools)`` false
+            # and ``_product([])`` yield one empty combination, so the market
+            # would plan with *no hedge legs at all* and print an unhedged stake
+            # as a guarantee.  Loud beats silent for that.
+            assert hedge_selections, f"contract shape {promo_shape} has no hedge side"
             # Gate **before** truncating, not after.  Sources that can never be
             # a hedge for this promo leg — the promo book's own counterparty,
             # its declared failover feed — are removed first, so the
@@ -2079,7 +2085,7 @@ def build_promo_plans(
             "as_of": as_of.isoformat(),
             "quote_count": len(quotes),
             "group_count": len(context.groups),
-            "unusable_groups": {k: v for k, v in sorted(context.unusable.items())},
+            "unusable_groups": dict(sorted(context.unusable.items())),
         },
     }
 
