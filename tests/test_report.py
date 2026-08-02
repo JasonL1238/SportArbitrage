@@ -1513,9 +1513,57 @@ def test_every_real_skip_reason_has_an_explanation(source: str) -> None:
     finally:
         adapter.close()
 
-    assert skipped, f"{source} skipped nothing, so this guard proves nothing"
+    # A source that skips nothing is *well behaved*, not broken, so this no
+    # longer asserts ``skipped``.  That assertion failed ``caesars``,
+    # ``draftkings`` and ``hardrock`` for the sole offence of parsing their
+    # captures cleanly, which is the outcome the collector is built to reach.
+    # The vacuity it was guarding against — every parse quietly ceasing to
+    # count skips, leaving this test green over nothing — is real, but it is a
+    # property of the corpus rather than of any one source, and it is pinned as
+    # one by ``test_the_skip_reason_guard_is_not_vacuous`` below.
     unexplained = [
         reason for reason in skipped
         if not any(reason.startswith(prefix) for prefix, _ in SKIP_NOTES)
     ]
     assert unexplained == [], unexplained
+
+
+def test_the_skip_reason_guard_is_not_vacuous() -> None:
+    """The corpus above must actually exercise the explanation guard.
+
+    ``test_every_real_skip_reason_has_an_explanation`` passes trivially for a
+    source that skipped nothing, which is correct per source and worthless as
+    the whole story: were every adapter to stop counting skips, all 25 would
+    pass while covering nothing.  The floors here are set well under the
+    captured slate's real figures — 172 distinct reasons across 22 of 25
+    sources — so re-capturing may move them without going red, while a
+    collapse in counting cannot hide.
+    """
+    from src.raw_store import RawStore
+
+    fixtures = Path(__file__).parent / "fixtures" / "raw"
+    store = RawStore(fixtures)
+    reasons: set[str] = set()
+    sources_that_skip = 0
+    for name in sorted(SOURCE_FACTORIES):
+        paths = sorted(fixtures.glob(f"{name}__*.json"))
+        if not paths:
+            continue  # no capture: the per-source test above already fails it
+        adapter = SOURCE_FACTORIES[name]()
+        try:
+            skipped = adapter.parse([store.read(path) for path in paths]).skipped
+        finally:
+            adapter.close()
+        if skipped:
+            sources_that_skip += 1
+            reasons.update(skipped)
+
+    assert len(reasons) >= 120, (
+        f"only {len(reasons)} distinct skip reasons across the captured slate "
+        "(was 172) — adapters have stopped counting what they drop, and the "
+        "per-source explanation guard now proves nothing"
+    )
+    assert sources_that_skip >= 20, (
+        f"only {sources_that_skip} sources skipped anything (was 22 of 25) — "
+        "too few to keep the explanation guard honest"
+    )
