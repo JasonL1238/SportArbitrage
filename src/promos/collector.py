@@ -582,9 +582,21 @@ def _cmd_plan(args: argparse.Namespace) -> int:
                     + (f"  [{item['step']}]" if item.get("step") else "")
                 )
                 for leg in item["legs"]:
-                    tag = "credit" if leg["stake_kind"] == "bonus" else "cash"
+                    tag = {
+                        "bonus": "credit",
+                        "boosted": "boosted",
+                    }.get(leg["stake_kind"], "cash")
+                    # Each leg's own line, not the group's.  The two sides of a
+                    # spread carry opposite signs, and printing only the
+                    # canonical line left the operator unable to see which side
+                    # of the game each stake goes on — the dashboard has shown
+                    # this since the payload carried it.
+                    leg_line = ""
+                    if leg.get("line") is not None and item["market"] != "moneyline":
+                        leg_line = f" {leg['line']:+g}"
                     print(
-                        f"    {leg['role']:5} {leg['source']:16} {leg['selection']:5} "
+                        f"    {leg['role']:5} {leg['source']:16} "
+                        f"{leg['selection']}{leg_line:8} "
                         f"@ {leg['decimal_odds']:.3f} stake {leg['stake']:.2f} ({tag})"
                     )
                 worst = item["guaranteed_cash"]
@@ -598,6 +610,11 @@ def _cmd_plan(args: argparse.Namespace) -> int:
                     extras.append(f"cost {item['cost_per_100_wagered']:.2f}/$100")
                 extra = ("  " + ", ".join(extras)) if extras else ""
                 print(f"    worst {worst:+.2f}, settles {settled:+.2f}{extra}")
+                for note in item.get("notes") or ():
+                    # Without these the card cannot be reconciled from its own
+                    # printed prices: a boosted leg shows its *quoted* odds,
+                    # and the note is what says a boost was applied to them.
+                    print(f"      · {note}")
             for caveat in plan.get("caveats", []):
                 print(f"  note: {caveat}")
             skipped = plan.get("skipped") or {}

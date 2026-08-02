@@ -799,14 +799,21 @@ class TestThePlanCommand:
         canonical line on both would send the hedge to the same side of the
         game.
         """
-        seeded = self._seed(tmp_path, monkeypatch, market="spread")
+        self._seed(tmp_path, monkeypatch, market="spread")
         assert self._run(["plan"]) == 0
         out = capsys.readouterr().out
         assert "spread" in out
-        assert "+1.5" in out or "-1.5" in out, out
         legs = [line for line in out.splitlines() if line.startswith("    promo ")
                 or line.startswith("    hedge ")]
         assert len(legs) >= 2, out
+        promo = next(line for line in legs if line.startswith("    promo "))
+        hedge = next(line for line in legs if line.startswith("    hedge "))
+        # Opposite signs, each on its own row.  "+1.5 or -1.5 appears somewhere"
+        # was satisfied by the group's canonical line alone, while the operator
+        # still could not see which side each stake went on.
+        assert "+1.5" in promo, promo
+        assert "-1.5" in hedge, hedge
+        assert "-1.5" not in promo, promo
 
     def test_a_team_total_plan_names_whose_total_it_is(
         self, tmp_path, monkeypatch, capsys,
@@ -817,8 +824,11 @@ class TestThePlanCommand:
         assert self._run(["plan"]) == 0
         out = capsys.readouterr().out
         assert "team_total" in out
-        # The team whose total it is, in parentheses beside the line.
-        assert "(Miami Marlins)" in out or "(Philadelphia Phillies)" in out, out
+        # The fixture prices the HOME team's total, and Miami is home.  An
+        # `or` over both names accepted the branch inversion it exists to
+        # catch — the away team's name on the home team's total.
+        assert "(Miami Marlins)" in out, out
+        assert "(Philadelphia Phillies)" not in out.split("—", 1)[-1].split("\n", 1)[0], out
 
     def test_verbose_shows_offers_that_produced_nothing(
         self, tmp_path, monkeypatch, capsys,

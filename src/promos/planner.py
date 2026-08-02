@@ -137,14 +137,29 @@ _QUALIFYING_SUMMARY = re.compile(
 #: arrives — roughly double its real value, since the credit lands only when
 #: the qualifying bet loses.
 _CONDITIONAL_REFUND = re.compile(
-    r"\b(?:second\s+chance|money\s+back|bet\s+reset"
-    # "if/when/should/unless your bet loses", in any of the orderings venues
-    # write.  Anchored on a win/lose word so that ordinary copy mentioning
-    # "back in bonus bets" — a parlay rebate, a refunded fee — is not swept up:
-    # a false positive silently drops the qualifying leg.
-    r"|(?:if|when|should|unless)\s+(?:your|it|the)\b[^.;]{0,48}?"
-    r"\b(?:lose|loses|losing|lost|wins?|won)\b"
-    r"|on\s+a\s+losing\b)",
+    r"\b(?:"
+    # Named second-chance products.
+    r"second\s+chance|2nd\s+chance|bet\s+reset|money\s+back"
+    # "…if/when/should your bet loses", any ordering.
+    r"|(?:if|when|should)\s+(?:your|it|the)\b[^.;]{0,48}?\b(?:lose|loses|losing|lost)\b"
+    # "…unless it wins" — a loss condition stated the other way round.
+    r"|unless\s+(?:your|it|the)\b[^.;]{0,48}?\b(?:wins?|won)\b"
+    # "if lose", "on a losing bet", "on your first losing wager".
+    r"|if\s+lose\b|on\s+(?:a|your)\b[^.;]{0,24}?\blosing\b"
+    # "refunded as credit", "get $50 refunded" — a refund is by definition
+    # contingent, and dropping these alternatives re-opened the hole round 5
+    # closed.
+    r"|refunded?\b"
+    r")",
+    re.IGNORECASE,
+)
+
+#: The mirror case, and NOT a refund: credit that arrives only if the
+#: qualifying bet *wins*.  Routing it to the loss-refund model inverted the
+#: sign of the guarantee; pricing it as ordinary credit is right, but the
+#: card has to say the credit is not certain.
+_WIN_CONDITIONAL = re.compile(
+    r"\b(?:if|when|should|once)\s+(?:your|it|the)\b[^.;]{0,48}?\b(?:wins?|won)\b",
     re.IGNORECASE,
 )
 
@@ -327,18 +342,37 @@ def _over_stated_limit(legs: Sequence["_Leg"]) -> bool:
     return False
 
 
-def _refuse_market(skipped: Counter, reason: str, candidate: "_Candidate") -> None:
-    """Record a refusal that happened after the scan, once per market.
+#: Prefix for post-scan refusal tallies held alongside the scan counts.
+#: Reconciled and stripped by :func:`_settle_counts`.
+_POST_SCAN = "__post__"
 
-    Scan counts reach an offer through :func:`_merge_counts`, which takes the
-    larger because two scans of one slate see the same refusal twice.  Adding a
-    per-candidate tally straight onto that produced a number that was neither —
-    under a caveat promising the counts say what was refused.
+
+def _refuse_market(skipped: Counter, reason: str, candidate: "_Candidate") -> None:
+    """Record a refusal that happened *after* the scan, once per market.
+
+    Held apart from the scan counts rather than merged into them.  The two
+    phases refuse disjoint sets — a market has to survive the scan to reach
+    ``_rescale`` at all — so their totals add; but two *scans* of one slate see
+    the same refusal twice, so those take the larger.  One ``max`` over both
+    was wrong in both directions: it reported 6 refusals where 3 markets
+    existed in the boost path, and 3 where 5 markets were refused in the
+    conversion path.
     """
-    marker = f"__markets__{reason}"
-    seen = skipped.get(marker, 0) + 1
-    skipped[marker] = seen
-    skipped[reason] = max(skipped.get(reason, 0), seen)
+    skipped[f"{_POST_SCAN}{reason}"] += 1
+
+
+def _settle_counts(skipped: Counter) -> dict[str, int]:
+    """Fold post-scan tallies into the scan counts and drop the bookkeeping."""
+    out: dict[str, int] = {}
+    for key, count in skipped.items():
+        if key.startswith(_POST_SCAN):
+            continue
+        out[key] = count + skipped.get(f"{_POST_SCAN}{key}", 0)
+    for key, count in skipped.items():
+        if key.startswith(_POST_SCAN):
+            reason = key[len(_POST_SCAN):]
+            out.setdefault(reason, count)
+    return dict(sorted(out.items()))
 
 
 def _merge_counts(into: Counter, counts: Mapping[str, int]) -> None:
@@ -1125,8 +1159,8 @@ def _candidate_payload(candidate: _Candidate, *, as_of: datetime) -> dict[str, A
             for leg in candidate.legs
         ],
         "outcome_profits": [[label, profit] for label, profit in candidate.outcome_profits],
-        "guaranteed_cash": round(candidate.floor, 2),
-        "settled_cash": round(candidate.settled_floor, 2),
+        "guaranteed_cash": round(candidate.floor or 0.0, 2),
+        "settled_cash": round(candidate.settled_floor or 0.0, 2),
         "quote_age_seconds": max(0, int((as_of - oldest).total_seconds())),
         "notes": list(candidate.notes),
     }
@@ -1339,7 +1373,10 @@ def _plan_for_offer(
         # Copy whose reward is conditional on losing *is* a no-sweat, whatever
         # the enricher labelled it.  Priced as a plain bonus it valued credit
         # that arrives only on a loss as credit in hand.
-        or _CONDITIONAL_REFUND.search(summary)
+        or (
+            _CONDITIONAL_REFUND.search(summary)
+            and not _WIN_CONDITIONAL.search(summary)
+        )
     ):
         # ``risk_free`` is the label the enricher writes for "risk-free bet"
         # copy.  The *kind* was handled and the reward was not, so those offers
@@ -1347,6 +1384,15 @@ def _plan_for_offer(
         # sentence, which is the one outcome this module exists to avoid.
         _plan_no_sweat(out, context, promo_keys, skipped, conversions, bonus_amount, min_dec)
     elif kind is PromoKind.DEPOSIT_MATCH or (reward == "site_credit" and not bonus_like):
+        if kind is PromoKind.PARLAY_BOOST:
+            # Site credit clears by rollover wherever it comes from — but the
+            # leg that earns it here is a parlay this planner does not model,
+            # and the rollover branch would otherwise assert an unqualified
+            # value for a reward contingent on hitting it.
+            out["caveats"].append(
+                "the credit is earned by a parlay, which this planner does not "
+                "model — the clearing cost below assumes the credit arrives"
+            )
         _plan_rollover(out, context, promo_keys, skipped, bonus_amount, wagering, min_dec)
     elif bonus_like and reward in {"bonus_bets", "free_bet", "site_credit", ""}:
         if qualifying is not None and bonus_amount:
@@ -1376,6 +1422,21 @@ def _plan_for_offer(
             "mechanics to hedge — the playbook below is the whole answer"
         )
 
+    # A win-conditional reward is priced as ordinary credit — which is right,
+    # the credit converts the same way once it lands — but it does not always
+    # land, and a bet-and-get card otherwise reads as though it does.  The
+    # loss-conditional case has a model (`_plan_no_sweat`); this one does not,
+    # so the honest move is to price it and say what the price assumes.
+    if _WIN_CONDITIONAL.search(summary) and out["strategy"] not in {
+        "text_only",
+        "no_odds_coverage",
+    }:
+        out["caveats"].append(
+            "this credit arrives only if the qualifying bet wins, so the "
+            "figures below are what it is worth once it does — not an "
+            "expected value over both outcomes"
+        )
+
     # Only claimed once a scan has actually applied it.  Printed before the
     # dispatch, it appeared on referral/loyalty/parlay offers that never scan
     # anything — a sentence about a promo-side leg that does not exist, and one
@@ -1385,10 +1446,7 @@ def _plan_for_offer(
             0,
             f"stated minimum odds {view.get('min_odds')} applied to the promo-side leg",
         )
-    out["skipped"] = {
-        reason: count for reason, count in sorted(skipped.items())
-        if not reason.startswith("__markets__")
-    }
+    out["skipped"] = _settle_counts(skipped)
     if (
         not out["plans"]
         and out["strategy"] not in {"text_only", "no_odds_coverage"}
@@ -1489,9 +1547,11 @@ def _plan_qualify_then_convert(
         payload["step"] = "convert"
         payload["conversion_pct"] = round(candidate.settled_floor / PLAN_UNIT * 100.0, 2)
         out["plans"].append(payload)
-    if conversion:
-        best_rate = conversion[0].settled_floor / PLAN_UNIT
-    if qualify and conversion:
+    if convert_survivors:
+        # From the markets that survived, not from the ranked list: the
+        # headline used to quote a conversion the operator cannot take.
+        best_rate = convert_survivors[0][0].settled_floor / PLAN_UNIT
+    if qualify and convert_survivors:
         cost = -min(qualify[0].settled_floor, 0.0) or 0.0
         out["expected_value"] = round(bonus_amount * best_rate - cost, 2)
         out["caveats"].append(
@@ -1615,6 +1675,9 @@ def _plan_boost(
         rows.append((max(needed, 0.0), candidate))
     rows.sort(key=lambda item: (item[0], -item[1].settled_floor, item[1].view.key[0]))
     boosted_rows = []
+    # A private counter so the re-solve's refusals are recorded once, as
+    # post-scan facts, rather than incremented straight onto the offer's.
+    resolve_refusals: Counter = Counter()
     for needed, candidate in rows:
         # Re-solve at the boost being advertised.  The candidates above come
         # from the *cash* scan, so their hedge stakes were sized for the
@@ -1635,11 +1698,14 @@ def _plan_boost(
             stake=stake,
             boost_percent=needed,
             refund_rate=0.0,
-            refusals=skipped,
+            refusals=resolve_refusals,
         )
         if boosted is None:
-            _refuse_market(skipped, "hedge_over_stated_limit", candidate)
+            for reason in resolve_refusals:
+                _refuse_market(skipped, reason, candidate)
+            resolve_refusals.clear()
             continue
+        resolve_refusals.clear()
         boosted_rows.append((needed, boosted))
     for needed, boosted in boosted_rows[:MAX_PLANS_PER_OFFER]:
         payload = _candidate_payload(boosted, as_of=context.as_of)
@@ -1664,10 +1730,10 @@ def _plan_rollover(
     )
     for candidate in candidates[:MAX_PLANS_PER_OFFER]:
         payload = _candidate_payload(candidate, as_of=context.as_of)
-        payload["cost_per_100_wagered"] = round(-min(candidate.settled_floor, 0.0), 2)
+        payload["cost_per_100_wagered"] = round(-min(candidate.settled_floor, 0.0) or 0.0, 2)
         out["plans"].append(payload)
     if candidates and bonus_amount and wagering:
-        cost_rate = -min(candidates[0].settled_floor, 0.0) / PLAN_UNIT
+        cost_rate = (-min(candidates[0].settled_floor, 0.0) or 0.0) / PLAN_UNIT
         clearing = float(bonus_amount) * wagering * cost_rate
         out["expected_value"] = round(float(bonus_amount) - clearing, 2)
         out["caveats"].append(
