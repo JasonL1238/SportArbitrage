@@ -918,3 +918,105 @@ class TestThePlanCommand:
         captured = capsys.readouterr()
         assert "no promo run" not in captured.err, captured.err
         assert f"promo run #{seeded}" in captured.out
+
+    def _seed_with_mirrors(self, tmp_path, monkeypatch):
+        """A run whose slate holds a *measurable* mirror.
+
+        The ordinary seed has two sources and one game, so the derived groups
+        are empty and `{}` is indistinguishable from the real gate.  Two Kambi
+        skins over twelve games give 24 shared selections, past
+        ``MIN_SHARED_SELECTIONS``, so the mirror is measured.
+        """
+        from datetime import timedelta
+
+        from src import settings as settings_mod
+        from src.promos.base import PromoSourceHealth
+        from src.schema import Selection
+        from src.sources.base import SourceHealth
+        from src.store import Store
+        from tests.conftest import make_quote
+
+        promo_db = tmp_path / "promos.sqlite3"
+        odds_db = tmp_path / "odds.sqlite3"
+        monkeypatch.setattr(settings_mod, "PROMO_DB_PATH", promo_db)
+        monkeypatch.setattr(settings_mod, "DB_PATH", odds_db)
+
+        observed = datetime.now(UTC)
+        commence = observed + timedelta(hours=6)
+        quotes = []
+        for i in range(12):
+            shared = dict(
+                event_key=f"MLB-A{i}@MLB-H{i}:2026-07-28",
+                home_participant=f"MLB-H{i}", away_participant=f"MLB-A{i}",
+                observed_at=observed, commence_time=commence,
+            )
+            for source in ("betrivers_kambi", "leovegas_kambi"):
+                quotes.append(make_quote(source=source, selection=Selection.AWAY,
+                                         decimal_odds=3.00, **shared))
+                quotes.append(make_quote(source=source, selection=Selection.HOME,
+                                         decimal_odds=1.50, **shared))
+            quotes.append(make_quote(source="fanduel", selection=Selection.HOME,
+                                     decimal_odds=1.40, **shared))
+            quotes.append(make_quote(source="fanduel", selection=Selection.AWAY,
+                                     decimal_odds=3.20, **shared))
+
+        class _Findings:
+            def __init__(self, rows):
+                self.quote_count = len(rows)
+                self.event_count = len({q.event_key for q in rows})
+                self.errors = []
+                self.warnings = []
+                self.findings = []
+                self.ok = True
+
+        odds = Store(odds_db)
+        run_id = odds.start_run(observed)
+        odds.save_quotes(run_id, quotes)
+        for key in ("betrivers_kambi", "leovegas_kambi", "fanduel"):
+            odds.save_health(run_id, SourceHealth(source_key=key, ok=True,
+                                                  checked_at=observed))
+        odds.finish_run(run_id, finished_at=observed, report=_Findings(quotes))
+        odds.close()
+
+        promos = PromoStore(promo_db)
+        promo_run = promos.start_run()
+        promos.finish_run(
+            promo_run, ok=True,
+            offers=[PromoOffer(
+                source="betrivers_kambi", offer_id="credit", kind=PromoKind.BONUS_BET,
+                title="Bonus bets", observed_at=observed,
+                bonus_amount=100.0, reward_type="bonus_bets",
+            )],
+            health=[PromoSourceHealth(source_key="betrivers_kambi", ok=True,
+                                      checked_at=observed, offer_count=1)],
+        )
+        promos.close()
+        return promo_run
+
+    def test_the_cli_plans_behind_a_counterparty_gate(self, tmp_path, monkeypatch):
+        """The gate at the CLI's call site, not the planner's default.
+
+        ``build_promo_plans`` derives the groups when handed ``None``, so the
+        planner is safe either way — but this caller passes the measured groups
+        explicitly and nothing asserted it passed anything.  Replacing the
+        argument with ``{}`` left the suite green while the CLI could print a
+        hedge at the same licence as the promo book.
+        """
+        import src.promos.planner as planner_module
+
+        seen: dict = {}
+        real = planner_module.build_promo_plans
+
+        def spy(offers, quotes, **kwargs):
+            seen.update(kwargs)
+            return real(offers, quotes, **kwargs)
+
+        self._seed_with_mirrors(tmp_path, monkeypatch)
+        monkeypatch.setattr(planner_module, "build_promo_plans", spy)
+        assert self._run(["plan"]) == 0
+        gate = seen.get("one_counterparty")
+        # Not `is not None`: `{}` is not None either, and `{}` is precisely the
+        # switched-off value this test exists to catch.
+        assert gate, f"the CLI planned with the gate switched off: {seen!r}"
+        pairs = [frozenset(group) for groups in gate.values() for group in groups]
+        assert frozenset({"betrivers_kambi", "leovegas_kambi"}) in pairs, gate

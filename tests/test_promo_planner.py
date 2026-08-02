@@ -3286,3 +3286,296 @@ class TestTheNoSweatSizeRecheckCountsWhatItDrops:
     def test_a_size_the_book_takes_still_values_the_refund(self):
         plan = _the_plan(_plans([self._offer()], self._slate(None)))
         assert plan["strategy"] == "no_sweat_hedge", plan
+
+
+class TestTheHedgeWindowReachesBothWaysInTime:
+    """The escape hatch reached for the freshest row only.
+
+    Every usable row is already inside ``MAX_OBSERVATION_SPREAD`` of the
+    *promo* leg; the pairing that fails is hedge-to-hedge, which can be twice
+    that apart.  So the row that rescues a combination is as often the older
+    one as the newer, and reaching for the newest alone made the rescue work in
+    one time direction only — the same board mirrored in time found the plan
+    one way round and missed it the other, blaming ``observation_spread``.
+    """
+
+    EVENT = "SOCCER-ars@SOCCER-che:2026-07-28"
+
+    def _slate(self, *, home_window_at, draw_at, rescuer_home_at):
+        def q(source, selection, odds, offset):
+            return make_quote(
+                source=source, sport=Sport.SOCCER, league="EPL",
+                event_key=self.EVENT, selection=selection, decimal_odds=odds,
+                observed_at=AS_OF - timedelta(seconds=offset),
+            )
+
+        rows = [q("draftkings", Selection.AWAY, 3.70, 100),
+                q("draftkings", Selection.HOME, 1.90, 100),
+                q("draftkings", Selection.DRAW, 4.40, 100)]
+        # Four books hold the best HOME prices in one scrape and the best DRAW
+        # prices in another, 200s apart: no pair drawn from the two windows is
+        # simultaneous, though each row pairs with the promo leg in between.
+        for i, source in enumerate(("betmgm", "caesars", "bovada", "espnbet")):
+            rows += [q(source, Selection.HOME, 1.95 - i * 0.01, home_window_at),
+                     q(source, Selection.DRAW, 4.20 - i * 0.01, draw_at),
+                     q(source, Selection.AWAY, 3.50, draw_at)]
+        # Its HOME price is the worst on the board, so the by-price window never
+        # holds it — and it is the only HOME row sharing a scrape with the DRAW
+        # prices, so it is the only row that can rescue the combination.
+        rows += [q("fanduel", Selection.HOME, 1.70, rescuer_home_at),
+                 q("fanduel", Selection.DRAW, 4.30, draw_at),
+                 q("fanduel", Selection.AWAY, 3.50, draw_at)]
+        return rows
+
+    def _best(self, **kwargs):
+        plan = _the_plan(_plans([_offer(bonus_amount=100.0)], self._slate(**kwargs)))
+        return max((c["guaranteed_cash"] for c in plan["plans"]), default=None)
+
+    def test_the_rescuing_row_may_be_the_staler_one(self):
+        best = self._best(home_window_at=0, draw_at=200, rescuer_home_at=200)
+        assert best == pytest.approx(48.38, abs=0.01), best
+
+    def test_the_rescuing_row_may_be_the_fresher_one(self):
+        best = self._best(home_window_at=200, draw_at=0, rescuer_home_at=0)
+        assert best == pytest.approx(48.38, abs=0.01), best
+
+    def test_mirroring_the_board_in_time_does_not_change_the_plan(self):
+        """The two directions must agree — scrape order is not a price."""
+        staler = self._best(home_window_at=0, draw_at=200, rescuer_home_at=200)
+        fresher = self._best(home_window_at=200, draw_at=0, rescuer_home_at=0)
+        assert staler == pytest.approx(fresher), (staler, fresher)
+
+
+class TestTheRolloverValueIsSignedTheRightWay:
+    """Its only test priced a $200 credit clearing for exactly $200.
+
+    ``bonus_amount - clearing`` and ``clearing - bonus_amount`` are the same
+    number at zero, so the sign was free: a $200 deposit match clearing for
+    $150 could have printed "net value −$50.00" on the card and in the CLI.
+    """
+
+    def _plan(self, wagering):
+        quotes = [
+            make_quote(source="draftkings", selection=Selection.AWAY, decimal_odds=1.85),
+            make_quote(source="fanduel", selection=Selection.HOME, decimal_odds=1.85),
+        ]
+        offer = _offer(kind="deposit_match", reward_type="site_credit",
+                       bonus_amount=200.0, wagering_requirement=wagering)
+        return _the_plan(_plans([offer], quotes))
+
+    def test_credit_worth_more_than_it_costs_to_clear_is_positive(self):
+        plan = self._plan("5x")
+        assert plan["expected_value"] > 0.0, plan["expected_value"]
+        assert plan["expected_value"] == pytest.approx(50.0, abs=0.5), plan
+
+    def test_credit_costing_more_than_it_is_worth_is_negative(self):
+        """A 20x rollover on $200 pushes $4,000 through the vig."""
+        plan = self._plan("20x")
+        assert plan["expected_value"] < 0.0, plan["expected_value"]
+
+
+class TestCreditDoesNotHandBackAStakeItNeverHeld:
+    """The promo-win row of a bonus conversion was unpinned.
+
+    ``_bonus_cash(WIN)`` pays ``net_odds - 1``: the credit is spent placing the
+    bet, so a winning bonus bet returns winnings only.  Pricing it as
+    ``net_odds`` — stake returned, as a cash bet would be — is invisible to the
+    floor, because it only *raises* the promo-win outcome and ``min(...)`` is
+    taken elsewhere.  The inflated figure still reaches the reader: the
+    dashboard prints the whole outcome table.
+    """
+
+    def _plan(self):
+        quotes = [
+            make_quote(source="draftkings", selection=Selection.AWAY, decimal_odds=3.0),
+            make_quote(source="fanduel", selection=Selection.HOME, decimal_odds=1.5),
+        ]
+        return _the_plan(_plans([_offer(bonus_amount=100.0)], quotes))
+
+    def test_the_promo_win_row_pays_winnings_only(self):
+        card = self._plan()["plans"][0]
+        rows = dict(card["outcome_profits"])
+        # $100 credit at 3.00 → $200 target; hedge $133.33 at 1.50.
+        # Promo wins: 200 − 133.33 = 66.67, *not* 300 − 133.33.
+        assert rows["away"] == pytest.approx(66.67, abs=0.01), card["outcome_profits"]
+
+    def test_both_rows_sit_beside_the_guarantee(self):
+        card = self._plan()["plans"][0]
+        for _, profit in card["outcome_profits"]:
+            assert profit == pytest.approx(card["guaranteed_cash"], abs=0.02), card
+
+
+class TestTheRefundRateComesFromTheBestUsableMarket:
+    """``rate`` is not a display figure — it resizes every stake on the card.
+
+    It feeds back into the solver as ``refund_rate``, so reading the worst
+    usable conversion instead of the best changed both the advertised
+    percentage and every printed hedge.
+    """
+
+    def _slate(self):
+        def q(source, selection, odds, event):
+            return make_quote(source=source, selection=selection, decimal_odds=odds,
+                              event_key=event, home_participant="MLB-H" + event[-1],
+                              away_participant="MLB-A" + event[-1])
+        return [
+            # Best conversion.
+            q("draftkings", Selection.AWAY, 3.00, "MLB-A1@MLB-H1:2026-07-28"),
+            q("fanduel", Selection.HOME, 1.50, "MLB-A1@MLB-H1:2026-07-28"),
+            # Middling.
+            q("draftkings", Selection.AWAY, 2.60, "MLB-A2@MLB-H2:2026-07-28"),
+            q("fanduel", Selection.HOME, 1.66, "MLB-A2@MLB-H2:2026-07-28"),
+            # Worst.
+            q("draftkings", Selection.AWAY, 2.20, "MLB-A3@MLB-H3:2026-07-28"),
+            q("fanduel", Selection.HOME, 1.85, "MLB-A3@MLB-H3:2026-07-28"),
+        ]
+
+    def test_the_advertised_rate_is_the_best_one(self):
+        offer = _offer(kind="no_sweat", bonus_amount=100.0,
+                       summary="No sweat first bet up to $100 if your bet loses")
+        plan = _the_plan(_plans([offer], self._slate()))
+        assert plan["strategy"] == "no_sweat_hedge", plan
+        # The best of the three markets converts at 66.66%; the worst is far
+        # below it, so reading the wrong end of the list is visible here.
+        assert plan["refund_conversion_pct"] == pytest.approx(66.66, abs=0.5), plan
+
+
+class TestBoostLockedNeverPrintsACardThatLosesEverywhere:
+    """The mirror of a filter already pinned in ``_plan_no_sweat``.
+
+    Without it a 5% boost over ordinary vig printed a card whose every outcome
+    was −$10.98, in the same format as a profitable one and with no caveat.
+    """
+
+    def _slate(self):
+        return [
+            make_quote(source="draftkings", selection=Selection.AWAY, decimal_odds=1.87),
+            make_quote(source="fanduel", selection=Selection.HOME, decimal_odds=1.87),
+        ]
+
+    def _plan(self):
+        offer = _offer(kind="odds_boost", reward_type="boost", bonus_amount=100.0,
+                       summary="5% profit boost on any MLB game")
+        return _the_plan(_plans([offer], self._slate()))
+
+    def test_a_boost_too_small_to_beat_the_vig_prints_no_card(self):
+        plan = self._plan()
+        for card in plan["plans"]:
+            assert card["guaranteed_cash"] > 0.0, card
+
+    def test_and_says_why(self):
+        plan = self._plan()
+        if not plan["plans"]:
+            assert plan["caveats"], plan
+
+
+class TestTheQualifyingCostIsActuallySubtracted:
+    """Every fixture had the qualifying round-trip costing exactly $0.00.
+
+    At zero, ``bonus × rate − cost`` and ``bonus × rate`` are the same number,
+    so both the cost term and the subtraction were free.  On a real board the
+    qualifying leg costs the vig, and the card's own caveat quotes the figure.
+    """
+
+    def _plan(self):
+        quotes = [
+            make_quote(source="draftkings", selection=Selection.AWAY, decimal_odds=3.00),
+            make_quote(source="fanduel", selection=Selection.HOME, decimal_odds=1.45),
+        ]
+        offer = _offer(kind="bet_and_get", bonus_amount=150.0,
+                       summary="Bet $100, get $150 in bonus bets")
+        return _the_plan(_plans([offer], quotes))
+
+    def test_the_cost_is_not_zero(self):
+        plan = self._plan()
+        qualify = [c for c in plan["plans"] if c.get("step") == "qualify"]
+        assert qualify, plan["plans"]
+        assert qualify[0]["qualifying_cost"] > 0.0, qualify[0]
+
+    def test_the_expected_value_is_net_of_it(self):
+        """Read the rate off the convert card rather than assuming one.
+
+        A hardcoded 66.66% was wrong here — the hedge is 1.45, so $100 of
+        credit converts at 62.07% — and an expectation that does not follow the
+        fixture's own arithmetic cannot tell a sign error from a stale guess.
+        """
+        plan = self._plan()
+        qualify = [c for c in plan["plans"] if c.get("step") == "qualify"]
+        convert = [c for c in plan["plans"] if c.get("step") == "convert"]
+        assert qualify and convert, plan["plans"]
+        cost = qualify[0]["qualifying_cost"]
+        gross = 150.0 * convert[0]["conversion_pct"] / 100.0
+        assert cost > 0.0, qualify[0]
+        assert plan["expected_value"] == pytest.approx(gross - cost, abs=0.02), (
+            plan["expected_value"], gross, cost)
+        # And strictly below the gross, which is what the subtraction buys.
+        assert plan["expected_value"] < gross - 1.0, (plan["expected_value"], gross)
+
+
+class TestTheBreakevenScanCountsWhatItDrops:
+    """Two bare ``continue``s sat in the breakeven branch, counting nothing.
+
+    The project's rule is that every discarded record is a counted skip or a
+    reject, because the caveat that sends the reader to ``skipped`` is guarded
+    on those counts being non-empty.
+
+    The second of the two — a promo price with no profit to scale — was called
+    unreachable on the grounds that the shortest legal price is 1.001.  It is
+    not: the schema's floor is 1.0 *exclusive*, so a legal 1.0000000001 lands
+    there.  It is kept and counted rather than deleted.
+    """
+
+    EVENT = "SOCCER-ars@SOCCER-che:2026-07-28"
+
+    def _slate(self):
+        def q(source, selection, odds):
+            return make_quote(source=source, sport=Sport.SOCCER, league="EPL",
+                              event_key=self.EVENT, selection=selection,
+                              decimal_odds=odds, observed_at=AS_OF)
+        # The two best hedge prices sum to 1.012, so the hedges alone already
+        # cover the book and no boost, however large, breaks even.
+        return [
+            q("draftkings", Selection.AWAY, 3.00), q("draftkings", Selection.HOME, 1.55),
+            q("draftkings", Selection.DRAW, 2.95),
+            q("fanduel", Selection.HOME, 1.50), q("fanduel", Selection.DRAW, 2.90),
+            q("fanduel", Selection.AWAY, 3.05),
+            q("betmgm", Selection.HOME, 1.49), q("betmgm", Selection.DRAW, 2.88),
+            q("betmgm", Selection.AWAY, 3.02),
+        ]
+
+    def _plan(self):
+        offer = _offer(kind="odds_boost", reward_type="boost", bonus_amount=100.0,
+                       summary="Odds boost on any soccer game")
+        return _the_plan(_plans([offer], self._slate()))
+
+    def test_a_market_the_hedges_already_cover_is_counted(self):
+        plan = self._plan()
+        assert plan["strategy"] == "boost_breakeven", plan["strategy"]
+        assert plan["skipped"].get("no_breakeven_boost_exists", 0) >= 1, plan["skipped"]
+
+    def test_a_promo_price_with_no_profit_to_scale_is_counted(self):
+        """Reached only at a price no book quotes — but a legal one.
+
+        The guard was reported dead on the grounds that 1.001 is the shortest
+        legal price.  The schema's bound is ``1.0 < value <= 1000.0``, so
+        1.0000000001 validates, and its net odds land inside ``_EPSILON`` of
+        1.0 where the boost has nothing to multiply.  Deleting the guard would
+        divide by zero; leaving it uncounted made the drop silent.
+        """
+        tiny = 1.0 + 1e-10
+        rows = [
+            make_quote(source="draftkings", selection=Selection.AWAY, decimal_odds=tiny,
+                       implied_probability=0.9999999999, american_odds=-10000000000,
+                       observed_at=AS_OF),
+            make_quote(source="draftkings", selection=Selection.HOME, decimal_odds=tiny,
+                       implied_probability=0.9999999999, american_odds=-10000000000,
+                       observed_at=AS_OF),
+            make_quote(source="fanduel", selection=Selection.HOME, decimal_odds=1.90,
+                       observed_at=AS_OF),
+            make_quote(source="fanduel", selection=Selection.AWAY, decimal_odds=1.90,
+                       observed_at=AS_OF),
+        ]
+        offer = _offer(kind="odds_boost", reward_type="boost", bonus_amount=100.0,
+                       summary="Odds boost on any game")
+        plan = _the_plan(_plans([offer], rows))
+        assert plan["skipped"].get("promo_price_too_short_to_boost", 0) >= 1, plan["skipped"]

@@ -1567,3 +1567,79 @@ def test_the_skip_reason_guard_is_not_vacuous() -> None:
         f"only {sources_that_skip} sources skipped anything (was 22 of 25) — "
         "too few to keep the explanation guard honest"
     )
+
+
+def _store_with_two_kambi_skins(tmp_path) -> tuple[Store, list]:
+    """An odds run holding a measurable mirror.
+
+    Two Kambi skins quote an identical book across twelve games — 24 shared
+    selections, past ``MIN_SHARED_SELECTIONS`` — so the mirror is *measured*
+    rather than merely suspected, and a planner given these quotes must refuse
+    to hedge one skin at the other.
+    """
+    from src.sources.base import SourceHealth
+
+    store = Store(tmp_path / "mirrors.sqlite3")
+    observed = datetime.now(UTC)
+    commence = observed + timedelta(hours=6)
+    quotes = []
+    for i in range(12):
+        shared = dict(
+            event_key=f"MLB-A{i}@MLB-H{i}:2026-07-28",
+            home_participant=f"MLB-H{i}", away_participant=f"MLB-A{i}",
+            observed_at=observed, commence_time=commence,
+        )
+        for source in ("betrivers_kambi", "leovegas_kambi"):
+            quotes.append(make_quote(source=source, selection=Selection.AWAY,
+                                     decimal_odds=3.00, **shared))
+            quotes.append(make_quote(source=source, selection=Selection.HOME,
+                                     decimal_odds=1.50, **shared))
+        quotes.append(make_quote(source="fanduel", selection=Selection.HOME,
+                                 decimal_odds=1.40, **shared))
+        quotes.append(make_quote(source="fanduel", selection=Selection.AWAY,
+                                 decimal_odds=3.20, **shared))
+    run_id = store.start_run(observed)
+    store.save_quotes(run_id, quotes)
+    for source in ("betrivers_kambi", "leovegas_kambi", "fanduel"):
+        store.save_health(run_id, SourceHealth(
+            source_key=source, ok=True, checked_at=observed,
+        ))
+    store.finish_run(run_id, finished_at=observed, report=_Findings(quotes))
+    return store, [run_id]
+
+
+def test_the_page_builds_promo_plans_behind_a_counterparty_gate(tmp_path, monkeypatch) -> None:
+    """The gate at the *call site*, not the planner's default.
+
+    ``build_promo_plans`` derives the groups itself when handed ``None``, so
+    the planner is safe either way — but both production callers pass the
+    measured groups explicitly, and nothing asserted they pass anything at
+    all.  Replacing either with ``{}`` left the whole suite green while the
+    dashboard offered a hedge at the same Kambi licence as the promo book.
+    """
+    import src.promos.planner as planner_module
+
+    store, run_ids = _store_with_two_kambi_skins(tmp_path)
+    seen: dict = {}
+    real = planner_module.build_promo_plans
+
+    def spy(offers, quotes, **kwargs):
+        seen.update(kwargs)
+        return real(offers, quotes, **kwargs)
+
+    monkeypatch.setattr(planner_module, "build_promo_plans", spy)
+    offers = [{
+        "source": "betrivers_kambi", "offer_id": "offer-1", "kind": "bonus_bet",
+        "title": "Bonus bet drop", "summary": "", "description": "",
+        "reward_type": "bonus_bets", "bonus_amount": 100.0,
+        "min_odds": None, "wagering_requirement": None,
+    }]
+    from src.report import _promo_plans
+
+    with store:
+        _promo_plans(store, offers, run_ids, datetime.now(UTC))
+
+    gate = seen.get("one_counterparty")
+    assert gate, f"the page built plans with no counterparty gate: {seen!r}"
+    pairs = [frozenset(group) for groups in gate.values() for group in groups]
+    assert frozenset({"betrivers_kambi", "leovegas_kambi"}) in pairs, gate

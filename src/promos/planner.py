@@ -989,14 +989,27 @@ def _scan(
                     usable.append((source, quote))
                 window = usable[:_HEDGE_CANDIDATES_PER_SELECTION]
                 if usable:
-                    freshest = max(usable, key=lambda item: item[1].observed_at)
-                    if freshest not in window:
-                        # Price alone can fill the window with rows that each
-                        # pair with the promo leg and not with each other; the
-                        # combination gate then rejects every one and reports
-                        # only ``observation_spread``, while a fully
-                        # simultaneous plan sat one row outside the window.
-                        window = [*window, freshest]
+                    # Price alone can fill the window with rows that each pair
+                    # with the promo leg and not with each other; the
+                    # combination gate then rejects every one and reports only
+                    # ``observation_spread``, while a fully simultaneous plan
+                    # sat one row outside the window.
+                    #
+                    # Both ends, not just the freshest.  Every usable row is
+                    # already within ``MAX_OBSERVATION_SPREAD`` of the *promo*
+                    # leg — the pairing that fails is hedge-to-hedge, which can
+                    # be twice that apart — so the row that rescues the
+                    # combination is as often the older one as the newer.
+                    # Reaching for the newest alone made the rescue work in one
+                    # time direction only: on a board mirrored in time and
+                    # otherwise identical, the plan was found at +$48.38 one way
+                    # round and missed the other, which left scrape order
+                    # deciding which plans exist and blamed
+                    # ``observation_spread`` for the ones it dropped.
+                    by_time = sorted(usable, key=lambda item: item[1].observed_at)
+                    for edge in (by_time[0], by_time[-1]):
+                        if edge not in window:
+                            window = [*window, edge]
                 pools.append(window)
             if any(not pool for pool in pools):
                 skipped["no_hedge_price"] += 1
@@ -1779,10 +1792,20 @@ def _plan_boost(
     for candidate in cash:
         hedge_sum = sum(1.0 / leg.net_odds for leg in candidate.hedge_legs)
         if hedge_sum >= 1.0 - _EPSILON:
+            # The hedges alone already cover the book, so no promo price —
+            # boosted by any amount — breaks even.  Counted, not dropped: the
+            # caveat beside these numbers points the reader at ``skipped``.
+            _refuse_market(skipped, "no_breakeven_boost_exists", candidate)
             continue
         breakeven_net = 1.0 / (1.0 - hedge_sum)
         base = candidate.promo_leg.net_odds
-        if base <= 1.0 + _EPSILON:
+        if base <= _EPSILON + 1.0:
+            # A promo price with no profit in it cannot be scaled into one: the
+            # boost multiplies ``base - 1``, which is zero here.  Reachable only
+            # at prices no book quotes, but the schema's floor is 1.0 exclusive
+            # rather than 1.001, so a legal 1.0000000001 lands here — kept and
+            # counted rather than deleted as dead.
+            _refuse_market(skipped, "promo_price_too_short_to_boost", candidate)
             continue
         needed = ((breakeven_net - 1.0) / (base - 1.0) - 1.0) * 100.0
         rows.append((max(needed, 0.0), candidate))
