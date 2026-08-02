@@ -3143,3 +3143,146 @@ class TestTwoOffersFromOneBookDoNotShareAMinimumOddsScan:
         ]
         out = _plans(offers, self._slate())
         assert out["plans"]["draftkings|free"]["plans"], out["plans"]["draftkings|free"]
+
+
+class TestASmallOfferIsNotRefusedAtTheSolversUnit:
+    """The published-limit gate ran on stakes nobody places.
+
+    Conversions are solved once per slate at ``PLAN_UNIT`` and the scan is
+    cached across every offer on the book, so its stakes are a unit of account.
+    Gating them refused markets that fit the real offer: a $25 bonus behind a
+    $20 hedge limit lost its only plan — the printed hedge is $7.76 — to a
+    refusal counted against a $31.05 leg that exists nowhere, under a caveat
+    saying nothing passed every gate.
+
+    The existing size tests all scale *up* (100 → 250/1000), where solving at
+    the unit is the more permissive direction and the defect cannot show.
+    """
+
+    def _slate(self, hedge_limit):
+        return [
+            make_quote(source="draftkings", selection=Selection.HOME, decimal_odds=3.0),
+            make_quote(source="draftkings", selection=Selection.AWAY, decimal_odds=1.45),
+            make_quote(source="fanduel", selection=Selection.AWAY, decimal_odds=3.0,
+                       limit_amount=hedge_limit),
+            make_quote(source="fanduel", selection=Selection.HOME, decimal_odds=1.45,
+                       limit_amount=hedge_limit),
+        ]
+
+    def test_a_sub_unit_offer_keeps_the_plan_its_own_size_fits(self):
+        plan = _the_plan(_plans([_offer(bonus_amount=25.0)], self._slate(20.0)))
+        assert plan["plans"], plan["skipped"]
+        for leg in plan["plans"][0]["legs"]:
+            if leg["source"] == "fanduel":
+                assert leg["stake"] <= 20.0, leg
+        assert "stake_over_stated_limit" not in plan["skipped"], plan["skipped"]
+
+    def test_the_same_slate_at_the_unit_is_still_refused(self):
+        """The gate moved, it did not go away.
+
+        $100 of credit needs $31.05 at the hedge, over the same $20 limit, and
+        this is the one size that reaches ``_rescale``'s scale-1.0 shortcut —
+        which returned unchecked while the scan did its own gating.
+        """
+        plan = _the_plan(_plans([_offer(bonus_amount=100.0)], self._slate(20.0)))
+        assert plan["plans"] == [], plan["plans"]
+        assert plan["skipped"].get("stake_over_stated_limit", 0) >= 1, plan["skipped"]
+
+    def test_the_refusal_count_still_names_the_market(self):
+        plan = _the_plan(_plans([_offer(bonus_amount=1000.0)], self._slate(50.0)))
+        assert plan["plans"] == [], plan["plans"]
+        assert plan["skipped"]["stake_over_stated_limit"] == 1, plan["skipped"]
+
+
+class TestANegatedWinClauseIsALossCondition:
+    """"…if your first bet doesn't win" was read as *win*-contingent.
+
+    That is the offer's literal inverse, and it is the standard US safety-net
+    wording — written that way precisely because "loses" would exclude pushes
+    and voids.  ``_WIN_CONDITIONAL`` had no negation guard and
+    ``_CONDITIONAL_REFUND`` had no negated-win branch, so the card staked
+    credit the operator does not hold, overstated the guarantee by 50%, and
+    printed "this credit arrives only if the qualifying bet wins" on an offer
+    that pays only when it does not.
+    """
+
+    NEGATED = [
+        "Bet $5, get $200 in bonus bets if your first bet doesn't win",
+        "First bet safety net up to $1,000 if your bet does not win",
+        "Get $150 back in bonus bets if your first bet didn't win",
+        "No sweat first bet up to $1,500 - not a winner? Get your stake back",
+    ]
+    #: Forms that named a loss outright and still matched nothing.
+    UNMATCHED = [
+        "If you lose your first bet, get up to $1,000 back in bonus bets",
+        "Get $150 in bonus bets if your first bet settles as a loss",
+    ]
+
+    @pytest.mark.parametrize("summary", NEGATED + UNMATCHED)
+    def test_it_reads_as_a_loss_condition(self, summary):
+        from src.promos.planner import _reward_is_loss_contingent
+        assert _reward_is_loss_contingent(summary), summary
+
+    @pytest.mark.parametrize("summary", NEGATED + UNMATCHED)
+    def test_it_does_not_read_as_a_win_condition(self, summary):
+        from src.promos.planner import _reward_is_win_contingent
+        assert not _reward_is_win_contingent(summary), summary
+
+    @pytest.mark.parametrize("summary", [
+        "Bet $5, get $200 in bonus bets if your first bet wins",
+        "Get $50 in bonus bets when your parlay wins",
+    ])
+    def test_an_affirmative_win_clause_is_untouched(self, summary):
+        """The negation branch must not swallow real win-contingent copy."""
+        from src.promos.planner import (
+            _reward_is_loss_contingent, _reward_is_win_contingent)
+        assert _reward_is_win_contingent(summary), summary
+        assert not _reward_is_loss_contingent(summary), summary
+
+    def test_the_negated_offer_is_priced_as_insurance_not_credit(self):
+        slate = [
+            make_quote(source="draftkings", selection=Selection.HOME, decimal_odds=3.0),
+            make_quote(source="fanduel", selection=Selection.AWAY, decimal_odds=1.5),
+        ]
+        negated = _the_plan(_plans(
+            [_offer(bonus_amount=1000.0, summary=self.NEGATED[0])], slate))
+        spelled = _the_plan(_plans(
+            [_offer(bonus_amount=1000.0,
+                    summary="Bet $5, get $200 in bonus bets if your first bet loses")],
+            slate))
+        # One word of copy apart, the two must reach the same model.
+        assert negated["strategy"] == spelled["strategy"], (
+            negated["strategy"], spelled["strategy"])
+        assert not any("only if the qualifying bet wins" in c
+                       for c in negated["caveats"]), negated["caveats"]
+
+
+class TestTheNoSweatSizeRecheckCountsWhatItDrops:
+    """Its two siblings count this refusal; this one dropped silently.
+
+    The invariant is that every discarded record is a counted skip or reject,
+    because the caveat that points the reader at ``skipped`` is guarded on
+    those counts being non-empty.  A book whose every conversion broke its
+    hedge's published size reported ``skipped={}`` and printed an empty
+    "gated out:" line in the CLI.
+    """
+
+    def _slate(self, hedge_limit):
+        return [
+            make_quote(source="draftkings", selection=Selection.HOME, decimal_odds=3.0),
+            make_quote(source="fanduel", selection=Selection.AWAY, decimal_odds=1.5,
+                       limit_amount=hedge_limit),
+        ]
+
+    def _offer(self):
+        return _offer(kind="no_sweat", reward_type="bonus_bets", bonus_amount=1000.0,
+                      summary="No sweat first bet up to $1,000 if your bet loses")
+
+    def test_the_drop_is_counted(self):
+        plan = _the_plan(_plans([self._offer()], self._slate(5.0)))
+        assert plan["strategy"] == "text_only", plan["strategy"]
+        assert plan["skipped"].get("stake_over_stated_limit", 0) >= 1, plan["skipped"]
+
+    def test_a_size_the_book_takes_still_values_the_refund(self):
+        plan = _the_plan(_plans([self._offer()], self._slate(None)))
+        assert plan["strategy"] == "no_sweat_hedge", plan

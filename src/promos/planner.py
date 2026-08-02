@@ -140,8 +140,18 @@ _CONDITIONAL_REFUND = re.compile(
     r"\b(?:"
     # Named second-chance products.
     r"second\s+chance|2nd\s+chance|bet\s+reset|money\s+back|stake\s+refund"
-    # "…if/when/should your bet loses", any ordering.
-    r"|(?:if|when|should)\s+(?:your|it|the)\b[^.;]{0,48}?\b(?:lose|loses|losing|lost)\b"
+    # "…if/when/should your bet loses", any ordering.  ``you`` alongside
+    # ``your``: "if you lose your first bet" is as common as "if your first bet
+    # loses" and matched nothing, pricing a second-chance offer as credit in
+    # hand.  ``loss``/``lost`` cover "settles as a loss", "settled as a loss".
+    r"|(?:if|when|should)\s+(?:you|your|it|the)\b[^.;]{0,48}?"
+    r"\b(?:lose|loses|losing|lost|loss)\b"
+    # "doesn't win", "does not win", "is not a winner", "not a winner?" — the
+    # standard US safety-net wording, written that way precisely because a
+    # push or a void is not a loss.  Without this the *win* pattern below
+    # matched the negated clause and stamped the offer's own inverse on it.
+    r"|(?:do(?:es)?n[’']?t|do(?:es)?\s+not|did\s+not|didn[’']?t|never|not)"
+    r"\s+(?:a\s+)?\b(?:win|wins|won|winner)\b"
     # "…unless it wins" — a loss condition stated the other way round.
     r"|unless\s+(?:your|it|the)\b[^.;]{0,48}?\b(?:wins?|won)\b"
     r"|if\s+lose\b|on\s+(?:a|your)\b[^.;]{0,24}?\blosing\b"
@@ -799,6 +809,7 @@ def _scan(
     boost_percent: float | None = None,
     refund_rate: float = 0.0,
     skipped: Counter,
+    stake_is_provisional: bool = False,
 ) -> list[_Candidate]:
     """Best hedged executions for a fixed promo book across the whole slate.
 
@@ -806,6 +817,12 @@ def _scan(
     ``cash``/``boosted``.  Hedge stakes are solved per candidate to equalise
     the settled outcomes, then rounded to cents, then the floor is re-measured
     from the rounded values.
+
+    Set *stake_is_provisional* when *stake* is a unit of account that a later
+    ``_rescale`` replaces with the offer's real size — the shared conversion
+    scan is the only such caller.  It suppresses the published-limit gate,
+    which would otherwise measure a stake nobody places; ``_rescale`` applies
+    that gate at the size actually staked, for every scale including 1.0.
     """
     # A market where the promo book was excluded for a parse fault is counted
     # once, whether or not the book still priced other markets.  This runs over
@@ -1037,6 +1054,7 @@ def _scan(
                     boost_percent=boost_percent,
                     refund_rate=refund_rate,
                     refusals=skipped,
+                    stake_is_provisional=stake_is_provisional,
                 )
                 if candidate is None:
                     continue
@@ -1089,6 +1107,7 @@ def _solve(
     boost_percent: float | None,
     refund_rate: float,
     refusals: Counter,
+    stake_is_provisional: bool = False,
 ) -> _Candidate | None:
     """Solve hedge stakes for one assignment and price every outcome.
 
@@ -1157,7 +1176,16 @@ def _solve(
     # amount exactly as a hedge's does, so a $250 bonus printed a guarantee
     # resting on a $250 leg at a book advertising $40 — the mirror of the
     # defect this gate was added for, left un-mirrored for three rounds.
-    if _over_stated_limit(legs):
+    #
+    # Skipped outright when the stake is provisional.  The conversion scan is
+    # solved once per slate at ``PLAN_UNIT`` and reused for every offer on the
+    # book, so its stakes are a unit of account, not stakes anyone places;
+    # measuring them against a venue's limit refused markets that fit the real
+    # offer.  A $25 bonus behind a $20 hedge limit lost its only plan — the
+    # printed hedge would have been $7.76 — to a refusal counted against a
+    # $31.05 leg that exists nowhere, under a caveat saying nothing passed
+    # every gate.  ``_rescale`` applies the gate at the size actually staked.
+    if not stake_is_provisional and _over_stated_limit(legs):
         _record_refused_market(refusals, "stake_over_stated_limit", view.key)
         return None
     profits = _outcome_profits(
@@ -1374,6 +1402,10 @@ def _plan_for_offer(
                 stake=PLAN_UNIT,
                 min_promo_decimal=min_decimal,
                 skipped=counts,
+                # This scan is cached across every offer on the book, so its
+                # stakes cannot be measured against a venue limit — each offer
+                # rescales them to its own size and is gated there.
+                stake_is_provisional=True,
             )
             conversion_cache[cache_key] = (found, counts)
         found, counts = conversion_cache[cache_key]
@@ -1646,10 +1678,16 @@ def _plan_no_sweat(
     # once the credit is scaled, and quoting one of those put $42 of an
     # unbackable guarantee on the card.
     stake_guess = float(bonus_amount) if bonus_amount else PLAN_UNIT
-    usable = [
-        candidate for candidate in conversion
-        if _rescale(candidate, stake_guess / PLAN_UNIT) is not None
-    ]
+    # Counted, not silently dropped, exactly as the two sibling re-scales do.
+    # This comprehension discarded markets with no ``_refuse_market`` call, so
+    # a book whose every conversion broke its hedge's published size reported
+    # ``skipped={}`` and printed an empty "gated out:" line in the CLI.
+    usable = []
+    for candidate in conversion:
+        if _rescale(candidate, stake_guess / PLAN_UNIT) is None:
+            _refuse_market(skipped, "stake_over_stated_limit", candidate)
+            continue
+        usable.append(candidate)
     if not usable:
         out["strategy"] = "text_only"
         out["caveats"].append(
@@ -1832,8 +1870,14 @@ def _rescale(candidate: _Candidate, scale: float) -> _Candidate | None:
     scaled legs rather than multiplied, so rounding never compounds.
     """
     if abs(scale - 1.0) < _EPSILON:
-        # No re-check: at scale 1.0 the stakes are the ones ``_solve`` already
-        # measured against the venue's limit.  Only scaling can break it.
+        # Gated even here.  The shortcut used to return unchecked, on the
+        # grounds that ``_solve`` had already measured these stakes against the
+        # venue's limit — true when the scan gated its own provisional stakes,
+        # false now that it does not.  An offer of exactly ``PLAN_UNIT`` is the
+        # one size that reaches this branch, and it would have been the one
+        # size no limit gate ever ran on.
+        if _over_stated_limit(candidate.legs):
+            return None
         return candidate
     promo = candidate.promo_leg
     scaled_promo = _Leg(promo.quote, _round_cents(promo.stake * scale), promo.net_odds,
