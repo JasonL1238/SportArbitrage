@@ -302,7 +302,11 @@ def collect_promos_once(
     built = build_sources(sources)
     raw_store = RawStore(settings.PROMO_RAW_DIR) if persist_raw else None
     promo_store = PromoStore(settings.PROMO_DB_PATH) if store else None
-    run_id = promo_store.start_run() if promo_store is not None else None
+    run_id = (
+        promo_store.start_run(jurisdiction=settings.STATE)
+        if promo_store is not None
+        else None
+    )
 
     offers: list[PromoOffer] = []
     health_rows: list[PromoSourceHealth] = []

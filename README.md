@@ -104,7 +104,9 @@ missing because it was not asked for is never reported as a market that vanished
 pip install -r requirements-dev.txt
 python -m playwright install chromium              # for ODDS_FETCH_MODE=browser
 
+export ODDS_STATE=IL                               # use PA on a Pennsylvania egress
 python -m src.collector collect                    # one pass over all venues and sports
+python -m src.collector collect --auto-state       # detect IL/PA, then relaunch with matching routes
 python -m src.collector collect --tier core        # slate endpoints only — a few requests per source
 python -m src.collector collect --tier core --watch   # poll forever (default every 300s)
 # Optional SMS when an arb clears 2.5% ROI (Twilio):
@@ -112,9 +114,11 @@ python -m src.collector collect --tier core --watch   # poll forever (default ev
 #   export ODDS_TWILIO_AUTH_TOKEN=...
 #   export ODDS_TWILIO_FROM_NUMBER=+1...   # your Twilio number
 #   export ODDS_ALERT_TO=+18479070871      # optional; this is the default
-python scripts/probe_sources.py                    # curl_cffi Chrome impersonation
-python scripts/probe_sources.py --browser          # Playwright Chromium
-python scripts/probe_sources.py --only blocked     # DK / Caesars / Fanatics / bet365
+python scripts/detect_state.py                     # manual check; stores state + time + IP hash
+python scripts/probe_sources.py --state IL         # requires matching recent detection
+python scripts/probe_sources.py --state PA --template-only  # structural only; never validates
+python scripts/probe_sources.py --state PA --force # live validation from matching PA egress
+python scripts/probe_sources.py --only blocked --template-only  # retained research candidates
 # ODDS_HTTP_PROXY=http://user:pass@host:port       # residential exit in a licensed state
 # ODDS_FETCH_MODE=browser                          # force Playwright for the collector
 python -m src.collector collect --sport hockey     # or narrow it
@@ -138,9 +142,35 @@ reloads on the newest snapshot; the left rail lists every collection by time so
 you can flip between them (or click bars on **Price changes**).
 
 Everything lands under `data/` (gitignored): raw responses in `data/raw/`,
-normalized rows in `data/collector.sqlite3`. Override with `ODDS_DATA_DIR`,
-`ODDS_RAW_DIR`, `ODDS_DB_PATH`, `ODDS_INTERVAL_SECONDS`, `ODDS_HTTP_TIMEOUT` (the
-older `MLB_*` names still work and log a deprecation).
+normalized rows in `data/collector.sqlite3`, the privacy-reduced egress record in
+`data/egress_state.json`, and route results in `data/probe_cache.sqlite3`.
+Override with `ODDS_DATA_DIR`, `ODDS_RAW_DIR`, `ODDS_DB_PATH`, `ODDS_STATE`,
+`ODDS_INTERVAL_SECONDS`, `ODDS_HTTP_TIMEOUT`, or `ODDS_PROBE_TTL_DAYS` (the older
+`MLB_*` names still work and log a deprecation).
+
+### Illinois and Pennsylvania
+
+`src/jurisdictions.py` is the single routing map. `ODDS_STATE` is normalized to
+uppercase and defaults to `IL`; unknown values use the existing clean
+bad-settings refusal. It changes FanDuel, the single active BetRivers/Kambi
+tenant, BetMGM, DraftKings, Caesars, and state-specific FanDuel/BetRivers promo
+requests. State-agnostic feeds retain their source identities.
+
+Illinois is the live baseline. Pennsylvania routes are configured from its
+authorized sportsbook surfaces but remain labelled template-only until their
+adapters pass from a detected PA egress. Hard Rock has no PA route because it is
+not a Pennsylvania online sportsbook; the adapter and comparison feeds remain
+registered without inventing one. Odds and promo runs store their jurisdiction,
+and the dashboard exposes legacy, template, unavailable-route, and recent-egress
+mismatch warnings.
+
+For live odds collection, `--auto-state` queries `ipapi.co` and falls back to
+`ipwho.is`, accepts only IL or PA, stores no raw IP, and starts a fresh child
+process with the detected `ODDS_STATE`. The fresh process matters because route
+factories are bound at import. Detection fails closed: a lookup failure or any
+other state starts no collection. This is routing convenience, not sportsbook
+wagering geolocation, and it necessarily reveals the public exit IP to the
+selected lookup provider. Manual/replay/report commands never auto-detect.
 
 A database written by an earlier schema is **refused with instructions** rather
 than silently written into; `python -m src.collector migrate` upgrades it, backing

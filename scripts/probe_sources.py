@@ -9,7 +9,8 @@ Default transport matches the collector: Chrome TLS impersonation via
 ``curl_cffi``, plus ``ODDS_HTTP_PROXY`` when set.  Use this to decide which
 blocked books are ready for an adapter.
 
-    python scripts/probe_sources.py                 # reachability, one line each
+    python scripts/probe_sources.py --state IL      # active retail routes
+    python scripts/probe_sources.py --state PA --template-only
     python scripts/probe_sources.py --verbose       # with the first bytes of each reply
     python scripts/probe_sources.py --only blocked  # DK / Caesars / Fanatics / bet365
     python scripts/probe_sources.py --plain         # old plain httpx baseline
@@ -20,6 +21,7 @@ import argparse
 import json
 import sys
 from dataclasses import dataclass, field
+from datetime import timedelta
 from pathlib import Path
 from typing import Any, Callable
 
@@ -30,6 +32,10 @@ import httpx
 # `python -m`, and a recon tool that needs its own incantation does not get used.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from src import settings  # noqa: E402
+from src.egress import is_recent, load_detection  # noqa: E402
+from src.jurisdictions import RouteStatus, jurisdiction  # noqa: E402
+from src.probe_cache import ProbeCache, ProbeStatus  # noqa: E402
 from src.sources._common import USER_AGENT  # noqa: E402
 from src.sources.transport import proxy_url  # noqa: E402
 
@@ -44,12 +50,11 @@ class Candidate:
     name: str
     url: str
     params: dict[str, str] = field(default_factory=dict)
-    expect: str = ""
-    """What the payload should contain if this source is usable at all."""
-
     note: str = ""
     counts: Callable[[Any], str] | None = None
     """Turns a decoded payload into a one-line summary of what arrived."""
+    source_key: str = ""
+    """Stable registered identity when this is an active-state probe."""
 
 
 def _len(path: str) -> Callable[[Any], str]:
@@ -72,49 +77,49 @@ def _len(path: str) -> Callable[[Any], str]:
 #: Every candidate probed while planning the expansion, kept whether or not it
 #: worked.  The ones that fail are the point: a candidate with no record is a
 #: candidate somebody will try again.
-CANDIDATES: tuple[Candidate, ...] = (
+RESEARCH_CANDIDATES: tuple[Candidate, ...] = (
     # ── reachable, and adapted ───────────────────────────────────────────────
     Candidate("kambi", "betrivers-il",
               "https://eu-offering-api.kambicdn.com/offering/v2018/rsiusil/listView/baseball/mlb.json",
-              {"lang": "en_US", "market": "US-IL"}, expect="events", counts=_len("events"),
+              {"lang": "en_US", "market": "US-IL"}, counts=_len("events"),
               note="registered as betrivers_kambi"),
     Candidate("kambi", "leovegas",
               "https://eu-offering-api.kambicdn.com/offering/v2018/leo/listView/baseball/mlb.json",
-              {"lang": "en_GB", "market": "GB"}, expect="events", counts=_len("events"),
+              {"lang": "en_GB", "market": "GB"}, counts=_len("events"),
               note="registered as leovegas_kambi; prices independently"),
     Candidate("kambi", "betrivers-nj",
               "https://eu-offering-api.kambicdn.com/offering/v2018/rsiusnj/listView/baseball/mlb.json",
-              {"lang": "en_US", "market": "US-NJ"}, expect="events", counts=_len("events"),
+              {"lang": "en_US", "market": "US-NJ"}, counts=_len("events"),
               note="MIRROR of betrivers-il — byte-identical listView; must not be registered"),
     Candidate("kambi", "kambi-reference",
               "https://eu-offering-api.kambicdn.com/offering/v2018/kambi/listView/baseball/mlb.json",
-              {"lang": "en_GB", "market": "GB"}, expect="events", counts=_len("events"),
+              {"lang": "en_GB", "market": "GB"}, counts=_len("events"),
               note="MIRROR of betrivers-il"),
     Candidate("exchange", "matchbook",
               "https://www.matchbook.com/edge/rest/events",
               {"sport-ids": "3", "states": "open", "per-page": "3", "odds-type": "DECIMAL",
                "include-prices": "true", "exchange-type": "back-lay"},
-              expect="events", counts=_len("events"),
+              counts=_len("events"),
               note="use www.matchbook.com; apiclient.matchbook.com answers 530"),
     Candidate("exchange", "smarkets",
               "https://api.smarkets.com/v3/events/",
               {"type": "baseball_match", "state": "upcoming", "limit": "3"},
-              expect="events", counts=_len("events")),
+              counts=_len("events")),
     Candidate("exchange", "sxbet",
               "https://api.sx.bet/markets/active", {"chainVersion": "SXR", "sportIds": "3"},
-              expect="markets", counts=_len("data.markets")),
+              counts=_len("data.markets")),
     Candidate("prediction", "kalshi",
               "https://api.elections.kalshi.com/trade-api/v2/markets",
               {"series_ticker": "KXMLBGAME", "limit": "3", "status": "open"},
-              expect="markets", counts=_len("markets"),
+              counts=_len("markets"),
               note="rate limits an unpaced probe with 429"),
     Candidate("prediction", "polymarket",
               "https://gamma-api.polymarket.com/events",
               {"limit": "3", "closed": "false", "active": "true", "tag_slug": "mlb"},
-              expect="markets", counts=lambda p: f"{len(p)} event(s)" if isinstance(p, list) else "?"),
+              counts=lambda p: f"{len(p)} event(s)" if isinstance(p, list) else "?"),
     Candidate("sportsbook", "bovada",
               "https://www.bovada.lv/services/sports/event/coupon/events/A/description/baseball/mlb",
-              {"marketFilterId": "def", "lang": "en"}, expect="events",
+              {"marketFilterId": "def", "lang": "en"},
               counts=lambda p: f"{sum(len(g.get('events') or []) for g in p)} event(s)"
               if isinstance(p, list) else "?"),
     Candidate("sportsbook", "betmgm",
@@ -125,11 +130,11 @@ CANDIDATES: tuple[Candidate, ...] = (
                "state": "Latest", "offerMapping": "Filtered",
                "offerCategories": "Gridable", "fixtureCategories": "Gridable",
                "sortBy": "Tags", "take": "3", "sportIds": "23"},
-              expect="fixtures", counts=_len("fixtures"),
+              counts=_len("fixtures"),
               note="registered as betmgm"),
     Candidate("sportsbook", "cloudbet",
               "https://www.cloudbet.com/sports-api/c/v6/sports/events",
-              {"limit": "3", "sport": "baseball"}, expect="sports",
+              {"limit": "3", "sport": "baseball"},
               counts=lambda p: (
                   f"{sum(len(c.get('events') or []) for s in (p.get('sports') or []) for c in (s.get('competitions') or []))} event(s)"
                   if isinstance(p, dict) else "?"
@@ -139,7 +144,7 @@ CANDIDATES: tuple[Candidate, ...] = (
               "https://1xbet.com/service-api/LineFeed/Get1x2_VZip",
               {"sports": "5", "count": "5", "lng": "en", "tf": "2200000",
                "tz": "0", "mode": "4", "country": "1"},
-              expect="Value", counts=_len("Value"),
+              counts=_len("Value"),
               note="registered as onexbet"),
 
     # ── reopen candidates (blocked under plain httpx; try impersonation) ────
@@ -164,20 +169,95 @@ CANDIDATES: tuple[Candidate, ...] = (
               note="Cloudflare under plain httpx"),
     Candidate("hardrock", "hardrock-ladder",
               "https://api.hardrocksportsbook.com/sportsbook/v1/api/getRootLadder",
-              expect="PriceAdjustmentDetailsResponse",
               note="registered as hardrock; ladder reachable from CA"),
     Candidate("hardrock", "hardrock-tree",
               "https://api.hardrocksportsbook.com/sportsbook/api/public/events/tree",
-              {"segment": "nj"}, expect="betSync",
+              {"segment": "nj"},
               note="tree reachable; GraphQL events empty from CA without proxy"),
     Candidate("kambi", "ballybet",
               "https://eu-offering-api.kambicdn.com/offering/v2018/ballybet/listView/baseball/mlb.json",
-              {"lang": "en_US", "market": "US-NJ"}, expect="events",
+              {"lang": "en_US", "market": "US-NJ"},
               note="429 No access from CA; AN an_bally is the interim path"),
     Candidate("gone", "espnbet",
               "https://api.espnbet.com/v1/sportsbook/events",
               note="product discontinued; parked host presents a CN=espn.com certificate"),
 )
+
+
+def state_candidates(state: str) -> tuple[Candidate, ...]:
+    """Registered retail sources whose constructor routes come from the map."""
+    configured = jurisdiction(state)
+    candidates: list[Candidate] = []
+    for key, route in configured.routes.items():
+        if route.status is RouteStatus.UNAVAILABLE:
+            continue
+        config = route.config
+        if key == "fanduel":
+            url = f"https://sbapi.{config['state']}.sportsbook.fanduel.com/api/content-managed-page"
+        elif key == "betrivers_kambi":
+            url = (
+                "https://eu-offering-api.kambicdn.com/offering/v2018/"
+                f"{config['operator']}/listView/baseball/mlb.json"
+            )
+        elif key == "betmgm":
+            url = f"{config['base_url']}/cds-api/bettingoffer/fixtures"
+        elif key == "draftkings":
+            url = f"{config['content_base_url']}/markets"
+        elif key == "caesars":
+            url = f"{config['base_url']}/sports"
+        elif key == "hardrock":
+            url = "https://api.hardrocksportsbook.com/sportsbook/api/public/events/tree"
+        else:  # pragma: no cover - map is closed and tested
+            continue
+        candidates.append(
+            Candidate(
+                "retail",
+                key,
+                url,
+                note=route.warning or f"{configured.state} validated route",
+                source_key=key,
+            )
+        )
+    return tuple(candidates)
+
+
+def probe_registered(candidate: Candidate, *, state: str) -> tuple[str, str]:
+    """Fetch and parse a small MLB scope through the real configured adapter."""
+    from src.sources._common import Tier
+    from src.sources.registry import sources_for_state
+
+    descriptor = next(
+        entry for entry in sources_for_state(state) if entry.key == candidate.source_key
+    )
+    # Caesars' currently pinned public competition ids cover NFL/NBA; the other
+    # state-sensitive adapters all have an MLB scope.  Probe a scope the real
+    # adapter declares instead of manufacturing a universal league.
+    league = "NFL" if candidate.source_key == "caesars" else "MLB"
+    source = descriptor.build(leagues=(league,), timeout=TIMEOUT)
+    try:
+        raws = source.fetch_raw(tier=Tier.CORE)
+        outcome = source.parse(raws)
+    except Exception as exc:  # noqa: BLE001 - one diagnostic row, never a traceback
+        detail = f"{type(exc).__name__}: {exc}"
+        lowered = detail.lower()
+        if "geo" in lowered or "region" in lowered or "location" in lowered:
+            return "GEO RESTRICTED", detail
+        if any(word in lowered for word in ("403", "blocked", "denied", "captcha", "waf")):
+            return "BLOCKED", detail
+        return "PARSE FAIL", detail
+    finally:
+        close = getattr(source, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                pass
+    if outcome.rejections:
+        first = outcome.rejections[0]
+        return "PARSE FAIL", f"{len(outcome.rejections)} rejection(s): {first.reason}"
+    if not outcome.quotes:
+        return "PARSE FAIL", f"adapter produced no {league} quotes"
+    return "OK", f"{len(outcome.quotes)} {league} quote(s), {len(raws)} response(s)"
 
 
 def probe(candidate: Candidate, *, verbose: bool, plain: bool = False) -> tuple[str, str]:
@@ -254,12 +334,36 @@ def _refusal_marker(body: str) -> str | None:
     return None
 
 
+def _cache_status(verdict: str, detail: str) -> ProbeStatus:
+    lowered = f"{verdict} {detail}".lower()
+    if verdict == "OK":
+        return ProbeStatus.OK
+    if "geo" in lowered or "not available in your region" in lowered:
+        return ProbeStatus.GEO_RESTRICTED
+    if any(word in lowered for word in ("403", "blocked", "denied", "waf", "captcha")):
+        return ProbeStatus.BLOCKED
+    return ProbeStatus.PARSE_FAIL
+
+
 def main(argv: list[str] | None = None) -> int:
+    refused = settings.refuse_bad_settings()
+    if refused is not None:
+        return refused
     parser = argparse.ArgumentParser(
         prog="python scripts/probe_sources.py", description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--only", help="probe one family (kambi, exchange, prediction, blocked, ...)")
+    parser.add_argument("--state", default=settings.STATE, help="retail jurisdiction (IL or PA)")
+    parser.add_argument(
+        "--only",
+        help="one source/name/family (draftkings, blocked, kambi, ...)",
+    )
+    parser.add_argument("--force", action="store_true", help="ignore fresh successful cache rows")
+    parser.add_argument(
+        "--template-only",
+        action="store_true",
+        help="request state-shaped routes without validating or caching them",
+    )
     parser.add_argument("--verbose", action="store_true", help="show the first bytes of each reply")
     parser.add_argument(
         "--plain", action="store_true",
@@ -270,15 +374,48 @@ def main(argv: list[str] | None = None) -> int:
         help="use Playwright Chromium (sets ODDS_FETCH_MODE=browser for this run)",
     )
     args = parser.parse_args(argv)
+    try:
+        configured = jurisdiction(args.state)
+    except KeyError as exc:
+        print(f"error: {exc.args[0]}", file=sys.stderr)
+        return 2
+    state = configured.state
     if args.browser:
         import os
         os.environ["ODDS_FETCH_MODE"] = "browser"
 
-    chosen = [c for c in CANDIDATES if not args.only or c.family == args.only]
+    active = state_candidates(state)
+    pool = (*active, *RESEARCH_CANDIDATES) if args.only else active
+    chosen = [
+        c
+        for c in pool
+        if not args.only
+        or args.only in {c.family, c.name, c.source_key}
+    ]
     if not chosen:
-        families = sorted({c.family for c in CANDIDATES})
-        print(f"no candidates in family {args.only!r}; known: {families}", file=sys.stderr)
+        known = sorted({c.family for c in pool} | {c.name for c in pool})
+        print(f"no candidates matching {args.only!r}; known: {known}", file=sys.stderr)
         return 1
+
+    detection = None
+    fingerprint = ""
+    if not args.template_only:
+        detection = load_detection(settings.EGRESS_STATE_PATH)
+        if detection is None or not is_recent(detection):
+            print(
+                "error: no recent egress detection; run "
+                "python scripts/detect_state.py first",
+                file=sys.stderr,
+            )
+            return 2
+        if detection.state != state:
+            print(
+                f"error: requested {state} but recent detected egress is "
+                f"{detection.state}; refusing validation",
+                file=sys.stderr,
+            )
+            return 2
+        fingerprint = detection.egress_fingerprint
 
     if args.plain:
         mode = "plain httpx"
@@ -287,16 +424,65 @@ def main(argv: list[str] | None = None) -> int:
     else:
         mode = "curl_cffi Chrome impersonation"
     proxy = proxy_url()
-    print(f"transport: {mode}" + (f" via {proxy}" if proxy else " (no proxy)"))
+    print(f"state: {state} ({'template-only' if args.template_only else 'egress verified'})")
+    print(f"transport: {mode}" + (" via configured proxy" if proxy else " (no proxy)"))
     print(f"{'family':<11} {'candidate':<28} {'verdict':<12} detail")
     print("-" * 110)
     reachable = 0
-    for candidate in chosen:
-        verdict, detail = probe(candidate, verbose=args.verbose, plain=args.plain)
-        reachable += verdict == "OK"
-        print(f"{candidate.family:<11} {candidate.name:<28} {verdict:<12} {detail}")
-        if candidate.note:
-            print(f"{'':<11} {'':<28} {'':<12} note: {candidate.note}")
+    cache = None if args.template_only else ProbeCache(settings.PROBE_CACHE_PATH)
+    try:
+        for candidate in chosen:
+            if cache is not None and candidate.source_key and not args.force:
+                cached = cache.fresh_ok(
+                    candidate.source_key,
+                    state,
+                    fingerprint,
+                    ttl=timedelta(days=settings.PROBE_TTL_DAYS),
+                )
+                if cached is not None:
+                    print(
+                        f"{candidate.family:<11} {candidate.name:<28} "
+                        f"{'CACHED OK':<12} {cached.probed_at}"
+                    )
+                    reachable += 1
+                    continue
+            if candidate.source_key:
+                verdict, detail = probe_registered(candidate, state=state)
+            else:
+                verdict, detail = probe(
+                    candidate, verbose=args.verbose, plain=args.plain
+                )
+            actual_ok = verdict == "OK"
+            reachable += actual_ok
+            shown = "UNVALIDATED" if args.template_only else verdict
+            shown_detail = f"{verdict}: {detail}" if args.template_only else detail
+            print(
+                f"{candidate.family:<11} {candidate.name:<28} "
+                f"{shown:<12} {shown_detail}"
+            )
+            if candidate.note:
+                print(f"{'':<11} {'':<28} {'':<12} note: {candidate.note}")
+            if cache is not None and candidate.source_key:
+                status = _cache_status(verdict, detail)
+                route = configured.routes[candidate.source_key]
+                if status is ProbeStatus.OK and route.routed_state != state:
+                    status = ProbeStatus.UNTESTED
+                    detail = f"legacy {route.routed_state} route answered; not {state} validation"
+                cache.record(
+                    candidate.source_key,
+                    state,
+                    fingerprint,
+                    status,
+                    detail,
+                )
+    finally:
+        if cache is not None:
+            cache.close()
+    for key, route in configured.routes.items():
+        if route.status is RouteStatus.UNAVAILABLE and (
+            not args.only or args.only in {"retail", key}
+        ):
+            print(f"{'retail':<11} {key:<28} {'UNTESTED':<12} {route.detail}")
     print("-" * 110)
     print(f"{reachable} of {len(chosen)} candidate(s) answered with usable JSON")
     print("\nNext lever on a refusal: ODDS_HTTP_PROXY, then browser-cookie bootstrap / Playwright.")

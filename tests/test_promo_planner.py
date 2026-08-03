@@ -105,14 +105,16 @@ class TestStakeableSources:
     """The promo is only usable at its own book — the source mapping is the rule."""
 
     def test_thelines_tenant_maps_to_the_brand(self):
-        assert stakeable_odds_sources("tl_draftkings") == ("draftkings", "an_draftkings")
+        assert stakeable_odds_sources("tl_draftkings") == (
+            "draftkings", "an_draftkings", "vi_draftkings",
+        )
 
     def test_primary_comes_before_failover(self):
         assert stakeable_odds_sources("fanduel") == ("fanduel", "an_fanduel")
 
     def test_promo_only_brand_uses_its_action_network_view(self):
-        assert stakeable_odds_sources("bet365") == ("an_bet365",)
-        assert stakeable_odds_sources("fanatics") == ("an_fanatics",)
+        assert stakeable_odds_sources("bet365") == ("an_bet365", "vi_bet365")
+        assert stakeable_odds_sources("fanatics") == ("an_fanatics", "vi_fanatics")
 
     def test_ontario_tenant_has_no_feed_and_says_so(self):
         # betmgm_on is a different licence with a different catalog; borrowing

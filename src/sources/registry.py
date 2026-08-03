@@ -36,13 +36,15 @@ disagreement is the finding.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from functools import partial
 from inspect import signature
 from typing import Any, Callable, Mapping, Sequence
 
+from src import settings
 from src.commission import COMMISSIONS
+from src.jurisdictions import jurisdiction, source_config
 from src.settlement import SETTLEMENT
 from src.sources.base import OddsSource
 from src.sources.actionnetwork import ActionNetworkAdapter
@@ -83,7 +85,13 @@ SLOW_SOURCES: frozenset[str] = frozenset({"smarkets"})
 #: win best-price highlighting, enter an arbitrage leg, or collapse two real
 #: books into one counterparty via distinctness (a consensus feed that agrees
 #: with A and with B would otherwise union-find A with B).
-VIEW_ONLY_SOURCES: frozenset[str] = frozenset({"an_open"})
+VIEW_ONLY_SOURCES: frozenset[str] = frozenset({"an_open"}) | jurisdiction(
+    settings.STATE
+).view_only_sources
+
+
+def view_only_for_state(state: str) -> frozenset[str]:
+    return frozenset({"an_open"}) | jurisdiction(state).view_only_sources
 
 
 def is_view_only(key: str) -> bool:
@@ -165,7 +173,7 @@ class SourceDescriptor:
 #: Order is the order they are collected in, and it is deliberate rather than
 #: alphabetical: the three books with the longest history come first so that a
 #: partial run still produces the comparison set that has been verified most.
-SOURCES: tuple[SourceDescriptor, ...] = (
+_BASE_SOURCES: tuple[SourceDescriptor, ...] = (
     SourceDescriptor(
         key="fanduel",
         adapter=FanDuelAdapter,
@@ -317,13 +325,21 @@ SOURCES: tuple[SourceDescriptor, ...] = (
         key="an_hardrock",
         adapter=ActionNetworkAdapter,
         kind=SourceKind.SPORTSBOOK,
-        config={"book_id": 2724, "fetch_book_ids": "2724"},
+        config={
+            "book_id": 2724,
+            "fetch_book_ids": "2724,79,2988,4727,69,68,123,75,71",
+            "base_url": "https://api.actionnetwork.com/web/v2/scoreboard",
+        },
     ),
     SourceDescriptor(
         key="an_fanatics",
         adapter=ActionNetworkAdapter,
         kind=SourceKind.SPORTSBOOK,
-        config={"book_id": 2988, "fetch_book_ids": "2988,2990"},
+        config={
+            "book_id": 2988,
+            "fetch_book_ids": "2988,2990,79,4727,69,68,123,75,71",
+            "base_url": "https://api.actionnetwork.com/web/v2/scoreboard",
+        },
     ),
     SourceDescriptor(
         key="an_fliff",
@@ -347,7 +363,11 @@ SOURCES: tuple[SourceDescriptor, ...] = (
         key="an_bally",
         adapter=ActionNetworkAdapter,
         kind=SourceKind.SPORTSBOOK,
-        config={"book_id": 4693, "fetch_book_ids": "4693"},
+        config={
+            "book_id": 4693,
+            "fetch_book_ids": "4693,79,2988,4727,69,68,123,75,71",
+            "base_url": "https://api.actionnetwork.com/web/v2/scoreboard",
+        },
     ),
     # Bet365 only appears when Caesars is named on the request; parse still
     # filters to book_id 79.
@@ -421,6 +441,29 @@ SOURCES: tuple[SourceDescriptor, ...] = (
     ),
 )
 
+
+def sources_for_state(state: str) -> tuple[SourceDescriptor, ...]:
+    """Build the stable registry with active-state retail constructor values.
+
+    Only first-party retail descriptors receive overrides.  Action Network,
+    VegasInsider, exchanges, prediction markets, and offshore books retain the
+    exact configuration they had before jurisdiction routing.
+    """
+    configured = jurisdiction(state)
+    built: list[SourceDescriptor] = []
+    for entry in _BASE_SOURCES:
+        override = source_config(configured.state, entry.key)
+        built.append(
+            replace(entry, config={**entry.config, **override})
+            if override
+            else entry
+        )
+    return tuple(built)
+
+
+# Active-state compatibility for existing callers.  Processes that need to
+# inspect another state without re-importing use ``sources_for_state``.
+SOURCES: tuple[SourceDescriptor, ...] = sources_for_state(settings.STATE)
 BY_KEY: dict[str, SourceDescriptor] = {entry.key: entry for entry in SOURCES}
 
 
@@ -504,4 +547,6 @@ __all__ = [
     "descriptor",
     "is_view_only",
     "keys",
+    "sources_for_state",
+    "view_only_for_state",
 ]

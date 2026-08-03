@@ -128,6 +128,9 @@ CREATE TABLE IF NOT EXISTS collection_run (
     error_count   INTEGER NOT NULL DEFAULT 0,
     warning_count INTEGER NOT NULL DEFAULT 0,
     note          TEXT,
+    -- Jurisdiction selected when the run started.  Blank means the run predates
+    -- jurisdiction-aware collection; reports must not inherit today's setting.
+    jurisdiction  TEXT NOT NULL DEFAULT '',
     -- The scope the run was collected under, structurally.  It was recoverable
     -- only as prose inside ``note``, which no code could safely read back — so
     -- ``replay`` compared a scope-collected run's stored rows against an
@@ -917,6 +920,7 @@ class Store:
         ("collection_run", "excluded_count", "INTEGER NOT NULL DEFAULT 0"),
         ("collection_run", "migrated_from", "INTEGER"),
         ("collection_run", "counterparty_groups", "TEXT"),
+        ("collection_run", "jurisdiction", "TEXT NOT NULL DEFAULT ''"),
     )
 
     def _add_missing_columns(self) -> None:
@@ -960,6 +964,7 @@ class Store:
         *,
         sports: Sequence[str] | None = None,
         leagues: Sequence[str] | None = None,
+        jurisdiction: str | None = None,
     ) -> int:
         """Open a run, recording the scope it is being collected under.
 
@@ -968,9 +973,15 @@ class Store:
         """
         with self._conn:
             cursor = self._conn.execute(
-                "INSERT INTO collection_run (started_at, scope_sports, scope_leagues) "
-                "VALUES (?, ?, ?)",
-                (_iso(started_at), ",".join(sports or ()), ",".join(leagues or ())),
+                "INSERT INTO collection_run "
+                "(started_at, scope_sports, scope_leagues, jurisdiction) "
+                "VALUES (?, ?, ?, ?)",
+                (
+                    _iso(started_at),
+                    ",".join(sports or ()),
+                    ",".join(leagues or ()),
+                    (jurisdiction or "").strip().upper(),
+                ),
             )
         return int(cursor.lastrowid)
 
@@ -1425,7 +1436,7 @@ class Store:
         """
         rows = self.query(
             "SELECT id, started_at, finished_at, ok, quote_count, error_count, "
-            "migrated_from FROM collection_run WHERE id = ?",
+            "migrated_from, jurisdiction FROM collection_run WHERE id = ?",
             (run_id,),
         )
         return rows[0] if rows else None
@@ -1487,7 +1498,7 @@ class Store:
             )
         return self._conn.execute(
             f"""SELECT id, started_at, finished_at, ok, quote_count, event_count,
-                       error_count, warning_count, note
+                       error_count, warning_count, note, jurisdiction
                   FROM collection_run{where}
                  ORDER BY id DESC LIMIT ?""",
             (*params, limit),

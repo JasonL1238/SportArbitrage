@@ -973,6 +973,7 @@ def find_opportunities(
     commissions: Mapping[str, Commission] | None = None,
     one_counterparty: Mapping[str, Sequence[frozenset[str]]] | None = None,
     order_book_sources: Collection[str] | None = None,
+    view_only_sources: Collection[str] | None = None,
 ) -> ArbReport:
     """Find every risk-free position in one run's worth of quotes.
 
@@ -988,6 +989,10 @@ def find_opportunities(
     is :data:`src.commission.COMMISSIONS`, the real table.  Pass ``{}`` to price
     every venue as charging nothing, which is what a test of the pure arithmetic
     wants and what a live run must never do.
+
+    *view_only_sources* defaults to the process's active jurisdiction. Reports
+    pass the stored run jurisdiction explicitly so historical PA and IL runs do
+    not inherit whichever state happens to be selected today.
 
     *one_counterparty* names groups of source keys that are the same
     counterparty, per league — what :mod:`src.distinctness` measures.  Distinct
@@ -1023,8 +1028,13 @@ def find_opportunities(
         )
     # Consensus / opening columns (``an_open``) are on the board for context
     # only — never a leg, never a counterparty in the measured gate.
-    if VIEW_ONLY_SOURCES:
-        quotes = [quote for quote in quotes if quote.source not in VIEW_ONLY_SOURCES]
+    view_only = (
+        VIEW_ONLY_SOURCES
+        if view_only_sources is None
+        else frozenset(view_only_sources)
+    )
+    if view_only:
+        quotes = [quote for quote in quotes if quote.source not in view_only]
 
     if one_counterparty is None:
         one_counterparty = counterparty_groups(quotes)

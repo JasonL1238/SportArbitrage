@@ -7,6 +7,7 @@ SportArbitrage is a local Python application with two collection domains and one
 - The odds pipeline collects venue data, normalizes quotes, reconciles event identity, validates the slate, detects arbitrage, and stores results.
 - The promotions pipeline collects and normalizes offers into a separate database, then builds plans against current odds at report time.
 - The report layer reads stored odds and promotions and produces a self-contained dashboard; its local server optionally invokes the collectors.
+- Operational scripts are thin manual entry points over reusable code in `src/`; application modules never import from `scripts/`.
 
 ## Odds data flow
 
@@ -16,7 +17,7 @@ source registry -> adapter fetch -> raw envelope on disk -> pure adapter parse
     -> SQLite persistence -> report/dashboard
 ```
 
-`src/collector.py` orchestrates this flow. Raw responses are persisted by `src/raw_store.py` before interpretation. Adapters return normalized `src/schema.py` models. `src/events.py` reconciles identities across the complete slate before `src/validation.py` and `src/arb.py` evaluate it. `src/store.py` owns the odds SQLite schema, migrations, and queries.
+`src/collector.py` orchestrates this flow. Raw responses are persisted by `src/raw_store.py` before interpretation. Adapters return normalized `src/schema.py` models. `src/events.py` reconciles identities across the complete slate before `src/validation.py` and `src/arb.py` evaluate it. `src/store.py` owns the odds SQLite schema, migrations, and queries. `src/jurisdictions.py` resolves the one active retail state and that state is stored when each run begins.
 
 ## Promotions data flow
 
@@ -40,15 +41,21 @@ promo registry -> promo fetch -> shared raw envelope -> promo parse/enrichment
 | `src/validation.py`, `src/distinctness.py`, `src/redundancy.py` | Slate correctness and counterparty independence |
 | `src/commission.py`, `src/settlement.py`, `src/arb.py` | Net pricing, settlement compatibility, and opportunity detection |
 | `src/store.py` | Odds persistence and migrations |
+| `src/jurisdictions.py` | Typed IL/PA retail and state-specific promo routing |
+| `src/egress.py`, `src/probe_cache.py` | Privacy-reduced explicit detection and separate live-probe cache |
 | `src/promos/` | Promo collection, normalization, persistence, and planning |
 | `src/report.py`, `src/report_assets.py` | Dashboard data construction, serving, and handwritten inline assets |
+| `scripts/` | Manual diagnostics and repository checks; not an application dependency |
+| `tests/fixtures/raw/` | Versioned captured inputs for deterministic parser and replay tests |
 
 ## Entry points
 
-- `python -m src` and `python -m src.collector`: odds collector and operational CLI.
+- `python -m src` and `python -m src.collector`: odds collector and operational CLI;
+  live collection can detect IL/PA before relaunching a state-bound child.
 - `python -m src.promos`: promotions CLI.
 - `python -m src.report`: static dashboard generation or local dashboard server.
 - `python scripts/probe_sources.py`: manual reachability diagnostics; it is not a normal test.
+- `python scripts/detect_state.py`: manual egress detection using the same provider-fallback path.
 
 ## Dependency boundaries
 
@@ -58,6 +65,11 @@ promo registry -> promo fetch -> shared raw envelope -> promo parse/enrichment
 - Event reconciliation operates on the full parsed slate before filtering-dependent validation.
 - Validation and arbitrage consume normalized models, never raw venue payloads.
 - Storage owns SQLite details. Domain calculations should accept models and collections rather than database rows.
+- One run has one retail jurisdiction. State tenants are constructor configuration, never new source/counterparty identities.
+- Automatic state selection happens before a fresh collector process imports its
+  state-bound factories; it never mutates a running registry.
 - Promotions may reuse settings, raw storage, and transport guards, but its schema, registry, and database remain separate.
 - The report layer may read and combine both domains; collection/domain modules must not depend on report rendering.
+- `src/report_assets.py` is handwritten presentation source (`CSS`, `BODY`, and `JS`), not generated output. Generated dashboards and runtime captures belong under ignored `data/` paths.
+- Reusable detection, probe-cache, and validation behavior belongs in `src/`; scripts should only parse arguments, call it, and present results.
 - Runtime dependencies are declared in `requirements.txt`; test-only dependencies are in `requirements-dev.txt`.

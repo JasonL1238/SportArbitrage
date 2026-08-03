@@ -30,7 +30,8 @@ CREATE TABLE IF NOT EXISTS promo_runs (
     ok INTEGER NOT NULL DEFAULT 0,
     offer_count INTEGER NOT NULL DEFAULT 0,
     source_count INTEGER NOT NULL DEFAULT 0,
-    notes TEXT NOT NULL DEFAULT ''
+    notes TEXT NOT NULL DEFAULT '',
+    jurisdiction TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS promo_health (
@@ -95,6 +96,10 @@ _V2_COLUMNS: tuple[tuple[str, str], ...] = (
     ("is_specific", "INTEGER NOT NULL DEFAULT 0"),
 )
 
+_RUN_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("jurisdiction", "TEXT NOT NULL DEFAULT ''"),
+)
+
 
 def _iso(value: datetime | None) -> str | None:
     if value is None:
@@ -150,6 +155,13 @@ class PromoStore:
                 if name not in cols:
                     self._conn.execute(f"ALTER TABLE promo_offers ADD COLUMN {name} {decl}")
             current = 2
+        run_cols = {
+            r["name"]
+            for r in self._conn.execute("PRAGMA table_info(promo_runs)").fetchall()
+        }
+        for name, decl in _RUN_COLUMNS:
+            if name not in run_cols:
+                self._conn.execute(f"ALTER TABLE promo_runs ADD COLUMN {name} {decl}")
         if row is None:
             self._conn.execute(
                 "INSERT INTO meta(key, value) VALUES ('schema_version', ?)",
@@ -165,10 +177,10 @@ class PromoStore:
     def close(self) -> None:
         self._conn.close()
 
-    def start_run(self) -> int:
+    def start_run(self, *, jurisdiction: str | None = None) -> int:
         cur = self._conn.execute(
-            "INSERT INTO promo_runs(started_at, ok) VALUES (?, 0)",
-            (_iso(datetime.now(UTC)),),
+            "INSERT INTO promo_runs(started_at, ok, jurisdiction) VALUES (?, 0, ?)",
+            (_iso(datetime.now(UTC)), (jurisdiction or "").strip().upper()),
         )
         self._conn.commit()
         return int(cur.lastrowid)
@@ -278,7 +290,8 @@ class PromoStore:
     def list_runs(self, *, limit: int = 10) -> list[dict[str, Any]]:
         rows = self._conn.execute(
             """
-            SELECT id, started_at, finished_at, ok, offer_count, source_count, notes
+            SELECT id, started_at, finished_at, ok, offer_count, source_count, notes,
+                   jurisdiction
             FROM promo_runs
             ORDER BY id DESC
             LIMIT ?

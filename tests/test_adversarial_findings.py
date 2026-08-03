@@ -3168,6 +3168,7 @@ class TestAnExistingDatabaseSurvivesAnAddedColumn:
             ("collection_run", "excluded_count"),
             ("collection_run", "migrated_from"),
             ("collection_run", "counterparty_groups"),
+            ("collection_run", "jurisdiction"),
         }
         registered = {(table, column) for table, column, _ in _Store._ADDED_COLUMNS}
         assert registered == expected, (

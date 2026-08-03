@@ -7,6 +7,7 @@ This is the canonical instruction set for coding agents in this repository. Tool
 - Start with the smallest relevant module and read the nearest applicable `AGENTS.md` or `CLAUDE.md`.
 - Use `docs/repository-map.md` to choose a directory and `docs/architecture.md` to understand boundaries.
 - Search for symbols, callers, and tests before opening large files. Read only the relevant ranges.
+- For files listed as context hotspots in the repository map, locate the named section or symbol first; do not read the whole file by default.
 - Avoid repo-wide scans unless the change crosses boundaries or local searches fail.
 - Ignore generated files, logs, coverage, build output, caches, vendored code, virtual environments, and raw datasets unless the task requires them. Tracked fixtures under `tests/fixtures/` are test inputs, not general exploration targets.
 
@@ -19,6 +20,7 @@ This is the canonical instruction set for coding agents in this repository. Tool
 - Keep promotions isolated from the odds database and collection lifecycle.
 - Separate generated and handwritten code. Do not hand-edit runtime data under `data/` or caches.
 - Update architecture, repository-map, testing, and contract documentation when the corresponding behavior or boundary changes.
+- Keep `AGENTS.md` and `CLAUDE.md` as short boundary adapters. Put shared rules here and run `scripts/check_agent_docs.py` after changing the instruction hierarchy.
 
 ## Validate
 

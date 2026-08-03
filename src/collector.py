@@ -32,6 +32,8 @@ from __future__ import annotations
 import argparse
 import logging
 import math
+import os
+import subprocess
 import sys
 import time
 from collections import Counter, defaultdict
@@ -551,7 +553,14 @@ def collect_once(
 
     started_at = datetime.now(UTC)
     run_id = (
-        store.start_run(started_at, sports=sports, leagues=leagues) if store else None
+        store.start_run(
+            started_at,
+            sports=sports,
+            leagues=leagues,
+            jurisdiction=settings.STATE,
+        )
+        if store
+        else None
     )
     # Identifies this pass on every response it captures.  A run id would do
     # where there is a store, but a store-less collection has none, and the
@@ -2642,7 +2651,76 @@ def _add_scope_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _auto_state_relaunch(argv: Sequence[str]) -> int:
+    """Detect IL/PA and run a fresh, consistently configured collector.
+
+    Source factories are deliberately bound once at module import.  Relaunching
+    is therefore the safe boundary: the child imports settings, registries, and
+    promo routes only after ``ODDS_STATE`` has been selected.
+    """
+    from src.egress import DEFAULT_DETECTION_URLS, detect_egress, save_detection
+    from src.jurisdictions import JURISDICTIONS
+    from src.sources.transport import build_default_client
+
+    non_collect_commands = {
+        "replay", "runs", "show", "arb", "lines", "mirrors", "health", "migrate"
+    }
+    requested = non_collect_commands.intersection(argv)
+    if requested:
+        print(
+            "error: --auto-state is only valid for live collection, not "
+            + ", ".join(sorted(requested)),
+            file=sys.stderr,
+        )
+        return 2
+
+    client = None
+    try:
+        client = build_default_client(timeout=settings.HTTP_TIMEOUT)
+        detection, provider = detect_egress(client, urls=DEFAULT_DETECTION_URLS)
+    except Exception as exc:  # noqa: BLE001 - CLI emits one actionable refusal
+        print(
+            f"error: automatic state detection failed: {type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+        return 2
+    finally:
+        if client is not None:
+            try:
+                client.close()
+            except Exception:
+                pass
+
+    if detection.state not in JURISDICTIONS:
+        print(
+            f"error: detected {detection.state}, but automatic collection supports "
+            f"only {', '.join(JURISDICTIONS)}; set ODDS_STATE explicitly after "
+            "adding and validating that jurisdiction",
+            file=sys.stderr,
+        )
+        return 2
+
+    save_detection(settings.EGRESS_STATE_PATH, detection)
+    child_argv = [item for item in argv if item != "--auto-state"]
+    child_env = dict(os.environ)
+    child_env["ODDS_STATE"] = detection.state
+    print(
+        f"auto-state: detected {detection.state} via {provider}; "
+        "starting a state-bound collector",
+        flush=True,
+    )
+    completed = subprocess.run(
+        [sys.executable, "-m", "src.collector", *child_argv],
+        env=child_env,
+        check=False,
+    )
+    return int(completed.returncode)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
+    effective_argv = list(sys.argv[1:] if argv is None else argv)
+    if "--auto-state" in effective_argv and "--help" not in effective_argv:
+        return _auto_state_relaunch(effective_argv)
     refusal = settings.refuse_bad_settings()
     if refusal is not None:
         return refusal
@@ -2665,6 +2743,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     collect = subparsers.add_parser("collect", help="run one collection pass (default)")
     collect.add_argument(
         "--source", action="append", choices=sorted(SOURCE_FACTORIES), help="repeatable"
+    )
+    collect.add_argument(
+        "--auto-state",
+        action="store_true",
+        help=(
+            "detect an IL/PA public exit, store only its state/time/IP hash, and "
+            "relaunch with matching retail routes"
+        ),
     )
     collect.add_argument(
         "--tier",
@@ -2791,9 +2877,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     migrate.set_defaults(func=_cmd_migrate)
 
-    args = parser.parse_args(argv)
+    args = parser.parse_args(effective_argv)
     if args.command is None:
-        args = parser.parse_args(["collect", *(argv or [])])
+        args = parser.parse_args(["collect", *effective_argv])
     return int(args.func(args))
 
 

@@ -1,8 +1,8 @@
 """Action Network multi-book scoreboard, from the public web JSON.
 
-``api.actionnetwork.com/web/v1/scoreboard/{sport}`` is the same payload the
-Action Network site renders for a league's slate.  No authentication is
-involved.  One response carries every book Action Network aggregates; this
+The current site uses ``api.actionnetwork.com/web/v2/scoreboard/{sport}``; v1
+captures remain supported for deterministic replay. No authentication is
+involved. One response carries several books Action Network aggregates; this
 adapter is parameterized by ``book_id`` so many registered sources share one
 parser and filter to one counterparty.
 
@@ -392,6 +392,18 @@ def parse_actionnetwork(raws: Sequence[RawResponse]) -> ParseOutcome:
     )
 
     for raw, game, fixture, book_id, fixture_key in work:
+        markets = game.get("markets")
+        if isinstance(markets, dict):
+            _parse_v2_markets(
+                markets=markets,
+                book_id=book_id,
+                raw=raw,
+                source=source,
+                fixture=fixture,
+                event_key=event_keys[fixture_key],
+                outcome=outcome,
+            )
+            continue
         for odds in game.get("odds") or []:
             if not isinstance(odds, dict):
                 outcome.skipped["odds_not_an_object"] += 1
@@ -410,6 +422,176 @@ def parse_actionnetwork(raws: Sequence[RawResponse]) -> ParseOutcome:
 
     drop_duplicate_selections(source, outcome)
     return outcome
+
+
+def _parse_v2_markets(
+    *,
+    markets: Mapping[str, Any],
+    book_id: int,
+    raw: RawResponse,
+    source: str,
+    fixture: _Fixture,
+    event_key: str,
+    outcome: ParseOutcome,
+) -> None:
+    """Decode the current v2 scoreboard while v1 captures keep replaying.
+
+    V2 groups rows as ``book -> period -> market -> outcomes`` instead of the
+    v1 flat ``odds`` list.  The endpoint still carries several books, so the
+    registered source is selected from the book id embedded in the envelope's
+    endpoint label exactly as it was for v1.
+    """
+    selected = markets.get(str(book_id)) or markets.get(book_id)
+    if not isinstance(selected, dict):
+        outcome.skipped["odds_for_other_book"] += _v2_row_count(markets)
+        return
+
+    outcome.skipped["odds_for_other_book"] += max(
+        0, _v2_row_count(markets) - _v2_row_count(selected)
+    )
+    for period_name, market_map in selected.items():
+        period = _v2_period(str(period_name), fixture.sport)
+        if not isinstance(period, Period):
+            outcome.skipped[period] += _v2_row_count(market_map)
+            continue
+        if not isinstance(market_map, dict):
+            outcome.skipped["market_group_not_an_object"] += 1
+            continue
+        for market_name, rows in market_map.items():
+            if not isinstance(rows, list):
+                outcome.skipped["market_rows_not_an_array"] += 1
+                continue
+            usable = [row for row in rows if isinstance(row, dict)]
+            outcome.skipped["odds_not_an_object"] += len(rows) - len(usable)
+            if market_name not in {"moneyline", "spread", "total"}:
+                outcome.skipped[f"market_out_of_scope:{market_name}"] += len(usable)
+                continue
+            _emit_v2_market(
+                rows=usable,
+                market_name=str(market_name),
+                period=period,
+                raw=raw,
+                source=source,
+                fixture=fixture,
+                event_key=event_key,
+                outcome=outcome,
+            )
+
+
+def _v2_row_count(value: Any) -> int:
+    if isinstance(value, list):
+        return len(value)
+    if isinstance(value, dict):
+        return sum(_v2_row_count(child) for child in value.values())
+    return 0
+
+
+def _v2_period(value: str, sport: Sport) -> Period | str:
+    normalized = value.strip().lower().replace("-", "_")
+    if normalized in {"event", "game"}:
+        return Period.FULL_GAME
+    if normalized in {"first_5_innings", "firstfiveinnings"}:
+        return (
+            Period.FIRST_5_INNINGS
+            if sport is Sport.BASEBALL
+            else f"period_out_of_scope:{normalized}"
+        )
+    if normalized in {"first_inning", "firstinning"}:
+        return (
+            Period.FIRST_1_INNING
+            if sport is Sport.BASEBALL
+            else f"period_out_of_scope:{normalized}"
+        )
+    return f"period_out_of_scope:{normalized or 'empty'}"
+
+
+def _emit_v2_market(
+    *,
+    rows: Sequence[Mapping[str, Any]],
+    market_name: str,
+    period: Period,
+    raw: RawResponse,
+    source: str,
+    fixture: _Fixture,
+    event_key: str,
+    outcome: ParseOutcome,
+) -> None:
+    by_side = {
+        str(row.get("side") or "").strip().lower(): row
+        for row in rows
+        if str(row.get("side") or "").strip()
+    }
+    first = rows[0] if rows else {}
+    market_id = str(first.get("market_id") or f"{fixture.event_id}:{market_name}")
+    status = {
+        side: 0 if str(row.get("line_status") or "normal").lower() == "normal" else 1
+        for side, row in by_side.items()
+    }
+
+    if market_name == "moneyline":
+        if fixture.sport is Sport.SOCCER and "draw" not in by_side:
+            outcome.skipped["draw_voids_market"] += 1
+            return
+        _emit(
+            raw, source, fixture, event_key, outcome,
+            Market.MONEYLINE, period, market_id,
+            tuple(
+                (selection, by_side.get(side, {}).get("odds"), side, None)
+                for side, selection in (
+                    ("home", Selection.HOME),
+                    ("away", Selection.AWAY),
+                    ("draw", Selection.DRAW),
+                )
+            ),
+            status,
+        )
+        return
+
+    if market_name == "spread":
+        sides = []
+        for side, selection in (("home", Selection.HOME), ("away", Selection.AWAY)):
+            row = by_side.get(side)
+            if row is None:
+                continue
+            try:
+                line = float(row.get("value")) + 0.0
+            except (TypeError, ValueError):
+                outcome.reject(
+                    source, "unparseable_line",
+                    f"spread/{side} on event {fixture.event_id} has "
+                    f"value={row.get('value')!r}",
+                    event_id=fixture.event_id,
+                )
+                continue
+            sides.append((selection, row.get("odds"), side, line))
+        if len(sides) == 2:
+            _emit(
+                raw, source, fixture, event_key, outcome,
+                Market.SPREAD, period, market_id, tuple(sides), status,
+            )
+        return
+
+    sides = []
+    for side, selection in (("over", Selection.OVER), ("under", Selection.UNDER)):
+        row = by_side.get(side)
+        if row is None:
+            continue
+        try:
+            line = float(row.get("value")) + 0.0
+        except (TypeError, ValueError):
+            outcome.reject(
+                source, "unparseable_line",
+                f"total/{side} on event {fixture.event_id} has "
+                f"value={row.get('value')!r}",
+                event_id=fixture.event_id,
+            )
+            continue
+        sides.append((selection, row.get("odds"), side, line))
+    if len(sides) == 2:
+        _emit(
+            raw, source, fixture, event_key, outcome,
+            Market.TOTAL, period, market_id, tuple(sides), status,
+        )
 
 
 def _book_and_path(endpoint: str) -> tuple[int | None, str]:

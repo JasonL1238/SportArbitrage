@@ -41,7 +41,9 @@ from src.arb import (
     merge_counterparty_groups,
 )
 from src.commission import commission_for, net_decimal_odds
+from src.egress import is_recent, load_detection
 from src.events import reconcile_event_keys
+from src.jurisdictions import JURISDICTIONS, route_warnings, source_host
 from src.leagues import is_known
 from src.leagues import league as get_league
 from src.report_assets import BODY, CSS, JS
@@ -912,6 +914,7 @@ def build_report(
     run_rows = store.query(
         """SELECT r.id, r.started_at, r.finished_at, r.ok, r.quote_count, r.event_count,
                   r.error_count, r.warning_count, r.note, r.excluded_count,
+                  r.jurisdiction,
                   (SELECT COUNT(*) FROM raw_response w WHERE w.run_id = r.id) AS raw_count
              FROM collection_run r
             WHERE r.finished_at IS NOT NULL
@@ -1020,6 +1023,7 @@ def build_report(
                 "warning_count": row["warning_count"],
                 "raw_count": row["raw_count"],
                 "note": row["note"],
+                "jurisdiction": row["jurisdiction"] or "UNKNOWN",
                 # Rows the --sport/--league filter dropped on purpose.  The flow
                 # strip rendered "read 5,429 -> checked 5,429 -> stored 2,476"
                 # for a scoped run: 2,953 rows vanish between adjacent boxes,
@@ -1039,6 +1043,23 @@ def build_report(
     strings: list[str] = quotes.pop("_strings")
     rows_available: int = quotes.pop("_available")
     latest_run_id = runs[0]["id"]
+    latest_jurisdiction = runs[0]["jurisdiction"]
+    jurisdiction_warnings = (
+        list(route_warnings(latest_jurisdiction))
+        if latest_jurisdiction in JURISDICTIONS
+        else ["This run predates jurisdiction-aware collection."]
+    )
+    detected = load_detection(settings.EGRESS_STATE_PATH)
+    if (
+        detected is not None
+        and is_recent(detected)
+        and latest_jurisdiction in JURISDICTIONS
+        and detected.state != latest_jurisdiction
+    ):
+        jurisdiction_warnings.append(
+            f"Stored run jurisdiction {latest_jurisdiction} differs from recent "
+            f"detected egress {detected.state}."
+        )
 
     detail_ids = tuple(quote_run_ids)
     placeholders = ",".join("?" * len(detail_ids))
@@ -1049,6 +1070,13 @@ def build_report(
             "db_path": str(store.path),
             "db_name": store.path.name,
             "latest_run_id": latest_run_id,
+            "jurisdiction": latest_jurisdiction,
+            "jurisdiction_live_validated": (
+                JURISDICTIONS[latest_jurisdiction].live_validated
+                if latest_jurisdiction in JURISDICTIONS
+                else False
+            ),
+            "jurisdiction_warnings": jurisdiction_warnings,
             "lede": _lede(runs[0]),
             "slate_dates": _slate_dates(quotes, strings),
             "replay_note": replay_note,
@@ -1079,7 +1107,7 @@ def build_report(
         # disagreeing with itself.  Union with the quoted sources makes the
         # page describe every venue whose prices it shows.
         "sources": [
-            _source_entry(key)
+            _source_entry(key, state=latest_jurisdiction)
             for key in sorted(_venues_on_the_page(runs, quotes, strings))
         ],
         "venue_kinds": VENUE_KINDS,
@@ -1226,6 +1254,7 @@ def _promo_payload(
                 "ok": bool(run["ok"]),
                 "offer_count": run["offer_count"],
                 "source_count": run["source_count"],
+                "jurisdiction": run.get("jurisdiction") or "UNKNOWN",
             }
         offers = []
         for row in store.offers_for_run(run_id):
@@ -1403,6 +1432,15 @@ def _arb_payload(
         # Same rule as ``collector arb``: the recorded full-slate gate is the
         # strong answer; re-measure only when a pre-column run left nothing.
         recorded = store.recorded_counterparty_groups(run_id)
+        from src.sources.registry import view_only_for_state
+
+        run = store.run_row(run_id)
+        state = run["jurisdiction"] if run is not None else ""
+        view_only = (
+            view_only_for_state(state)
+            if state in JURISDICTIONS
+            else None
+        )
         report = find_opportunities(
             everything,
             total_stake=total_stake,
@@ -1411,6 +1449,7 @@ def _arb_payload(
                 {} if recorded else counterparty_groups(everything),
                 recorded,
             ),
+            view_only_sources=view_only,
         )
         rejected = {}
         for diagnostic in report.diagnostics:
@@ -1551,7 +1590,15 @@ def _coverage_for_run(
                 {"source": row["source_key"], "league": row["league"], "sport": row["sport"]}
             )
 
-    from src.sources.registry import VIEW_ONLY_SOURCES
+    from src.sources.registry import VIEW_ONLY_SOURCES, view_only_for_state
+
+    run = store.run_row(run_id)
+    state = run["jurisdiction"] if run is not None else ""
+    view_only = (
+        view_only_for_state(state)
+        if state in JURISDICTIONS
+        else VIEW_ONLY_SOURCES
+    )
 
     result: list[dict[str, Any]] = []
     for sport in sorted(per_sport):
@@ -1561,7 +1608,7 @@ def _coverage_for_run(
         books = sorted(
             key
             for key, count in entry["per_source"].items()
-            if count and key not in VIEW_ONLY_SOURCES
+            if count and key not in view_only
         )
         result.append(
             {
@@ -1826,7 +1873,7 @@ def _venues_on_the_page(
     return keys
 
 
-def _source_entry(key: str) -> dict[str, Any]:
+def _source_entry(key: str, *, state: str | None = None) -> dict[str, Any]:
     """One venue, as the page describes it.
 
     Carries what it charges and how it settles a game that is not played, and not
@@ -1837,13 +1884,28 @@ def _source_entry(key: str) -> dict[str, Any]:
     tables the arbitrage engine uses means the page cannot describe a venue in
     terms the pipeline does not price it in.
     """
-    from src.sources.registry import is_view_only
+    from src.sources.registry import is_view_only, view_only_for_state
 
     entry = dict(key=key, **SOURCE_NOTES.get(key, _unknown_source(key)))
+    if state in JURISDICTIONS:
+        configured = JURISDICTIONS[state]
+        route = configured.routes.get(key)
+        host = source_host(state, key)
+        if host:
+            entry["host"] = host
+        if route is not None:
+            entry["route_status"] = route.status.value
+            entry["routed_state"] = route.routed_state
+            if route.warning:
+                entry["route_warning"] = route.warning
     charge = commission_for(key)
     entry["commission"] = "" if charge.is_free else charge.describe()
     entry["settles"] = _SETTLEMENT_WORDS[regime_for(key)]
-    entry["view_only"] = is_view_only(key)
+    entry["view_only"] = (
+        key in view_only_for_state(state)
+        if state in JURISDICTIONS
+        else is_view_only(key)
+    )
     return entry
 
 

@@ -328,17 +328,30 @@ _ORDER_DRIVEN = frozenset(
 def stakeable_odds_sources(promo_source: str) -> tuple[str, ...]:
     """Odds feeds whose prices can be **staked at the promo's own book**.
 
-    First-party feed first, the brand's Action Network failover second — both
-    describe bets placeable at that one counterparty, which is the only place
-    the promo is usable.  An empty tuple means the slate has no view of this
-    book at all (Ontario tenants, promo-only brands), and the caller falls back
-    to text guidance rather than borrowing another book's games.
+    First-party feed first, then every registered redundant observation of the
+    same counterparty (Action Network, VegasInsider, or VSiN). An empty tuple
+    means the slate has no view of this book at all (Ontario tenants,
+    promo-only brands), and the caller falls back to text guidance rather than
+    borrowing another book's games.
     """
     brand = brand_key(promo_source)
     ordered: list[str] = [brand]
-    for primary, secondary in ODDS_REDUNDANT_PAIRS:
-        if primary == brand:
-            ordered.append(secondary)
+
+    def expand() -> None:
+        for source in tuple(ordered):
+            for left, right in ODDS_REDUNDANT_PAIRS:
+                if left == source and right not in ordered:
+                    ordered.append(right)
+                elif right == source and left not in ordered:
+                    ordered.append(left)
+
+    # Components here are tiny triangles; repeat until the transitive same-book
+    # observations are all named.  They remain one counterparty in execution.
+    while True:
+        before = len(ordered)
+        expand()
+        if len(ordered) == before:
+            break
     keys = [
         key
         for key in ordered
@@ -347,7 +360,17 @@ def stakeable_odds_sources(promo_source: str) -> tuple[str, ...]:
     if not keys:
         failover = f"an_{brand}"
         if failover in _REGISTERED_KEYS and failover not in VIEW_ONLY_SOURCES:
-            keys = [failover]
+            ordered = [failover]
+            while True:
+                before = len(ordered)
+                expand()
+                if len(ordered) == before:
+                    break
+            keys = [
+                key
+                for key in ordered
+                if key in _REGISTERED_KEYS and key not in VIEW_ONLY_SOURCES
+            ]
     return tuple(keys)
 
 

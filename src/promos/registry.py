@@ -8,10 +8,12 @@ stable logged-out promo API are covered by HTML catalog adapters and TheLines
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import partial
 from typing import Any, Callable, Mapping
 
+from src import settings
+from src.jurisdictions import jurisdiction
 from src.promos.base import PromoSource
 from src.promos.bovada import BovadaPromoAdapter
 from src.promos.cloudbet import CloudbetPromoAdapter
@@ -22,23 +24,6 @@ from src.promos.landing import LandingPromoAdapter, LandingTarget
 from src.promos.leovegas import LeoVegasPromoAdapter
 from src.promos.schema import PromoKind
 from src.promos.thelines import TheLinesPromoAdapter
-
-_BETRIVERS_STATES: tuple[tuple[str, str], ...] = (
-    ("il", "IL"),
-    ("nj", "NJ"),
-    ("pa", "PA"),
-    ("co", "CO"),
-    ("mi", "MI"),
-    ("in", "IN"),
-    ("va", "VA"),
-    ("oh", "OH"),
-    ("az", "AZ"),
-    ("ny", "NY"),
-    ("la", "LA"),
-    ("md", "MD"),
-    ("wv", "WV"),
-)
-
 
 @dataclass(frozen=True)
 class PromoSourceDescriptor:
@@ -101,20 +86,8 @@ def _thelines(key: str, brand_key: str) -> PromoSourceDescriptor:
     )
 
 
-def _betrivers_targets() -> tuple[LandingTarget, ...]:
-    return tuple(
-        LandingTarget(
-            f"https://{slug}.betrivers.com/",
-            f"landing-{code.lower()}",
-            f"BetRivers {code}",
-            region=code,
-        )
-        for slug, code in _BETRIVERS_STATES
-    )
-
-
 #: Every large sportsbook (and promo-bearing exchange) paired to the odds slate.
-PROMO_SOURCES: tuple[PromoSourceDescriptor, ...] = (
+_BASE_PROMO_SOURCES: tuple[PromoSourceDescriptor, ...] = (
     PromoSourceDescriptor(
         key="fanduel",
         adapter=FanDuelPromoAdapter,
@@ -175,7 +148,14 @@ PROMO_SOURCES: tuple[PromoSourceDescriptor, ...] = (
     ),
     _landing(
         "betrivers_kambi",
-        _betrivers_targets(),
+        (
+            LandingTarget(
+                "https://il.betrivers.com/",
+                "landing-il",
+                "BetRivers IL",
+                region="IL",
+            ),
+        ),
         default_kind=PromoKind.SIGNUP_BONUS,
         empty_is_ok=True,
     ),
@@ -235,6 +215,39 @@ PROMO_SOURCES: tuple[PromoSourceDescriptor, ...] = (
     _thelines("tl_fanatics", "fanatics"),
 )
 
+
+def promo_sources_for_state(state: str) -> tuple[PromoSourceDescriptor, ...]:
+    """One FanDuel region and one BetRivers landing for the active state."""
+    configured = jurisdiction(state)
+    promo = configured.promos
+    built: list[PromoSourceDescriptor] = []
+    for entry in _BASE_PROMO_SOURCES:
+        if entry.key == "fanduel":
+            built.append(
+                replace(
+                    entry,
+                    config={
+                        **entry.config,
+                        "region": promo.fanduel_region,
+                        "regions": (promo.fanduel_region,),
+                    },
+                )
+            )
+            continue
+        if entry.key == "betrivers_kambi":
+            target = LandingTarget(
+                promo.betrivers_url,
+                f"landing-{configured.state.lower()}",
+                promo.betrivers_label,
+                region=configured.state,
+            )
+            built.append(replace(entry, config={**entry.config, "targets": (target,)}))
+            continue
+        built.append(entry)
+    return tuple(built)
+
+
+PROMO_SOURCES: tuple[PromoSourceDescriptor, ...] = promo_sources_for_state(settings.STATE)
 BY_KEY: dict[str, PromoSourceDescriptor] = {entry.key: entry for entry in PROMO_SOURCES}
 
 
@@ -268,4 +281,5 @@ __all__ = [
     "PromoSourceDescriptor",
     "descriptor",
     "keys",
+    "promo_sources_for_state",
 ]

@@ -1,18 +1,21 @@
 # Multi-state adaptation runbook
 
-When you move to **IL, PA, MD**, or any other licensed US state, the collector
-must keep working **there** without throwing away support for states already
-proven. This doc is the plan and the checklist. Implementation follows it;
-do not invent a second process.
+The collector has one jurisdiction-aware process for **IL** and **PA**. Illinois
+is the live baseline; Pennsylvania is a routed template until the registered
+adapters pass from a detected PA egress. This document is the operating runbook
+and extension checklist; do not invent a second state-specific process.
 
 ## Goals
 
-1. **Detect** which US state the current egress / session is in (or is configured for).
-2. **Probe** every registered retail book against that state.
-3. **Adapt** host / operator / segment / promo URLs so stakeable books answer.
-4. **Keep** every previously validated state in the map — never delete IL (or PA,
+1. **Select** the intended state with `ODDS_STATE` (default `IL`) or use the
+   live collector's `--auto-state` launcher.
+2. **Detect** the effective egress manually with `scripts/detect_state.py`, or
+   let that launcher perform the same check before collection.
+3. **Probe** every registered retail book against that state.
+4. **Adapt** host / operator / segment / promo URLs so stakeable books answer.
+5. **Keep** every previously validated state in the map — never delete IL (or PA,
    etc.) just because the primary moved.
-5. **Skip** re-probing a `(source, state)` pair that already passed under the
+6. **Skip** re-probing a `(source, state)` pair that already passed under the
    same egress fingerprint.
 
 Offshore books, exchanges, and prediction markets are mostly jurisdiction-
@@ -34,34 +37,34 @@ BetMGM, DraftKings, Caesars, Hard Rock, and their promo landings.
 - A geo wall is a transport problem (`ODDS_HTTP_PROXY`), not a reason to delete
   an adapter.
 
-## Current baseline (before this work)
+## Implemented baseline
 
-There is no first-class location setting today. Jurisdiction is hard-coded per
-adapter (mostly **IL**; Caesars / Hard Rock often **NJ**). Egress has been
-Davis, CA. The only geo lever is `ODDS_HTTP_PROXY` / `HTTPS_PROXY` /
-`ALL_PROXY`.
+`src/jurisdictions.py` owns the typed routes. `ODDS_STATE` is normalized to
+uppercase, defaults to `IL`, and refuses unknown states through the ordinary
+bad-settings path. The odds and promo registries retain stable keys while
+binding active-state constructor values. Every odds and promo run persists the
+selected jurisdiction.
 
-| Venue | Today’s jurisdiction encoding |
+| Venue | IL | PA |
 |---|---|
-| FanDuel | `il` subdomain (`sbapi.il.…`) |
-| BetRivers | Kambi `rsiusil` / `US-IL` |
-| BetMGM | `www.il.betmgm.com`, `US-Illinois` |
-| DraftKings | `US-IL-SB` |
-| Caesars | `locations/nj` |
-| Hard Rock | `segment=nj` |
-| Promos (FD / MGM / BR) | IL landings / region headers |
+| FanDuel | validated `il` | template `pa` |
+| BetRivers | validated `rsiusil` / `US-IL` | template `rsiuspa` / `US-PA` |
+| BetMGM | validated IL host/subdivision | template PA host/subdivision |
+| DraftKings | validated `US-IL-SB` | template `US-PA-SB` |
+| Caesars | legacy NJ route, warned | template `locations/pa` |
+| Hard Rock | legacy NJ route, warned | unavailable; no PA route is invented |
+| Promos (FD / BR) | one IL region/landing | one PA region/landing |
 
-That baseline stays as the **IL** (and **NJ** where used) entries in the
-jurisdiction map after centralization.
+State-agnostic feeds remain unchanged. Pennsylvania's Hard Rock absence is an
+availability fact, not a reason to unregister the adapter or secondary feeds.
 
 ---
 
-## Architecture to add
+## Implemented architecture
 
 ### 1. Jurisdiction map (keep forever)
 
-New module, e.g. `src/jurisdictions.py` (or equivalent), holding per-state
-templates for every state-sensitive book:
+`src/jurisdictions.py` holds per-state templates for every state-sensitive book:
 
 ```text
 STATE → {
@@ -83,18 +86,29 @@ STATE → {
 
 ### 2. Active state + detection
 
-Settings (names illustrative):
+Settings and operational records:
 
 | Knob | Role |
 |---|---|
-| `ODDS_STATE` | Explicit primary state (`IL`, `PA`, `MD`, …). Wins when set. |
-| `ODDS_STATES` | Optional comma list of *known* states kept in the map / cache. |
-| Detection | If unset: derive from egress (proxy geo, or a cheap `ipinfo`-style
-  lookup, or a dry probe against a known geo-gated host). Persist the result
-  for the process. |
+| `ODDS_STATE` | Explicit primary state (`IL` or `PA`); default `IL`. |
+| `ODDS_EGRESS_STATE_PATH` | Privacy-reduced detection record under `data/` by default. |
+| `ODDS_PROBE_CACHE_PATH` | Separate SQLite live-probe cache. |
+| `ODDS_PROBE_TTL_DAYS` | Fresh-`ok` TTL; default 60 days. |
 
 Detection answers “where are we *effectively*?” — physical presence or proxy
-exit. The collector then builds retail adapters from that state’s templates.
+exit. Ordinary collection remains deterministic from `ODDS_STATE`; passing
+`--auto-state` opts into a fresh lookup and relaunches the collector with the
+detected IL/PA state. `ipapi.co` is tried first and `ipwho.is` is the fallback.
+The public exit IP is necessarily disclosed to the provider but is reduced to a
+SHA-256 fingerprint before local persistence.
+
+```bash
+python -m src.collector collect --auto-state --tier core
+```
+
+The launcher accepts only configured IL/PA results and fails closed on lookup
+failure or any other state. It does not change states inside a running watch
+loop and it does not run for replay, report, or read-only commands.
 
 ### 3. Validation cache (skip if already proven)
 
@@ -104,11 +118,11 @@ Persist under `data/` (SQLite or JSON), keyed by:
 (source_key, state, egress_fingerprint) → status, probed_at, notes
 ```
 
-- `egress_fingerprint`: hash of resolved exit IP and/or proxy URL (not the raw
-  secret if avoidable — store a stable hash).
+- `egress_fingerprint`: SHA-256 of the resolved public exit IP. The raw IP,
+  proxy credentials, and proxy URL are never persisted.
 - Status: `ok` | `geo_restricted` | `blocked` | `parse_fail` | `untested`.
 - **Skip rule:** if status is `ok` and `probed_at` is newer than a configured
-  TTL (default: long, e.g. 30–90 days), do **not** re-run the live probe for
+  TTL (default: 60 days), do **not** re-run the live probe for
   that pair. Parser / schema unit tests still run; only live reachability is
   skipped.
 - Force re-probe: `python scripts/probe_sources.py --state PA --force` (or
@@ -136,7 +150,7 @@ when the cache misses or you pass `--force`.
 ### Step 0 — Record intent
 
 ```bash
-export ODDS_STATE=PA          # or IL, MD, …
+export ODDS_STATE=PA          # or IL
 # If books still refuse CA egress:
 export ODDS_HTTP_PROXY=…      # residential exit in that licensed state
 ```
@@ -217,30 +231,23 @@ Use this when Step 2 fails for a venue.
 | BetMGM | `www.{st}.betmgm.com`, subdivision, access id | Access id may be state-specific |
 | DraftKings | `US-{ST}-SB` | Often needs licensed-state proxy from CA |
 | Caesars | `locations/{st}` | Same |
-| Hard Rock | `segment={st}` | Tree may answer while GraphQL needs proxy |
+| Hard Rock | Add a segment only when licensed in that state | PA is explicitly unavailable; never invent `segment=pa` |
 | Bovada / Cloudbet / 1xBet / Pinnacle / exchanges / Kalshi / Polymarket | Usually none | Treat as state-agnostic once ok |
 | Action Network failovers | None | Not a jurisdiction substitute; watch parser mismatch |
 
 ---
 
-## Suggested implementation order
+## Delivery status
 
-1. **`src/jurisdictions.py`** — IL (+ current NJ Caesars/HR) templates only; no
-   behavior change yet.
-2. **`ODDS_STATE` + detection script** — print configured vs egress; no auto-edit
-   of git.
-3. **Wire FanDuel / BetRivers / BetMGM / DK / Caesars / Hard Rock + promos** to
-   the map.
-4. **Validation cache** in `data/` + `probe_sources.py --state` / `--force` /
-   skip-if-ok.
-5. **First real move** (PA or MD): run the runbook; append templates only where
-   probes fail; document in `SOURCE_FEASIBILITY.md`.
-6. **Tests** — template resolution for IL→PA/MD; distinctness still rejects dual
-   RSIUS*; guards unchanged; no live network in CI.
-
-Auto-editing adapters in-place for a new state is optional glue on top of
-steps 1–4. Prefer: probe → human/agent applies map patches → re-probe → cache.
-Do not have a silent process rewrite registry keys into mirror duplicates.
+- Implemented: typed IL/PA map, validated `ODDS_STATE`, active-state odds and
+  promo registries, run-state persistence, report hosts/warnings, provider-
+  fallback detection, fail-closed `--auto-state` collection relaunch, cache
+  TTL/force behavior, and template-only probes.
+- Still required: a legitimate PA egress run producing parser-clean quotes
+  before PA route statuses are promoted from `template` to `validated`.
+- Existing independent blocker: three retained Action Network source keys need
+  real non-empty committed captures before the full offline contract suite can
+  be green.
 
 ---
 

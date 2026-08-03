@@ -19,6 +19,17 @@ Live collection can require a licensed-region exit and `ODDS_HTTP_PROXY`. It is 
 
 Use `.venv/bin/python` below when the virtual environment is not activated.
 
+## Tool availability
+
+| Check | Status | Command |
+| --- | --- | --- |
+| Tests | Configured | `python -m pytest <focused paths> -q` |
+| Syntax/import compilation | Configured | `python -m compileall -q src scripts` |
+| Agent-document drift | Configured and run in CI | `python scripts/check_agent_docs.py` |
+| Lint | Not configured | Do not claim lint success or invent a command |
+| Static types | Not configured | Do not claim type-check success or invent a command |
+| Package build | No build artifact | Use focused tests and `compileall`; the dashboard is runtime output |
+
 ## Targeted tests
 
 Start with the test containing the changed symbol or the closest domain group:
@@ -34,7 +45,8 @@ Start with the test containing the changed symbol or the closest domain group:
 | Collection/replay | `python -m pytest tests/test_pipeline.py tests/test_fixture_replay.py tests/test_integration.py -q` |
 | Promotions | `python -m pytest tests/test_promos.py tests/test_promo_planner.py -q` |
 | Dashboard | `python -m pytest tests/test_report.py -q` |
-| Agent documentation | `python scripts/check_agent_docs.py` |
+| Jurisdiction/detection/cache/auto-relaunch | `python -m pytest tests/test_jurisdictions.py tests/test_probe_sources.py -q` |
+| Agent documentation | `python -m pytest tests/test_agent_docs.py -q` then `python scripts/check_agent_docs.py` |
 
 For one failing case, use its node id: `python -m pytest path/to/test.py::TestClass::test_case -q`.
 
@@ -63,6 +75,19 @@ python scripts/check_agent_docs.py
 ```
 
 The full suite currently contains thousands of cases and exercises real captured payloads offline. Do not substitute a live collection run for it.
+
+### Known baseline blocker
+
+As of 2026-08-03, the full suite cannot become green because registered
+`an_fliff`, `an_circa`, and `an_superbook` have no genuine non-empty committed
+captures. The session-scoped registered-fixture setup reports `an_fliff` first,
+then causes many dependent tests to error. Treat that cascade as one fixture
+contract blocker, not hundreds of unrelated regressions. Do not synthesize
+fixtures or unregister sources to hide it; see `docs/SOURCE_FEASIBILITY.md`.
+
+Run focused tests that do not require the complete registered fixture slate,
+and still run the full command when the change warrants it. Report its exact
+result and distinguish new failures from this documented baseline.
 
 ## Build and smoke checks
 

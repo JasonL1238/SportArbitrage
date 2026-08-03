@@ -7,8 +7,43 @@ few months by somebody writing an adapter for a host that has never answered.
 Reproduce it with:
 
 ```bash
-python scripts/probe_sources.py
+python scripts/detect_state.py
+python scripts/probe_sources.py --state IL
 ```
+
+## Pennsylvania routing status — 2026-08-03
+
+Pennsylvania is configured but not yet live-validated. The active-state map
+selects FanDuel `pa`, BetRivers `rsiuspa` / `US-PA`, BetMGM's PA host and
+subdivision, DraftKings `US-PA-SB`, and Caesars `locations/pa`. FanDuel promos
+send only `PA`; BetRivers promos request only `pa.betrivers.com`.
+
+Hard Rock is not in the Pennsylvania Gaming Control Board's authorized online
+sportsbook list, so the map marks it unavailable instead of inventing a PA
+segment. The registered adapter and comparison feeds remain in the repository.
+
+An Illinois-exit template probe on 2026-08-03 produced parser-clean payloads for
+FanDuel (72 MLB quotes), BetRivers (486), and DraftKings (86). BetMGM returned
+HTTP 400 (`Access id not allowed for application`), so its PA access ID still
+needs discovery from the public PA application. Caesars was blocked at
+CloudFront. Hard Rock is unavailable in PA. These are structural results only:
+3/5 candidate routes produced quotes, and none was promoted to validated.
+
+The same session's public egress resolved to Illinois, so the real PA probe was
+correctly refused. A later automated lookup attempt from the managed development
+environment was also blocked by its privacy approval layer; no PA `ok` cache
+rows were written. Live certification still requires running the commands below
+from a legitimate Pennsylvania connection and consenting to the IP lookup.
+
+From Illinois, inspect route structure without creating validation evidence:
+
+```bash
+ODDS_STATE=PA python scripts/probe_sources.py --state PA --template-only
+```
+
+To promote individual PA routes, run `detect_state.py` on a legitimate PA
+egress, then run `probe_sources.py --state PA --force`. Only parser-clean quotes
+under a matching recent detection can write `ok` to the separate cache.
 
 ## Illinois re-probe — 2026-08-03
 
@@ -40,11 +75,23 @@ material price drift instead.
 | FanDuel | `fanduel` | `an_fanduel` | VI column verified, adapter not registered yet | First party 48 MLB quotes; AN 112. |
 | BetMGM | `betmgm` | `an_betmgm` | VI column verified, adapter not registered yet | First party 48; AN 104. |
 | BetRivers | `betrivers_kambi` | `an_betrivers` | VI `RiversCasino` column verified, adapter not registered yet | First party 476; AN 136. |
-| Hard Rock Bet | `hardrock` | `an_hardrock` | `vi_hardrock` | VI produced 48 MLB quotes; first-party GraphQL is geo-empty and AN currently omits the requested book. |
+| Hard Rock Bet | `hardrock` | `an_hardrock` | `vi_hardrock` | AN v2 and VI each produced 48 MLB quotes; first-party GraphQL remains geo-empty. |
 | bet365 | not implemented | `an_bet365` | `vi_bet365` | AN and VI both produced quotes; official site is Cloudflare-blocked. |
-| Fanatics | not implemented | `an_fanatics` | `vi_fanatics` | VI produced 48 MLB quotes. Current first-party probe returned HTML rather than odds JSON and AN currently omits the requested book. |
+| Fanatics | not implemented | `an_fanatics` | `vi_fanatics` | AN v2 and VI each produced 48 MLB quotes. Current first-party probe returned HTML rather than odds JSON. |
 | Circa | app-only surface; no web adapter | `an_circa` | `vsin_circa` | Circa's own site points to VSiN as an odds aggregator. The named VSiN column produced 48 MLB quotes / 8 events with no rejections. It is a Las Vegas line tracker, so use it as fallback and drift evidence rather than proof of Illinois-state price identity. AN is retained but currently omits Circa. |
 | theScore Bet | verified IL GraphQL surface; adapter pending | none | none | Official `us-il` edge returned a valid anonymous startup, MLB competition, and lines payload. This is the strongest next first-party adapter candidate. |
+
+The retained Action Network feeds were rechecked from Illinois on 2026-08-03.
+The old v1 scoreboard returned games but omitted all six requested books. The
+current Action Network web board revealed a v2 endpoint and grouped `markets`
+schema. After adding dual-schema parsing, v2 restored real 48-quote MLB captures
+for Hard Rock, Fanatics, and Bally. Fliff, Circa, and SuperBook still returned
+zero requested-book rows across MLB, WNBA, NFL, NHL, and soccer. Those remaining
+three cannot yet supply the real, non-empty captures required by the offline
+source contract. Their independent fallbacks remain registered where available,
+but the full offline suite remains blocked until Action Network restores those
+tenants or a different genuine feed is integrated under an accurately named
+source.
 
 ### First-party endpoint findings
 
@@ -84,7 +131,7 @@ Rows below that still say "closed" mean *not yet opened with the new transport*,
 not *forbidden to open*. Re-probe with:
 
 ```bash
-python scripts/probe_sources.py --only blocked
+python scripts/probe_sources.py --only blocked --template-only
 ```
 
 ---
@@ -150,7 +197,8 @@ Neither opened odds JSON without a licensed-state exit IP:
 
 BetMGM Illinois still answers under Chrome impersonation (registered).  Big-book
 adapters are blocked on **egress identity**, not on missing code paths: set
-`ODDS_HTTP_PROXY` and re-run `python scripts/probe_sources.py --only blocked`.
+`ODDS_HTTP_PROXY` and re-run detection followed by
+`python scripts/probe_sources.py --state IL --only blocked`.
 
 ---
 
@@ -334,7 +382,9 @@ finding of any kind.
 | Fliff / Circa / SuperBook (Westgate) | — | no stable first-party JSON from CA | AN book ids `2292` / `78` / `14` |
 
 Set `ODDS_HTTP_PROXY` to a licensed-state residential exit and re-run
-`python scripts/probe_sources.py --only blocked` / `--only hardrock`.
+`python scripts/probe_sources.py --only blocked --template-only` /
+`--only hardrock --template-only` for research, or use a matching detected
+licensed-state egress for validation.
 
 Four of the venues are exchanges or prediction markets, whose two-sided quotes
 and — for two of them — stated liquidity make a position *more* checkable than

@@ -1920,7 +1920,7 @@ function buildRunPicker() {
         aria-selected="${r.id === currentRunId ? 'true' : 'false'}">
         <b>${i === 0 ? 'Latest · ' : ''}${fmtTime(r.started_at)}</b>
         <span class="when">${fmtClock(r.started_at)} · ${ago(r.started_at)}</span>
-        <span class="bits">${prices} · ${games} · took ${secs}${flag}${kept}</span>
+        <span class="bits">${escapeHtml(r.jurisdiction || 'legacy')} · ${prices} · ${games} · took ${secs}${flag}${kept}</span>
       </button>`;
     }).join('');
     list.querySelectorAll('[data-run-id]').forEach((node) => {
@@ -1931,7 +1931,7 @@ function buildRunPicker() {
   const meta = el('run-meta');
   if (meta) {
     meta.textContent = run
-      ? `${fmtClock(run.started_at)} · ${ago(run.started_at)} · ${runs.length} saved`
+      ? `${run.jurisdiction || 'legacy'} · ${fmtClock(run.started_at)} · ${ago(run.started_at)} · ${runs.length} saved`
       : 'no scrapes yet';
   }
   const histNav = el('nav-history');
@@ -2205,10 +2205,10 @@ function renderOverview() {
   const producing = health.filter((h) => h.quote_count > 0);
 
   el('lede').textContent = DATA.meta.lede;
-  el('brand-sub').textContent = DATA.meta.db_name;
+  el('brand-sub').textContent = `${DATA.meta.db_name} · ${run.jurisdiction || 'legacy jurisdiction'}`;
   el('built').innerHTML = `page built ${escapeHtml(fmtClock(DATA.meta.generated_at))}<br>from ${escapeHtml(DATA.meta.db_path)}`;
   const took = run.duration_ms !== null ? (run.duration_ms / 1000).toFixed(1) + 's' : 'unknown';
-  el('run-meta').textContent = `${fmtClock(run.started_at)} · ${ago(run.started_at)} · took ${took} · ${runs.length} saved`;
+  el('run-meta').textContent = `${run.jurisdiction || 'legacy'} · ${fmtClock(run.started_at)} · ${ago(run.started_at)} · took ${took} · ${runs.length} saved`;
   paintScrapeStamp();
 
   const usableSports = (run.sports || []).filter((entry) => entry.comparable);
@@ -2224,6 +2224,8 @@ function renderOverview() {
       : '',
     currentSport ? `<span class="pill accent">showing ${escapeHtml(sportLabel(currentSport))}</span>` : '',
     `<span class="pill flat">${runs.length} scrape${runs.length === 1 ? '' : 's'} saved</span>`,
+    ...(DATA.meta.jurisdiction_warnings || []).map((warning) =>
+      `<span class="pill bad" title="${escapeHtml(warning)}">jurisdiction warning</span>`),
   ].filter(Boolean).join('');
 
   const notice = el('run-notice');

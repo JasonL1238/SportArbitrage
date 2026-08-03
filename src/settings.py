@@ -22,6 +22,8 @@ import math
 import os
 from pathlib import Path
 
+from src.jurisdictions import JURISDICTIONS, normalize_state
+
 #: Prefix for the current variable names.
 ENV_PREFIX = "ODDS"
 
@@ -85,6 +87,39 @@ PROMO_RAW_DIR = Path(
 BAD_SETTINGS: list[str] = []
 
 
+def _state(default: str = "IL") -> str:
+    """Read the active retail jurisdiction without making imports fail.
+
+    Like numeric settings, an unknown state is recorded for the entry point's
+    normal bad-settings refusal path.  Falling back to IL keeps ``--help`` and
+    diagnostics importable; collection refuses before the fallback is used.
+    """
+    raw = _lookup("STATE", default)
+    value = normalize_state(raw)
+    if value in JURISDICTIONS:
+        return value
+    current, _ = ENV_NAMES["STATE"]
+    BAD_SETTINGS.append(
+        f"{current}={raw!r} is unknown; configured states: {', '.join(JURISDICTIONS)}"
+    )
+    return default
+
+
+#: One active retail jurisdiction per process/run.  State-agnostic sources are
+#: unchanged; retail adapters and state-specific promotions resolve through it.
+STATE = _state()
+
+#: Explicit or ``--auto-state`` egress detection is persisted here.
+EGRESS_STATE_PATH = Path(
+    _lookup("EGRESS_STATE_PATH", str(DATA_DIR / "egress_state.json"))
+).expanduser()
+
+#: Separate live-probe cache.  It is operational state, not odds history.
+PROBE_CACHE_PATH = Path(
+    _lookup("PROBE_CACHE_PATH", str(DATA_DIR / "probe_cache.sqlite3"))
+).expanduser()
+
+
 def _number(suffix: str, default: str, *, whole: bool, minimum: float):
     """Read a numeric setting, refusing what cannot be honoured — by name.
 
@@ -135,6 +170,9 @@ DEFAULT_INTERVAL_SECONDS = _number("INTERVAL_SECONDS", "300", whole=True, minimu
 
 #: Per-request timeout, seconds.
 HTTP_TIMEOUT = _number("HTTP_TIMEOUT", "20", whole=False, minimum=0.001)
+
+#: Fresh successful live probes are reused for this many days.
+PROBE_TTL_DAYS = _number("PROBE_TTL_DAYS", "60", whole=True, minimum=1)
 
 #: Minimum ideal-stake ROI (fraction) before an arb is texted.  Default 2.5%.
 ALERT_MIN_ROI = _number("ALERT_MIN_ROI", "0.025", whole=False, minimum=0.0)
