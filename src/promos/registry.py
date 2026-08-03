@@ -215,9 +215,19 @@ _BASE_PROMO_SOURCES: tuple[PromoSourceDescriptor, ...] = (
     _thelines("tl_fanatics", "fanatics"),
 )
 
+STATE_PROMO_SOURCE_KEYS: frozenset[str] = frozenset({"fanduel", "betrivers_kambi"})
 
-def promo_sources_for_state(state: str) -> tuple[PromoSourceDescriptor, ...]:
-    """One FanDuel region and one BetRivers landing for the active state."""
+
+def global_promo_sources() -> tuple[PromoSourceDescriptor, ...]:
+    """Generic catalogs whose eligibility is established from published terms."""
+    return tuple(
+        entry for entry in _BASE_PROMO_SOURCES
+        if entry.key not in STATE_PROMO_SOURCE_KEYS
+    )
+
+
+def state_promo_sources_for_state(state: str) -> tuple[PromoSourceDescriptor, ...]:
+    """Only promo surfaces whose request URL/region is state-specific."""
     configured = jurisdiction(state)
     promo = configured.promos
     built: list[PromoSourceDescriptor] = []
@@ -233,8 +243,7 @@ def promo_sources_for_state(state: str) -> tuple[PromoSourceDescriptor, ...]:
                     },
                 )
             )
-            continue
-        if entry.key == "betrivers_kambi":
+        elif entry.key == "betrivers_kambi" and promo.betrivers_url:
             target = LandingTarget(
                 promo.betrivers_url,
                 f"landing-{configured.state.lower()}",
@@ -242,6 +251,20 @@ def promo_sources_for_state(state: str) -> tuple[PromoSourceDescriptor, ...]:
                 region=configured.state,
             )
             built.append(replace(entry, config={**entry.config, "targets": (target,)}))
+    return tuple(built)
+
+
+def promo_sources_for_state(state: str) -> tuple[PromoSourceDescriptor, ...]:
+    """One FanDuel region and one BetRivers landing for the active state."""
+    configured = jurisdiction(state)
+    state_entries = {
+        entry.key: entry for entry in state_promo_sources_for_state(configured.state)
+    }
+    built: list[PromoSourceDescriptor] = []
+    for entry in _BASE_PROMO_SOURCES:
+        if entry.key in STATE_PROMO_SOURCE_KEYS:
+            if entry.key in state_entries:
+                built.append(state_entries[entry.key])
             continue
         built.append(entry)
     return tuple(built)
@@ -278,8 +301,11 @@ _check()
 __all__ = [
     "BY_KEY",
     "PROMO_SOURCES",
+    "STATE_PROMO_SOURCE_KEYS",
     "PromoSourceDescriptor",
     "descriptor",
+    "global_promo_sources",
     "keys",
     "promo_sources_for_state",
+    "state_promo_sources_for_state",
 ]

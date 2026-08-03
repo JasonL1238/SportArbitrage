@@ -104,9 +104,8 @@ missing because it was not asked for is never reported as a market that vanished
 pip install -r requirements-dev.txt
 python -m playwright install chromium              # for ODDS_FETCH_MODE=browser
 
-export ODDS_STATE=IL                               # use PA on a Pennsylvania egress
-python -m src.collector collect                    # one pass over all venues and sports
-python -m src.collector collect --auto-state       # detect IL/PA, then relaunch with matching routes
+python -m src.collector collect                    # detect current state and scrape it
+python -m src.collector collect --state PA --state NJ  # current state + PA + NJ
 python -m src.collector collect --tier core        # slate endpoints only — a few requests per source
 python -m src.collector collect --tier core --watch   # poll forever (default every 300s)
 # Optional SMS when an arb clears 2.5% ROI (Twilio):
@@ -148,29 +147,27 @@ Override with `ODDS_DATA_DIR`, `ODDS_RAW_DIR`, `ODDS_DB_PATH`, `ODDS_STATE`,
 `ODDS_INTERVAL_SECONDS`, `ODDS_HTTP_TIMEOUT`, or `ODDS_PROBE_TTL_DAYS` (the older
 `MLB_*` names still work and log a deprecation).
 
-### Illinois and Pennsylvania
+### Illinois, Pennsylvania, New Jersey, and DC
 
-`src/jurisdictions.py` is the single routing map. `ODDS_STATE` is normalized to
-uppercase and defaults to `IL`; unknown values use the existing clean
-bad-settings refusal. It changes FanDuel, the single active BetRivers/Kambi
-tenant, BetMGM, DraftKings, Caesars, and state-specific FanDuel/BetRivers promo
-requests. State-agnostic feeds retain their source identities.
+`src/jurisdictions.py` is the single routing map. Every live odds and promo
+scrape detects the current public egress, includes that state, and unions any
+repeatable `--state` selections. Supported choices are IL, PA, NJ, and DC.
+`ODDS_STATE` remains a compatibility/probe setting and, when explicitly set for
+collection, is treated as another requested state.
 
-Illinois is the live baseline. Pennsylvania routes are configured from its
-authorized sportsbook surfaces but remain labelled template-only until their
-adapters pass from a detected PA egress. Hard Rock has no PA route because it is
-not a Pennsylvania online sportsbook; the adapter and comparison feeds remain
-registered without inventing one. Odds and promo runs store their jurisdiction,
-and the dashboard exposes legacy, template, unavailable-route, and recent-egress
-mismatch warnings.
+Illinois is the live baseline. PA, NJ, and DC exact-state routes remain
+template-only until their adapters pass from matching detected egresses. Hard
+Rock is unavailable in PA/DC and BetRivers is unavailable in DC; those adapters
+remain registered without inventing routes. A blocked state endpoint is shown as
+a failure and is never replaced by another state's endpoint.
 
-For live odds collection, `--auto-state` queries `ipapi.co` and falls back to
-`ipwho.is`, accepts only IL or PA, stores no raw IP, and starts a fresh child
-process with the detected `ODDS_STATE`. The fresh process matters because route
-factories are bound at import. Detection fails closed: a lookup failure or any
-other state starts no collection. This is routing convenience, not sportsbook
-wagering geolocation, and it necessarily reveals the public exit IP to the
-selected lookup provider. Manual/replay/report commands never auto-detect.
+Detection queries `ipapi.co` and falls back to `ipwho.is`; only state, time, and
+a SHA-256 exit-IP fingerprint are stored. Detection fails closed. Global direct
+venues are fetched once per batch and remain actionable. Action Network,
+VegasInsider, VSiN, and similar republished observations are marked global and
+diagnostic-only: they can expose drift but cannot form arb legs. Promo runs keep
+only offers whose terms or state-specific surface affirmatively confirms the
+run state. This routing convenience is not sportsbook wagering geolocation.
 
 A database written by an earlier schema is **refused with instructions** rather
 than silently written into; `python -m src.collector migrate` upgrades it, backing

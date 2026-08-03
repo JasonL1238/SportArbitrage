@@ -914,7 +914,7 @@ def build_report(
     run_rows = store.query(
         """SELECT r.id, r.started_at, r.finished_at, r.ok, r.quote_count, r.event_count,
                   r.error_count, r.warning_count, r.note, r.excluded_count,
-                  r.jurisdiction,
+                  r.jurisdiction, r.batch_id, r.route_scope,
                   (SELECT COUNT(*) FROM raw_response w WHERE w.run_id = r.id) AS raw_count
              FROM collection_run r
             WHERE r.finished_at IS NOT NULL
@@ -1024,6 +1024,8 @@ def build_report(
                 "raw_count": row["raw_count"],
                 "note": row["note"],
                 "jurisdiction": row["jurisdiction"] or "UNKNOWN",
+                "batch_id": row["batch_id"] or "",
+                "route_scope": row["route_scope"] or "state",
                 # Rows the --sport/--league filter dropped on purpose.  The flow
                 # strip rendered "read 5,429 -> checked 5,429 -> stored 2,476"
                 # for a scoped run: 2,953 rows vanish between adjacent boxes,
@@ -1047,7 +1049,11 @@ def build_report(
     jurisdiction_warnings = (
         list(route_warnings(latest_jurisdiction))
         if latest_jurisdiction in JURISDICTIONS
-        else ["This run predates jurisdiction-aware collection."]
+        else (
+            ["This is the state-neutral global-source run for its collection batch."]
+            if latest_jurisdiction == "GLOBAL"
+            else ["This run predates jurisdiction-aware collection."]
+        )
     )
     detected = load_detection(settings.EGRESS_STATE_PATH)
     if (
@@ -1077,6 +1083,7 @@ def build_report(
                 else False
             ),
             "jurisdiction_warnings": jurisdiction_warnings,
+            "detected_state": detected.state if detected is not None else None,
             "lede": _lede(runs[0]),
             "slate_dates": _slate_dates(quotes, strings),
             "replay_note": replay_note,
@@ -1110,6 +1117,13 @@ def build_report(
             _source_entry(key, state=latest_jurisdiction)
             for key in sorted(_venues_on_the_page(runs, quotes, strings))
         ],
+        "sources_by_jurisdiction": {
+            state: [
+                _source_entry(key, state=state)
+                for key in sorted(_venues_on_the_page(runs, quotes, strings))
+            ]
+            for state in (*JURISDICTIONS, "GLOBAL")
+        },
         "venue_kinds": VENUE_KINDS,
         "runs": runs,
         "quotes": quotes,
@@ -1287,7 +1301,26 @@ def _promo_payload(
                 }
             )
         health = store.health_for_run(run_id)
-        plans, plan_meta = _promo_plans(odds_store, offers, quote_run_ids, as_of)
+        promo_state = str((run or {}).get("jurisdiction") or "").upper()
+        if promo_state == "UNKNOWN":
+            promo_state = ""
+        matching_quote_runs = (
+            tuple(quote_run_ids)
+            if not promo_state
+            else tuple(
+                candidate
+                for candidate in quote_run_ids
+                if odds_store is not None
+                and (odds_store.run_row(candidate) or {})["jurisdiction"] == promo_state
+            )
+        )
+        if not matching_quote_runs and odds_store is not None and promo_state:
+            latest_matching = odds_store.latest_run_id(jurisdiction=promo_state)
+            if latest_matching is not None:
+                matching_quote_runs = (latest_matching,)
+        plans, plan_meta = _promo_plans(
+            odds_store, offers, matching_quote_runs, as_of
+        )
         return {
             "run": run,
             "offers": offers,
@@ -1332,7 +1365,11 @@ def _promo_payload_for_serve() -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         return _failed(exc)
     try:
-        run_id = odds_store.latest_run_id()
+        promo = _promo_payload()
+        promo_state = str((promo.get("run") or {}).get("jurisdiction") or "")
+        if promo_state == "UNKNOWN":
+            promo_state = ""
+        run_id = odds_store.latest_run_id(jurisdiction=promo_state or None)
         if run_id is None:
             # The honest ``no_odds_run``: a readable store with nothing in it.
             return _promo_payload()
@@ -1432,14 +1469,14 @@ def _arb_payload(
         # Same rule as ``collector arb``: the recorded full-slate gate is the
         # strong answer; re-measure only when a pre-column run left nothing.
         recorded = store.recorded_counterparty_groups(run_id)
-        from src.sources.registry import view_only_for_state
+        from src.sources.registry import REPUBLISHED_SOURCE_KEYS, view_only_for_state
 
         run = store.run_row(run_id)
         state = run["jurisdiction"] if run is not None else ""
         view_only = (
             view_only_for_state(state)
             if state in JURISDICTIONS
-            else None
+            else REPUBLISHED_SOURCE_KEYS if state == "GLOBAL" else None
         )
         report = find_opportunities(
             everything,
@@ -1451,6 +1488,13 @@ def _arb_payload(
             ),
             view_only_sources=view_only,
         )
+        if run is not None and run["route_scope"] == "state" and state in JURISDICTIONS:
+            native = frozenset(JURISDICTIONS[state].routes)
+            report.opportunities = [
+                opportunity
+                for opportunity in report.opportunities
+                if native.intersection(opportunity.sources)
+            ]
         rejected = {}
         for diagnostic in report.diagnostics:
             rejected[diagnostic.code] = rejected.get(diagnostic.code, 0) + 1
@@ -1884,7 +1928,12 @@ def _source_entry(key: str, *, state: str | None = None) -> dict[str, Any]:
     tables the arbitrage engine uses means the page cannot describe a venue in
     terms the pipeline does not price it in.
     """
-    from src.sources.registry import is_view_only, view_only_for_state
+    from src.sources.registry import (
+        REPUBLISHED_SOURCE_KEYS,
+        RETAIL_SOURCE_KEYS,
+        is_view_only,
+        view_only_for_state,
+    )
 
     entry = dict(key=key, **SOURCE_NOTES.get(key, _unknown_source(key)))
     if state in JURISDICTIONS:
@@ -1902,10 +1951,14 @@ def _source_entry(key: str, *, state: str | None = None) -> dict[str, Any]:
     entry["commission"] = "" if charge.is_free else charge.describe()
     entry["settles"] = _SETTLEMENT_WORDS[regime_for(key)]
     entry["view_only"] = (
-        key in view_only_for_state(state)
+        key in REPUBLISHED_SOURCE_KEYS
+        if state == "GLOBAL"
+        else key in view_only_for_state(state)
         if state in JURISDICTIONS
         else is_view_only(key)
     )
+    entry["route_scope"] = "state" if key in RETAIL_SOURCE_KEYS else "global"
+    entry["diagnostic_only"] = key in REPUBLISHED_SOURCE_KEYS
     return entry
 
 
@@ -2334,12 +2387,14 @@ def _run_collect_from_ui(
     tier: str,
     sport: str | None,
     league: str | None,
+    states: Sequence[str] | None = None,
     on_progress: Any | None = None,
 ) -> dict[str, Any]:
     """One collection pass, started from the dashboard's Scrape button."""
-    from src.collector import build_sources, collect_once, resolve_leagues
+    from src.collector import collect_batch_once
     from src.raw_store import RawStore
     from src.sources._common import Tier
+    from src.state_selection import detect_and_select
 
     try:
         chosen_tier = Tier(tier)
@@ -2353,15 +2408,15 @@ def _run_collect_from_ui(
         if unknown:
             raise ValueError(f"unknown sport(s): {unknown}")
     try:
-        resolved = resolve_leagues(sports, leagues)
-        sources = build_sources(None, leagues=resolved)
+        selection = detect_and_select(states)
     except SystemExit as exc:
         raise ValueError(str(exc) or "could not start collect") from None
     store = Store(settings.DB_PATH)
     raw_store = RawStore(settings.RAW_DIR)
     try:
-        result = collect_once(
-            sources,
+        batch = collect_batch_once(
+            selection.states,
+            detected_state=selection.detected.state,
             raw_store=raw_store,
             store=store,
             sports=sports,
@@ -2370,15 +2425,17 @@ def _run_collect_from_ui(
             on_progress=on_progress,
         )
     finally:
-        for source in sources:
-            source.close()
         store.close()
+    quote_count = sum(len(result.quotes) for _, result in batch.runs)
     return {
-        "run_id": result.run_id,
-        "ok": result.ok,
-        "quote_count": len(result.quotes),
-        "error_count": len(result.report.errors),
-        "warning_count": len(result.report.warnings),
+        "batch_id": batch.batch_id,
+        "detected_state": batch.detected_state,
+        "states": [state for state, _ in batch.runs if state != "GLOBAL"],
+        "runs": {state: result.run_id for state, result in batch.runs},
+        "ok": batch.ok,
+        "quote_count": quote_count,
+        "error_count": sum(len(result.report.errors) for _, result in batch.runs),
+        "warning_count": sum(len(result.report.warnings) for _, result in batch.runs),
         "tier": chosen_tier.value,
         "sports": list(sports or ()),
         "leagues": list(leagues or ()),
@@ -2388,29 +2445,38 @@ def _run_collect_from_ui(
 def _run_promos_from_ui(
     *,
     sources: Sequence[str] | None = None,
+    states: Sequence[str] | None = None,
     on_progress: Any | None = None,
 ) -> dict[str, Any]:
     """One promo/bonus collection pass from the dashboard Promos scrape button."""
-    from src.promos.collector import collect_promos_once
+    from src.promos.collector import collect_promos_batch_once
+    from src.state_selection import detect_and_select
 
-    result = collect_promos_once(
+    selection = detect_and_select(states)
+    batch = collect_promos_batch_once(
+        selection.states,
+        detected_state=selection.detected.state,
         sources=sources,
         store=True,
         persist_raw=True,
         on_progress=on_progress,
     )
     by_source: dict[str, int] = {}
-    for offer in result.offers:
-        by_source[offer.source] = by_source.get(offer.source, 0) + 1
+    for _, result in batch.runs:
+        for offer in result.offers:
+            by_source[offer.source] = by_source.get(offer.source, 0) + 1
     return {
-        "run_id": result.run_id,
-        "ok": result.ok,
-        "offer_count": len(result.offers),
-        "source_ok": sum(1 for h in result.health if h.ok),
-        "source_count": len(result.health),
+        "batch_id": batch.batch_id,
+        "detected_state": batch.detected_state,
+        "states": [state for state, _ in batch.runs],
+        "runs": {state: result.run_id for state, result in batch.runs},
+        "ok": batch.ok,
+        "offer_count": sum(len(result.offers) for _, result in batch.runs),
+        "source_ok": sum(sum(1 for h in result.health if h.ok) for _, result in batch.runs),
+        "source_count": sum(len(result.health) for _, result in batch.runs),
         "by_source": by_source,
-        "started_at": result.started_at.isoformat(),
-        "finished_at": result.finished_at.isoformat(),
+        "started_at": min(result.started_at for _, result in batch.runs).isoformat(),
+        "finished_at": max(result.finished_at for _, result in batch.runs).isoformat(),
     }
 
 
@@ -2448,6 +2514,7 @@ def _serve(
             state["progress"] = dict(payload) if payload is not None else None
 
     def status_payload() -> dict[str, Any]:
+        detected = load_detection(settings.EGRESS_STATE_PATH)
         with state_lock:
             progress = dict(state["progress"]) if state["progress"] else None
             return {
@@ -2459,6 +2526,8 @@ def _serve(
                 "last_error": state["last_error"],
                 "started_at": state["started_at"],
                 "progress": progress,
+                "detected_state": detected.state if detected is not None else None,
+                "supported_states": list(JURISDICTIONS),
             }
 
     def _begin(kind: str, starting: Mapping[str, Any]) -> bool:
@@ -2533,6 +2602,16 @@ def _serve(
             tier = str(body.get("tier") or "core")
             sport = body.get("sport") or None
             league = body.get("league") or None
+            states = body.get("states") or []
+            if not isinstance(states, list) or not all(
+                isinstance(item, str) and item.upper() in JURISDICTIONS
+                for item in states
+            ):
+                self._json(400, {
+                    "ok": False,
+                    "error": "states must be a list containing only IL, PA, NJ, or DC",
+                })
+                return
             if sport is not None:
                 sport = str(sport)
             if league is not None:
@@ -2559,6 +2638,7 @@ def _serve(
                     tier=tier,
                     sport=sport,
                     league=league,
+                    states=states,
                     on_progress=set_progress,
                 )
                 set_progress({
@@ -2615,6 +2695,16 @@ def _serve(
                 return
 
             sources = body.get("sources")
+            states = body.get("states") or []
+            if not isinstance(states, list) or not all(
+                isinstance(item, str) and item.upper() in JURISDICTIONS
+                for item in states
+            ):
+                self._json(400, {
+                    "ok": False,
+                    "error": "states must be a list containing only IL, PA, NJ, or DC",
+                })
+                return
             if sources is not None:
                 if not isinstance(sources, list) or not all(
                     isinstance(item, str) for item in sources
@@ -2644,6 +2734,7 @@ def _serve(
             try:
                 collected = _run_promos_from_ui(
                     sources=sources,
+                    states=states,
                     on_progress=set_progress,
                 )
                 set_progress({

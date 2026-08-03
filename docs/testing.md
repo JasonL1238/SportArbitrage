@@ -45,7 +45,7 @@ Start with the test containing the changed symbol or the closest domain group:
 | Collection/replay | `python -m pytest tests/test_pipeline.py tests/test_fixture_replay.py tests/test_integration.py -q` |
 | Promotions | `python -m pytest tests/test_promos.py tests/test_promo_planner.py -q` |
 | Dashboard | `python -m pytest tests/test_report.py -q` |
-| Jurisdiction/detection/cache/auto-relaunch | `python -m pytest tests/test_jurisdictions.py tests/test_probe_sources.py -q` |
+| Jurisdiction/detection/cache/multi-state batch | `python -m pytest tests/test_jurisdictions.py tests/test_probe_sources.py -q` |
 | Agent documentation | `python -m pytest tests/test_agent_docs.py -q` then `python scripts/check_agent_docs.py` |
 
 For one failing case, use its node id: `python -m pytest path/to/test.py::TestClass::test_case -q`.

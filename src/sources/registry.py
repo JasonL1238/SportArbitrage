@@ -44,7 +44,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 from src import settings
 from src.commission import COMMISSIONS
-from src.jurisdictions import jurisdiction, source_config
+from src.jurisdictions import RouteStatus, jurisdiction
 from src.settlement import SETTLEMENT
 from src.sources.base import OddsSource
 from src.sources.actionnetwork import ActionNetworkAdapter
@@ -85,13 +85,34 @@ SLOW_SOURCES: frozenset[str] = frozenset({"smarkets"})
 #: win best-price highlighting, enter an arbitrage leg, or collapse two real
 #: books into one counterparty via distinctness (a consensus feed that agrees
 #: with A and with B would otherwise union-find A with B).
-VIEW_ONLY_SOURCES: frozenset[str] = frozenset({"an_open"}) | jurisdiction(
+RETAIL_SOURCE_KEYS: frozenset[str] = frozenset(
+    {"fanduel", "betrivers_kambi", "betmgm", "draftkings", "caesars", "hardrock"}
+)
+
+# Republished comparison surfaces identify gaps and stale/misaligned prices, but
+# they are not a place at which this application can place a wager.  Keeping all
+# of them view-only also prevents a first-party book and its republished copy
+# from becoming the two legs of a false arbitrage.
+REPUBLISHED_SOURCE_KEYS: frozenset[str] = frozenset(
+    {"vsin_circa"}
+) | frozenset(
+    entry
+    for entry in (
+        "an_draftkings", "an_caesars", "vi_draftkings", "vi_caesars",
+        "vi_hardrock", "vi_fanatics", "vi_bet365", "an_hardrock",
+        "an_fanatics", "an_fliff", "an_circa", "an_superbook", "an_bally",
+        "an_bet365", "an_open", "an_fanduel", "an_betrivers", "an_betmgm",
+        "an_bovada", "an_onexbet",
+    )
+)
+
+VIEW_ONLY_SOURCES: frozenset[str] = REPUBLISHED_SOURCE_KEYS | jurisdiction(
     settings.STATE
 ).view_only_sources
 
 
 def view_only_for_state(state: str) -> frozenset[str]:
-    return frozenset({"an_open"}) | jurisdiction(state).view_only_sources
+    return REPUBLISHED_SOURCE_KEYS | jurisdiction(state).view_only_sources
 
 
 def is_view_only(key: str) -> bool:
@@ -442,23 +463,65 @@ _BASE_SOURCES: tuple[SourceDescriptor, ...] = (
 )
 
 
-def sources_for_state(state: str) -> tuple[SourceDescriptor, ...]:
-    """Build the stable registry with active-state retail constructor values.
+def global_sources() -> tuple[SourceDescriptor, ...]:
+    """State-neutral venues and republished diagnostics, in registry order."""
+    return tuple(entry for entry in _BASE_SOURCES if entry.key not in RETAIL_SOURCE_KEYS)
 
-    Only first-party retail descriptors receive overrides.  Action Network,
-    VegasInsider, exchanges, prediction markets, and offshore books retain the
-    exact configuration they had before jurisdiction routing.
+
+def state_sources_for_state(state: str) -> tuple[SourceDescriptor, ...]:
+    """Exact-state first-party retail descriptors only.
+
+    Unavailable books retain their stable registry entries globally, but are not
+    instantiated for a state in which no licensed route exists.  Any route
+    tagged for another state is a configuration error, never a fallback.
     """
     configured = jurisdiction(state)
     built: list[SourceDescriptor] = []
     for entry in _BASE_SOURCES:
-        override = source_config(configured.state, entry.key)
-        built.append(
-            replace(entry, config={**entry.config, **override})
-            if override
-            else entry
-        )
+        if entry.key not in RETAIL_SOURCE_KEYS:
+            continue
+        route = configured.routes.get(entry.key)
+        if route is None or route.status is RouteStatus.UNAVAILABLE:
+            continue
+        if route.routed_state != configured.state:
+            raise RuntimeError(
+                f"{entry.key} route is tagged {route.routed_state}, not "
+                f"requested state {configured.state}; cross-state fallback refused"
+            )
+        built.append(replace(entry, config={**entry.config, **route.config}))
     return tuple(built)
+
+
+def sources_for_state(state: str) -> tuple[SourceDescriptor, ...]:
+    """Build the complete stable registry with available state overrides.
+
+    Unavailable retail descriptors remain registered for contract coverage and
+    historical offline replay, but :func:`state_sources_for_state` is the only
+    live state builder and omits them. Action Network, VegasInsider, exchanges,
+    prediction markets, and offshore books remain state-neutral.
+    """
+    configured = jurisdiction(state)
+    state_entries = {entry.key: entry for entry in state_sources_for_state(configured.state)}
+    built: list[SourceDescriptor] = []
+    for entry in _BASE_SOURCES:
+        if entry.key in RETAIL_SOURCE_KEYS:
+            if entry.key in state_entries:
+                built.append(state_entries[entry.key])
+            else:
+                built.append(entry)
+            continue
+        built.append(entry)
+    return tuple(built)
+
+
+def descriptor_for_state(state: str, key: str) -> SourceDescriptor:
+    entries = {entry.key: entry for entry in sources_for_state(state)}
+    try:
+        return entries[key]
+    except KeyError:
+        raise KeyError(
+            f"source {key!r} is unavailable for {jurisdiction(state).state}"
+        ) from None
 
 
 # Active-state compatibility for existing callers.  Processes that need to
@@ -540,13 +603,18 @@ __all__ = [
     "BY_KEY",
     "SOURCES",
     "SLOW_SOURCES",
+    "REPUBLISHED_SOURCE_KEYS",
+    "RETAIL_SOURCE_KEYS",
     "VIEW_ONLY_SOURCES",
     "SourceDescriptor",
     "SourceKind",
     "accepts_leagues",
     "descriptor",
+    "descriptor_for_state",
+    "global_sources",
     "is_view_only",
     "keys",
     "sources_for_state",
+    "state_sources_for_state",
     "view_only_for_state",
 ]

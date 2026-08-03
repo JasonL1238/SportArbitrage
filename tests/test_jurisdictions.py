@@ -10,8 +10,14 @@ from src.jurisdictions import JURISDICTIONS, RouteStatus, jurisdiction, route_wa
 from src.probe_cache import ProbeCache, ProbeStatus
 from src.promos.registry import promo_sources_for_state
 from src.promos.store import PromoStore
-from src.sources.registry import sources_for_state, view_only_for_state
+from src.sources.registry import (
+    REPUBLISHED_SOURCE_KEYS,
+    sources_for_state,
+    state_sources_for_state,
+    view_only_for_state,
+)
 from src.store import Store
+from src.validation import ValidationReport
 
 
 def _by_key(entries):
@@ -21,7 +27,7 @@ def _by_key(entries):
 def test_il_and_pa_retail_routes_keep_stable_source_keys() -> None:
     il = _by_key(sources_for_state("IL"))
     pa = _by_key(sources_for_state("pa"))
-    assert il.keys() == pa.keys()
+    assert il.keys() == pa.keys(), "unavailable books remain registered for replay"
     assert il["fanduel"].config["state"] == "il"
     assert pa["fanduel"].config["state"] == "pa"
     assert il["betrivers_kambi"].config == {
@@ -42,6 +48,7 @@ def test_pa_hardrock_is_unavailable_not_an_invented_pa_segment() -> None:
     assert any("no licensed route" in warning for warning in route_warnings("PA"))
     assert {"hardrock", "vi_hardrock", "an_hardrock"} <= view_only_for_state("PA")
     assert "hardrock" not in view_only_for_state("IL")
+    assert REPUBLISHED_SOURCE_KEYS <= view_only_for_state("IL")
 
 
 def test_promos_use_one_active_state_region_and_landing() -> None:
@@ -74,14 +81,25 @@ def test_settings_normalize_state_and_refuse_unknown(monkeypatch) -> None:
 def test_run_jurisdiction_is_stored_and_legacy_rows_stay_blank(tmp_path) -> None:
     with Store(tmp_path / "odds.sqlite3") as store:
         legacy = store.start_run(datetime.now(UTC))
-        pa = store.start_run(datetime.now(UTC), jurisdiction="pa")
+        pa = store.start_run(
+            datetime.now(UTC), jurisdiction="pa", batch_id="batch-1", route_scope="state"
+        )
         assert store.run_row(legacy)["jurisdiction"] == ""
         assert store.run_row(pa)["jurisdiction"] == "PA"
+        assert store.run_row(pa)["batch_id"] == "batch-1"
+        store.finish_run(
+            pa,
+            finished_at=datetime.now(UTC),
+            report=ValidationReport(),
+        )
+        assert store.latest_run_id(jurisdiction="PA") == pa
+        assert store.latest_run_id(jurisdiction="NJ") is None
 
     promo_store = PromoStore(tmp_path / "promos.sqlite3")
     try:
-        promo_store.start_run(jurisdiction="pa")
+        promo_store.start_run(jurisdiction="pa", batch_id="batch-1")
         assert promo_store.list_runs(limit=1)[0]["jurisdiction"] == "PA"
+        assert promo_store.list_runs(limit=1)[0]["batch_id"] == "batch-1"
     finally:
         promo_store.close()
 
@@ -140,8 +158,85 @@ def test_probe_cache_skips_only_fresh_ok_for_same_state_and_egress(tmp_path) -> 
         assert cache.fresh_ok("caesars", "PA", fingerprint, now=now) is None
 
 
-def test_only_il_and_pa_are_configured() -> None:
-    assert set(JURISDICTIONS) == {"IL", "PA"}
+def test_all_supported_collection_states_are_configured() -> None:
+    assert set(JURISDICTIONS) == {"IL", "PA", "NJ", "DC"}
+
+
+def test_every_instantiated_retail_route_matches_its_requested_state() -> None:
+    for state in JURISDICTIONS:
+        configured = jurisdiction(state)
+        for entry in state_sources_for_state(state):
+            assert configured.routes[entry.key].routed_state == state
+    assert "betrivers_kambi" not in _by_key(state_sources_for_state("DC"))
+    assert "hardrock" not in _by_key(state_sources_for_state("DC"))
+    il = _by_key(state_sources_for_state("IL"))
+    assert "/locations/il/" in il["caesars"].config["base_url"]
+    assert il["hardrock"].config["segment"] == "il"
+    nj = _by_key(state_sources_for_state("NJ"))
+    assert "/locations/nj/" in nj["caesars"].config["base_url"]
+    assert nj["hardrock"].config["segment"] == "nj"
+
+
+def test_state_selection_includes_detected_first_and_deduplicates(monkeypatch) -> None:
+    from src.state_selection import select_states
+
+    monkeypatch.delenv("ODDS_STATE", raising=False)
+    assert select_states("pa", ["NJ", "pa", "IL"]) == ("PA", "NJ", "IL")
+
+
+def test_batch_fetches_global_sources_once_for_multiple_states(tmp_path, monkeypatch) -> None:
+    import src.collector as collector
+    from src.raw_store import RawResponse, RawStore
+
+    calls: dict[str, int] = {}
+
+    class FakeSource:
+        def __init__(self, key: str):
+            self.source_key = key
+            self.leagues = ()
+
+        def fetch_raw(self, *, tier=None):
+            calls[self.source_key] = calls.get(self.source_key, 0) + 1
+            return [RawResponse(
+                source=self.source_key,
+                endpoint="test",
+                url="https://example.test",
+                status_code=200,
+                body="{}",
+                fetched_at=datetime.now(UTC),
+            )]
+
+        def close(self):
+            pass
+
+    def build(keys=None, *, state=None, route_scope="all", **kwargs):
+        if route_scope == "global":
+            return [FakeSource("pinnacle")]
+        return [FakeSource(f"retail-{state}")]
+
+    seen = []
+
+    class Result:
+        ok = True
+        quotes = []
+
+    def collect(sources, **kwargs):
+        for source in sources:
+            collector._fetch(source, kwargs["tier"])
+        seen.append((kwargs["jurisdiction"], tuple(s.source_key for s in sources)))
+        return Result()
+
+    monkeypatch.setattr(collector, "build_sources", build)
+    monkeypatch.setattr(collector, "collect_once", collect)
+    batch = collector.collect_batch_once(
+        ("IL", "PA"),
+        detected_state="IL",
+        raw_store=RawStore(tmp_path / "raw"),
+        store=None,
+    )
+    assert batch.ok
+    assert calls["pinnacle"] == 1
+    assert [state for state, _ in seen] == ["GLOBAL", "IL", "PA"]
 
 
 def test_report_source_metadata_resolves_stored_state_not_hardcoded_il() -> None:

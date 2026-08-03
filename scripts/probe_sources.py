@@ -353,7 +353,11 @@ def main(argv: list[str] | None = None) -> int:
         prog="python scripts/probe_sources.py", description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--state", default=settings.STATE, help="retail jurisdiction (IL or PA)")
+    parser.add_argument(
+        "--state",
+        default=settings.STATE,
+        help="retail jurisdiction (IL, PA, NJ, or DC)",
+    )
     parser.add_argument(
         "--only",
         help="one source/name/family (draftkings, blocked, kambi, ...)",

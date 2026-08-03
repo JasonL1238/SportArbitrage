@@ -105,16 +105,14 @@ class TestStakeableSources:
     """The promo is only usable at its own book — the source mapping is the rule."""
 
     def test_thelines_tenant_maps_to_the_brand(self):
-        assert stakeable_odds_sources("tl_draftkings") == (
-            "draftkings", "an_draftkings", "vi_draftkings",
-        )
+        assert stakeable_odds_sources("tl_draftkings") == ("draftkings",)
 
     def test_primary_comes_before_failover(self):
-        assert stakeable_odds_sources("fanduel") == ("fanduel", "an_fanduel")
+        assert stakeable_odds_sources("fanduel") == ("fanduel",)
 
-    def test_promo_only_brand_uses_its_action_network_view(self):
-        assert stakeable_odds_sources("bet365") == ("an_bet365", "vi_bet365")
-        assert stakeable_odds_sources("fanatics") == ("an_fanatics", "vi_fanatics")
+    def test_promo_only_brand_does_not_treat_republished_views_as_stakeable(self):
+        assert stakeable_odds_sources("bet365") == ()
+        assert stakeable_odds_sources("fanatics") == ()
 
     def test_ontario_tenant_has_no_feed_and_says_so(self):
         # betmgm_on is a different licence with a different catalog; borrowing
@@ -269,7 +267,7 @@ class TestThePromoLegStaysOnItsOwnBook:
         assert best["legs"][0]["source"] == "draftkings"
         assert best["legs"][0]["decimal_odds"] == pytest.approx(3.0)
 
-    def test_failover_rows_stand_in_when_the_first_party_feed_is_dry(self):
+    def test_republished_rows_do_not_stand_in_for_first_party_prices(self):
         quotes = [
             make_quote(source="an_bet365", selection=Selection.AWAY, decimal_odds=3.0),
             make_quote(source="fanduel", selection=Selection.HOME, decimal_odds=1.5),
@@ -277,9 +275,8 @@ class TestThePromoLegStaysOnItsOwnBook:
         offer = _offer(source="bet365", offer_id="b1")
         out = _plans([offer], quotes)
         plan = out["plans"]["bet365|b1"]
-        assert plan["plans"], plan
-        assert plan["plans"][0]["legs"][0]["source"] == "an_bet365"
-        assert any("Action Network" in c for c in plan["caveats"])
+        assert plan["strategy"] == "no_odds_coverage"
+        assert plan["plans"] == []
 
     def test_a_book_with_no_feed_falls_back_to_text(self):
         out = _plans([_offer(source="betmgm_on", offer_id="on1")],
@@ -624,8 +621,8 @@ class TestAgreementWithTheArbDetector:
 # ── round 1 adversarial findings ─────────────────────────────────────────────
 
 
-class TestBothFeedsOfOneFailoverPairCannotBeStitched:
-    """A position may not quote both a book's first-party and AN feed.
+class TestRepublishedFeedCannotBeStitchedIntoAPromoPlan:
+    """A position may not quote a republisher as an executable hedge.
 
     The two are one book seen twice: they can only differ by one being stale,
     so no operator can place both prices.  Before the fix the gate was
@@ -676,14 +673,14 @@ class TestBothFeedsOfOneFailoverPairCannotBeStitched:
                 "stitched both feeds of one book into one position"
             )
 
-    def test_the_refusal_is_counted(self):
+    def test_the_diagnostic_feed_is_not_counted_as_an_executable_refusal(self):
         offer = _offer(source="fanduel", offer_id="fd-1")
         out = build_promo_plans(
             [offer], self._slate(), as_of=AS_OF, commissions={}, one_counterparty={},
         )
-        assert out["plans"]["fanduel|fd-1"]["skipped"].get("both_failover_feeds", 0) > 0
+        assert out["plans"]["fanduel|fd-1"]["skipped"].get("both_failover_feeds", 0) == 0
 
-    def test_the_surviving_plan_uses_one_feed_and_is_executable(self):
+    def test_the_surviving_plan_uses_only_the_first_party_feed(self):
         offer = _offer(source="fanduel", offer_id="fd-1")
         out = build_promo_plans(
             [offer], self._slate(), as_of=AS_OF, commissions={}, one_counterparty={},
@@ -691,11 +688,8 @@ class TestBothFeedsOfOneFailoverPairCannotBeStitched:
         best = out["plans"]["fanduel|fd-1"]["plans"][0]
         hedges = {leg["source"] for leg in best["legs"] if leg["role"] == "hedge"}
         assert len(hedges) == 1, hedges
-        # an_betmgm's pair (1.88 / 3.75) is the better single feed: $100 credit
-        # on the 4.4 draw returns $340 profit, hedged 340/3.75 = $90.67 on away
-        # and 340/1.88 = $180.85 on home, so every settled outcome pays
-        # 340 − 271.52 = $68.48.
-        assert best["guaranteed_cash"] == pytest.approx(68.48, abs=0.01)
+        assert hedges == {"betmgm"}
+        assert best["guaranteed_cash"] == pytest.approx(67.13, abs=0.01)
 
 
 class TestTiedPricesPickTheSameRowWhateverTheOrder:
@@ -1478,12 +1472,8 @@ class TestAHedgeAboveTheBooksStatedSizeIsRefused:
         assert plan["plans"], plan["skipped"]
 
 
-class TestDropCountsSpanBothFeedsOfABrand:
-    """Two feeds price overlapping but different slates.
-
-    Maxing the per-feed counters got the shared markets right and under-counted
-    everything only one feed saw — 54 reported against 82 real on live data.
-    """
+class TestDropCountsIgnoreDiagnosticFeeds:
+    """Republished rows remain visible but do not enter executable promo scans."""
 
     def _split_stale(self):
         started = AS_OF - timedelta(hours=1)
@@ -1505,8 +1495,8 @@ class TestDropCountsSpanBothFeedsOfABrand:
             _plans([_offer(source="betmgm")], self._split_stale()),
             key="betmgm|offer-1",
         )
-        # Four distinct stale markets: two at each feed, none shared.
-        assert plan["skipped"].get("already_started") == 4, plan["skipped"]
+        # Only the two first-party BetMGM markets enter the executable scan.
+        assert plan["skipped"].get("already_started") == 2, plan["skipped"]
 
 
 class TestAMixedCauseNeverClaimsEveryOne:

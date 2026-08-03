@@ -13,6 +13,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Callable, Mapping, Sequence
+from uuid import uuid4
 
 from src import settings
 from src.promos import registry
@@ -45,6 +46,12 @@ _EMPTY_CATALOG_SKIPS = frozenset(
 )
 
 
+def offer_confirmed_for_state(offer: PromoOffer, state: str) -> bool:
+    """Eligibility fails closed: silence is not permission for a state run."""
+    target = state.strip().upper()
+    return target in offer.eligible_regions and target not in offer.ineligible_regions
+
+
 @dataclass
 class PromoRunResult:
     run_id: int | None
@@ -53,6 +60,7 @@ class PromoRunResult:
     offers: list[PromoOffer] = field(default_factory=list)
     health: list[PromoSourceHealth] = field(default_factory=list)
     ok: bool = False
+    filtered_unconfirmed: int = 0
 
     def summary_lines(self) -> list[str]:
         ok_brands, total_brands, _ = brand_coverage(self.health)
@@ -76,19 +84,69 @@ class PromoRunResult:
         return lines
 
 
+@dataclass(frozen=True)
+class PromoBatchResult:
+    batch_id: str
+    detected_state: str
+    runs: tuple[tuple[str, PromoRunResult], ...]
+
+    @property
+    def ok(self) -> bool:
+        return bool(self.runs) and all(result.ok for _, result in self.runs)
+
+
+class CachedPromoSource:
+    """Fetch one generic catalog once and replay its bytes for each state."""
+
+    def __init__(self, source: PromoSource) -> None:
+        self._source = source
+        self._raws: list[RawResponse] | None = None
+
+    @property
+    def source_key(self) -> str:
+        return self._source.source_key
+
+    def fetch_raw(self) -> list[RawResponse]:
+        if self._raws is None:
+            self._raws = list(self._source.fetch_raw())
+        return list(self._raws)
+
+    def parse(self, raws: Sequence[RawResponse]) -> PromoParseOutcome:
+        return self._source.parse(raws)
+
+    def close(self) -> None:
+        # Per-state collection closes its inputs; the batch owns this shared
+        # wrapper and closes the underlying client after the last state.
+        pass
+
+    def close_underlying(self) -> None:
+        self._source.close()
+
+
 def build_sources(
     keys: Sequence[str] | None = None,
     *,
     timeout: float | None = None,
+    state: str | None = None,
+    route_scope: str = "all",
 ) -> list[PromoSource]:
-    selected = list(keys) if keys else list(registry.keys())
-    unknown = [key for key in selected if key not in PROMO_FACTORIES]
+    if state is None and route_scope == "all":
+        entries = registry.PROMO_SOURCES
+    elif route_scope == "global":
+        entries = registry.global_promo_sources()
+    elif route_scope == "state" and state is not None:
+        entries = registry.state_promo_sources_for_state(state)
+    else:
+        raise ValueError("state is required for state-scoped promo construction")
+    factories = {entry.key: entry.factory() for entry in entries}
+    selected = [key for key in (keys or factories) if key in factories]
+    unknown = [key for key in (keys or ()) if key not in PROMO_FACTORIES]
     if unknown:
         raise KeyError(f"unknown promo source(s): {unknown}; known: {sorted(PROMO_FACTORIES)}")
     timeout = settings.HTTP_TIMEOUT if timeout is None else timeout
     sources: list[PromoSource] = []
     for key in selected:
-        factory = PROMO_FACTORIES[key]
+        factory = factories[key]
         try:
             sources.append(factory(timeout=timeout))
         except TypeError:
@@ -297,13 +355,21 @@ def collect_promos_once(
     store: bool = True,
     persist_raw: bool = True,
     on_progress: Callable[[Mapping[str, object]], None] | None = None,
+    jurisdiction: str | None = None,
+    batch_id: str | None = None,
+    built_sources: Sequence[PromoSource] | None = None,
 ) -> PromoRunResult:
     started_at = datetime.now(UTC)
-    built = build_sources(sources)
+    run_state = (jurisdiction or settings.STATE).strip().upper()
+    built = list(built_sources) if built_sources is not None else build_sources(sources)
     raw_store = RawStore(settings.PROMO_RAW_DIR) if persist_raw else None
     promo_store = PromoStore(settings.PROMO_DB_PATH) if store else None
     run_id = (
-        promo_store.start_run(jurisdiction=settings.STATE)
+        promo_store.start_run(
+            jurisdiction=run_state,
+            batch_id=batch_id,
+            route_scope="state",
+        )
         if promo_store is not None
         else None
     )
@@ -312,6 +378,7 @@ def collect_promos_once(
     health_rows: list[PromoSourceHealth] = []
     finished_at = started_at
     ok = False
+    filtered_unconfirmed = 0
     total = len(built)
 
     def _progress(payload: dict[str, object]) -> None:
@@ -396,6 +463,9 @@ def collect_promos_once(
         offers = enrich_offers(offers)
         offers = prefer_primary_offers(offers)
         offers = apply_usage_guidance(offers)
+        confirmed = [offer for offer in offers if offer_confirmed_for_state(offer, run_state)]
+        filtered_unconfirmed = len(offers) - len(confirmed)
+        offers = confirmed
         health_rows = _reassess_health_after_enrich(health_rows, offers)
         ok_brands, total_brands, _ = brand_coverage(health_rows)
         # Run health folds TheLines secondaries into brand coverage so a dead
@@ -407,7 +477,16 @@ def collect_promos_once(
         finished_at = datetime.now(UTC)
         if promo_store is not None and run_id is not None:
             try:
-                promo_store.finish_run(run_id, ok=ok, offers=offers, health=health_rows)
+                promo_store.finish_run(
+                    run_id,
+                    ok=ok,
+                    offers=offers,
+                    health=health_rows,
+                    notes=(
+                        f"{filtered_unconfirmed} offer(s) filtered because eligibility "
+                        f"for {run_state} was not affirmatively confirmed"
+                    ),
+                )
             except Exception:  # noqa: BLE001
                 log.exception("failed to persist promo run %s", run_id)
                 ok = False
@@ -422,26 +501,78 @@ def collect_promos_once(
         offers=offers,
         health=health_rows,
         ok=ok,
+        filtered_unconfirmed=filtered_unconfirmed,
+    )
+
+
+def collect_promos_batch_once(
+    states: Sequence[str],
+    *,
+    detected_state: str,
+    sources: Sequence[str] | None = None,
+    store: bool = True,
+    persist_raw: bool = True,
+    on_progress: Callable[[Mapping[str, object]], None] | None = None,
+) -> PromoBatchResult:
+    batch_id = uuid4().hex
+    globals_built = build_sources(sources, route_scope="global")
+    cached = [CachedPromoSource(source) for source in globals_built]
+    runs: list[tuple[str, PromoRunResult]] = []
+    try:
+        for state in states:
+            state_sources = build_sources(sources, state=state, route_scope="state")
+            result = collect_promos_once(
+                store=store,
+                persist_raw=persist_raw,
+                on_progress=on_progress,
+                jurisdiction=state,
+                batch_id=batch_id,
+                built_sources=[*state_sources, *cached],
+            )
+            runs.append((state, result))
+    finally:
+        for source in cached:
+            source.close_underlying()
+    return PromoBatchResult(
+        batch_id=batch_id,
+        detected_state=detected_state,
+        runs=tuple(runs),
     )
 
 
 def _cmd_collect(args: argparse.Namespace) -> int:
-    result = collect_promos_once(
+    from src.state_selection import StateSelectionError, detect_and_select
+
+    try:
+        selection = detect_and_select(args.state)
+    except StateSelectionError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    print(
+        f"auto-state: detected {selection.detected.state} via {selection.provider}; "
+        f"batch states: {', '.join(selection.states)}"
+    )
+    batch = collect_promos_batch_once(
+        selection.states,
+        detected_state=selection.detected.state,
         sources=args.source,
         store=not args.no_store,
         persist_raw=not args.no_raw,
     )
-    for line in result.summary_lines():
-        print(line)
-    if args.verbose:
-        for offer in result.offers:
-            end = offer.ends_at.isoformat() if offer.ends_at else "-"
-            label = offer.summary or offer.title
-            print(
-                f"  [{offer.source}] {offer.kind.value:14} {label[:70]}"
-                f"  ends={end} specific={offer.is_specific}"
-            )
-    return 0 if result.ok else 1
+    for state, result in batch.runs:
+        print(f"\n--- {state} promo run ---")
+        for line in result.summary_lines():
+            print(line)
+        print(f"  filtered unconfirmed for {state}: {result.filtered_unconfirmed}")
+        if args.verbose:
+            for offer in result.offers:
+                end = offer.ends_at.isoformat() if offer.ends_at else "-"
+                label = offer.summary or offer.title
+                print(
+                    f"  [{offer.source}] {offer.kind.value:14} {label[:70]}"
+                    f"  ends={end} specific={offer.is_specific}"
+                )
+    return 0 if batch.ok else 1
 
 
 def _cmd_show(args: argparse.Namespace) -> int:
@@ -515,9 +646,15 @@ def _cmd_plan(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return 1
-        odds_run = odds_store.latest_run_id()
+        promo_row = promo_store.run_row(promo_run)
+        promo_state = str((promo_row or {}).get("jurisdiction") or "").upper()
+        odds_run = odds_store.latest_run_id(
+            jurisdiction=promo_state or None,
+        )
         if odds_run is None:
-            print("no odds runs stored yet — run `python -m src.collector collect` first",
+            print(
+                f"no {promo_state or 'matching'} odds run is stored — run "
+                "`python -m src.collector collect` first",
                   file=sys.stderr)
             return 1
         offers = promo_store.offers_for_run(promo_run)
@@ -662,6 +799,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="append",
         choices=sorted(PROMO_FACTORIES),
         help="repeatable; default is every registered promo source",
+    )
+    collect.add_argument(
+        "--state",
+        action="append",
+        type=lambda value: value.strip().upper(),
+        choices=["IL", "PA", "NJ", "DC"],
+        help="additional state; repeatable (detected state is always included)",
     )
     collect.add_argument("--no-store", action="store_true")
     collect.add_argument("--no-raw", action="store_true")

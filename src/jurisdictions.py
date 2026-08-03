@@ -1,4 +1,4 @@
-"""Typed routing for the one US retail jurisdiction active in a run.
+"""Typed routing for US retail jurisdictions selected in a collection batch.
 
 Retail sportsbooks expose the same product through state-specific public hosts,
 tenant ids, and request parameters.  Those values belong here rather than in
@@ -6,9 +6,8 @@ the registry or report so collection, promotions, diagnostics, and presentation
 all describe the same jurisdiction.
 
 Routes marked ``template`` are structurally known but still need a successful
-probe from that state's egress.  ``legacy`` routes intentionally preserve an
-older working route until the active-state replacement is verified.  They are
-reported as warnings; they are never presented as active-state proof.
+probe from that state's egress. Unavailable routes keep the source registered
+without inventing an endpoint for a state where the book is not licensed.
 """
 from __future__ import annotations
 
@@ -22,7 +21,6 @@ from urllib.parse import urlsplit
 class RouteStatus(StrEnum):
     VALIDATED = "validated"
     TEMPLATE = "template"
-    LEGACY = "legacy"
     UNAVAILABLE = "unavailable"
 
 
@@ -46,16 +44,13 @@ class RetailRoute:
             return f"{self.source_key}: {self.routed_state} route is template-only"
         if self.status is RouteStatus.UNAVAILABLE:
             return f"{self.source_key}: no licensed route is available in {self.routed_state}"
-        return (
-            f"{self.source_key}: using legacy {self.routed_state} routing"
-            + (f" ({self.detail})" if self.detail else "")
-        )
+        raise AssertionError(f"unhandled route status: {self.status}")
 
 
 @dataclass(frozen=True)
 class PromoRoute:
     fanduel_region: str
-    betrivers_url: str
+    betrivers_url: str | None
     betrivers_label: str
 
 
@@ -136,28 +131,26 @@ IL = Jurisdiction(
             RouteStatus.VALIDATED,
             "IL",
         ),
-        # Kept exactly as the pre-jurisdiction implementation behaved.  These
-        # warnings stay visible until an IL response parses into usable quotes.
         "caesars": _route(
             "caesars",
             "https://api.americanwagering.com",
             {
                 "base_url": (
-                    "https://api.americanwagering.com/regions/us/locations/nj/"
+                    "https://api.americanwagering.com/regions/us/locations/il/"
                     "brands/czr/sb/v3"
                 )
             },
-            RouteStatus.LEGACY,
-            "NJ",
-            "Illinois replacement has not passed the parser",
+            RouteStatus.TEMPLATE,
+            "IL",
+            "exact Illinois route still requires matching-egress validation",
         ),
         "hardrock": _route(
             "hardrock",
             "https://api.hardrocksportsbook.com",
-            {"segment": "nj"},
-            RouteStatus.LEGACY,
-            "NJ",
-            "Illinois replacement has not passed the parser",
+            {"segment": "il"},
+            RouteStatus.TEMPLATE,
+            "IL",
+            "exact Illinois route still requires matching-egress validation",
         ),
     },
     promos=PromoRoute(
@@ -257,7 +250,156 @@ PA = Jurisdiction(
 )
 
 
-JURISDICTIONS: Mapping[str, Jurisdiction] = MappingProxyType({"IL": IL, "PA": PA})
+NJ = Jurisdiction(
+    state="NJ",
+    label="New Jersey",
+    live_validated=False,
+    routes={
+        "fanduel": _route(
+            "fanduel",
+            "https://sbapi.nj.sportsbook.fanduel.com",
+            {"state": "nj"},
+            RouteStatus.TEMPLATE,
+            "NJ",
+        ),
+        "betrivers_kambi": _route(
+            "betrivers_kambi",
+            "https://eu-offering-api.kambicdn.com",
+            {"operator": "rsiusnj", "market": "US-NJ", "lang": "en_US"},
+            RouteStatus.TEMPLATE,
+            "NJ",
+        ),
+        "betmgm": _route(
+            "betmgm",
+            "https://sports.nj.betmgm.com",
+            {
+                "base_url": "https://sports.nj.betmgm.com",
+                "subdivision": "US-New Jersey",
+                "access_id": _MGM_ACCESS_ID,
+            },
+            RouteStatus.TEMPLATE,
+            "NJ",
+        ),
+        "draftkings": _route(
+            "draftkings",
+            "https://sportsbook-nash.draftkings.com",
+            {
+                "base_url": "https://sportsbook-nash.draftkings.com/sites/US-NJ-SB/api/v5",
+                "content_base_url": (
+                    "https://sportsbook-nash.draftkings.com/sites/US-NJ-SB/api/"
+                    "sportscontent/controldata/league/leagueSubcategory/v1"
+                ),
+            },
+            RouteStatus.TEMPLATE,
+            "NJ",
+        ),
+        "caesars": _route(
+            "caesars",
+            "https://api.americanwagering.com",
+            {
+                "base_url": (
+                    "https://api.americanwagering.com/regions/us/locations/nj/"
+                    "brands/czr/sb/v3"
+                )
+            },
+            RouteStatus.TEMPLATE,
+            "NJ",
+        ),
+        "hardrock": _route(
+            "hardrock",
+            "https://api.hardrocksportsbook.com",
+            {"segment": "nj"},
+            RouteStatus.TEMPLATE,
+            "NJ",
+        ),
+    },
+    promos=PromoRoute(
+        fanduel_region="NJ",
+        betrivers_url="https://nj.betrivers.com/",
+        betrivers_label="BetRivers NJ",
+    ),
+)
+
+
+DC = Jurisdiction(
+    state="DC",
+    label="District of Columbia",
+    live_validated=False,
+    routes={
+        "fanduel": _route(
+            "fanduel",
+            "https://sbapi.dc.sportsbook.fanduel.com",
+            {"state": "dc"},
+            RouteStatus.TEMPLATE,
+            "DC",
+        ),
+        "betrivers_kambi": RetailRoute(
+            source_key="betrivers_kambi",
+            host="eu-offering-api.kambicdn.com",
+            config={},
+            status=RouteStatus.UNAVAILABLE,
+            routed_state="DC",
+            detail="BetRivers is not a District of Columbia online sportsbook",
+        ),
+        "betmgm": _route(
+            "betmgm",
+            "https://sports.dc.betmgm.com",
+            {
+                "base_url": "https://sports.dc.betmgm.com",
+                "subdivision": "US-District of Columbia",
+                "access_id": _MGM_ACCESS_ID,
+            },
+            RouteStatus.TEMPLATE,
+            "DC",
+        ),
+        "draftkings": _route(
+            "draftkings",
+            "https://sportsbook-nash.draftkings.com",
+            {
+                "base_url": "https://sportsbook-nash.draftkings.com/sites/US-DC-SB/api/v5",
+                "content_base_url": (
+                    "https://sportsbook-nash.draftkings.com/sites/US-DC-SB/api/"
+                    "sportscontent/controldata/league/leagueSubcategory/v1"
+                ),
+            },
+            RouteStatus.TEMPLATE,
+            "DC",
+        ),
+        "caesars": _route(
+            "caesars",
+            "https://api.americanwagering.com",
+            {
+                "base_url": (
+                    "https://api.americanwagering.com/regions/us/locations/dc/"
+                    "brands/czr/sb/v3"
+                )
+            },
+            RouteStatus.TEMPLATE,
+            "DC",
+        ),
+        "hardrock": RetailRoute(
+            source_key="hardrock",
+            host="api.hardrocksportsbook.com",
+            config={},
+            status=RouteStatus.UNAVAILABLE,
+            routed_state="DC",
+            detail="Hard Rock is not a District of Columbia online sportsbook",
+        ),
+    },
+    promos=PromoRoute(
+        fanduel_region="DC",
+        betrivers_url=None,
+        betrivers_label="BetRivers unavailable in DC",
+    ),
+    view_only_sources=frozenset(
+        {"betrivers_kambi", "hardrock", "vi_hardrock", "an_hardrock"}
+    ),
+)
+
+
+JURISDICTIONS: Mapping[str, Jurisdiction] = MappingProxyType(
+    {"IL": IL, "PA": PA, "NJ": NJ, "DC": DC}
+)
 
 
 def normalize_state(value: str) -> str:
@@ -272,11 +414,6 @@ def jurisdiction(state: str) -> Jurisdiction:
         raise KeyError(
             f"unknown jurisdiction {state!r}; configured: {', '.join(JURISDICTIONS)}"
         ) from None
-
-
-def source_config(state: str, source_key: str) -> dict[str, Any]:
-    route = jurisdiction(state).routes.get(source_key)
-    return dict(route.config) if route is not None else {}
 
 
 def source_host(state: str, source_key: str) -> str | None:
@@ -295,7 +432,9 @@ def route_warnings(state: str) -> tuple[str, ...]:
 
 __all__ = [
     "IL",
+    "DC",
     "JURISDICTIONS",
+    "NJ",
     "PA",
     "Jurisdiction",
     "PromoRoute",
@@ -304,6 +443,5 @@ __all__ = [
     "jurisdiction",
     "normalize_state",
     "route_warnings",
-    "source_config",
     "source_host",
 ]

@@ -12,7 +12,7 @@ Use this map before exploring. Search for the relevant symbol and its tests, the
 | `src/validation.py` | Cross-row correctness | Findings, thresholds, completeness and plausibility checks |
 | `src/arb.py` | Opportunity calculation | Grouping, stakes, pushes, liquidity, rejection reasons |
 | `src/store.py`, `src/raw_store.py` | Persistence | SQLite schema/migrations and raw replay envelopes |
-| `src/jurisdictions.py` | Retail jurisdiction map | IL/PA routes, status, promo region and landing |
+| `src/jurisdictions.py`, `src/state_selection.py` | Retail routing and batch selection | IL/PA/NJ/DC routes, status, detection, selection |
 | `src/egress.py`, `src/probe_cache.py` | Jurisdiction diagnostics | Hashed egress record and TTL/status cache |
 | `src/promos/` | Promotions subsystem | Promo adapters, enrichment, deduplication, storage, planning |
 | `src/report.py`, `src/report_assets.py` | Dashboard | Report payload/server and handwritten CSS/HTML/JavaScript |
@@ -48,7 +48,7 @@ Search these files by section or symbol before reading ranges:
 - Arbitrage behavior: `src/arb.py`, commission, settlement, distinctness, or redundancy modules; add focused mathematical and adversarial tests.
 - Promo source or offer logic: remain under `src/promos/`; do not add promo tables to the odds store.
 - Dashboard data and server behavior: `src/report.py`; visual/interaction assets: `src/report_assets.py`; validate through `tests/test_report.py`.
-- Retail state routing: `src/jurisdictions.py`, state-aware registry builders, persisted run jurisdiction, and focused jurisdiction/probe tests.
+- Retail state routing: `src/jurisdictions.py`, `src/state_selection.py`, scoped registry builders, batch/run persistence, and focused jurisdiction/probe tests.
 
 ## Validation shortcuts
 

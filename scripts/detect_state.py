@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Detect and record the current public egress jurisdiction.
 
-The collector can invoke the same detector when ``--auto-state`` is requested.
-The persisted record contains only a two-letter state, a timestamp, and SHA-256
-of the public IP.
+Every live odds and promo scrape invokes the same detector automatically.  This
+command is the explicit preflight used before jurisdiction probes.  The
+persisted record contains only a two-letter state, a timestamp, and SHA-256 of
+the public IP.
 """
 from __future__ import annotations
 

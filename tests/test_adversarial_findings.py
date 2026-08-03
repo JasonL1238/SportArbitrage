@@ -3169,6 +3169,8 @@ class TestAnExistingDatabaseSurvivesAnAddedColumn:
             ("collection_run", "migrated_from"),
             ("collection_run", "counterparty_groups"),
             ("collection_run", "jurisdiction"),
+            ("collection_run", "batch_id"),
+            ("collection_run", "route_scope"),
         }
         registered = {(table, column) for table, column, _ in _Store._ADDED_COLUMNS}
         assert registered == expected, (
@@ -9477,7 +9479,7 @@ class TestOperatorFacingSentencesAreTrueOnANewBook:
         text = pathlib.Path("src/collector.py").read_text()
         # anchored as a code line — the explanatory comment quotes the old text
         assert "\n            exit_code = 0 if result.ok else 1\n" not in text
-        index = text.index("if not result.ok:\n                exit_code = 1")
+        index = text.index("if not batch.ok:\n                exit_code = 1")
         assert "result.print_summary()" in text[max(0, index - 800): index]
 
 
@@ -11252,11 +11254,20 @@ class TestTheDefaultSubcommandAndTheReportEntryPointAreExecuted:
         summary — is executed rather than merely imported."""
         import src.collector
         import src.settings
+        import src.state_selection
+        from src.egress import detection_from_payload
+        from src.state_selection import StateSelection
         from src.sources.base import ParseOutcome, SourceHealth
 
         monkeypatch.setattr(src.settings, "DATA_DIR", tmp_path)
         monkeypatch.setattr(src.settings, "RAW_DIR", tmp_path / "raw")
         monkeypatch.setattr(src.settings, "DB_PATH", tmp_path / "db.sqlite3")
+        detected = detection_from_payload({"ip": "203.0.113.55", "region_code": "IL"})
+        monkeypatch.setattr(
+            src.state_selection,
+            "detect_and_select",
+            lambda states: StateSelection(detected, ("IL",), "test"),
+        )
 
         rows = [
             make_quote(source="pinnacle", selection=Selection.HOME,

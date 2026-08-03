@@ -11,6 +11,16 @@ python scripts/detect_state.py
 python scripts/probe_sources.py --state IL
 ```
 
+## Multi-state routing update — 2026-08-03
+
+Live collection now supports IL, PA, NJ, and DC batches. The detected current
+state is always included; additional states are explicit. Caesars and Hard Rock
+NJ values now live only in the NJ route map. Illinois uses only
+`locations/il`/`segment=il`; failed exact-state requests remain failed and never
+fall back to NJ. NJ/DC/PA route records are templates pending matching-egress
+parser-clean probes. Republished Action Network, VegasInsider, and VSiN rows are
+global diagnostic observations and cannot form arbitrage legs.
+
 ## Pennsylvania routing status — 2026-08-03
 
 Pennsylvania is configured but not yet live-validated. The active-state map

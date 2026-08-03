@@ -1,16 +1,13 @@
 # Multi-state adaptation runbook
 
-The collector has one jurisdiction-aware process for **IL** and **PA**. Illinois
-is the live baseline; Pennsylvania is a routed template until the registered
-adapters pass from a detected PA egress. This document is the operating runbook
-and extension checklist; do not invent a second state-specific process.
+The collector supports batches for **IL**, **PA**, **NJ**, and **DC**. Illinois
+is the live baseline; other exact-state routes remain templates until their
+registered adapters pass from matching detected egresses.
 
 ## Goals
 
-1. **Select** the intended state with `ODDS_STATE` (default `IL`) or use the
-   live collector's `--auto-state` launcher.
-2. **Detect** the effective egress manually with `scripts/detect_state.py`, or
-   let that launcher perform the same check before collection.
+1. **Detect** the effective egress automatically at every live scrape start.
+2. **Select** optional additional states with repeatable `--state` flags or the dashboard.
 3. **Probe** every registered retail book against that state.
 4. **Adapt** host / operator / segment / promo URLs so stakeable books answer.
 5. **Keep** every previously validated state in the map — never delete IL (or PA,
@@ -30,30 +27,28 @@ BetMGM, DraftKings, Caesars, Hard Rock, and their promo landings.
   add `betrivers_pa` beside `betrivers_kambi` unless `src/distinctness.py`
   proves they disagree. See [`SOURCE_FEASIBILITY.md`](SOURCE_FEASIBILITY.md).
 - **Do not remove a working state template** when adding another.
-- **One primary stakeable state per run** for retail books that are
-  licence-bound. Extra validated states stay in the registry for travel /
-  proxy / future moves; they are not all scraped in parallel unless each has
-  its own exit IP.
+- **One state per child run.** Each route must be tagged for that exact state;
+  a failure is never replaced by another state's route.
+- Direct global venues remain actionable and are fetched once per batch.
+  Republished global observations remain diagnostic-only.
 - A geo wall is a transport problem (`ODDS_HTTP_PROXY`), not a reason to delete
   an adapter.
 
 ## Implemented baseline
 
-`src/jurisdictions.py` owns the typed routes. `ODDS_STATE` is normalized to
-uppercase, defaults to `IL`, and refuses unknown states through the ordinary
-bad-settings path. The odds and promo registries retain stable keys while
-binding active-state constructor values. Every odds and promo run persists the
-selected jurisdiction.
+`src/jurisdictions.py` owns typed routes and `src/state_selection.py` owns
+detection/selection. Registries retain stable source keys. Every odds and promo
+run persists jurisdiction, batch id, and route scope.
 
-| Venue | IL | PA |
-|---|---|
-| FanDuel | validated `il` | template `pa` |
-| BetRivers | validated `rsiusil` / `US-IL` | template `rsiuspa` / `US-PA` |
-| BetMGM | validated IL host/subdivision | template PA host/subdivision |
-| DraftKings | validated `US-IL-SB` | template `US-PA-SB` |
-| Caesars | legacy NJ route, warned | template `locations/pa` |
-| Hard Rock | legacy NJ route, warned | unavailable; no PA route is invented |
-| Promos (FD / BR) | one IL region/landing | one PA region/landing |
+| Venue | IL | PA | NJ | DC |
+|---|---|---|---|---|
+| FanDuel | validated | template | template | template |
+| BetRivers | validated | template | template | unavailable |
+| BetMGM | validated | template | template | template |
+| DraftKings | validated | template | template | template |
+| Caesars | exact-state template | template | template | template |
+| Hard Rock | exact-state template | unavailable | template | unavailable |
+| Promos (FD / BR) | IL / IL | PA / PA | NJ / NJ | DC / unavailable |
 
 State-agnostic feeds remain unchanged. Pennsylvania's Hard Rock absence is an
 availability fact, not a reason to unregister the adapter or secondary feeds.
@@ -78,7 +73,7 @@ STATE → {
 }
 ```
 
-- Seed with **IL** (and **NJ** for Caesars/Hard Rock if that is what answers).
+- Seed with **IL** and keep any known NJ routes under NJ only.
 - When PA / MD / … is validated, **append** rows; never overwrite IL out of
   existence.
 - Unknown state → fail loudly with “add template + run probe,” do not guess
@@ -90,25 +85,23 @@ Settings and operational records:
 
 | Knob | Role |
 |---|---|
-| `ODDS_STATE` | Explicit primary state (`IL` or `PA`); default `IL`. |
+| `ODDS_STATE` | Compatibility/probe state; explicit values join a collection batch. |
 | `ODDS_EGRESS_STATE_PATH` | Privacy-reduced detection record under `data/` by default. |
 | `ODDS_PROBE_CACHE_PATH` | Separate SQLite live-probe cache. |
 | `ODDS_PROBE_TTL_DAYS` | Fresh-`ok` TTL; default 60 days. |
 
 Detection answers “where are we *effectively*?” — physical presence or proxy
-exit. Ordinary collection remains deterministic from `ODDS_STATE`; passing
-`--auto-state` opts into a fresh lookup and relaunches the collector with the
-detected IL/PA state. `ipapi.co` is tried first and `ipwho.is` is the fallback.
+exit. Every live scrape performs one lookup. `ipapi.co` is tried first and
+`ipwho.is` is the fallback.
 The public exit IP is necessarily disclosed to the provider but is reduced to a
 SHA-256 fingerprint before local persistence.
 
 ```bash
-python -m src.collector collect --auto-state --tier core
+python -m src.collector collect --tier core --state PA --state NJ
 ```
 
-The launcher accepts only configured IL/PA results and fails closed on lookup
-failure or any other state. It does not change states inside a running watch
-loop and it does not run for replay, report, or read-only commands.
+Collection accepts only IL/PA/NJ/DC and fails closed otherwise. Watch mode
+detects once at startup. Replay, report, and read-only commands never detect.
 
 ### 3. Validation cache (skip if already proven)
 
@@ -135,7 +128,7 @@ egress fingerprint, the cache short-circuits the expensive live pass.
 
 - Constructors take jurisdiction fields from the map / registry `config`, not
   module-level `DEFAULT_STATE = "il"` alone.
-- Registry builds one stakeable retail config for `ODDS_STATE`.
+- Registry builds one exact-state retail config for every selected batch state.
 - Promos use the same map (`x-sportsbook-region`, `.il.` / `.pa.` landings).
 - Optional later: `ODDS_HTTP_PROXY_IL`, `ODDS_HTTP_PROXY_PA` if one process must
   hit two exits. Until then, one global proxy + one primary state is enough.
@@ -204,7 +197,7 @@ For each failing **retail** source:
 ### Step 4 — Collector smoke
 
 ```bash
-python -m src.collector --tier core   # or the project’s usual smoke entry
+python -m src.collector collect --tier core
 ```
 
 Confirm retail books produce rows, redundancy/distinctness still sane, and
@@ -212,8 +205,9 @@ reports do not hardcode `.il.` when primary is PA.
 
 ### Step 5 — Mark validated
 
-Cache write is automatic on probe success. Optionally stamp
-`ODDS_STATES=IL,PA` so tooling knows both are first-class.
+Cache write is automatic on probe success. Promote a route from `template` to
+`validated` in `src/jurisdictions.py` only after its real adapter returns
+parser-clean quotes through matching egress.
 
 Returning later to IL with the same egress fingerprint: Step 2 should report
 cache hits and exit without a full live re-sweep.
@@ -233,16 +227,16 @@ Use this when Step 2 fails for a venue.
 | Caesars | `locations/{st}` | Same |
 | Hard Rock | Add a segment only when licensed in that state | PA is explicitly unavailable; never invent `segment=pa` |
 | Bovada / Cloudbet / 1xBet / Pinnacle / exchanges / Kalshi / Polymarket | Usually none | Treat as state-agnostic once ok |
-| Action Network failovers | None | Not a jurisdiction substitute; watch parser mismatch |
+| Action Network / VegasInsider / VSiN observations | None | Diagnostic only; not a jurisdiction substitute or executable leg |
 
 ---
 
 ## Delivery status
 
-- Implemented: typed IL/PA map, validated `ODDS_STATE`, active-state odds and
-  promo registries, run-state persistence, report hosts/warnings, provider-
-  fallback detection, fail-closed `--auto-state` collection relaunch, cache
-  TTL/force behavior, and template-only probes.
+- Implemented: typed IL/PA/NJ/DC map, detected multi-state batches, exact-state
+  odds/promo registries, global-fetch reuse, strict promo eligibility, batch/run
+  persistence, state-matched promo planning, cache TTL/force behavior, and
+  template-only probes.
 - Still required: a legitimate PA egress run producing parser-clean quotes
   before PA route statuses are promoted from `template` to `validated`.
 - Existing independent blocker: three retained Action Network source keys need

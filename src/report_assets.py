@@ -146,6 +146,9 @@ select, input[type="search"], input[type="text"] {
   font: 400 12px/1.4 var(--sans);
 }
 .rail-foot { margin-top: auto; font: 400 11px/1.45 var(--mono); color: var(--muted); }
+.state-picks { display: grid; grid-template-columns: repeat(2, 1fr); gap: 3px 8px; }
+.state-picks label { font: 500 11px/1.3 var(--mono); color: var(--ink-2); }
+.state-picks input { margin: 0 4px 0 0; vertical-align: -1px; }
 .sr-only {
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
   overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
@@ -724,6 +727,13 @@ BODY = """
         <option value="sport:baseball">All baseball</option>
         <option value="all">Everything (slower)</option>
       </select>
+      <span class="eyebrow">States (current is always included)</span>
+      <div class="state-picks" id="scrape-states">
+        <label><input type="checkbox" value="IL">IL</label>
+        <label><input type="checkbox" value="PA">PA</label>
+        <label><input type="checkbox" value="NJ">NJ</label>
+        <label><input type="checkbox" value="DC">DC</label>
+      </div>
       <button type="button" id="scrape-btn" class="scrape-btn">Scrape now</button>
       <div class="scrape-progress" id="scrape-progress" aria-live="polite">
         <div class="scrape-bar" aria-hidden="true"><i id="scrape-bar-fill"></i></div>
@@ -1426,16 +1436,23 @@ const str = (i) => (i === null || i === undefined || i < 0 ? null : S[i]);
 // moment there were ten: the other seven rendered as raw slugs in every table on
 // the page, and nothing failed.
 const SOURCE_INFO = new Map((DATA.sources || []).map((s) => [s.key, s]));
-const book = (key) => (SOURCE_INFO.get(key) || {}).label || key;
+const SOURCE_INFO_BY_STATE = new Map(Object.entries(DATA.sources_by_jurisdiction || {})
+  .map(([state, entries]) => [state, new Map((entries || []).map((s) => [s.key, s]))]));
+function sourceInfo(key) {
+  const run = typeof runById !== 'undefined' ? runById.get(currentRunId) : null;
+  const scoped = run && SOURCE_INFO_BY_STATE.get(run.jurisdiction || '');
+  return (scoped && scoped.get(key)) || SOURCE_INFO.get(key) || {};
+}
+const book = (key) => sourceInfo(key).label || key;
 
 // What kind of counterparty each venue is.  Not decoration: it decides whether the
 // quoted price is the price you are paid, whether there is a real amount behind it,
 // and what happens to the stake if the game is called off.
-const venueKind = (key) => (SOURCE_INFO.get(key) || {}).kind || 'sportsbook';
-const commissionOf = (key) => (SOURCE_INFO.get(key) || {}).commission || '';
+const venueKind = (key) => sourceInfo(key).kind || 'sportsbook';
+const commissionOf = (key) => sourceInfo(key).commission || '';
 const charges = (key) => Boolean(commissionOf(key));
 /** Consensus / opening columns shown for context — never "best" and never arb. */
-const isViewOnly = (key) => Boolean((SOURCE_INFO.get(key) || {}).view_only);
+const isViewOnly = (key) => Boolean(sourceInfo(key).view_only);
 
 /*  The price after the venue's cut — what you are actually paid.
  *
@@ -1920,7 +1937,7 @@ function buildRunPicker() {
         aria-selected="${r.id === currentRunId ? 'true' : 'false'}">
         <b>${i === 0 ? 'Latest · ' : ''}${fmtTime(r.started_at)}</b>
         <span class="when">${fmtClock(r.started_at)} · ${ago(r.started_at)}</span>
-        <span class="bits">${escapeHtml(r.jurisdiction || 'legacy')} · ${prices} · ${games} · took ${secs}${flag}${kept}</span>
+        <span class="bits">${escapeHtml(r.jurisdiction || 'legacy')} · ${escapeHtml(r.route_scope || 'legacy')} · ${prices} · ${games} · took ${secs}${flag}${kept}</span>
       </button>`;
     }).join('');
     list.querySelectorAll('[data-run-id]').forEach((node) => {
@@ -3973,7 +3990,7 @@ function renderBet(key) {
 
 function renderBook(key) {
   const run = runById.get(currentRunId);
-  const note = DATA.sources.find((s) => s.key === key);
+  const note = sourceInfo(key);
   const health = (run.sources || []).find((h) => h.key === key);
 
   if (!note && !health) {
@@ -3998,7 +4015,18 @@ function renderBook(key) {
   el('book-host').textContent = (note && note.host) || '';
   const refusedNow = health ? scopesFailedOf(health) : 0;
   const truncatedNow = health ? (health.scopes_truncated || []).length : 0;
-  el('book-state').innerHTML = health
+  const routeBadges = [
+    note && note.route_scope === 'global'
+      ? '<span class="pill flat">GLOBAL</span>'
+      : '',
+    note && note.diagnostic_only
+      ? '<span class="pill warn">diagnostic only</span>'
+      : '',
+    note && note.route_status
+      ? `<span class="pill ${note.route_status === 'validated' ? 'ok' : 'warn'}">${escapeHtml(note.route_status)}</span>`
+      : '',
+  ].filter(Boolean).join(' ');
+  el('book-state').innerHTML = (health
     ? (!health.ok
         ? `<span class="pill bad"><i></i>${escapeHtml(label(health.error_kind) || 'failed')}</span>`
         : refusedNow
@@ -4008,7 +4036,8 @@ function renderBook(key) {
             ? `<span class="pill warn"><i></i>cut short on ${truncatedNow} scope${
                 truncatedNow === 1 ? '' : 's'}</span>`
             : '<span class="pill ok"><i></i>responded normally</span>')
-    : '<span class="pill flat">nothing recorded for this collection</span>';
+    : '<span class="pill flat">nothing recorded for this collection</span>')
+    + (routeBadges ? ' ' + routeBadges : '');
 
   const mine = currentRows().filter((r) => str(r[COL.source]) === key);
   const stats = health ? [
@@ -4798,11 +4827,29 @@ el('sport-pick').addEventListener('change', () => {
 
 function scrapeScopePayload() {
   const value = el('scrape-scope').value || 'league:MLB';
-  if (value === 'all') return { tier: 'core' };
-  if (value.startsWith('sport:')) return { tier: 'core', sport: value.slice(6) };
-  if (value.startsWith('league:')) return { tier: 'core', league: value.slice(7) };
-  return { tier: 'core', league: 'MLB' };
+  const states = selectedScrapeStates();
+  if (value === 'all') return { tier: 'core', states };
+  if (value.startsWith('sport:')) return { tier: 'core', sport: value.slice(6), states };
+  if (value.startsWith('league:')) return { tier: 'core', league: value.slice(7), states };
+  return { tier: 'core', league: 'MLB', states };
 }
+
+function selectedScrapeStates() {
+  return Array.from(document.querySelectorAll('#scrape-states input:checked'))
+    .map((node) => node.value);
+}
+
+function lockDetectedScrapeState(state) {
+  if (!state) return;
+  const input = Array.from(document.querySelectorAll('#scrape-states input'))
+    .find((node) => node.value === state);
+  if (input) {
+    input.checked = true;
+    input.disabled = true;
+    input.closest('label').title = 'Detected current state; always included';
+  }
+}
+lockDetectedScrapeState(DATA.meta.detected_state);
 
 function paintScrapeProgress(progress, busy) {
   const box = el('scrape-progress');
@@ -5045,7 +5092,7 @@ function wirePromoScrapeButton() {
       const res = await fetch('/api/promos/collect', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
+        body: JSON.stringify({ states: selectedScrapeStates() }),
       });
       const body = await res.json().catch(() => ({}));
       stopPoll();

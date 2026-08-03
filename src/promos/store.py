@@ -31,7 +31,9 @@ CREATE TABLE IF NOT EXISTS promo_runs (
     offer_count INTEGER NOT NULL DEFAULT 0,
     source_count INTEGER NOT NULL DEFAULT 0,
     notes TEXT NOT NULL DEFAULT '',
-    jurisdiction TEXT NOT NULL DEFAULT ''
+    jurisdiction TEXT NOT NULL DEFAULT '',
+    batch_id TEXT NOT NULL DEFAULT '',
+    route_scope TEXT NOT NULL DEFAULT 'state'
 );
 
 CREATE TABLE IF NOT EXISTS promo_health (
@@ -98,6 +100,8 @@ _V2_COLUMNS: tuple[tuple[str, str], ...] = (
 
 _RUN_COLUMNS: tuple[tuple[str, str], ...] = (
     ("jurisdiction", "TEXT NOT NULL DEFAULT ''"),
+    ("batch_id", "TEXT NOT NULL DEFAULT ''"),
+    ("route_scope", "TEXT NOT NULL DEFAULT 'state'"),
 )
 
 
@@ -177,10 +181,23 @@ class PromoStore:
     def close(self) -> None:
         self._conn.close()
 
-    def start_run(self, *, jurisdiction: str | None = None) -> int:
+    def start_run(
+        self,
+        *,
+        jurisdiction: str | None = None,
+        batch_id: str | None = None,
+        route_scope: str = "state",
+    ) -> int:
         cur = self._conn.execute(
-            "INSERT INTO promo_runs(started_at, ok, jurisdiction) VALUES (?, 0, ?)",
-            (_iso(datetime.now(UTC)), (jurisdiction or "").strip().upper()),
+            "INSERT INTO promo_runs"
+            "(started_at, ok, jurisdiction, batch_id, route_scope) "
+            "VALUES (?, 0, ?, ?, ?)",
+            (
+                _iso(datetime.now(UTC)),
+                (jurisdiction or "").strip().upper(),
+                (batch_id or "").strip(),
+                route_scope.strip().lower(),
+            ),
         )
         self._conn.commit()
         return int(cur.lastrowid)
@@ -291,7 +308,7 @@ class PromoStore:
         rows = self._conn.execute(
             """
             SELECT id, started_at, finished_at, ok, offer_count, source_count, notes,
-                   jurisdiction
+                   jurisdiction, batch_id, route_scope
             FROM promo_runs
             ORDER BY id DESC
             LIMIT ?
@@ -365,8 +382,22 @@ class PromoStore:
         ).fetchone()
         return row is not None
 
-    def latest_run_id(self) -> int | None:
-        row = self._conn.execute("SELECT MAX(id) AS id FROM promo_runs").fetchone()
+    def run_row(self, run_id: int) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            "SELECT id, started_at, finished_at, ok, jurisdiction, batch_id, route_scope "
+            "FROM promo_runs WHERE id = ?",
+            (run_id,),
+        ).fetchone()
+        return dict(row) if row is not None else None
+
+    def latest_run_id(self, *, jurisdiction: str | None = None) -> int | None:
+        if jurisdiction:
+            row = self._conn.execute(
+                "SELECT MAX(id) AS id FROM promo_runs WHERE jurisdiction = ?",
+                (jurisdiction.strip().upper(),),
+            ).fetchone()
+        else:
+            row = self._conn.execute("SELECT MAX(id) AS id FROM promo_runs").fetchone()
         return int(row["id"]) if row and row["id"] is not None else None
 
 

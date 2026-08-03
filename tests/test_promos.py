@@ -216,6 +216,25 @@ def test_enrich_extracts_bet_get_bonus_bets() -> None:
     assert enriched.summary
 
 
+def test_state_promo_eligibility_requires_affirmative_confirmation() -> None:
+    from src.promos.collector import offer_confirmed_for_state
+
+    base = dict(
+        source="draftkings",
+        offer_id="state-check",
+        kind=PromoKind.SIGNUP_BONUS,
+        title="Welcome",
+        observed_at=datetime.now(UTC),
+    )
+    assert not offer_confirmed_for_state(PromoOffer(**base), "PA")
+    assert offer_confirmed_for_state(
+        PromoOffer(**base, eligible_regions=["PA"]), "pa"
+    )
+    assert not offer_confirmed_for_state(
+        PromoOffer(**base, eligible_regions=["PA"], ineligible_regions=["PA"]), "PA"
+    )
+
+
 def test_strategy_bonus_bet_mentions_hedge() -> None:
     from src.promos.strategy import build_usage_guidance
 

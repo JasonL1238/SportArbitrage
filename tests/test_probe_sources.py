@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from types import SimpleNamespace
-
 from src.egress import detect_egress, detection_from_payload, save_detection
 
 
@@ -124,12 +122,10 @@ def test_detection_falls_back_after_provider_failure() -> None:
     assert provider == "https://second.invalid/"
 
 
-def test_collector_auto_state_relaunches_with_detected_state(
-    monkeypatch, tmp_path, capsys,
+def test_batch_state_detection_includes_requested_states_with_reduced_record(
+    monkeypatch, tmp_path,
 ) -> None:
-    import src.collector as collector
-    import src.egress as egress
-    import src.sources.transport as transport
+    import src.state_selection as state_selection
 
     detection = detection_from_payload(
         {"ip": "203.0.113.12", "region_code": "PA"},
@@ -140,40 +136,25 @@ def test_collector_auto_state_relaunches_with_detected_state(
         def close(self):
             pass
 
-    monkeypatch.setattr(collector.settings, "EGRESS_STATE_PATH", tmp_path / "egress.json")
-    monkeypatch.setattr(transport, "build_default_client", lambda **kwargs: Client())
     monkeypatch.setattr(
-        egress,
+        state_selection.settings, "EGRESS_STATE_PATH", tmp_path / "egress.json"
+    )
+    monkeypatch.setattr(
+        state_selection,
         "detect_egress",
         lambda client, urls: (detection, "https://second.invalid/"),
     )
-    launched = {}
-
-    def run(command, *, env, check):
-        launched.update(command=command, env=env, check=check)
-        return SimpleNamespace(returncode=7)
-
-    monkeypatch.setattr(collector.subprocess, "run", run)
-    assert collector.main(
-        ["collect", "--auto-state", "--source", "draftkings"]
-    ) == 7
-    assert launched["command"][-3:] == [
-        "collect", "--source", "draftkings",
-    ]
-    assert launched["env"]["ODDS_STATE"] == "PA"
-    assert launched["check"] is False
-    assert "203.0.113.12" not in collector.settings.EGRESS_STATE_PATH.read_text()
-    assert "detected PA" in capsys.readouterr().out
-
-
-def test_collector_auto_state_is_live_collection_only(monkeypatch, capsys) -> None:
-    import src.collector as collector
-    import src.sources.transport as transport
-
-    monkeypatch.setattr(
-        transport,
-        "build_default_client",
-        lambda **kwargs: (_ for _ in ()).throw(AssertionError("network called")),
+    selection = state_selection.detect_and_select(
+        ["IL"], client_factory=lambda **kwargs: Client()
     )
-    assert collector.main(["runs", "--auto-state"]) == 2
-    assert "only valid for live collection" in capsys.readouterr().err
+    assert selection.states == ("PA", "IL")
+    assert "203.0.113.12" not in state_selection.settings.EGRESS_STATE_PATH.read_text()
+
+
+def test_auto_state_compatibility_flag_is_not_accepted_by_read_commands() -> None:
+    import src.collector as collector
+    import pytest
+
+    with pytest.raises(SystemExit) as caught:
+        collector.main(["runs", "--auto-state"])
+    assert caught.value.code == 2

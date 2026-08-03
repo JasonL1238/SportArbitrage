@@ -32,8 +32,6 @@ from __future__ import annotations
 import argparse
 import logging
 import math
-import os
-import subprocess
 import sys
 import time
 from collections import Counter, defaultdict
@@ -97,6 +95,36 @@ log = logging.getLogger("collector")
 SOURCE_FACTORIES: dict[str, Callable[..., OddsSource]] = {
     entry.key: entry.factory() for entry in registry.SOURCES
 }
+
+
+class CachedOddsSource:
+    """Delegate parsing/capabilities while fetching one batch's globals once."""
+
+    def __init__(self, source: OddsSource, *, capture_id: str) -> None:
+        self._source = source
+        self._capture_id = capture_id
+        self._raws: list[RawResponse] | None = None
+
+    @property
+    def source_key(self) -> str:
+        return self._source.source_key
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._source, name)
+
+    def fetch_raw(self, *, tier: Tier = Tier.FULL) -> list[RawResponse]:
+        if self._raws is None:
+            self._raws = [
+                replace(raw, capture_id=raw.capture_id or self._capture_id)
+                for raw in _fetch(self._source, tier)
+            ]
+        return list(self._raws)
+
+    def parse(self, raws: Sequence[RawResponse]) -> ParseOutcome:
+        return self._source.parse(raws)
+
+    def close(self) -> None:
+        self._source.close()
 
 #: Comparison needs two counterparties; one is not a pipeline.  This is the
 #: *comparability* bar and nothing else — whether the run as a whole is healthy is
@@ -383,6 +411,17 @@ class RunResult:
                 print(f"    rejected: {dict(rejected)}")
 
 
+@dataclass(frozen=True)
+class BatchResult:
+    batch_id: str
+    detected_state: str
+    runs: tuple[tuple[str, RunResult], ...]
+
+    @property
+    def ok(self) -> bool:
+        return bool(self.runs) and all(result.ok for _, result in self.runs)
+
+
 def resolve_leagues(
     sports: Sequence[str] | None = None, leagues: Sequence[str] | None = None
 ) -> tuple[str, ...]:
@@ -414,7 +453,11 @@ def resolve_leagues(
 
 
 def build_sources(
-    keys: Sequence[str] | None = None, *, leagues: Sequence[str] | None = None
+    keys: Sequence[str] | None = None,
+    *,
+    leagues: Sequence[str] | None = None,
+    state: str | None = None,
+    route_scope: str = "all",
 ) -> list[OddsSource]:
     """Instantiate the requested adapters, configured for *leagues*.
 
@@ -431,20 +474,40 @@ def build_sources(
     silently dropped, and it does not take the whole run down either: a book with
     no tennis is a fact about that book, not an error in the command.
     """
-    selected = list(keys) if keys else list(SOURCE_FACTORIES)
+    if state is None and route_scope == "all":
+        factories = SOURCE_FACTORIES
+    else:
+        if route_scope == "global":
+            descriptors = registry.global_sources()
+        elif route_scope == "state":
+            if state is None:
+                raise ValueError("state is required for state-scoped source construction")
+            descriptors = registry.state_sources_for_state(state)
+        elif route_scope == "all":
+            if state is None:
+                raise ValueError("state is required for explicit all-scope construction")
+            descriptors = (
+                *registry.state_sources_for_state(state),
+                *registry.global_sources(),
+            )
+        else:
+            raise ValueError(f"unknown route scope {route_scope!r}")
+        factories = {entry.key: entry.factory() for entry in descriptors}
+
+    known = {entry.key for entry in registry.SOURCES}
+    unknown = [key for key in (keys or ()) if key not in known]
+    if unknown:
+        raise SystemExit(f"unknown source(s): {unknown}; known: {sorted(known)}")
+    selected = [key for key in (keys or factories) if key in factories]
     # Slow sources last.  Every price in a run has to be comparable with the
     # others, and a source paced to its own rate limit can take minutes — so
     # where it sits in the order decides how many *other* sources it pushes out
     # of that window.  Smarkets in the middle cost Kalshi and Polymarket 847
     # comparable markets between them, purely by being ahead of them.
     selected.sort(key=lambda key: key in registry.SLOW_SOURCES)
-    unknown = [key for key in selected if key not in SOURCE_FACTORIES]
-    if unknown:
-        raise SystemExit(f"unknown source(s): {unknown}; known: {sorted(SOURCE_FACTORIES)}")
-
     built: list[OddsSource] = []
     for key in selected:
-        factory = SOURCE_FACTORIES[key]
+        factory = factories[key]
         if not _accepts_leagues(factory):
             log.warning(
                 "%s does not accept a league list, so it will collect whatever it "
@@ -519,6 +582,10 @@ def collect_once(
     tier: Tier = Tier.FULL,
     on_progress: Callable[[Mapping[str, Any]], None] | None = None,
     alert: bool = True,
+    jurisdiction: str | None = None,
+    batch_id: str | None = None,
+    route_scope: str = "legacy",
+    state_source_keys: Sequence[str] = (),
 ) -> RunResult:
     """Fetch, persist raw, parse, reconcile, validate, find arbitrage, persist.
 
@@ -551,13 +618,16 @@ def collect_once(
         except Exception:  # noqa: BLE001 — progress must never abort a collect
             log.debug("on_progress failed", exc_info=True)
 
+    run_state = (jurisdiction or settings.STATE).strip().upper()
     started_at = datetime.now(UTC)
     run_id = (
         store.start_run(
             started_at,
             sports=sports,
             leagues=leagues,
-            jurisdiction=settings.STATE,
+            jurisdiction=run_state,
+            batch_id=batch_id,
+            route_scope=route_scope,
         )
         if store
         else None
@@ -708,6 +778,20 @@ def collect_once(
         run_id=run_id,
         narrowed=bool(sports or leagues),
     )
+    if route_scope == "state":
+        native_producing = {
+            health.source_key
+            for health in health_reports
+            if health.ok and health.quote_count and health.source_key in state_source_keys
+        }
+        if len(native_producing) < MIN_HEALTHY_SOURCES:
+            report.add(
+                Severity.ERROR,
+                "state_native_sources_below_two",
+                f"{run_state}: only {len(native_producing)} exact-state first-party "
+                f"source(s) produced ({', '.join(sorted(native_producing)) or 'none'}); "
+                "global venues cannot make a state slate healthy by themselves",
+            )
 
     sports_seen = sport_coverage(all_quotes, coverage)
     _report_sport_coverage(sports_seen, report)
@@ -746,7 +830,19 @@ def collect_once(
         all_quotes,
         as_of=as_of or datetime.now(UTC),
         one_counterparty=measured_counterparties,
+        view_only_sources=(
+            registry.view_only_for_state(run_state)
+            if run_state != "GLOBAL"
+            else registry.REPUBLISHED_SOURCE_KEYS
+        ),
     )
+    if route_scope == "state" and state_source_keys:
+        native = frozenset(state_source_keys)
+        arb_report.opportunities = [
+            opportunity
+            for opportunity in arb_report.opportunities
+            if native.intersection(opportunity.sources)
+        ]
 
     if store is not None and run_id is not None:
         _progress({
@@ -1621,8 +1717,16 @@ def replay_run(
 
     replayed: list[Quote] = []
     for source_key, paths in by_source_paths.items():
-        factory = SOURCE_FACTORIES.get(source_key)
-        if factory is None:
+        try:
+            stored_state = str(run_row["jurisdiction"] or "") if run_row else ""
+            if stored_state in ("", "GLOBAL", settings.STATE):
+                factory = SOURCE_FACTORIES[source_key]
+            else:
+                source_entry = registry.descriptor_for_state(
+                    stored_state, source_key
+                )
+                factory = source_entry.factory()
+        except (KeyError, RuntimeError):
             problems.append(f"{source_key}: no adapter available to replay this source")
             continue
         source = factory()
@@ -1734,22 +1838,117 @@ def _open_store() -> Store:
         raise SystemExit(str(exc)) from None
 
 
+def collect_batch_once(
+    states: Sequence[str],
+    *,
+    detected_state: str,
+    raw_store: RawStore,
+    store: Store | None,
+    source_keys: Sequence[str] | None = None,
+    sports: Sequence[str] | None = None,
+    leagues: Sequence[str] | None = None,
+    tier: Tier = Tier.FULL,
+    on_progress: Callable[[Mapping[str, Any]], None] | None = None,
+    alert: bool = True,
+) -> BatchResult:
+    """Fetch globals once, then combine them with each exact-state retail slate."""
+    batch_id = uuid4().hex
+    resolved_leagues = resolve_leagues(sports, leagues)
+    globals_built = build_sources(
+        source_keys,
+        leagues=resolved_leagues,
+        route_scope="global",
+    )
+    cached_globals = [
+        CachedOddsSource(source, capture_id=batch_id) for source in globals_built
+    ]
+    runs: list[tuple[str, RunResult]] = []
+    try:
+        if cached_globals:
+            global_result = collect_once(
+                cached_globals,
+                raw_store=raw_store,
+                store=store,
+                sports=sports,
+                leagues=leagues,
+                tier=tier,
+                on_progress=on_progress,
+                alert=alert,
+                jurisdiction="GLOBAL",
+                batch_id=batch_id,
+                route_scope="global",
+            )
+            runs.append(("GLOBAL", global_result))
+
+        for state in states:
+            retail = build_sources(
+                source_keys,
+                leagues=resolved_leagues,
+                state=state,
+                route_scope="state",
+            )
+            state_keys = tuple(source.source_key for source in retail)
+            combined: list[OddsSource] = [*retail, *cached_globals]
+            try:
+                result = collect_once(
+                    combined,
+                    raw_store=raw_store,
+                    store=store,
+                    sports=sports,
+                    leagues=leagues,
+                    tier=tier,
+                    on_progress=on_progress,
+                    alert=alert,
+                    jurisdiction=state,
+                    batch_id=batch_id,
+                    route_scope="state",
+                    state_source_keys=state_keys,
+                )
+                runs.append((state, result))
+            finally:
+                for source in retail:
+                    source.close()
+    finally:
+        for source in cached_globals:
+            source.close()
+    return BatchResult(
+        batch_id=batch_id,
+        detected_state=detected_state,
+        runs=tuple(runs),
+    )
+
+
 def _cmd_collect(args: argparse.Namespace) -> int:
     sports, leagues = _filter_args(args)
     raw_store = RawStore(settings.RAW_DIR)
-    sources = build_sources(args.source, leagues=resolve_leagues(sports, leagues))
     store = None if args.no_store else _open_store()
     tier = Tier(args.tier)
+    from src.state_selection import StateSelectionError, detect_and_select
+
+    try:
+        selection = detect_and_select(args.state)
+    except StateSelectionError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        if store is not None:
+            store.close()
+        return 2
+    print(
+        f"auto-state: detected {selection.detected.state} via {selection.provider}; "
+        f"batch states: {', '.join(selection.states)}",
+        flush=True,
+    )
     exit_code = 0
     try:
         iteration = 0
         while True:
             iteration += 1
             try:
-                result = collect_once(
-                    sources,
+                batch = collect_batch_once(
+                    selection.states,
+                    detected_state=selection.detected.state,
                     raw_store=raw_store,
                     store=store,
+                    source_keys=args.source,
                     sports=sports,
                     leagues=leagues,
                     tier=tier,
@@ -1770,14 +1969,17 @@ def _cmd_collect(args: argparse.Namespace) -> int:
                 log.info("sleeping %ss before the next run", args.interval)
                 time.sleep(args.interval)
                 continue
-            result.print_summary()
+            print(f"\n=== batch {batch.batch_id} ===")
+            for state, result in batch.runs:
+                print(f"\n--- {state} ---")
+                result.print_summary()
             # **Sticky.**  ``exit_code = 0 if result.ok else 1`` let one good
             # pass overwrite an earlier failure, so a bounded batch — ``--watch
             # --max-runs 3`` in cron — exited 0 when pass 2 of 3 died with a
             # traceback and only the *final* pass's verdict survived.  An
             # endless watch never reaches the exit, so the only reader of this
             # value is exactly the bounded batch that was being lied to.
-            if not result.ok:
+            if not batch.ok:
                 exit_code = 1
             if not args.watch:
                 break
@@ -1786,8 +1988,6 @@ def _cmd_collect(args: argparse.Namespace) -> int:
             log.info("sleeping %ss before next run", args.interval)
             time.sleep(args.interval)
     finally:
-        for source in sources:
-            source.close()
         if store is not None:
             store.close()
     return exit_code
@@ -2651,76 +2851,8 @@ def _add_scope_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def _auto_state_relaunch(argv: Sequence[str]) -> int:
-    """Detect IL/PA and run a fresh, consistently configured collector.
-
-    Source factories are deliberately bound once at module import.  Relaunching
-    is therefore the safe boundary: the child imports settings, registries, and
-    promo routes only after ``ODDS_STATE`` has been selected.
-    """
-    from src.egress import DEFAULT_DETECTION_URLS, detect_egress, save_detection
-    from src.jurisdictions import JURISDICTIONS
-    from src.sources.transport import build_default_client
-
-    non_collect_commands = {
-        "replay", "runs", "show", "arb", "lines", "mirrors", "health", "migrate"
-    }
-    requested = non_collect_commands.intersection(argv)
-    if requested:
-        print(
-            "error: --auto-state is only valid for live collection, not "
-            + ", ".join(sorted(requested)),
-            file=sys.stderr,
-        )
-        return 2
-
-    client = None
-    try:
-        client = build_default_client(timeout=settings.HTTP_TIMEOUT)
-        detection, provider = detect_egress(client, urls=DEFAULT_DETECTION_URLS)
-    except Exception as exc:  # noqa: BLE001 - CLI emits one actionable refusal
-        print(
-            f"error: automatic state detection failed: {type(exc).__name__}: {exc}",
-            file=sys.stderr,
-        )
-        return 2
-    finally:
-        if client is not None:
-            try:
-                client.close()
-            except Exception:
-                pass
-
-    if detection.state not in JURISDICTIONS:
-        print(
-            f"error: detected {detection.state}, but automatic collection supports "
-            f"only {', '.join(JURISDICTIONS)}; set ODDS_STATE explicitly after "
-            "adding and validating that jurisdiction",
-            file=sys.stderr,
-        )
-        return 2
-
-    save_detection(settings.EGRESS_STATE_PATH, detection)
-    child_argv = [item for item in argv if item != "--auto-state"]
-    child_env = dict(os.environ)
-    child_env["ODDS_STATE"] = detection.state
-    print(
-        f"auto-state: detected {detection.state} via {provider}; "
-        "starting a state-bound collector",
-        flush=True,
-    )
-    completed = subprocess.run(
-        [sys.executable, "-m", "src.collector", *child_argv],
-        env=child_env,
-        check=False,
-    )
-    return int(completed.returncode)
-
-
 def main(argv: Sequence[str] | None = None) -> int:
     effective_argv = list(sys.argv[1:] if argv is None else argv)
-    if "--auto-state" in effective_argv and "--help" not in effective_argv:
-        return _auto_state_relaunch(effective_argv)
     refusal = settings.refuse_bad_settings()
     if refusal is not None:
         return refusal
@@ -2747,10 +2879,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     collect.add_argument(
         "--auto-state",
         action="store_true",
-        help=(
-            "detect an IL/PA public exit, store only its state/time/IP hash, and "
-            "relaunch with matching retail routes"
-        ),
+        help="deprecated compatibility flag; live collection now always detects state",
+    )
+    collect.add_argument(
+        "--state",
+        action="append",
+        type=lambda value: value.strip().upper(),
+        choices=["IL", "PA", "NJ", "DC"],
+        help="additional state to scrape; repeatable (detected state is always included)",
     )
     collect.add_argument(
         "--tier",

@@ -155,7 +155,7 @@ class TestArbTreatsFailoverAsOneBook:
         sources = {leg.source for opp in report.opportunities for leg in opp.legs}
         assert "fanduel" in sources and "pinnacle" in sources
 
-    def test_two_way_primary_does_not_demote_three_way_secondary(self) -> None:
+    def test_republished_three_way_secondary_remains_diagnostic_only(self) -> None:
         from src.schema import Sport
 
         # Healthy overrounds per book; AN home + Pinnacle draw/away has edge.
@@ -199,10 +199,10 @@ class TestArbTreatsFailoverAsOneBook:
                     )
                 )
         report = find_opportunities(quotes)
-        assert any(
+        assert not any(
             "an_fanduel" in {leg.source for leg in opp.legs}
             for opp in report.opportunities
-        ), "soccer 3-way AN must survive a 2-way primary"
+        ), "republished prices must never become executable arb legs"
 
     def test_no_arb_between_book_and_its_republisher(self) -> None:
         quotes = _pair_slate("fanduel", "an_fanduel", identical=False)

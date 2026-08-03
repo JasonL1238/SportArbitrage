@@ -131,6 +131,8 @@ CREATE TABLE IF NOT EXISTS collection_run (
     -- Jurisdiction selected when the run started.  Blank means the run predates
     -- jurisdiction-aware collection; reports must not inherit today's setting.
     jurisdiction  TEXT NOT NULL DEFAULT '',
+    batch_id      TEXT NOT NULL DEFAULT '',
+    route_scope   TEXT NOT NULL DEFAULT 'state',
     -- The scope the run was collected under, structurally.  It was recoverable
     -- only as prose inside ``note``, which no code could safely read back — so
     -- ``replay`` compared a scope-collected run's stored rows against an
@@ -921,6 +923,8 @@ class Store:
         ("collection_run", "migrated_from", "INTEGER"),
         ("collection_run", "counterparty_groups", "TEXT"),
         ("collection_run", "jurisdiction", "TEXT NOT NULL DEFAULT ''"),
+        ("collection_run", "batch_id", "TEXT NOT NULL DEFAULT ''"),
+        ("collection_run", "route_scope", "TEXT NOT NULL DEFAULT 'state'"),
     )
 
     def _add_missing_columns(self) -> None:
@@ -965,6 +969,8 @@ class Store:
         sports: Sequence[str] | None = None,
         leagues: Sequence[str] | None = None,
         jurisdiction: str | None = None,
+        batch_id: str | None = None,
+        route_scope: str = "state",
     ) -> int:
         """Open a run, recording the scope it is being collected under.
 
@@ -974,13 +980,15 @@ class Store:
         with self._conn:
             cursor = self._conn.execute(
                 "INSERT INTO collection_run "
-                "(started_at, scope_sports, scope_leagues, jurisdiction) "
-                "VALUES (?, ?, ?, ?)",
+                "(started_at, scope_sports, scope_leagues, jurisdiction, batch_id, route_scope) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
                 (
                     _iso(started_at),
                     ",".join(sports or ()),
                     ",".join(leagues or ()),
                     (jurisdiction or "").strip().upper(),
+                    (batch_id or "").strip(),
+                    route_scope.strip().lower(),
                 ),
             )
         return int(cursor.lastrowid)
@@ -1436,7 +1444,8 @@ class Store:
         """
         rows = self.query(
             "SELECT id, started_at, finished_at, ok, quote_count, error_count, "
-            "migrated_from, jurisdiction FROM collection_run WHERE id = ?",
+            "migrated_from, jurisdiction, batch_id, route_scope "
+            "FROM collection_run WHERE id = ?",
             (run_id,),
         )
         return rows[0] if rows else None
@@ -1447,6 +1456,7 @@ class Store:
         only_ok: bool = False,
         sports: Sequence[str] | str | None = None,
         leagues: Sequence[str] | str | None = None,
+        jurisdiction: str | None = None,
     ) -> int | None:
         """Newest finished run — holding a row in scope, when a scope is given.
 
@@ -1458,7 +1468,13 @@ class Store:
         run.  Two commands, seconds apart, describing different collections.
         """
         sql = "SELECT id FROM collection_run r WHERE finished_at IS NOT NULL"
+        if jurisdiction:
+            sql += " AND jurisdiction = ?"
+            state_params: list[Any] = [jurisdiction.strip().upper()]
+        else:
+            state_params = []
         clause, params = _scope(sports, leagues, prefix="q.")
+        params = [*state_params, *params]
         if clause:
             # ``status = 'active'``: a suspended price is a row, not a price
             # anybody can act on, so a run whose only in-scope rows are
@@ -1498,7 +1514,7 @@ class Store:
             )
         return self._conn.execute(
             f"""SELECT id, started_at, finished_at, ok, quote_count, event_count,
-                       error_count, warning_count, note, jurisdiction
+                       error_count, warning_count, note, jurisdiction, batch_id, route_scope
                   FROM collection_run{where}
                  ORDER BY id DESC LIMIT ?""",
             (*params, limit),

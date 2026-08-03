@@ -105,11 +105,11 @@ def _state(default: str = "IL") -> str:
     return default
 
 
-#: One active retail jurisdiction per process/run.  State-agnostic sources are
-#: unchanged; retail adapters and state-specific promotions resolve through it.
+#: Compatibility/probe jurisdiction. Live collection detects the current state
+#: and treats an explicitly supplied ODDS_STATE as an additional batch request.
 STATE = _state()
 
-#: Explicit or ``--auto-state`` egress detection is persisted here.
+#: Automatic live-scrape and explicit probe detection is persisted here.
 EGRESS_STATE_PATH = Path(
     _lookup("EGRESS_STATE_PATH", str(DATA_DIR / "egress_state.json"))
 ).expanduser()
