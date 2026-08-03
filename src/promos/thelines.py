@@ -461,14 +461,9 @@ def _append_offer(
     )
 
 
-def clear_page_cache() -> None:
-    _PAGE_CACHE.clear()
-
-
 __all__ = [
     "BRAND_ALIASES",
     "DEFAULT_URL",
     "TheLinesPromoAdapter",
-    "clear_page_cache",
     "parse_thelines_offers",
 ]

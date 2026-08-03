@@ -612,7 +612,7 @@ def _emit_markets(
                 )
                 continue
 
-            line = _line_for(selection, market_kind, market_line_f, sel)
+            line = _line_for(selection, market_kind, market_line_f)
             if market_kind in (Market.SPREAD, Market.TOTAL) and line is None:
                 outcome.reject(
                     source,
@@ -656,9 +656,7 @@ def _line_for(
     selection: Selection,
     market_kind: Market,
     market_line: float | None,
-    sel: Mapping[str, Any],
 ) -> float | None:
-    del sel  # side comes from the resolved Selection, not Amelco A/B
     if market_kind is Market.MONEYLINE:
         return None
     if market_kind is Market.TOTAL:
