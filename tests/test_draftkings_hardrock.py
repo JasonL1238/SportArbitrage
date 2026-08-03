@@ -55,6 +55,49 @@ def test_draftkings_parses_game_lines_from_fixture() -> None:
     assert all(q.league == "NBA" for q in outcome.quotes)
 
 
+def test_draftkings_parses_current_sportscontent_shape() -> None:
+    """The live Illinois page replaced v5 eventgroups with normalized stores."""
+    payload = {
+        "events": [{
+            "id": "34469547", "name": "WAS Nationals @ PHI Phillies",
+            "startEventDate": "2026-08-03T22:40:00Z", "status": "NOT_STARTED",
+            "participants": [
+                {"name": "PHI Phillies", "venueRole": "Home"},
+                {"name": "WAS Nationals", "venueRole": "Away"},
+            ],
+        }],
+        "markets": [
+            {"id": "ml", "eventId": "34469547", "name": "Moneyline", "tags": ["PrimaryMarket"]},
+            {"id": "rl", "eventId": "34469547", "name": "Run Line", "tags": ["PrimaryMarket"]},
+            {"id": "to", "eventId": "34469547", "name": "Total", "tags": ["PrimaryMarket"]},
+        ],
+        "selections": [
+            {"id": "a-ml", "marketId": "ml", "label": "WAS Nationals", "displayOdds": {"american": "+144", "decimal": "2.44"}},
+            {"id": "h-ml", "marketId": "ml", "label": "PHI Phillies", "displayOdds": {"american": "−175", "decimal": "1.57"}},
+            {"id": "a-rl", "marketId": "rl", "label": "WAS Nationals", "points": 1.5, "displayOdds": {"american": "-143", "decimal": "1.69"}},
+            {"id": "h-rl", "marketId": "rl", "label": "PHI Phillies", "points": -1.5, "displayOdds": {"american": "+119", "decimal": "2.19"}},
+            {"id": "o", "marketId": "to", "label": "Over", "points": 9.5, "displayOdds": {"american": "+102", "decimal": "2.02"}},
+            {"id": "u", "marketId": "to", "label": "Under", "points": 9.5, "displayOdds": {"american": "-122", "decimal": "1.81"}},
+        ],
+    }
+    raw = RawResponse(
+        source="draftkings", endpoint="sportscontent-84240",
+        url="https://sportsbook-nash.draftkings.com/example", status_code=200,
+        body=json.dumps(payload), fetched_at=datetime(2026, 8, 3, 12, tzinfo=timezone.utc),
+        content_type="application/json",
+    )
+    outcome = parse_draftkings([raw])
+    assert not outcome.rejections
+    assert len(outcome.quotes) == 6
+    assert {q.market for q in outcome.quotes} == {
+        Market.MONEYLINE, Market.SPREAD, Market.TOTAL,
+    }
+    by_market_selection = {(q.market, q.selection): q for q in outcome.quotes}
+    assert by_market_selection[Market.SPREAD, Selection.AWAY].line == 1.5
+    assert by_market_selection[Market.SPREAD, Selection.HOME].line == -1.5
+    assert by_market_selection[Market.TOTAL, Selection.UNDER].line == 9.5
+
+
 def test_hardrock_joins_root_idx_to_ladder() -> None:
     ladder = _load("hardrock__*_ladder_*.json")
     events = _load("hardrock__*_events-BASEBALL_*.json")

@@ -15,11 +15,49 @@ import pytest
 from src.normalize import decimal_to_american
 from src.raw_store import RawResponse, RawStore
 from src.schema import Market, Period, Quote, QuoteStatus, Selection, Sport
+from src.sources._common import Tier
+from src.sources.base import OddsSource, ParseOutcome
 
 FIXTURE_RAW_DIR = Path(__file__).parent / "fixtures" / "raw"
 
 #: The slate captured in the fixtures.
 FIXTURE_DATE = "2026-07-28"
+
+
+class CapturedSource:
+    """Collect stored envelopes while delegating parsing to the real adapter.
+
+    A test source must implement the source contract; attaching an invented
+    ``_replay_paths`` attribute to a real adapter does nothing and silently
+    turns an offline test into a live network test.  This wrapper makes the
+    capture substitution explicit while retaining the adapter's real parser,
+    capabilities, league declaration, and identity.
+    """
+
+    def __init__(self, delegate: OddsSource, raws: list[RawResponse]) -> None:
+        self.delegate = delegate
+        self.raws = list(raws)
+
+    @property
+    def source_key(self) -> str:
+        return self.delegate.source_key
+
+    @property
+    def leagues(self) -> tuple[str, ...]:
+        return self.delegate.leagues
+
+    def capabilities(self, *, tier: Tier = Tier.FULL):
+        return self.delegate.capabilities(tier=tier)
+
+    def fetch_raw(self, *, tier: Tier = Tier.FULL) -> list[RawResponse]:
+        del tier
+        return list(self.raws)
+
+    def parse(self, raws: list[RawResponse]) -> ParseOutcome:
+        return self.delegate.parse(raws)
+
+    def close(self) -> None:
+        self.delegate.close()
 
 
 @pytest.fixture(autouse=True)

@@ -1,11 +1,14 @@
-"""DraftKings US sportsbook pregame markets, from the public eventgroups API.
+"""DraftKings US sportsbook pregame markets, from the public sportsbook APIs.
 
-``sportsbook-nash.draftkings.com/sites/US-IL-SB/api/v5/eventgroups/{id}`` is the
-same JSON the Illinois sportsbook page renders.  No account is involved.
+The legacy ``api/v5/eventgroups/{id}`` payload remains supported for replay.
+Live Illinois pages now read ``api/sportscontent/.../leagueSubcategory/v1``;
+that endpoint is used for leagues whose current Game Lines subcategory has been
+observed.  No account is involved.
 
-From California the Akamai edge answers ``403`` without a licensed-state exit
-IP.  Set ``ODDS_HTTP_PROXY`` to an IL/NJ residential proxy and re-probe; the
-parser itself is independent of that wall and is pinned against captured bytes.
+The Akamai edge rejects a plain HTTP client even from Illinois.  When no client
+was injected, collection therefore retries the current endpoint through the
+project's browser transport after seeding the public league page.  Parsing stays
+pure and supports both generations of captured bytes.
 """
 from __future__ import annotations
 
@@ -44,6 +47,10 @@ log = logging.getLogger(__name__)
 
 SOURCE_KEY = "draftkings"
 DEFAULT_BASE_URL = "https://sportsbook-nash.draftkings.com/sites/US-IL-SB/api/v5"
+DEFAULT_CONTENT_BASE_URL = (
+    "https://sportsbook-nash.draftkings.com/sites/US-IL-SB/api/"
+    "sportscontent/controldata/league/leagueSubcategory/v1"
+)
 DEFAULT_ORIGIN = "https://sportsbook.draftkings.com/"
 HOST_INTERVAL = 0.5
 
@@ -56,6 +63,13 @@ EVENT_GROUPS: tuple[tuple[int, Sport, str], ...] = (
     (42133, Sport.HOCKEY, "NHL"),
     (40253, Sport.SOCCER, "EPL"),
 )
+
+#: Current public page route and Game Lines subcategory.  IDs are discovered
+#: from the page's own request, not inferred from the retired v5 endpoint.
+CONTENT_ROUTES: dict[int, tuple[str, str]] = {
+    84240: ("baseball/mlb", "4519"),
+    88808: ("football/nfl", "10500"),
+}
 
 MARKETS_BY_SPORT: dict[Sport, frozenset[Market]] = {
     Sport.BASEBALL: frozenset({Market.MONEYLINE, Market.SPREAD, Market.TOTAL}),
@@ -111,6 +125,7 @@ class DraftKingsAdapter:
         *,
         source_key: str = SOURCE_KEY,
         base_url: str = DEFAULT_BASE_URL,
+        content_base_url: str = DEFAULT_CONTENT_BASE_URL,
         timeout: float = 25.0,
         client: httpx.Client | None = None,
     ) -> None:
@@ -132,6 +147,9 @@ class DraftKingsAdapter:
         self._wanted = wanted
         self._source_key = source_key
         self.base_url = base_url.rstrip("/")
+        self.content_base_url = content_base_url.rstrip("/")
+        self._allow_browser_fallback = client is None
+        self._browser_http: SourceClient | None = None
         self._http = SourceClient(
             source_key, timeout=timeout, client=client, host_interval=HOST_INTERVAL
         )
@@ -163,15 +181,7 @@ class DraftKingsAdapter:
             label = f"eventgroup:{scope.event_group_id}"
             tally.requested(label)
             try:
-                raw = self._http.get(
-                    f"{self.base_url}/eventgroups/{scope.event_group_id}",
-                    endpoint=f"eventgroup-{scope.event_group_id}",
-                    params={"format": "json"},
-                    headers={
-                        "Origin": "https://sportsbook.draftkings.com",
-                        "Referer": DEFAULT_ORIGIN,
-                    },
-                )
+                raw = self._fetch_scope(scope)
             except SourceError as exc:
                 log.info(
                     "%s: event group %s unavailable: %s",
@@ -184,11 +194,66 @@ class DraftKingsAdapter:
         tally.require_something(what="pregame eventgroup")
         return raws
 
+    def _fetch_scope(self, scope: _GroupScope) -> RawResponse:
+        current = CONTENT_ROUTES.get(scope.event_group_id)
+        if current is None:
+            return self._http.get(
+                f"{self.base_url}/eventgroups/{scope.event_group_id}",
+                endpoint=f"eventgroup-{scope.event_group_id}",
+                params={"format": "json"},
+                headers={"Origin": DEFAULT_ORIGIN.rstrip("/"), "Referer": DEFAULT_ORIGIN},
+            )
+
+        page_path, subcategory_id = current
+        page_url = f"{DEFAULT_ORIGIN}leagues/{page_path}"
+        params = {
+            "isBatchable": "false",
+            "templateVars": f"{scope.event_group_id},{subcategory_id}",
+            "eventsQuery": (
+                f"$filter=leagueId eq '{scope.event_group_id}' AND "
+                "clientMetadata/Subcategories/any(s: "
+                f"s/Id eq '{subcategory_id}')"
+            ),
+            "marketsQuery": (
+                "$filter=clientMetadata/subCategoryId eq "
+                f"'{subcategory_id}' AND tags/all(t: t ne 'SportcastBetBuilder')"
+            ),
+            "include": "Events",
+            "entity": "events",
+        }
+        headers = {"Origin": DEFAULT_ORIGIN.rstrip("/"), "Referer": page_url}
+        try:
+            return self._http.get(
+                f"{self.content_base_url}/markets",
+                endpoint=f"sportscontent-{scope.event_group_id}",
+                params=params,
+                headers=headers,
+            )
+        except SourceError:
+            if not self._allow_browser_fallback:
+                raise
+        if self._browser_http is None:
+            from src.sources.browser import build_browser_client
+
+            self._browser_http = SourceClient(
+                self._source_key,
+                client=build_browser_client(timeout=25.0, seed_url=page_url),
+                host_interval=HOST_INTERVAL,
+            )
+        return self._browser_http.get(
+            f"{self.content_base_url}/markets",
+            endpoint=f"sportscontent-{scope.event_group_id}",
+            params=params,
+            headers=headers,
+        )
+
     def parse(self, raws: Sequence[RawResponse]) -> ParseOutcome:
         return parse_draftkings(raws)
 
     def close(self) -> None:
         self._http.close()
+        if self._browser_http is not None:
+            self._browser_http.close()
 
 
 def _event_count(raw: RawResponse) -> int:
@@ -198,7 +263,9 @@ def _event_count(raw: RawResponse) -> int:
         return 0
     if not isinstance(payload, dict):
         return 0
-    events = (payload.get("eventGroup") or {}).get("events")
+    events = payload.get("events")
+    if not isinstance(events, list):
+        events = (payload.get("eventGroup") or {}).get("events")
     return len(events) if isinstance(events, list) else 0
 
 
@@ -210,12 +277,14 @@ def parse_draftkings(raws: Sequence[RawResponse]) -> ParseOutcome:
     work: list[tuple[RawResponse, Mapping[str, Any], _Fixture, list[Mapping[str, Any]]]] = []
 
     for raw in latest_per_endpoint(raws):
-        if not raw.endpoint.startswith("eventgroup"):
+        if not raw.endpoint.startswith(("eventgroup", "sportscontent")):
             continue
         payload = raw.json()
         if not isinstance(payload, dict):
             raise FormatChangeError(f"{source}:{raw.endpoint}: expected object")
         group = payload.get("eventGroup")
+        if group is None and raw.endpoint.startswith("sportscontent"):
+            group = _eventgroup_from_sportscontent(payload, raw.endpoint)
         if not isinstance(group, dict):
             raise FormatChangeError(f"{source}:{raw.endpoint}: missing eventGroup")
 
@@ -258,6 +327,98 @@ def parse_draftkings(raws: Sequence[RawResponse]) -> ParseOutcome:
 
     drop_duplicate_selections(source, outcome)
     return outcome
+
+
+def _eventgroup_from_sportscontent(
+    payload: Mapping[str, Any], endpoint: str
+) -> Mapping[str, Any]:
+    """Translate the current normalized DK store into the replay-stable shape."""
+    try:
+        group_id = int(endpoint.rsplit("-", 1)[-1])
+    except ValueError as exc:
+        raise FormatChangeError(f"draftkings:{endpoint}: missing league id") from exc
+    events = payload.get("events")
+    markets = payload.get("markets")
+    selections = payload.get("selections")
+    if not all(isinstance(rows, list) for rows in (events, markets, selections)):
+        raise FormatChangeError(
+            f"draftkings:{endpoint}: expected events/markets/selections lists"
+        )
+
+    converted_events: list[dict[str, Any]] = []
+    for event in events:
+        if not isinstance(event, Mapping):
+            continue
+        participants = event.get("participants") or []
+        away = next(
+            (p for p in participants if isinstance(p, Mapping) and p.get("venueRole") == "Away"),
+            {},
+        )
+        home = next(
+            (p for p in participants if isinstance(p, Mapping) and p.get("venueRole") == "Home"),
+            {},
+        )
+        converted_events.append(
+            {
+                "eventId": event.get("id"),
+                "name": event.get("name"),
+                "teamName1": away.get("name"),
+                "teamName2": home.get("name"),
+                "startDate": event.get("startEventDate"),
+                "eventStatus": {"state": event.get("status")},
+            }
+        )
+
+    by_market: dict[str, list[Mapping[str, Any]]] = {}
+    for selection in selections:
+        if isinstance(selection, Mapping) and selection.get("marketId"):
+            by_market.setdefault(str(selection["marketId"]), []).append(selection)
+    converted_markets: list[dict[str, Any]] = []
+    for market in markets:
+        if not isinstance(market, Mapping):
+            continue
+        tags = set(market.get("tags") or [])
+        converted_outcomes = []
+        for selection in by_market.get(str(market.get("id") or ""), []):
+            display = selection.get("displayOdds") or {}
+            american = str(display.get("american") or "").replace("−", "-")
+            converted_outcomes.append(
+                {
+                    "id": selection.get("id"),
+                    "label": selection.get("label"),
+                    "oddsDecimal": display.get("decimal") or selection.get("trueOdds"),
+                    "oddsAmerican": american,
+                    "line": selection.get("points"),
+                    "hidden": False,
+                }
+            )
+        converted_markets.append(
+            {
+                "id": market.get("id"),
+                "eventId": market.get("eventId"),
+                "label": market.get("name"),
+                "isSuspended": False,
+                "isOpen": True,
+                "main": "PrimaryMarket" in tags,
+                "outcomes": converted_outcomes,
+            }
+        )
+
+    return {
+        "eventGroupId": group_id,
+        "events": converted_events,
+        "offerCategories": [
+            {
+                "name": "Game Lines",
+                "offerSubcategoryDescriptors": [
+                    {
+                        "name": "Game",
+                        "offerSubcategory": {"offers": [converted_markets]},
+                    }
+                ],
+            }
+        ],
+    }
 
 
 def _league_for_group(group: Mapping[str, Any], endpoint: str) -> str | None:

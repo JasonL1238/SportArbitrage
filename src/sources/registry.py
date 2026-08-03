@@ -61,6 +61,8 @@ from src.sources.pinnacle import PinnacleAdapter
 from src.sources.polymarket import PolymarketAdapter
 from src.sources.smarkets import SmarketsAdapter
 from src.sources.sxbet import SxBetAdapter
+from src.sources.vegasinsider import VegasInsiderAdapter
+from src.sources.vsin import VsinCircaAdapter
 
 
 #: Sources that take much longer than the rest of the pass, because their own
@@ -267,6 +269,44 @@ SOURCES: tuple[SourceDescriptor, ...] = (
         adapter=ActionNetworkAdapter,
         kind=SourceKind.SPORTSBOOK,
         config={"book_id": 123, "fetch_book_ids": "123"},
+    ),
+    # Independent public comparison surface.  These are the third observation
+    # path for DK/Caesars, not separate counterparties; redundancy.py prevents
+    # any combination of first-party, AN and VI rows from arbing against itself.
+    SourceDescriptor(
+        key="vi_draftkings",
+        adapter=VegasInsiderAdapter,
+        kind=SourceKind.SPORTSBOOK,
+        config={"book": "draftkings"},
+    ),
+    SourceDescriptor(
+        key="vi_caesars",
+        adapter=VegasInsiderAdapter,
+        kind=SourceKind.SPORTSBOOK,
+        config={"book": "caesars"},
+    ),
+    SourceDescriptor(
+        key="vi_hardrock",
+        adapter=VegasInsiderAdapter,
+        kind=SourceKind.SPORTSBOOK,
+        config={"book": "hardrock"},
+    ),
+    SourceDescriptor(
+        key="vi_fanatics",
+        adapter=VegasInsiderAdapter,
+        kind=SourceKind.SPORTSBOOK,
+        config={"book": "fanatics"},
+    ),
+    SourceDescriptor(
+        key="vi_bet365",
+        adapter=VegasInsiderAdapter,
+        kind=SourceKind.SPORTSBOOK,
+        config={"book": "bet365"},
+    ),
+    SourceDescriptor(
+        key="vsin_circa",
+        adapter=VsinCircaAdapter,
+        kind=SourceKind.SPORTSBOOK,
     ),
     # Hard Rock / Fanatics / Fliff / Circa / Westgate(SuperBook) / Bally —
     # Action Network catalog ids.  From CA the scoreboard often omits prices

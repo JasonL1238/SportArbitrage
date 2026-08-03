@@ -1053,6 +1053,19 @@ def test_replay_reproduces_a_stored_run(tmp_path: Path, collector, monkeypatch) 
     ]
     with Store(tmp_path / "db.sqlite3") as store:
         result = collector.collect_once(sources, raw_store=raw_store, store=store)
+
+        class ReplayOnlySource(FakeSource):
+            def fetch_raw(self, *, tier=None):
+                raise AssertionError("replay must never call fetch_raw")
+
+        monkeypatch.setitem(
+            collector.SOURCE_FACTORIES, "fanduel",
+            lambda **kwargs: ReplayOnlySource("fanduel", rows, leagues=("MLB",)),
+        )
+        monkeypatch.setitem(
+            collector.SOURCE_FACTORIES, "pinnacle",
+            lambda **kwargs: ReplayOnlySource("pinnacle", other, leagues=("MLB",)),
+        )
         ok, problems = collector.replay_run(
             result.run_id, store=store, raw_store=raw_store
         )

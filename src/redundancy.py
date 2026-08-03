@@ -41,8 +41,17 @@ REDUNDANT_PAIRS: tuple[tuple[str, str], ...] = (
     ("bovada", "an_bovada"),
     ("onexbet", "an_onexbet"),
     ("draftkings", "an_draftkings"),
+    ("draftkings", "vi_draftkings"),
+    ("an_draftkings", "vi_draftkings"),
     ("hardrock", "an_hardrock"),
+    ("hardrock", "vi_hardrock"),
+    ("an_hardrock", "vi_hardrock"),
     ("caesars", "an_caesars"),
+    ("caesars", "vi_caesars"),
+    ("an_caesars", "vi_caesars"),
+    ("an_fanatics", "vi_fanatics"),
+    ("an_bet365", "vi_bet365"),
+    ("an_circa", "vsin_circa"),
 )
 
 _PAIR_LOOKUP: dict[frozenset[str], tuple[str, str]] = {
@@ -91,7 +100,7 @@ def check_redundancy(
                 Severity.WARNING,
                 "primary_source_offline",
                 f"{primary} produced no rows while {secondary} priced the slate "
-                f"({secondary_n} quotes). Using the Action Network republisher as "
+                f"({secondary_n} quotes). Using the registered republisher as "
                 f"failover for {primary}",
                 source=primary,
             )
@@ -111,7 +120,7 @@ def check_redundancy(
                 "redundant_sources_disagree",
                 f"{agreement.summary()}. These are an intentional failover pair, "
                 "so disagreement is a data-quality signal rather than proof they "
-                "are two books — check for stale Action Network prices or a "
+                "are two books — check for stale republished prices or a "
                 "parser/jurisdiction mismatch before trusting either leg",
                 source=secondary,
             )

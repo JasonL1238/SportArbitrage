@@ -4530,6 +4530,12 @@ class TestTheChargeAndTheSettlementRuleArePinnedPerVenue:
         "an_circa": "no commission (the venue's margin is already in the price)",
         "an_superbook": "no commission (the venue's margin is already in the price)",
         "an_bally": "no commission (the venue's margin is already in the price)",
+        "vi_draftkings": "no commission (the venue's margin is already in the price)",
+        "vi_caesars": "no commission (the venue's margin is already in the price)",
+        "vi_hardrock": "no commission (the venue's margin is already in the price)",
+        "vi_fanatics": "no commission (the venue's margin is already in the price)",
+        "vi_bet365": "no commission (the venue's margin is already in the price)",
+        "vsin_circa": "no commission (the venue's margin is already in the price)",
         "betmgm": "no commission (the venue's margin is already in the price)",
         "betrivers_kambi": "no commission (the venue's margin is already in the price)",
         "bovada": "no commission (the venue's margin is already in the price)",
@@ -4564,6 +4570,12 @@ class TestTheChargeAndTheSettlementRuleArePinnedPerVenue:
         "an_circa": 'void_and_refund',
         "an_superbook": 'void_and_refund',
         "an_bally": 'void_and_refund',
+        "vi_draftkings": 'void_and_refund',
+        "vi_caesars": 'void_and_refund',
+        "vi_hardrock": 'void_and_refund',
+        "vi_fanatics": 'void_and_refund',
+        "vi_bet365": 'void_and_refund',
+        "vsin_circa": 'void_and_refund',
         "betmgm": 'void_and_refund',
         "betrivers_kambi": 'void_and_refund',
         "bovada": 'void_and_refund',
@@ -4945,7 +4957,9 @@ class TestTheWomensMarkerReachesEveryVenueThatNeedsIt:
     #: cannot arrive under a men's league key in the first place.
     IMMUNE = (
         "betmgm", "bovada", "caesars", "cloudbet", "draftkings", "hardrock",
-        "kalshi", "onexbet", "polymarket",
+        "kalshi", "onexbet", "polymarket", "vi_draftkings", "vi_caesars",
+        "vi_hardrock", "vi_fanatics", "vi_bet365",
+        "vsin_circa",
     )
 
     def test_every_catch_all_adapter_applies_the_marker(self) -> None:
@@ -9273,6 +9287,7 @@ class TestReplayJudgesAScopedRunByItsOwnScope:
         from src.raw_store import RawStore
         from src.sources import registry
         from src.store import Store
+        from tests.conftest import CapturedSource
 
         raw_store = RawStore(tmp_path / "raw")
         fixture_dir = pathlib.Path("tests/fixtures/raw")
@@ -9280,8 +9295,11 @@ class TestReplayJudgesAScopedRunByItsOwnScope:
         for key in ("pinnacle", "fanduel"):
             descriptor = registry.descriptor(key)
             source = descriptor.replay_instance()
-            source._replay_paths = sorted(fixture_dir.glob(f"{key}__*.json"))  # noqa: SLF001
-            sources.append(source)
+            raws = [
+                RawStore(fixture_dir).read(path)
+                for path in sorted(fixture_dir.glob(f"{key}__*.json"))
+            ]
+            sources.append(CapturedSource(source, raws))
         with Store(tmp_path / "db.sqlite3") as store:
             result = collect_once(
                 sources, raw_store=raw_store, store=store, sports=["baseball"],
@@ -9313,15 +9331,20 @@ class TestReplayJudgesAScopedRunByItsOwnScope:
         from src.raw_store import RawStore
         from src.sources import registry
         from src.store import Store
+        from tests.conftest import CapturedSource
 
         raw_store = RawStore(tmp_path / "raw")
         fixture_dir = pathlib.Path("tests/fixtures/raw")
         descriptor = registry.descriptor("pinnacle")
         source = descriptor.replay_instance()
-        source._replay_paths = sorted(fixture_dir.glob("pinnacle__*.json"))  # noqa: SLF001
+        raws = [
+            RawStore(fixture_dir).read(path)
+            for path in sorted(fixture_dir.glob("pinnacle__*.json"))
+        ]
+        captured = CapturedSource(source, raws)
         with Store(tmp_path / "db.sqlite3") as store:
             result = collect_once(
-                [source], raw_store=raw_store, store=store, sports=["baseball"],
+                [captured], raw_store=raw_store, store=store, sports=["baseball"],
             )
             ok, problems = replay_run(
                 result.run_id, store=store, raw_store=raw_store, sports=["hockey"],
@@ -10907,6 +10930,12 @@ class TestEachVenuesKindIsPinnedBecauseItPicksTheRule:
         "an_circa": False,
         "an_superbook": False,
         "an_bally": False,
+        "vi_draftkings": False,
+        "vi_caesars": False,
+        "vi_hardrock": False,
+        "vi_fanatics": False,
+        "vi_bet365": False,
+        "vsin_circa": False,
         "betmgm": False,
         "betrivers_kambi": False,
         "bovada": False,

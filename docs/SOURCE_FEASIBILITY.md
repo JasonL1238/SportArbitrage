@@ -10,6 +10,72 @@ Reproduce it with:
 python scripts/probe_sources.py
 ```
 
+## Illinois re-probe — 2026-08-03
+
+This is the current baseline from the Illinois connection. It supersedes the
+older California reachability notes below; those remain as history because they
+show which failures are egress-sensitive.
+
+The Illinois Gaming Board's current [authorized sportsbook
+list](https://igb.illinois.gov/sports-wagering/sports-authorized-operating-sportsbooks.html)
+names ten online operators: bet365, BetMGM, BetRivers, Caesars, Circa,
+DraftKings, theScore Bet, Fanatics, FanDuel, and Hard Rock Bet. "Available in a
+comparison table" does not by itself mean an operator is legal or usable in
+Illinois. In particular, the IGB has issued cease-and-desist letters to
+[Polymarket, Kalshi, and Bovada](https://igb.illinois.gov/sports-wagering/cease-and-desist-letters.html);
+their adapters remain research inputs but must not be presented as Illinois
+betting counterparties.
+
+### Redundant feed coverage
+
+Republished rows retain their own source keys for provenance but are one
+counterparty with the underlying sportsbook. `src.redundancy` prevents any two
+of those observations from becoming opposite legs of an arbitrage and flags
+material price drift instead.
+
+| Book | First party | Action Network | Independent comparison | Current Illinois result |
+|---|---|---|---|---|
+| DraftKings | `draftkings` | `an_draftkings` | `vi_draftkings` | **Three paths registered.** Current first party uses the official `sportscontent` endpoint through browser transport: 48 MLB quotes, zero rejections. AN and VI both produced quotes. |
+| Caesars | `caesars` | `an_caesars` | `vi_caesars` | Three paths registered; first-party CloudFront is blocked, while AN and VI produced MLB quotes. |
+| FanDuel | `fanduel` | `an_fanduel` | VI column verified, adapter not registered yet | First party 48 MLB quotes; AN 112. |
+| BetMGM | `betmgm` | `an_betmgm` | VI column verified, adapter not registered yet | First party 48; AN 104. |
+| BetRivers | `betrivers_kambi` | `an_betrivers` | VI `RiversCasino` column verified, adapter not registered yet | First party 476; AN 136. |
+| Hard Rock Bet | `hardrock` | `an_hardrock` | `vi_hardrock` | VI produced 48 MLB quotes; first-party GraphQL is geo-empty and AN currently omits the requested book. |
+| bet365 | not implemented | `an_bet365` | `vi_bet365` | AN and VI both produced quotes; official site is Cloudflare-blocked. |
+| Fanatics | not implemented | `an_fanatics` | `vi_fanatics` | VI produced 48 MLB quotes. Current first-party probe returned HTML rather than odds JSON and AN currently omits the requested book. |
+| Circa | app-only surface; no web adapter | `an_circa` | `vsin_circa` | Circa's own site points to VSiN as an odds aggregator. The named VSiN column produced 48 MLB quotes / 8 events with no rejections. It is a Las Vegas line tracker, so use it as fallback and drift evidence rather than proof of Illinois-state price identity. AN is retained but currently omits Circa. |
+| theScore Bet | verified IL GraphQL surface; adapter pending | none | none | Official `us-il` edge returned a valid anonymous startup, MLB competition, and lines payload. This is the strongest next first-party adapter candidate. |
+
+### First-party endpoint findings
+
+| Source | Result from Illinois |
+|---|---|
+| FanDuel IL | working, 48 MLB quotes / 8 events |
+| BetRivers IL | working, 476 / 8 |
+| BetMGM IL | working, 48 / 8 |
+| DraftKings IL | **repaired**: current browser-observed `sportscontent/.../leagueSubcategory/v1/markets` route returns 43 KB JSON and parses 48 / 8; retired v5 captures still replay |
+| Caesars IL and legacy NJ | both `403` / request blocked |
+| Hard Rock `il` and legacy `nj` | ladder and tree answer, but GraphQL returns zero events for both |
+| Pinnacle | `401 No authorization token provided`; guest-token discovery required |
+| bet365 | `403` Cloudflare |
+| Fanatics | public page answers, but the probed data route is HTML rather than odds JSON |
+| Bally Kambi | `429 No access` |
+| Circa | official site says the complete real-time menu is in its mobile app; no public first-party web odds surface found. Its site explicitly lists VSiN and WagerTalk as aggregators, so `vsin_circa` is the independent fallback. |
+| theScore Bet | **first party verified**: `env.js` exposes the public GraphQL host; the default edge redirects this Illinois egress to `sportsbook.us-il.thescore.bet`. Anonymous `Startup`, persisted `CompetitionPage`, and `CompetitionPageSectionLinesTabNode` calls all returned `200`. The MLB lines payload contained 47 event nodes, 55 markets, and 147 selections with structured American odds. Parser/capture work remains. |
+
+The theScore request sequence is state-sensitive and should be implemented as
+one adapter rather than hard-coded curl calls: fetch the official public bundle
+for current persisted-query hashes, call `Startup` on the resolved regional
+edge, keep the anonymous token in memory only, then capture the competition and
+lines responses. The startup payload includes the raw exit IP, so it must be
+sanitized before persistence; only the region and an IP fingerprint belong in
+diagnostic storage.
+
+The full endpoint probe returned usable JSON for 15 of 22 research candidates.
+Working non-retail sources included LeoVegas, Matchbook, Smarkets, SX Bet,
+Cloudbet, and 1xBet. Those results establish transport health; they do not make
+an unlicensed venue an Illinois counterparty.
+
 Everything below was first measured on **2026-07-28** from a host in Davis,
 California with plain `httpx`. That pass classified several big books as
 permanently closed. **That policy is retired.** The collector now defaults to
@@ -23,7 +89,7 @@ python scripts/probe_sources.py --only blocked
 
 ---
 
-## Registered — twelve distinct sources
+## Original California baseline — registered sources
 
 Measured on one live ``--tier core`` pass (2026-07-28), which produced **1,683
 cross-book markets** against 331 from the original three books, and found five
@@ -65,7 +131,7 @@ source's own host, which is a constraint to work within:
 - **Kalshi** — `429 too_many_requests` on the second request of an unpaced probe.
   Paced at 0.6 s.
 
-## Permanently closed (still)
+## Original California blocks
 
 ### Previously blocked under plain `httpx` — reopen candidates
 

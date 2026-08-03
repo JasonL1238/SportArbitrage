@@ -59,11 +59,12 @@ class TestRedundantPairsDeclared:
         for primary, secondary in REDUNDANT_PAIRS:
             assert primary in registry.BY_KEY, primary
             assert secondary in registry.BY_KEY, secondary
-            assert secondary.startswith("an_"), secondary
+            assert secondary.startswith(("an_", "vi_", "vsin_")), secondary
 
     def test_lookup_is_symmetric(self) -> None:
         assert is_redundant_pair("fanduel", "an_fanduel")
         assert is_redundant_pair("an_fanduel", "fanduel")
+        assert is_redundant_pair("an_draftkings", "vi_draftkings")
         assert not is_redundant_pair("fanduel", "pinnacle")
 
 
@@ -102,6 +103,22 @@ class TestRedundancyFlags:
 
 
 class TestArbTreatsFailoverAsOneBook:
+    def test_three_paths_for_one_book_never_form_arb_legs(self) -> None:
+        event = "MLB-AWAY@MLB-HOME:2026-08-01"
+        quotes = [
+            _ml(source, event, selection, odds)
+            for source, selection, odds in (
+                ("draftkings", Selection.HOME, 1.80),
+                ("draftkings", Selection.AWAY, 2.05),
+                ("an_draftkings", Selection.HOME, 2.30),
+                ("an_draftkings", Selection.AWAY, 1.70),
+                ("vi_draftkings", Selection.HOME, 2.20),
+                ("vi_draftkings", Selection.AWAY, 1.75),
+            )
+        ]
+        report = find_opportunities(quotes)
+        assert report.opportunities == []
+
     def test_declared_pair_is_not_in_measured_union_find(self) -> None:
         # Thick agreeing slate: distinctness would call them MIRROR, but they
         # must still stay out of the transitive counterparty graph.

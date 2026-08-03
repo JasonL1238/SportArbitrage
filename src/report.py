@@ -165,6 +165,49 @@ SOURCE_NOTES: dict[str, dict[str, str]] = {
         "kind": "sportsbook",
         "what": "Bet365 prices from Action Network's public scoreboard.",
     },
+    "vi_draftkings": {
+        "label": "DraftKings (VegasInsider)",
+        "host": "www.vegasinsider.com",
+        "kind": "sportsbook",
+        "what": "DraftKings's named column on VegasInsider's public comparison table. "
+                "A redundant observation path, never a separate counterparty.",
+    },
+    "vi_caesars": {
+        "label": "Caesars (VegasInsider)",
+        "host": "www.vegasinsider.com",
+        "kind": "sportsbook",
+        "what": "Caesars's named column on VegasInsider's public comparison table. "
+                "A redundant observation path, never a separate counterparty.",
+    },
+    "vi_hardrock": {
+        "label": "Hard Rock Bet (VegasInsider)",
+        "host": "www.vegasinsider.com",
+        "kind": "sportsbook",
+        "what": "Hard Rock Bet's named VegasInsider column, retained as fallback and "
+                "cross-check data for the same sportsbook.",
+    },
+    "vi_fanatics": {
+        "label": "Fanatics (VegasInsider)",
+        "host": "www.vegasinsider.com",
+        "kind": "sportsbook",
+        "what": "Fanatics's named VegasInsider column, retained as fallback and "
+                "cross-check data for the same sportsbook.",
+    },
+    "vi_bet365": {
+        "label": "bet365 (VegasInsider)",
+        "host": "www.vegasinsider.com",
+        "kind": "sportsbook",
+        "what": "bet365's named VegasInsider column, retained as fallback and "
+                "cross-check data for the same sportsbook.",
+    },
+    "vsin_circa": {
+        "label": "Circa (VSiN)",
+        "host": "data.vsin.com",
+        "kind": "sportsbook",
+        "what": "Circa's named column on VSiN's public Las Vegas line tracker. "
+                "Circa lists VSiN as an odds aggregator; this is fallback and "
+                "cross-check data, never a separate counterparty.",
+    },
     "an_open": {
         "label": "Open (Action Network)",
         "host": "api.actionnetwork.com",

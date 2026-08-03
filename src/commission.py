@@ -171,6 +171,12 @@ COMMISSIONS: dict[str, Commission] = {
     "an_circa": NO_COMMISSION,
     "an_superbook": NO_COMMISSION,
     "an_bally": NO_COMMISSION,
+    "vi_draftkings": NO_COMMISSION,
+    "vi_caesars": NO_COMMISSION,
+    "vi_hardrock": NO_COMMISSION,
+    "vi_fanatics": NO_COMMISSION,
+    "vi_bet365": NO_COMMISSION,
+    "vsin_circa": NO_COMMISSION,
     # ── betting exchanges: a share of net winnings ────────────────────────────
     # CHECK AGAINST YOUR OWN ACCOUNT before staking a Matchbook leg.  Matchbook
     # has changed its standard commission more than once (it has been both above
