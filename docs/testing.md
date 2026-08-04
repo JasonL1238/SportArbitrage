@@ -15,7 +15,19 @@ Install Chromium only for browser-mode collection or manual browser diagnostics:
 .venv/bin/python -m playwright install chromium
 ```
 
-Live collection can require a licensed-region exit and `ODDS_HTTP_PROXY`. It is intentionally excluded from automated validation. Tests use tracked captures under `tests/fixtures/raw/`. Node.js is optional; `tests/test_report.py` skips its dashboard JavaScript smoke coverage when Node is unavailable.
+Live collection can require a licensed-region exit. Use
+`ODDS_HTTP_PROXY_<STATE>` for a state-specific exit; the legacy
+`ODDS_HTTP_PROXY` remains a fallback. Live calls are intentionally excluded from
+automated validation. Tests use tracked captures under `tests/fixtures/raw/`
+and narrow current-shape captures under `tests/fixtures/live_regressions/`.
+Node.js is optional; `tests/test_report.py` skips its dashboard JavaScript smoke
+coverage when Node is unavailable.
+
+Manual browser research requires Playwright. `ODDS_BROWSER_CHANNEL=chrome` may
+select an installed stable Chrome channel when the bundled Chromium differs,
+but research must remain anonymous and must not automate CAPTCHA, login, or
+account state. Sanitized output under `data/research/` is ignored and does not
+count as a test fixture.
 
 Use `.venv/bin/python` below when the virtual environment is not activated.
 
@@ -46,6 +58,7 @@ Start with the test containing the changed symbol or the closest domain group:
 | Promotions | `python -m pytest tests/test_promos.py tests/test_promo_planner.py -q` |
 | Dashboard | `python -m pytest tests/test_report.py -q` |
 | Jurisdiction/detection/cache/multi-state batch | `python -m pytest tests/test_jurisdictions.py tests/test_probe_sources.py -q` |
+| First-party research transport / current Hard Rock shape | `python -m pytest tests/test_source_research.py tests/test_draftkings_hardrock.py -q` |
 | Agent documentation | `python -m pytest tests/test_agent_docs.py -q` then `python scripts/check_agent_docs.py` |
 
 For one failing case, use its node id: `python -m pytest path/to/test.py::TestClass::test_case -q`.

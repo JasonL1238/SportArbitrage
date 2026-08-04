@@ -20,16 +20,63 @@ def test_template_only_never_requires_egress_or_writes_cache(
     monkeypatch, tmp_path, capsys,
 ) -> None:
     probe_sources = _configure_paths(monkeypatch, tmp_path)
+    proxy_states = []
+    monkeypatch.setattr(
+        probe_sources,
+        "proxy_url",
+        lambda state=None: proxy_states.append(state) or None,
+    )
     monkeypatch.setattr(
         probe_sources,
         "probe_registered",
         lambda candidate, state: ("OK", "48 MLB quotes"),
     )
+    monkeypatch.setattr(
+        probe_sources,
+        "probe",
+        lambda candidate, state, verbose, plain: ("OK", "research candidate"),
+    )
     assert probe_sources.main(
         ["--state", "PA", "--template-only", "--only", "draftkings"]
     ) == 0
     assert "UNVALIDATED" in capsys.readouterr().out
+    assert proxy_states == ["PA"]
     assert not probe_sources.settings.PROBE_CACHE_PATH.exists()
+
+
+def test_plain_research_probe_uses_requested_state_proxy(monkeypatch) -> None:
+    from scripts import probe_sources
+
+    seen = {}
+
+    class Response:
+        status_code = 200
+        text = '{"events": []}'
+        headers = {"content-type": "application/json"}
+
+    def fake_get(url, **kwargs):
+        seen.update(url=url, **kwargs)
+        return Response()
+
+    monkeypatch.setattr(
+        probe_sources,
+        "proxy_url",
+        lambda state=None: f"http://{state.lower()}.proxy.invalid:8080",
+    )
+    monkeypatch.setattr(probe_sources.httpx, "get", fake_get)
+    candidate = probe_sources.Candidate(
+        family="research",
+        name="example",
+        url="https://example.invalid/odds",
+    )
+    verdict, _detail = probe_sources.probe(
+        candidate,
+        state="PA",
+        verbose=False,
+        plain=True,
+    )
+    assert verdict == "OK"
+    assert seen["proxy"] == "http://pa.proxy.invalid:8080"
 
 
 def test_state_mismatch_refuses_before_live_probe(monkeypatch, tmp_path, capsys) -> None:

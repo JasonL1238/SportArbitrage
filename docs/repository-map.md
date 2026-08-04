@@ -6,6 +6,7 @@ Use this map before exploring. Search for the relevant symbol and its tests, the
 | --- | --- | --- |
 | `src/collector.py` | Odds orchestration and CLI | Collection lifecycle, replay, CLI commands, coverage reporting |
 | `src/sources/` | Venue integrations | Endpoint, payload mapping, source health, shared HTTP behavior |
+| `src/sources/research.py` | First-party discovery boundary | Research profiles, sanitization, resumable ignored manifests |
 | `src/schema.py`, `src/vocab.py` | Normalized contracts | Quote fields, closed vocabulary, period and outcome rules |
 | `src/leagues.py`, `src/participants.py`, `src/rosters.py` | Identity metadata | League support, aliases, participant resolution |
 | `src/events.py` | Fixture joins | Event keys, orientation, time clustering |
@@ -19,6 +20,7 @@ Use this map before exploring. Search for the relevant symbol and its tests, the
 | `tests/` | Automated validation | Unit, contract, integration, replay, and dashboard tests |
 | `tests/test_adversarial_findings.py` | Regression archive | Search for the affected symbol or finding; never open the full file by default |
 | `tests/fixtures/raw/` | Captured payloads | Add only when a parser regression needs a representative fixture |
+| `tests/fixtures/live_regressions/` | Dated genuine live-shape samples | Keep narrow; require offline parser assertions and no credentials |
 | `docs/` | Contracts and operating knowledge | Architecture, inputs, source evidence, testing, agent guidance |
 | `scripts/` | Manual maintenance/diagnostics | Source probes and repository checks; not application imports |
 | `.github/workflows/` | CI entry points | Keep commands synchronized with `docs/testing.md` |
@@ -43,6 +45,9 @@ Search these files by section or symbol before reading ranges:
 
 - New or changed venue: adapter in `src/sources/`, registration in `src/sources/registry.py`, focused adapter tests, and source/contract documentation.
 - Shared fetching behavior: `src/sources/_common.py`, `transport.py`, or `guards.py`, plus client/guard tests.
+- Anonymous application/XHR/WebSocket investigation: reusable capture and
+  redaction in `src/sources/browser.py` / `research.py`; thin manual invocation
+  in `scripts/recon_sources.py`. Ignored research output is not a fixture.
 - New normalized concept: begin in `src/schema.py` or `src/vocab.py`, then update validation, storage, report serialization, adapters, and contract tests.
 - Event matching: `src/events.py` and participant/league modules; validate with event, participant, and integration tests.
 - Arbitrage behavior: `src/arb.py`, commission, settlement, distinctness, or redundancy modules; add focused mathematical and adversarial tests.
@@ -61,6 +66,7 @@ python -m pytest tests/test_source_contract.py tests/test_<venue>_adapter.py -q
 python -m pytest tests/test_promos.py tests/test_promo_planner.py -q
 python -m pytest tests/test_report.py -q
 python -m pytest tests/test_jurisdictions.py tests/test_probe_sources.py -q
+python -m pytest tests/test_source_research.py tests/test_draftkings_hardrock.py -q
 python -m pytest tests/test_agent_docs.py -q
 python scripts/check_agent_docs.py
 ```

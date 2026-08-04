@@ -5,13 +5,14 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from src.raw_store import RawResponse
+from src.raw_store import RawResponse, RawStore
 from src.schema import Market, Selection
 from src.sources.caesars import parse_caesars
 from src.sources.draftkings import parse_draftkings
 from src.sources.hardrock import parse_hardrock
 
 RAW = Path(__file__).resolve().parent / "fixtures" / "raw"
+LIVE_REGRESSIONS = Path(__file__).resolve().parent / "fixtures" / "live_regressions"
 
 
 def _load(pattern: str) -> RawResponse:
@@ -125,6 +126,69 @@ def test_hardrock_joins_root_idx_to_ladder() -> None:
     assert by_sel[Market.SPREAD, Selection.AWAY].line == 1.5
     assert by_sel[Market.SPREAD, Selection.HOME].line == -1.5
     assert by_sel[Market.TOTAL, Selection.OVER].line == 8.5
+
+
+def test_hardrock_accepts_current_millisecond_event_times() -> None:
+    ladder = _load("hardrock__*_ladder_*.json")
+    events = _load("hardrock__*_events-BASEBALL_*.json")
+    payload = events.json()
+    expected = datetime.fromisoformat(
+        payload["data"]["betSync"]["events"]["data"][0]["eventTime"].replace(
+            "Z", "+00:00"
+        )
+    )
+    payload["data"]["betSync"]["events"]["data"][0]["eventTime"] = (
+        expected.timestamp() * 1000
+    )
+    events = RawResponse(
+        source=events.source,
+        endpoint=events.endpoint,
+        url=events.url,
+        status_code=events.status_code,
+        body=json.dumps(payload),
+        fetched_at=datetime(2026, 8, 1, tzinfo=timezone.utc),
+    )
+    outcome = parse_hardrock([ladder, events])
+    assert not outcome.rejections
+    assert len(outcome.quotes) == 6
+
+
+def test_hardrock_accepts_current_selection_name_lines() -> None:
+    ladder = _load("hardrock__*_ladder_*.json")
+    events = _load("hardrock__*_events-BASEBALL_*.json")
+    payload = events.json()
+    for market in payload["data"]["betSync"]["events"]["data"][0]["markets"]:
+        line = market.pop("line", None)
+        if line is None or market["type"].endswith(":ML"):
+            continue
+        for selection in market["selection"]:
+            if market["type"].endswith(":OU"):
+                selection["name"] = f"{selection['name']} {line}"
+            elif selection["type"] == "AH":
+                selection["name"] = f"{selection['name']} +{abs(line)}"
+            else:
+                selection["name"] = f"{selection['name']} -{abs(line)}"
+    events = RawResponse(
+        source=events.source,
+        endpoint=events.endpoint,
+        url=events.url,
+        status_code=events.status_code,
+        body=json.dumps(payload),
+        fetched_at=datetime(2026, 8, 1, tzinfo=timezone.utc),
+    )
+    outcome = parse_hardrock([ladder, events])
+    assert not outcome.rejections
+    assert len(outcome.quotes) == 6
+
+
+def test_current_hardrock_il_capture_replays_offline_without_rejections() -> None:
+    raws = list(RawStore(LIVE_REGRESSIONS).iter_responses("hardrock"))
+    assert {raw.endpoint for raw in raws} == {"ladder", "tree", "events-BASEBALL"}
+    tree = next(raw for raw in raws if raw.endpoint == "tree")
+    assert tree.request_params == {"segment": "il"}
+    outcome = parse_hardrock(raws)
+    assert not outcome.rejections
+    assert len(outcome.quotes) >= 100
 
 
 def test_caesars_parses_bar_wrapped_names() -> None:

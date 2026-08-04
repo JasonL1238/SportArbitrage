@@ -544,6 +544,7 @@ class BetRiversKambiAdapter:
         *,
         source_key: str = SOURCE_KEY,
         lang: str = DEFAULT_LANG,
+        proxy_state: str | None = None,
     ) -> None:
         """:param leagues: Kambi sport paths (``"baseball/mlb"``) or canonical
         league keys (``"MLB"``) to collect.  Defaults to
@@ -565,7 +566,9 @@ class BetRiversKambiAdapter:
         self._paths = _resolve_requested_paths(
             DEFAULT_PATHS if leagues is None else leagues
         )
-        self._http = SourceClient(source_key, timeout=timeout, client=client)
+        self._http = SourceClient(
+            source_key, timeout=timeout, client=client, proxy_state=proxy_state
+        )
 
     @property
     def source_key(self) -> str:

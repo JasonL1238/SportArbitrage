@@ -36,6 +36,7 @@ promo registry -> promo fetch -> shared raw envelope -> promo parse/enrichment
 | `src/schema.py`, `src/vocab.py` | Closed normalized quote model, sports, markets, periods, and settlement facts |
 | `src/leagues.py`, `src/rosters.py`, `src/participants.py` | Competition metadata and participant identity |
 | `src/sources/` | Venue-specific fetch and parse adapters plus shared transport guards |
+| `src/sources/research.py` | Sanitized, ignored first-party browser/XHR/WebSocket discovery artifacts; never runtime odds |
 | `src/raw_store.py` | Versioned raw-response envelopes and offline replay inputs |
 | `src/events.py` | Cross-source event reconciliation |
 | `src/validation.py`, `src/distinctness.py`, `src/redundancy.py` | Slate correctness and counterparty independence |
@@ -47,6 +48,7 @@ promo registry -> promo fetch -> shared raw envelope -> promo parse/enrichment
 | `src/report.py`, `src/report_assets.py` | Dashboard data construction, serving, and handwritten inline assets |
 | `scripts/` | Manual diagnostics and repository checks; not an application dependency |
 | `tests/fixtures/raw/` | Versioned captured inputs for deterministic parser and replay tests |
+| `tests/fixtures/live_regressions/` | Small dated genuine captures for current live-shape regressions |
 
 ## Entry points
 
@@ -56,6 +58,8 @@ promo registry -> promo fetch -> shared raw envelope -> promo parse/enrichment
 - `python -m src.report`: static dashboard generation or local dashboard server.
 - `python scripts/probe_sources.py`: manual reachability diagnostics; it is not a normal test.
 - `python scripts/detect_state.py`: manual egress detection using the same provider-fallback path.
+- `python scripts/recon_sources.py`: manual anonymous first-party traffic research;
+  output is ignored until a payload becomes a normal adapter capture and replay test.
 
 ## Dependency boundaries
 
@@ -73,4 +77,7 @@ promo registry -> promo fetch -> shared raw envelope -> promo parse/enrichment
 - The report layer may read and combine both domains; collection/domain modules must not depend on report rendering.
 - `src/report_assets.py` is handwritten presentation source (`CSS`, `BODY`, and `JS`), not generated output. Generated dashboards and runtime captures belong under ignored `data/` paths.
 - Reusable detection, probe-cache, and validation behavior belongs in `src/`; scripts should only parse arguments, call it, and present results.
+- Exact-state retail descriptors pass their state into transport selection.
+  `ODDS_HTTP_PROXY_<STATE>` takes precedence over the legacy global proxy, and
+  proxy credentials never enter raw envelopes, research manifests, or logs.
 - Runtime dependencies are declared in `requirements.txt`; test-only dependencies are in `requirements-dev.txt`.

@@ -119,7 +119,11 @@ python scripts/probe_sources.py --state PA --template-only  # structural only; n
 python scripts/probe_sources.py --state PA --force # live validation from matching PA egress
 python scripts/probe_sources.py --only blocked --template-only  # retained research candidates
 # ODDS_HTTP_PROXY=http://user:pass@host:port       # residential exit in a licensed state
+# ODDS_HTTP_PROXY_PA=http://user:pass@pa-host:port # preferred for an exact PA route
 # ODDS_FETCH_MODE=browser                          # force Playwright for the collector
+# ODDS_BROWSER_CHANNEL=chrome                      # optional installed stable Chrome
+python scripts/recon_sources.py hardrock --state IL --mode adapter  # manual first-party research
+python scripts/recon_sources.py bet365 --state IL --mode chrome --capture-dom
 python -m src.collector collect --sport hockey     # or narrow it
 python -m src.collector runs                       # recent runs + per-sport coverage
 python -m src.collector show --limit 20            # normalized rows
@@ -168,6 +172,11 @@ VegasInsider, VSiN, and similar republished observations are marked global and
 diagnostic-only: they can expose drift but cannot form arb legs. Promo runs keep
 only offers whose terms or state-specific surface affirmatively confirms the
 run state. This routing convenience is not sportsbook wagering geolocation.
+
+For multi-state runs, configure `ODDS_HTTP_PROXY_IL`,
+`ODDS_HTTP_PROXY_PA`, `ODDS_HTTP_PROXY_NJ`, or `ODDS_HTTP_PROXY_DC` when routes
+need different exits. Exact-state values win over the legacy global proxy.
+Proxy URLs and credentials are never persisted.
 
 A database written by an earlier schema is **refused with instructions** rather
 than silently written into; `python -m src.collector migrate` upgrades it, backing

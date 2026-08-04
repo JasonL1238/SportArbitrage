@@ -1,4 +1,106 @@
-# Multi-state collection implementation handoff
+# First-party sportsbook acquisition handoff
+
+Last updated: 2026-08-03 (Hard Rock IL complete; other three diagnosed)
+
+## Active objective
+
+Establish anonymous first-party odds acquisition for Caesars, Hard Rock,
+Fanatics, and bet365. Work state-by-state against exact licensed routes, keep
+all research artifacts sanitized, and do not count Action Network or
+VegasInsider as first-party success.
+
+## Active completion contract
+
+- Caesars: IL, PA, NJ, and DC.
+- Hard Rock: IL and NJ; PA/DC remain explicitly unavailable.
+- Fanatics: IL, PA, NJ, and DC.
+- bet365: IL, PA, and NJ; DC remains explicitly unavailable.
+- Each validated route needs two matching-egress runs with active pregame core
+  markets, parser-clean genuine captures, and offline replay coverage.
+- No account/login automation, CAPTCHA bypass, synthetic fixtures, or betting.
+
+## Current implementation checkpoint
+
+- [x] Read canonical, source-boundary, test-boundary, and existing handoff rules.
+- [x] Confirmed clean `main` baseline at `369a622`.
+- [x] Add privacy-safe state-specific proxy selection and egress validation.
+- [x] Add reusable browser page-response/WebSocket research capture.
+- [x] Add the narrow source/transport/state research CLI.
+- [x] Re-discover and validate Hard Rock IL live application traffic.
+- [ ] Validate Caesars first-party core odds (current IL calls are WAF-blocked).
+- [ ] Implement Fanatics and bet365 adapters from genuine first-party payloads.
+- [x] Commit-ready genuine Hard Rock IL RawResponse captures and offline replay.
+- [x] Run focused, package-level, and full validation; the documented missing
+  Action Network capture baseline remains red.
+
+## Immediate resume point
+
+For bet365, find why a normal persistent browser receives the full anonymous IL
+MLB slate while every isolated Playwright profile opens the correct IL shell but
+never completes its catalog subscription. Bundled Chromium, installed stable
+Chrome, headed, mobile, and persistent variants have all been tried; do not copy
+user profile state or bypass a challenge. Fanatics requires legitimate native-
+client research; no Android tooling is installed and the local Xcode simulator
+runtime is incomplete. Caesars needs operator-approved access or a naturally
+successful anonymous session before more parser work is useful.
+
+## Experiment log
+
+All experiments used detected IL egress fingerprint
+`34e56847c7eca6389c6c105ffa82e4ac5da03edebf3a87e0eca0f481921a9561`.
+Ignored sanitized artifacts are under `data/research/`.
+
+- 2026-08-04 00:29Z-00:45Z, Caesars IL, explicit
+  `sportsbook.caesars.com/us/il/bet/`: exact IL config, v3 sports menu, team
+  metadata, and IL Diffusion sockets returned 200. Current v4 navigation/home/
+  quick-picks returned CloudFront 403. Direct v3 MLB highlights also returned
+  403. The sports menu proved the old hard-coded competition list is incomplete
+  (current MLB id `04f90892-3afa-4e84-acce-5b89f151063d`). Headed and persistent
+  browser trials returned the same 403. Next: operator-approved access or a
+  naturally successful anonymous payload; do not bypass AWS WAF.
+- 2026-08-04 00:34Z, Hard Rock IL, headless discovery plus two adapter runs:
+  app traffic proved segment `il`, channel `ILLINOIS_ONLINE`, millisecond
+  `eventTime`, and selection-name handicaps. Adapter updated. Two separate
+  matching-egress runs each produced 202 quotes with zero rejections. A later
+  probe produced 172 quotes with zero rejections; the exact IL route is now
+  validated. Genuine current envelopes replay to at least 100 quotes without
+  network. NJ still needs matching-NJ egress.
+- 2026-08-04 00:35Z, Fanatics IL, headless page: `sportsbook.fanatics.com`
+  redirected to the `betfanatics.com` marketing site and produced no first-party
+  odds traffic. Official operator material says the sportsbook is a native iOS/
+  Android experience. Next: mobile-client research without login; do not
+  register an adapter until a genuine anonymous odds payload exists. Android
+  platform tools are absent and the local iOS simulator runtime is incomplete.
+- 2026-08-04 00:36Z-01:03Z, bet365 IL: an initial challenge later cleared
+  naturally. The exact `www.il.bet365.com` application, IL state code 28, IL
+  locale, compact pull-pod protocol, and `365lpodds.com` sockets were confirmed.
+  A normal persistent browser displayed a complete anonymous MLB slate with
+  moneyline, run line, and total prices. Fresh isolated Playwright sessions—
+  mobile, headed, persistent, and installed stable Chrome—load the exact IL
+  navigation but stay behind the application preloader; their catalog sockets
+  return handshake/time frames without a slate. bet365 is viable but is not yet
+  safe to register as an unattended adapter. Generated Caesars/bet365 browser
+  profiles were deleted after diagnosis so anonymous session cookies are not
+  retained; only sanitized ignored manifests remain.
+
+## Validation evidence for this task
+
+- Focused research/transport/Hard Rock/jurisdiction/client/probe tests:
+  **53 passed**.
+- Focused promotions/report group: **167 passed, 4 failed**. Three failures are
+  the documented missing `an_fliff`, `an_circa`, and `an_superbook` captures;
+  the localhost server case is sandbox-only and passed separately with loopback
+  permission (**1 passed**).
+- Source contract/pipeline/integration group: **135 passed, 1,373 errors**;
+  every error is the known `registered_raws` cascade beginning at missing
+  `an_fliff`.
+- Full `tests/`: **2,565 passed, 4 failed, 1,395 errors**. The four direct
+  failures are the same three missing-capture guards and sandboxed localhost
+  bind; all errors are the same registered-fixture cascade.
+- `python -m compileall -q src scripts`, agent-document drift check, agent-doc
+  test, and `git diff --check`: passed.
+
+## Historical multi-state delivery
 
 Last updated: 2026-08-03
 

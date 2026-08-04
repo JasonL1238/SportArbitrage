@@ -147,10 +147,10 @@ IL = Jurisdiction(
         "hardrock": _route(
             "hardrock",
             "https://api.hardrocksportsbook.com",
-            {"segment": "il"},
-            RouteStatus.TEMPLATE,
+            {"segment": "il", "channel": "ILLINOIS_ONLINE"},
+            RouteStatus.VALIDATED,
             "IL",
-            "exact Illinois route still requires matching-egress validation",
+            "validated from matching Illinois egress on 2026-08-03",
         ),
     },
     promos=PromoRoute(
@@ -308,7 +308,7 @@ NJ = Jurisdiction(
         "hardrock": _route(
             "hardrock",
             "https://api.hardrocksportsbook.com",
-            {"segment": "nj"},
+            {"segment": "nj", "channel": "NEW_JERSEY_ONLINE"},
             RouteStatus.TEMPLATE,
             "NJ",
         ),

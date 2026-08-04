@@ -158,6 +158,8 @@ class SourceDescriptor:
     config: Mapping[str, Any] = field(default_factory=dict)
     """What distinguishes this instance from its siblings on the same class — the
     Kambi operator token, a FanDuel state, an exchange's currency."""
+    route_state: str | None = None
+    """Exact retail state whose proxy must carry this live descriptor."""
 
     def factory(self) -> Callable[..., OddsSource]:
         """A callable that builds this source, with its configuration bound.
@@ -167,7 +169,8 @@ class SourceDescriptor:
         which is how :func:`accepts_leagues` can tell whether an instance can be
         narrowed to a league list without knowing anything about the class.
         """
-        return partial(self.adapter, source_key=self.key, **self.config)
+        routed = {"proxy_state": self.route_state} if self.route_state else {}
+        return partial(self.adapter, source_key=self.key, **self.config, **routed)
 
     def build(self, *, leagues: Sequence[str] | None = None, timeout: float | None = None) -> OddsSource:
         kwargs: dict[str, Any] = {}
@@ -488,7 +491,13 @@ def state_sources_for_state(state: str) -> tuple[SourceDescriptor, ...]:
                 f"{entry.key} route is tagged {route.routed_state}, not "
                 f"requested state {configured.state}; cross-state fallback refused"
             )
-        built.append(replace(entry, config={**entry.config, **route.config}))
+        built.append(
+            replace(
+                entry,
+                config={**entry.config, **route.config},
+                route_state=configured.state,
+            )
+        )
     return tuple(built)
 
 

@@ -1,15 +1,14 @@
 """Hard Rock Bet pregame markets, from the Amelco public stack.
 
-Three calls make a slate:
+Three calls make a jurisdiction-specific slate:
 
-* ``/sportsbook/api/public/events/tree?segment=nj`` — sport / competition map
-  (reachable from CA).
+* ``/sportsbook/api/public/events/tree?segment=<state>`` — sport / competition
+  map.
 * ``/sportsbook/v1/api/getRootLadder`` — ``rootIndex`` → decimal / moneyline
-  ladder (reachable from CA).
+  ladder.
 * ``POST /java-graphql/graphql`` — events with markets whose selections carry
-  ``rootIdx`` into that ladder.  From California this returns an empty
-  ``events.data`` list; a licensed-state ``ODDS_HTTP_PROXY`` is required for
-  live prices.
+  ``rootIdx`` into that ladder.  The segment, online channel, and egress must
+  all match the selected jurisdiction for live prices.
 
 Prices are never taken as raw numbers off the GraphQL selection; a missing
 ladder entry refuses the row rather than inventing an odds.
@@ -17,6 +16,7 @@ ladder entry refuses the row rather than inventing an odds.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Mapping, Sequence
@@ -42,6 +42,7 @@ from src.sources._common import (
     drop_duplicate_selections,
     envelope_source,
     latest_per_endpoint,
+    parse_epoch_time,
     parse_iso_time,
 )
 from src.sources.base import ParseOutcome
@@ -52,6 +53,7 @@ log = logging.getLogger(__name__)
 SOURCE_KEY = "hardrock"
 DEFAULT_API_BASE = "https://api.hardrocksportsbook.com"
 DEFAULT_SEGMENT = "nj"
+DEFAULT_CHANNEL = "NEW_JERSEY_ONLINE"
 HOST_INTERVAL = 0.6
 
 SPORT_SCOPES: tuple[tuple[str, Sport, tuple[str, ...]], ...] = (
@@ -186,7 +188,7 @@ class _Fixture:
 
 
 class HardRockAdapter:
-    """Collects Hard Rock Bet NJ pregame game markets."""
+    """Collect Hard Rock Bet pregame game markets for one routed state."""
 
     def __init__(
         self,
@@ -195,8 +197,10 @@ class HardRockAdapter:
         source_key: str = SOURCE_KEY,
         api_base: str = DEFAULT_API_BASE,
         segment: str = DEFAULT_SEGMENT,
+        channel: str = DEFAULT_CHANNEL,
         timeout: float = 30.0,
         client: httpx.Client | None = None,
+        proxy_state: str | None = None,
     ) -> None:
         wanted = (
             frozenset(leagues)
@@ -215,8 +219,13 @@ class HardRockAdapter:
         self._source_key = source_key
         self.api_base = api_base.rstrip("/")
         self.segment = segment
+        self.channel = channel
         self._http = SourceClient(
-            source_key, timeout=timeout, client=client, host_interval=HOST_INTERVAL
+            source_key,
+            timeout=timeout,
+            client=client,
+            host_interval=HOST_INTERVAL,
+            proxy_state=proxy_state,
         )
 
     @property
@@ -310,7 +319,7 @@ class HardRockAdapter:
             key for key in MARKET_TYPES if key.startswith(sport_code + ":")
         ]
         variables = {
-            "channel": "WEB",
+            "channel": self.channel,
             "segment": self.segment,
             "region": "us",
             "language": "enus",
@@ -489,7 +498,12 @@ def _accept_event(
         )
         return None
 
-    commence_time = parse_iso_time(event.get("eventTime"))
+    event_time = event.get("eventTime")
+    commence_time = (
+        parse_epoch_time(event_time, unit="ms")
+        if isinstance(event_time, (int, float))
+        else parse_iso_time(event_time)
+    )
     if commence_time is None:
         outcome.reject(source, "missing_commence_time", f"event {event_id}", event_id=event_id)
         return None
@@ -612,7 +626,12 @@ def _emit_markets(
                 )
                 continue
 
-            line = _line_for(selection, market_kind, market_line_f)
+            line = _line_for(
+                selection,
+                market_kind,
+                market_line_f,
+                selection_name=str(sel.get("name") or ""),
+            )
             if market_kind in (Market.SPREAD, Market.TOTAL) and line is None:
                 outcome.reject(
                     source,
@@ -656,11 +675,16 @@ def _line_for(
     selection: Selection,
     market_kind: Market,
     market_line: float | None,
+    *,
+    selection_name: str = "",
 ) -> float | None:
     if market_kind is Market.MONEYLINE:
         return None
+    named_line = _named_line(selection_name)
     if market_kind is Market.TOTAL:
-        return market_line
+        return market_line if market_line is not None else named_line
+    if named_line is not None:
+        return named_line
     if market_line is None:
         return None
     if selection is Selection.AWAY:
@@ -668,6 +692,17 @@ def _line_for(
     if selection is Selection.HOME:
         return -abs(market_line)
     return market_line
+
+
+def _named_line(name: str) -> float | None:
+    """Read the signed handicap appended to current Hard Rock selection names."""
+    match = re.search(r"([+-]?\d+(?:\.\d+)?)\s*$", name.strip())
+    if match is None:
+        return None
+    try:
+        return float(match.group(1))
+    except ValueError:  # pragma: no cover - regex accepts only float syntax
+        return None
 
 
 def _selection_for(
@@ -688,7 +723,8 @@ def _selection_for(
         return None
 
     if name:
-        participant = canonical_participant(name, fixture.competition)
+        participant_name = re.sub(r"\s+[+-]?\d+(?:\.\d+)?\s*$", "", name)
+        participant = canonical_participant(participant_name, fixture.competition)
         if participant is not None:
             # Compare to book_home_key / oriented sides so tennis orient() cannot
             # flip Amelco A/B against the participant identity.

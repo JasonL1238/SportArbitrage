@@ -97,6 +97,7 @@ class CaesarsAdapter:
         base_url: str = DEFAULT_BASE_URL,
         timeout: float = 25.0,
         client: httpx.Client | None = None,
+        proxy_state: str | None = None,
     ) -> None:
         wanted = (
             frozenset(leagues)
@@ -115,7 +116,11 @@ class CaesarsAdapter:
         self._source_key = source_key
         self.base_url = base_url.rstrip("/")
         self._http = SourceClient(
-            source_key, timeout=timeout, client=client, host_interval=HOST_INTERVAL
+            source_key,
+            timeout=timeout,
+            client=client,
+            host_interval=HOST_INTERVAL,
+            proxy_state=proxy_state,
         )
 
     @property

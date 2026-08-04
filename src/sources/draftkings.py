@@ -128,6 +128,7 @@ class DraftKingsAdapter:
         content_base_url: str = DEFAULT_CONTENT_BASE_URL,
         timeout: float = 25.0,
         client: httpx.Client | None = None,
+        proxy_state: str | None = None,
     ) -> None:
         wanted = (
             frozenset(leagues)
@@ -148,10 +149,15 @@ class DraftKingsAdapter:
         self._source_key = source_key
         self.base_url = base_url.rstrip("/")
         self.content_base_url = content_base_url.rstrip("/")
+        self.proxy_state = proxy_state
         self._allow_browser_fallback = client is None
         self._browser_http: SourceClient | None = None
         self._http = SourceClient(
-            source_key, timeout=timeout, client=client, host_interval=HOST_INTERVAL
+            source_key,
+            timeout=timeout,
+            client=client,
+            host_interval=HOST_INTERVAL,
+            proxy_state=proxy_state,
         )
 
     @property
@@ -237,7 +243,11 @@ class DraftKingsAdapter:
 
             self._browser_http = SourceClient(
                 self._source_key,
-                client=build_browser_client(timeout=25.0, seed_url=page_url),
+                client=build_browser_client(
+                    timeout=25.0,
+                    seed_url=page_url,
+                    state=self.proxy_state,
+                ),
                 host_interval=HOST_INTERVAL,
             )
         return self._browser_http.get(

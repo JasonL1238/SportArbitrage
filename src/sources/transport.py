@@ -19,8 +19,19 @@ from urllib.parse import urlencode, urlsplit, urlunsplit
 DEFAULT_IMPERSONATE = os.environ.get("ODDS_IMPERSONATE", "chrome131")
 
 
-def proxy_url() -> str | None:
-    """First non-empty proxy env var, or None."""
+def proxy_url(state: str | None = None) -> str | None:
+    """Return the configured proxy, preferring an exact-state value.
+
+    A multi-state batch must not accidentally send every retail request through
+    the process-wide proxy.  ``ODDS_HTTP_PROXY_PA`` (and the equivalent IL/NJ/DC
+    keys) therefore wins for a PA route, with the historical global variables
+    retained as an explicit fallback.
+    """
+    normalized = (state or "").strip().upper()
+    if normalized:
+        value = os.environ.get(f"ODDS_HTTP_PROXY_{normalized}", "").strip()
+        if value:
+            return value
     for key in ("ODDS_HTTP_PROXY", "HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY"):
         value = os.environ.get(key, "").strip()
         if value:
@@ -129,7 +140,13 @@ class ImpersonatedSession:
         self._session.close()
 
 
-def build_default_client(*, timeout: float = 20.0, seed_url: str | None = None) -> Any:
+def build_default_client(
+    *,
+    timeout: float = 20.0,
+    seed_url: str | None = None,
+    proxy: str | None = None,
+    state: str | None = None,
+) -> Any:
     """Session used when an adapter does not inject its own client.
 
     Order of preference:
@@ -138,9 +155,14 @@ def build_default_client(*, timeout: float = 20.0, seed_url: str | None = None) 
     """
     from src.sources.browser import browser_enabled, build_browser_client
 
+    resolved_proxy = proxy if proxy is not None else proxy_url(state)
     if browser_enabled():
-        return build_browser_client(timeout=timeout, seed_url=seed_url)
-    return ImpersonatedSession(timeout=timeout)
+        return build_browser_client(
+            timeout=timeout,
+            seed_url=seed_url,
+            proxy=resolved_proxy,
+        )
+    return ImpersonatedSession(timeout=timeout, proxy=resolved_proxy)
 
 
 def _with_query(url: str, params: Mapping[str, Any]) -> str:

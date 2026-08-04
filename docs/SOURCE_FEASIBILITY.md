@@ -71,6 +71,35 @@ Illinois. In particular, the IGB has issued cease-and-desist letters to
 their adapters remain research inputs but must not be presented as Illinois
 betting counterparties.
 
+### First-party acquisition follow-up — 2026-08-04 UTC
+
+All results below used the recorded Illinois egress fingerprint and anonymous
+application traffic. Research capture stores only sanitized URLs, safe headers,
+response bodies, text WebSocket frames, and the egress hash under ignored
+`data/research/`; it never persists the exit IP, proxy URL, cookies, or tokens.
+
+- **Hard Rock IL is repaired and live-validated.** The application proved
+  segment `il`, channel `ILLINOIS_ONLINE`, millisecond event timestamps, and
+  selection-name handicaps. Two runs returned 202 quotes with zero rejections;
+  a later probe returned 172 with zero. A genuine dated RawResponse set replays
+  to more than 100 quotes without network access.
+- **Caesars IL remains blocked at the first-party core-odds boundary.** The
+  exact IL application, v3 sports menu, metadata, and sockets answer, but v4
+  navigation/home/quick-picks and current v3 MLB highlights return CloudFront
+  403 in headed, headless, and persistent sessions. This needs operator-approved
+  access or a naturally successful anonymous response, not WAF bypass code.
+- **Fanatics currently exposes sportsbook odds through its native apps.** The
+  [operator describes the sportsbook as an iOS/Android
+  experience](https://www.fanaticsinc.com/fanatics-sportsbook-online-experience);
+  its sportsbook web host redirects to the marketing site and yields no
+  anonymous first-party sportsbook payload. Native-client research remains,
+  without login or untrusted APK installation.
+- **bet365 IL is viable but not registered.** A normal browser displays a full
+  anonymous Illinois MLB slate, and the exact IL configuration plus compact
+  publisher protocol were identified. Fresh isolated Chromium and stable-Chrome
+  profiles load the correct IL shell but their catalog subscription stalls at
+  the application preloader, so unattended collection is not yet repeatable.
+
 ### Redundant feed coverage
 
 Republished rows retain their own source keys for provenance but are one
@@ -85,9 +114,9 @@ material price drift instead.
 | FanDuel | `fanduel` | `an_fanduel` | VI column verified, adapter not registered yet | First party 48 MLB quotes; AN 112. |
 | BetMGM | `betmgm` | `an_betmgm` | VI column verified, adapter not registered yet | First party 48; AN 104. |
 | BetRivers | `betrivers_kambi` | `an_betrivers` | VI `RiversCasino` column verified, adapter not registered yet | First party 476; AN 136. |
-| Hard Rock Bet | `hardrock` | `an_hardrock` | `vi_hardrock` | AN v2 and VI each produced 48 MLB quotes; first-party GraphQL remains geo-empty. |
-| bet365 | not implemented | `an_bet365` | `vi_bet365` | AN and VI both produced quotes; official site is Cloudflare-blocked. |
-| Fanatics | not implemented | `an_fanatics` | `vi_fanatics` | AN v2 and VI each produced 48 MLB quotes. Current first-party probe returned HTML rather than odds JSON. |
+| Hard Rock Bet | `hardrock` | `an_hardrock` | `vi_hardrock` | **Three paths registered.** First party now returns current IL core markets parser-clean; AN v2 and VI provide diagnostic comparison rows. |
+| bet365 | not implemented | `an_bet365` | `vi_bet365` | AN and VI produce comparison rows. A normal browser shows first-party IL odds, but fresh isolated automation does not complete its catalog subscription. |
+| Fanatics | not implemented | `an_fanatics` | `vi_fanatics` | AN v2 and VI produce comparison rows. The current web host is marketing-only; native-app first-party discovery remains. |
 | Circa | app-only surface; no web adapter | `an_circa` | `vsin_circa` | Circa's own site points to VSiN as an odds aggregator. The named VSiN column produced 48 MLB quotes / 8 events with no rejections. It is a Las Vegas line tracker, so use it as fallback and drift evidence rather than proof of Illinois-state price identity. AN is retained but currently omits Circa. |
 | theScore Bet | verified IL GraphQL surface; adapter pending | none | none | Official `us-il` edge returned a valid anonymous startup, MLB competition, and lines payload. This is the strongest next first-party adapter candidate. |
 
@@ -112,10 +141,10 @@ source.
 | BetMGM IL | working, 48 / 8 |
 | DraftKings IL | **repaired**: current browser-observed `sportscontent/.../leagueSubcategory/v1/markets` route returns 43 KB JSON and parses 48 / 8; retired v5 captures still replay |
 | Caesars IL and legacy NJ | both `403` / request blocked |
-| Hard Rock `il` and legacy `nj` | ladder and tree answer, but GraphQL returns zero events for both |
+| Hard Rock IL | **working and validated**: current route returns parser-clean core markets; NJ remains template-only pending NJ egress |
 | Pinnacle | `401 No authorization token provided`; guest-token discovery required |
-| bet365 | `403` Cloudflare |
-| Fanatics | public page answers, but the probed data route is HTML rather than odds JSON |
+| bet365 | normal browser shows full IL MLB odds; fresh isolated browser catalog subscription stalls |
+| Fanatics | sportsbook web host redirects to marketing; first-party discovery remains native-app work |
 | Bally Kambi | `429 No access` |
 | Circa | official site says the complete real-time menu is in its mobile app; no public first-party web odds surface found. Its site explicitly lists VSiN and WagerTalk as aggregators, so `vsin_circa` is the independent fallback. |
 | theScore Bet | **first party verified**: `env.js` exposes the public GraphQL host; the default edge redirects this Illinois egress to `sportsbook.us-il.thescore.bet`. Anonymous `Startup`, persisted `CompetitionPage`, and `CompetitionPageSectionLinesTabNode` calls all returned `200`. The MLB lines payload contained 47 event nodes, 55 markets, and 147 selections with structured American odds. Parser/capture work remains. |
@@ -201,7 +230,7 @@ Neither opened odds JSON without a licensed-state exit IP:
 | DraftKings | `403` Akamai | HTML shell loads; `sportsbook-nash` API still `403`; no odds XHR | `ODDS_HTTP_PROXY` to IL/NJ residential, then adapter |
 | Caesars | `403` CloudFront | `403` | same — licensed-state proxy |
 | Fanatics | NXDOMAIN | NXDOMAIN | find current host |
-| bet365 | `403` Cloudflare | `403` | proxy + Playwright challenge solve |
+| bet365 | `403` Cloudflare | `403` | anonymous application observation only; never bypass a challenge |
 | Betway / Bally / Fliff / Hard Rock | no simple public GET | — | reverse runtime/XHR or mobile |
 | ESPN BET | discontinued | — | skip |
 

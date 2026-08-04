@@ -229,6 +229,7 @@ class BetMgmAdapter:
         subdivision: str = DEFAULT_SUBDIVISION,
         timeout: float = 20.0,
         client: httpx.Client | None = None,
+        proxy_state: str | None = None,
     ) -> None:
         wanted = tuple(leagues) if leagues is not None else tuple(
             league for scope in SPORT_SCOPES for league in scope.leagues
@@ -258,7 +259,11 @@ class BetMgmAdapter:
         self.access_id = access_id
         self.subdivision = subdivision
         self._http = SourceClient(
-            source_key, timeout=timeout, client=client, host_interval=HOST_INTERVAL
+            source_key,
+            timeout=timeout,
+            client=client,
+            host_interval=HOST_INTERVAL,
+            proxy_state=proxy_state,
         )
 
     @property

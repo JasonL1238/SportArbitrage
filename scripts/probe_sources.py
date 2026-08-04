@@ -6,8 +6,8 @@ network from wherever it is run — which endpoints answer, which refuse, and ho
 and that changes with the host, the day, the jurisdiction, and the transport.
 
 Default transport matches the collector: Chrome TLS impersonation via
-``curl_cffi``, plus ``ODDS_HTTP_PROXY`` when set.  Use this to decide which
-blocked books are ready for an adapter.
+``curl_cffi``, plus the selected state's proxy when configured. Use this to
+decide which blocked books are ready for an adapter.
 
     python scripts/probe_sources.py --state IL      # active retail routes
     python scripts/probe_sources.py --state PA --template-only
@@ -260,17 +260,24 @@ def probe_registered(candidate: Candidate, *, state: str) -> tuple[str, str]:
     return "OK", f"{len(outcome.quotes)} {league} quote(s), {len(raws)} response(s)"
 
 
-def probe(candidate: Candidate, *, verbose: bool, plain: bool = False) -> tuple[str, str]:
+def probe(
+    candidate: Candidate,
+    *,
+    state: str,
+    verbose: bool,
+    plain: bool = False,
+) -> tuple[str, str]:
     """``(verdict, detail)`` for one candidate.  Never raises."""
     from src.sources.browser import browser_enabled, build_browser_client
     from src.sources.transport import build_default_client
 
     headers = {"User-Agent": USER_AGENT, "Accept": "application/json, text/plain, */*"}
+    selected_proxy = proxy_url(state)
     try:
         if plain:
             response = httpx.get(
                 candidate.url, params=candidate.params, timeout=TIMEOUT,
-                follow_redirects=True, headers=headers,
+                follow_redirects=True, headers=headers, proxy=selected_proxy,
             )
             status = response.status_code
             body = response.text
@@ -283,9 +290,9 @@ def probe(candidate: Candidate, *, verbose: bool, plain: bool = False) -> tuple[
             elif "americanwagering.com" in candidate.url:
                 seed = "https://www.caesars.com/sportsbook-and-casino"
             session = (
-                build_browser_client(timeout=TIMEOUT, seed_url=seed)
+                build_browser_client(timeout=TIMEOUT, seed_url=seed, state=state)
                 if browser_enabled()
-                else build_default_client(timeout=TIMEOUT)
+                else build_default_client(timeout=TIMEOUT, state=state)
             )
             try:
                 response = session.get(
@@ -427,7 +434,7 @@ def main(argv: list[str] | None = None) -> int:
         mode = "Playwright Chromium"
     else:
         mode = "curl_cffi Chrome impersonation"
-    proxy = proxy_url()
+    proxy = proxy_url(state)
     print(f"state: {state} ({'template-only' if args.template_only else 'egress verified'})")
     print(f"transport: {mode}" + (" via configured proxy" if proxy else " (no proxy)"))
     print(f"{'family':<11} {'candidate':<28} {'verdict':<12} detail")
@@ -454,7 +461,10 @@ def main(argv: list[str] | None = None) -> int:
                 verdict, detail = probe_registered(candidate, state=state)
             else:
                 verdict, detail = probe(
-                    candidate, verbose=args.verbose, plain=args.plain
+                    candidate,
+                    state=state,
+                    verbose=args.verbose,
+                    plain=args.plain,
                 )
             actual_ok = verdict == "OK"
             reachable += actual_ok

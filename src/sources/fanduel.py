@@ -624,6 +624,7 @@ class FanDuelAdapter:
         client: httpx.Client | None = None,
         soccer_detail: bool = True,
         soccer_detail_limit: int | None = None,
+        proxy_state: str | None = None,
         *,
         source_key: str = SOURCE_KEY,
     ) -> None:
@@ -641,7 +642,9 @@ class FanDuelAdapter:
         self.app_key = app_key
         self.soccer_detail = soccer_detail
         self.soccer_detail_limit = soccer_detail_limit
-        self._http = SourceClient(source_key, timeout=timeout, client=client)
+        self._http = SourceClient(
+            source_key, timeout=timeout, client=client, proxy_state=proxy_state
+        )
 
     @property
     def source_key(self) -> str:

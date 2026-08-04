@@ -130,8 +130,9 @@ egress fingerprint, the cache short-circuits the expensive live pass.
   module-level `DEFAULT_STATE = "il"` alone.
 - Registry builds one exact-state retail config for every selected batch state.
 - Promos use the same map (`x-sportsbook-region`, `.il.` / `.pa.` landings).
-- Optional later: `ODDS_HTTP_PROXY_IL`, `ODDS_HTTP_PROXY_PA` if one process must
-  hit two exits. Until then, one global proxy + one primary state is enough.
+- `ODDS_HTTP_PROXY_IL`, `ODDS_HTTP_PROXY_PA`, `ODDS_HTTP_PROXY_NJ`, and
+  `ODDS_HTTP_PROXY_DC` select exact-state exits in one process. They take
+  precedence over the retained global `ODDS_HTTP_PROXY` fallback.
 
 ---
 
@@ -145,7 +146,7 @@ when the cache misses or you pass `--force`.
 ```bash
 export ODDS_STATE=PA          # or IL
 # If books still refuse CA egress:
-export ODDS_HTTP_PROXY=…      # residential exit in that licensed state
+export ODDS_HTTP_PROXY_PA=…   # residential PA exit for PA routes
 ```
 
 ### Step 1 — Detect

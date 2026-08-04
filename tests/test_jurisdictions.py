@@ -172,9 +172,11 @@ def test_every_instantiated_retail_route_matches_its_requested_state() -> None:
     il = _by_key(state_sources_for_state("IL"))
     assert "/locations/il/" in il["caesars"].config["base_url"]
     assert il["hardrock"].config["segment"] == "il"
+    assert il["hardrock"].config["channel"] == "ILLINOIS_ONLINE"
     nj = _by_key(state_sources_for_state("NJ"))
     assert "/locations/nj/" in nj["caesars"].config["base_url"]
     assert nj["hardrock"].config["segment"] == "nj"
+    assert nj["hardrock"].config["channel"] == "NEW_JERSEY_ONLINE"
 
 
 def test_state_selection_includes_detected_first_and_deduplicates(monkeypatch) -> None:

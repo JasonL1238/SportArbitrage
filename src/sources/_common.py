@@ -159,6 +159,7 @@ class SourceClient:
         pacer: HostPacer | None = None,
         min_request_interval: float | None = None,
         host_interval: float = 0.0,
+        proxy_state: str | None = None,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         from src.sources.transport import build_default_client
@@ -177,7 +178,11 @@ class SourceClient:
         self._owns_client = client is None
         # Default: Chrome TLS impersonation (+ optional proxy).  Injected
         # clients (httpx.MockTransport in tests) are left alone.
-        self._client = client if client is not None else build_default_client(timeout=timeout)
+        self._client = (
+            client
+            if client is not None
+            else build_default_client(timeout=timeout, state=proxy_state)
+        )
 
     def get(
         self,
