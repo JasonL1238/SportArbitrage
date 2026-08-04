@@ -97,6 +97,7 @@ try {
     globalThis.__americanOf = americanOf;
     globalThis.__consensusLine = consensusLine;
     globalThis.__fmtAmerican = fmtAmerican;
+    globalThis.__betLink = betLink;
     globalThis.__promoPlanHtml = promoPlanHtml;
     globalThis.__promoDetailHtml = promoDetailHtml;
     globalThis.__renderPromos = renderPromos;
@@ -1403,5 +1404,41 @@ if (process.argv[3]) {
   console.log(problems.length
     ? 'PROMO PLAN RENDER WRONG: ' + problems.join('; ')
     : 'promo plan cards render the planner\'s numbers verbatim (6 strategies, 3 markets, 7 shapes)');
+  if (problems.length) process.exit(1);
+}
+
+// ── where each leg gets placed ───────────────────────────────────────────────
+// A link is the one thing on an arb card that leaves the page, so the two ways
+// it can mislead are checked here: an event link that is not marked as exact
+// (the reader cannot tell it apart from a league index) and any book-supplied
+// string reaching the markup unescaped.
+{
+  const betLink = globalThis.__betLink;
+  const problems = [];
+  const exact = betLink({ url: 'https://sportsbook.draftkings.com/event/34475007',
+                          precision: 'event', book: 'draftkings', mirrored: false });
+  if (!exact.includes('bet-exact')) problems.push('an event link is not marked exact');
+  if (!exact.includes('/event/34475007')) problems.push('the event url is not in the href');
+
+  const league = betLink({ url: 'https://sportsbook.fanduel.com/navigation/mlb',
+                           precision: 'league', book: 'fanduel', mirrored: false });
+  if (league.includes('bet-exact')) problems.push('a league page is dressed as an exact bet');
+  if (!league.includes('>league<')) problems.push('a league page does not say league');
+
+  const mirrored = betLink({ url: 'https://sportsbook.fanduel.com/navigation/mlb',
+                             precision: 'league', book: 'fanduel', mirrored: true });
+  if (!mirrored.includes('aggregator')) problems.push('a mirrored price is not flagged');
+
+  if (!betLink(null).includes('—')) problems.push('a legless link is not a dash');
+  if (betLink(null).includes('undefined')) problems.push('a missing link prints undefined');
+
+  const hostile = betLink({ url: 'https://x.test/?a="><script>alert(1)</script>',
+                            precision: 'event', book: 'x"><b>', mirrored: false });
+  if (hostile.includes('<script>') || hostile.includes('><b>')) {
+    problems.push('a book-supplied string reached the markup unescaped');
+  }
+  console.log(problems.length
+    ? 'BET LINK RENDER WRONG: ' + problems.join('; ')
+    : 'bet links state their precision and escape book-supplied text');
   if (problems.length) process.exit(1);
 }

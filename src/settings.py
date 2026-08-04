@@ -174,13 +174,37 @@ HTTP_TIMEOUT = _number("HTTP_TIMEOUT", "20", whole=False, minimum=0.001)
 #: Fresh successful live probes are reused for this many days.
 PROBE_TTL_DAYS = _number("PROBE_TTL_DAYS", "60", whole=True, minimum=1)
 
-#: Minimum ideal-stake ROI (fraction) before an arb is texted.  Default 2.5%.
-ALERT_MIN_ROI = _number("ALERT_MIN_ROI", "0.025", whole=False, minimum=0.0)
+#: Minimum ideal-stake ROI (fraction) before an arb is texted.  Default 3%.
+#: Read as return on the bankroll actually staked, which is the same number the
+#: dashboard and ``arb`` print — deliberately not the market margin, so "3%"
+#: means one thing everywhere.
+ALERT_MIN_ROI = _number("ALERT_MIN_ROI", "0.03", whole=False, minimum=0.0)
 
 #: Destination mobile for arb SMS (E.164).  Override with ``ODDS_ALERT_TO``.
 ALERT_TO = _lookup("ALERT_TO", "+18479070871")
 
-#: Twilio credentials — empty means alerts are disabled (collect still runs).
+#: How a text is delivered.  ``messages`` drives the local Messages app over
+#: AppleScript — free, no account, but only while this Mac is awake and signed
+#: in.  ``twilio`` uses the HTTP API and works from anywhere the credentials do.
+ALERT_TRANSPORTS: tuple[str, ...] = ("messages", "twilio")
+
+
+def _transport() -> str:
+    raw = _lookup("ALERT_TRANSPORT", "messages").strip().lower()
+    if raw in ALERT_TRANSPORTS:
+        return raw
+    current, _ = ENV_NAMES["ALERT_TRANSPORT"]
+    BAD_SETTINGS.append(
+        f"{current}={raw!r} is unknown; use one of: {', '.join(ALERT_TRANSPORTS)}"
+    )
+    # A typo must not silently mean "no alerts": fall back to the default so the
+    # entry point's refusal is what stops the run, not a quiet dead channel.
+    return "messages"
+
+
+ALERT_TRANSPORT = _transport()
+
+#: Twilio credentials — empty means the ``twilio`` transport is unavailable.
 TWILIO_ACCOUNT_SID = _lookup("TWILIO_ACCOUNT_SID", "")
 TWILIO_AUTH_TOKEN = _lookup("TWILIO_AUTH_TOKEN", "")
 TWILIO_FROM_NUMBER = _lookup("TWILIO_FROM_NUMBER", "")

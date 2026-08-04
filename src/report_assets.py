@@ -366,6 +366,10 @@ tbody tr.go:focus-visible { outline: 2px solid var(--accent); outline-offset: -2
   font-variant-numeric: tabular-nums; vertical-align: top;
 }
 .arb-legs td.num { font-family: var(--mono); text-align: right; padding-right: 0; }
+/* An exact bet link is the one the reader wants; a league page is a consolation
+   prize and must not look like the same offer. */
+.arb-legs a.bet-exact { font-weight: 600; }
+.arb-legs a { white-space: nowrap; }
 .arb-outcomes {
   margin: 8px 0 0; font: 400 12px/1.45 var(--mono); color: var(--ink-2);
   font-variant-numeric: tabular-nums;
@@ -1873,6 +1877,28 @@ function escapeHtml(s) {
   return txt(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
+/** One leg's "where to place it" cell.
+ *
+ * The label states the precision rather than hiding it. A link that says "bet"
+ * but lands on a league index costs the reader the seconds an edge is made of,
+ * and they would blame the page rather than the book. `mirrored` is called out
+ * for the same reason: the price came off an aggregator, so the book's own
+ * number needs checking before the stake goes on.
+ */
+function betLink(link) {
+  if (!link || !link.url) return '<span class="dim">—</span>';
+  const exact = link.precision === 'event';
+  const label = exact ? 'bet' : (link.precision === 'league' ? 'league' : 'site');
+  const title = exact
+    ? `${link.book} — this game`
+    : `${link.book} — ${link.precision} page; find the game from there`
+      + (link.mirrored ? ' (price read from an aggregator)' : '');
+  const flag = link.mirrored ? '<span class="dim" title="price via an aggregator">*</span>' : '';
+  return `<a href="${escapeHtml(link.url)}" target="_blank" rel="noopener noreferrer"`
+    + ` title="${escapeHtml(title)}"${exact ? ' class="bet-exact"' : ''}>`
+    + `${escapeHtml(label)}</a>${flag}`;
+}
+
 /* ── run selection ───────────────────────────────────────────────────────── */
 
 const runs = DATA.runs;                       // newest first
@@ -2827,6 +2853,7 @@ function promoPlanCardHtml(plan) {
       <td>${escapeHtml(promoSelectionLabel(plan, leg))}${escapeHtml(line)}</td>
       <td>${escapeHtml(fmtAmerican(leg.american_odds))}</td>
       <td>${promoMoney(leg.stake)}${leg.stake_kind === 'bonus' ? ' <span class="dim">credit</span>' : ''}</td>
+      <td>${betLink(leg.link)}</td>
     </tr>`;
   }).join('');
   const metrics = [];
@@ -3227,6 +3254,7 @@ function arbCard(o) {
       <td class="num">${escapeHtml(fmtAmerican(leg.american_odds))}${net}</td>
       <td class="num">$${Number(leg.stake).toFixed(2)}</td>
       <td class="num">$${Number(leg.payout).toFixed(2)}</td>
+      <td class="num">${betLink(leg.link)}</td>
     </tr>`;
   }).join('');
   const outcomes = (o.outcome_profits || []).map((row) =>
@@ -3259,7 +3287,7 @@ function arbCard(o) {
     </div>
     <table class="arb-legs">
       <thead><tr>
-        <th>Book</th><th>Bet</th><th>Odds</th><th>Stake</th><th>Pays</th>
+        <th>Book</th><th>Bet</th><th>Odds</th><th>Stake</th><th>Pays</th><th>Place</th>
       </tr></thead>
       <tbody>${legs}</tbody>
     </table>

@@ -108,11 +108,16 @@ python -m src.collector collect                    # detect current state and sc
 python -m src.collector collect --state PA --state NJ  # current state + PA + NJ
 python -m src.collector collect --tier core        # slate endpoints only — a few requests per source
 python -m src.collector collect --tier core --watch   # poll forever (default every 300s)
-# Optional SMS when an arb clears 2.5% ROI (Twilio):
+# A text when a risk-free arb clears 3% ROI.  On by default via the local
+# Messages app — no account, but only while this Mac is awake and signed in.
+# The first send raises a one-time Automation prompt; approve it once.
+#   export ODDS_ALERT_TO=+18479070871      # optional; this is the default
+#   export ODDS_ALERT_MIN_ROI=0.03         # optional; this is the default
+# To send from anywhere instead, switch transports and add Twilio credentials:
+#   export ODDS_ALERT_TRANSPORT=twilio
 #   export ODDS_TWILIO_ACCOUNT_SID=...
 #   export ODDS_TWILIO_AUTH_TOKEN=...
 #   export ODDS_TWILIO_FROM_NUMBER=+1...   # your Twilio number
-#   export ODDS_ALERT_TO=+18479070871      # optional; this is the default
 python scripts/detect_state.py                     # manual check; stores state + time + IP hash
 python scripts/probe_sources.py --state IL         # requires matching recent detection
 python scripts/probe_sources.py --state PA --template-only  # structural only; never validates
@@ -457,7 +462,18 @@ tests/
 ## Scope
 
 This collects and normalizes odds and identifies arbitrage in the collected data.
-It does not place bets.  Optional SMS alerts (Twilio) fire when a risk-free
-position clears ``ODDS_ALERT_MIN_ROI`` (default **2.5%**); without Twilio
-credentials the pipeline simply skips texting.  Use ``--no-alert`` to silence
-a run even when credentials are set.
+It does not place bets.  A text goes out when a risk-free position clears
+``ODDS_ALERT_MIN_ROI`` (default **3%** ROI on staked bankroll, which is the same
+number the dashboard and ``arb`` print — deliberately not the market margin).
+``ODDS_ALERT_TRANSPORT`` picks how: ``messages`` (default) drives the local
+Messages app over AppleScript, ``twilio`` posts to the HTTP API.  When the
+configured transport is not usable the pipeline skips texting and says why in the
+log rather than failing a collect.  Use ``--no-alert`` to silence a run outright.
+
+Every leg in a text and on the dashboard carries a link to where the bet is
+placed.  Only DraftKings and Smarkets have an event-level grammar confirmed by
+``scripts/verify_betlinks.py``; every other book links to its league page and
+says so, because a link that lands on the wrong game is worse than one that
+admits it is an index.  A price read from an aggregator (``an_*``, ``vi_*``,
+``vsin_*``) always resolves to the book it mirrors and is flagged, since the
+event id in that row belongs to the aggregator and not to the book.

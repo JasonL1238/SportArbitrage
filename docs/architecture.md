@@ -57,6 +57,9 @@ promo registry -> promo fetch -> shared raw envelope -> promo parse/enrichment
 - `python -m src.promos`: promotions CLI.
 - `python -m src.report`: static dashboard generation or local dashboard server.
 - `python scripts/probe_sources.py`: manual reachability diagnostics; it is not a normal test.
+- `python scripts/verify_betlinks.py`: manual probe of each book's candidate event-URL
+  grammar. It is the only thing that may set `verified=True` in `src/betlinks.py`;
+  an unverified grammar is a guess and is never linked to.
 - `python scripts/detect_state.py`: manual egress detection using the same provider-fallback path.
 - `python scripts/recon_sources.py`: manual anonymous first-party traffic research;
   output is ignored until a payload becomes a normal adapter capture and replay test.

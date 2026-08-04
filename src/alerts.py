@@ -7,6 +7,9 @@ repo.  The default destination is the number configured in :mod:`src.settings`.
 from __future__ import annotations
 
 import logging
+import shutil
+import subprocess
+import sys
 from dataclasses import dataclass, field
 from typing import Callable, Sequence
 
@@ -14,6 +17,7 @@ import httpx
 
 from src import settings
 from src.arb import Opportunity
+from src.betlinks import Precision, bet_link
 from src.vocab import Market, Selection
 
 log = logging.getLogger("alerts")
@@ -25,7 +29,7 @@ _TWILIO_URL = "https://api.twilio.com/2010-04-01/Accounts/{sid}/Messages.json"
 _MAX_SMS_CHARS = 1400
 
 
-def alert_ready() -> bool:
+def twilio_ready() -> bool:
     """True when Twilio credentials and a destination number are configured."""
     return bool(
         settings.TWILIO_ACCOUNT_SID
@@ -33,6 +37,54 @@ def alert_ready() -> bool:
         and settings.TWILIO_FROM_NUMBER
         and settings.ALERT_TO
     )
+
+
+def messages_ready() -> bool:
+    """True when the local Messages app could plausibly deliver.
+
+    Only checks what is knowable without sending: this is a Mac, ``osascript``
+    exists, and there is a destination.  Whether Automation permission has been
+    granted is not knowable in advance — the first send is what asks, and
+    :func:`send_via_messages` turns that refusal into an actionable error.
+    """
+    return bool(
+        sys.platform == "darwin"
+        and shutil.which("osascript")
+        and settings.ALERT_TO
+    )
+
+
+def alert_ready() -> bool:
+    """True when the configured transport can deliver."""
+    if settings.ALERT_TRANSPORT == "twilio":
+        return twilio_ready()
+    return messages_ready()
+
+
+def unready_reason() -> str:
+    """Why alerts are off, phrased as the thing to go fix."""
+    if settings.ALERT_TRANSPORT == "twilio":
+        missing = [
+            name
+            for name, value in (
+                ("ODDS_TWILIO_ACCOUNT_SID", settings.TWILIO_ACCOUNT_SID),
+                ("ODDS_TWILIO_AUTH_TOKEN", settings.TWILIO_AUTH_TOKEN),
+                ("ODDS_TWILIO_FROM_NUMBER", settings.TWILIO_FROM_NUMBER),
+                ("ODDS_ALERT_TO", settings.ALERT_TO),
+            )
+            if not value
+        ]
+        return f"twilio transport is missing {', '.join(missing)}"
+    if sys.platform != "darwin":
+        return (
+            f"the messages transport needs macOS (this is {sys.platform}); "
+            "set ODDS_ALERT_TRANSPORT=twilio to send over HTTP instead"
+        )
+    if not shutil.which("osascript"):
+        return "the messages transport needs osascript, which is not on PATH"
+    if not settings.ALERT_TO:
+        return "no destination number — set ODDS_ALERT_TO"
+    return ""
 
 
 def opportunity_alert_key(opportunity: Opportunity) -> str:
@@ -96,11 +148,24 @@ def format_alert(opportunity: Opportunity) -> str:
     legs = []
     for i, leg in enumerate(opportunity.legs, start=1):
         label = _selection_label(opportunity, leg)
-        legs.append(
+        line = (
             f"{i}) {leg.source} {label} "
             f"{leg.quote.american_odds:+d} (${leg.decimal_odds:.3f}) "
             f"stake ${leg.stake:.2f}"
         )
+        # The link is the point of the text: a 3% edge is only takeable if both
+        # slips are one tap away.  An event link goes bare; a league page says so,
+        # because sending someone to an index and calling it the bet wastes the
+        # seconds the edge is made of.
+        link = bet_link(leg.quote)
+        if link is not None:
+            if link.precision is Precision.EVENT:
+                line += f"\n   {link.url}"
+            else:
+                where = "league page" if link.precision is Precision.LEAGUE else "site"
+                mirror = f", price via {leg.source}" if link.mirrored else ""
+                line += f"\n   {link.book} {where}{mirror}: {link.url}"
+        legs.append(line)
     cap = ""
     if opportunity.max_total_stake is not None:
         cap = f"\nMax stake ~${opportunity.max_total_stake:.0f}"
@@ -116,6 +181,90 @@ def format_alert(opportunity: Opportunity) -> str:
     if len(body) > _MAX_SMS_CHARS:
         body = body[: _MAX_SMS_CHARS - 1] + "…"
     return body
+
+
+#: AppleScript for one outgoing message.
+#:
+#: The destination and the body arrive as ``argv``, never interpolated into the
+#: script text.  That is not tidiness: a team name with a double quote in it, or
+#: any promo copy that reached a note, would otherwise terminate the AppleScript
+#: string and the remainder would be *executed*.  ``osascript -`` reads the
+#: program from stdin and hands everything after it to ``on run``, so no value
+#: from the odds feed is ever parsed as code.
+#:
+#: The service is chosen first and ``send`` is then called **exactly once**.
+#:
+#: An earlier version sent through iMessage inside a ``try`` and, on error,
+#: looped over every remaining service sending again — meant as SMS-relay
+#: fallback for a number iMessage does not know.  It delivers twice: the
+#: scripting bridge can report a failure for a ``send`` that already went out,
+#: and ``services`` includes the iMessage service the first attempt just used, so
+#: the retry re-sends the same message to the same person.  There is no way to
+#: ask Messages whether the first one landed, so the only safe number of sends is
+#: one.
+_MESSAGES_SCRIPT = """
+on run argv
+  set dest to item 1 of argv
+  set msg to item 2 of argv
+  tell application "Messages"
+    set svc to missing value
+    try
+      set svc to 1st service whose service type = iMessage
+    end try
+    if svc is missing value then
+      if (count of services) is 0 then
+        error "Messages has no configured service to send from"
+      end if
+      set svc to item 1 of services
+    end if
+    send msg to buddy dest of svc
+  end tell
+  return "sent"
+end run
+"""
+
+
+def send_via_messages(body: str, *, to: str | None = None, timeout: float = 30.0) -> str:
+    """Send one message through the local Messages app.  Returns the route used.
+
+    Raises ``RuntimeError`` with the remedy when macOS refuses — an ungranted
+    Automation permission is the common first failure and its raw AppleScript
+    error says nothing a reader could act on.
+    """
+    dest = to or settings.ALERT_TO
+    if not dest:
+        raise RuntimeError("no destination number — set ODDS_ALERT_TO")
+    if sys.platform != "darwin":
+        raise RuntimeError(
+            f"the messages transport needs macOS (this is {sys.platform}); "
+            "set ODDS_ALERT_TRANSPORT=twilio to send over HTTP instead"
+        )
+    try:
+        completed = subprocess.run(
+            ["osascript", "-", dest, body],
+            input=_MESSAGES_SCRIPT,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError("osascript is not on PATH") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"Messages did not answer within {timeout:g}s — it may be showing a "
+            "permission prompt; approve it once and the next send is immediate"
+        ) from exc
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "").strip()
+        if "-1743" in detail or "not allowed" in detail.lower():
+            raise RuntimeError(
+                "macOS denied Automation access to Messages. Grant it in System "
+                "Settings → Privacy & Security → Automation, for the terminal or "
+                f"app running this. Raw error: {detail[:160]}"
+            )
+        raise RuntimeError(f"osascript failed: {detail[:200]}")
+    return (completed.stdout or "").strip() or "sent"
 
 
 def send_sms(
@@ -157,12 +306,19 @@ def send_sms(
             client.close()
 
 
+def send_alert(body: str, *, to: str | None = None) -> str:
+    """Deliver one alert over the configured transport."""
+    if settings.ALERT_TRANSPORT == "twilio":
+        return send_sms(body, to=to)
+    return send_via_messages(body, to=to)
+
+
 @dataclass
 class AlertBook:
     """Tracks which opportunities already texted in this process."""
 
     sent_keys: set[str] = field(default_factory=set)
-    send: Callable[[str], str] = field(default=send_sms)
+    send: Callable[[str], str] = field(default=send_alert)
 
     def notify(
         self,
@@ -172,10 +328,7 @@ class AlertBook:
     ) -> list[Opportunity]:
         """Text each new qualifying opportunity.  Returns those that were sent."""
         if not alert_ready():
-            log.debug(
-                "SMS alerts skipped — Twilio not configured "
-                "(set ODDS_TWILIO_ACCOUNT_SID / AUTH_TOKEN / FROM_NUMBER)"
-            )
+            log.debug("arb alerts skipped — %s", unready_reason())
             return []
 
         sent: list[Opportunity] = []
@@ -186,16 +339,30 @@ class AlertBook:
             if key in self.sent_keys:
                 continue
             body = format_alert(opportunity)
+            # Claimed *before* the send, so a delivery that reports failure
+            # cannot be retried into a second text.  ``collect_batch_once`` is
+            # why this matters rather than being theoretical: it runs a GLOBAL
+            # pass and then one pass per state over the *same cached* global
+            # payloads, so an arb between two global books is offered to this
+            # book once per pass with a byte-identical key.  Recording only on
+            # success meant an ambiguous first send left the key unclaimed and
+            # the next pass sent it again.
+            #
+            # The trade is deliberate: at most one text per arb per process,
+            # even when that means a genuinely failed send is not retried.  A
+            # missed alert is visible in the log; a duplicate at 3am is not
+            # recoverable and is what the dedupe book exists to prevent.
+            self.sent_keys.add(key)
             try:
                 sid = self.send(body)
             except Exception:  # noqa: BLE001 — watch loop must not die on SMS
                 log.exception(
-                    "failed to send arb SMS for %s (roi %.1f%%)",
+                    "failed to send arb alert for %s (roi %.1f%%); not retried, "
+                    "because a send that fails after delivering would double-text",
                     opportunity.event_key,
                     opportunity.roi * 100.0,
                 )
                 continue
-            self.sent_keys.add(key)
             sent.append(opportunity)
             log.info(
                 "sent arb SMS sid=%s roi=%.1f%% %s",

@@ -63,6 +63,7 @@ from src.arb import (
     net_decimal,
     settlement_outcomes,
 )
+from src.betlinks import link_payload
 from src.commission import Commission
 from src.promos.redundancy import brand_key
 from src.promos.schema import PromoKind
@@ -1356,6 +1357,10 @@ def _candidate_payload(candidate: _Candidate, *, as_of: datetime) -> dict[str, A
                 "stake_kind": leg.mode,
                 "is_alternate": leg.quote.is_alternate,
                 "observed_at": leg.quote.observed_at.isoformat(),
+                # Where this leg gets placed.  A plan that names a promo, a book
+                # and a stake but leaves the reader to find the game is a
+                # calculation, not an instruction.
+                "link": link_payload(leg.quote),
             }
             for leg in candidate.legs
         ],

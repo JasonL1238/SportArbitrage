@@ -40,6 +40,7 @@ from src.arb import (
     find_opportunities,
     merge_counterparty_groups,
 )
+from src.betlinks import link_payload
 from src.commission import commission_for, net_decimal_odds
 from src.egress import is_recent, load_detection
 from src.events import reconcile_event_keys
@@ -1550,6 +1551,9 @@ def _opportunity_entry(opportunity: Opportunity) -> dict[str, Any]:
                 "net_decimal_odds": round(leg.net_odds, 4),
                 "stake": round(leg.stake, 2),
                 "payout": round(leg.payout, 2),
+                # Where to actually place it.  None only for a consensus feed,
+                # which names no venue that would take the bet.
+                "link": link_payload(leg.quote),
             }
             for leg in opportunity.legs
         ],
