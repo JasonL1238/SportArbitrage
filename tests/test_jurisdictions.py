@@ -12,6 +12,7 @@ from src.promos.registry import promo_sources_for_state
 from src.promos.store import PromoStore
 from src.sources.registry import (
     REPUBLISHED_SOURCE_KEYS,
+    republished_sources_for_state,
     sources_for_state,
     state_sources_for_state,
     view_only_for_state,
@@ -39,6 +40,29 @@ def test_il_and_pa_retail_routes_keep_stable_source_keys() -> None:
     assert "US-IL-SB" in il["draftkings"].config["base_url"]
     assert "US-PA-SB" in pa["draftkings"].config["base_url"]
     assert sum(entry.key == "betrivers_kambi" for entry in pa.values()) == 1
+
+
+def test_republished_routes_use_the_requested_states_book_ids() -> None:
+    il = _by_key(republished_sources_for_state("IL"))
+    pa = _by_key(republished_sources_for_state("PA"))
+    nj = _by_key(republished_sources_for_state("NJ"))
+
+    assert il["an_fanduel"].config["book_id"] == 270
+    assert pa["an_fanduel"].config["book_id"] == 255
+    assert nj["an_fanduel"].config["book_id"] == 69
+    assert pa["an_caesars"].config["book_id"] == 1906
+    assert "an_hardrock" not in pa
+    assert "an_bally" not in pa
+
+    # Every Action Network descriptor in one state asks for the same complete
+    # set, so a source cannot disappear merely because another descriptor used
+    # a narrower expansion list.
+    pa_fetch_sets = {
+        entry.config["fetch_book_ids"]
+        for entry in pa.values()
+        if entry.key in jurisdiction("PA").republished
+    }
+    assert len(pa_fetch_sets) == 1
 
 
 def test_pa_hardrock_is_unavailable_not_an_invented_pa_segment() -> None:

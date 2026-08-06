@@ -383,6 +383,84 @@ tbody tr.go:focus-visible { outline: 2px solid var(--accent); outline-offset: -2
 }
 .arb-reject b { font-family: var(--mono); color: var(--ink); font-weight: 600; }
 
+/* ── placed-bet ledger ─────────────────────────────────────────────────────
+   The one part of the page that writes rather than reads, so its controls are
+   deliberately louder than the rest of the chrome: a stake box that looks like
+   a label gets typed into by accident. */
+.bl-btn {
+  font: 500 11.5px/1 var(--sans); color: var(--ink);
+  background: var(--surface-2); border: 1px solid var(--line);
+  border-radius: 5px; padding: 5px 9px; cursor: pointer; white-space: nowrap;
+}
+.bl-btn:hover { border-color: var(--muted); }
+.bl-btn:disabled { opacity: 0.5; cursor: default; }
+.bl-btn.primary { font-weight: 600; border-color: var(--muted); }
+.bl-btn.danger:hover { color: var(--down); border-color: var(--down); }
+.bl-btn.is-file { opacity: 0.55; cursor: not-allowed; }
+
+.bl-drawer { margin-top: 10px; padding: 10px; border: 1px dashed var(--line);
+  border-radius: var(--radius); background: var(--surface-2); }
+.bl-drawer[hidden] { display: none; }
+.bl-drawer .bl-legs { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.bl-drawer .bl-legs td { padding: 4px 8px 4px 0; border-bottom: 1px solid var(--line-soft); }
+.bl-drawer .bl-legs td.num { text-align: right; font-family: var(--mono); }
+
+.bl-field { display: inline-flex; flex-direction: column; gap: 3px; }
+.bl-field > span { font: 400 10.5px/1.2 var(--sans); color: var(--muted);
+  text-transform: uppercase; letter-spacing: 0.04em; }
+.bl-field input, .bl-field select {
+  font: 400 12.5px/1.2 var(--mono); color: var(--ink);
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: 5px; padding: 5px 7px; min-width: 0;
+}
+.bl-field input:focus, .bl-field select:focus { outline: 1px solid var(--muted); }
+.bl-form { display: flex; flex-wrap: wrap; gap: 10px 12px; align-items: flex-end; }
+.bl-form .bl-field.wide { flex: 1 1 220px; }
+.bl-form .bl-field.wide input { width: 100%; }
+.bl-form .bl-field input.money, .bl-form .bl-field input.odds { width: 8ch; }
+.bl-msg { margin: 8px 0 0; font: 400 12px/1.45 var(--sans); color: var(--ink-2); }
+.bl-msg.bad { color: var(--down); }
+.bl-msg.good { color: var(--up); }
+
+.bl-slip + .bl-slip { margin-top: 10px; border-top: 1px solid var(--line-soft); padding-top: 12px; }
+.bl-slip .bl-top { display: flex; flex-wrap: wrap; gap: 6px 12px;
+  align-items: baseline; justify-content: space-between; }
+.bl-slip .bl-top b { font: 600 14px/1.3 var(--sans); }
+.bl-slip .bl-meta { font: 400 12px/1.4 var(--sans); color: var(--ink-2); }
+.bl-slip .bl-kpis { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 6px 0 8px;
+  font: 400 12px/1.45 var(--sans); color: var(--ink-2); }
+.bl-slip .bl-kpis strong { color: var(--ink); font-family: var(--mono);
+  font-variant-numeric: tabular-nums; }
+.bl-slip table.bl-legs { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.bl-slip table.bl-legs th {
+  text-align: left; font: 500 10.5px/1.2 var(--sans); color: var(--muted);
+  text-transform: uppercase; letter-spacing: 0.04em;
+  padding: 0 8px 5px 0; border-bottom: 1px solid var(--line);
+}
+.bl-slip table.bl-legs td { padding: 6px 8px 6px 0; border-bottom: 1px solid var(--line-soft);
+  vertical-align: middle; }
+.bl-slip table.bl-legs td.num { font-family: var(--mono); text-align: right; padding-right: 0;
+  font-variant-numeric: tabular-nums; }
+.bl-slip input.bl-text { width: min(18ch, 100%); min-width: 8ch; }
+.bl-slip textarea.bl-note { display: block; width: 100%; min-height: 2.6em; resize: vertical;
+  margin-top: 7px; padding: 5px 7px; border: 1px solid var(--line); border-radius: 4px;
+  color: var(--ink); background: var(--surface-2); font: 400 12px/1.4 var(--sans); }
+.bl-slip .bl-acts { display: flex; flex-wrap: wrap; gap: 5px; justify-content: flex-end; }
+.bl-status {
+  display: inline-block; padding: 1px 6px; border-radius: 999px;
+  font: 500 10.5px/1.6 var(--sans); border: 1px solid var(--line); color: var(--ink-2);
+}
+.bl-status.won { color: var(--up); border-color: var(--up); }
+.bl-status.lost { color: var(--down); border-color: var(--down); }
+.bl-status.pending { color: var(--muted); }
+.bl-pl.up { color: var(--up); }
+.bl-pl.down { color: var(--down); }
+.bl-note { margin: 6px 0 0; font: 400 12px/1.45 var(--sans); color: var(--muted); }
+.bl-books { display: flex; flex-wrap: wrap; gap: 6px 14px; font: 400 12px/1.5 var(--sans);
+  color: var(--ink-2); }
+.bl-books span { display: inline-flex; gap: 6px; align-items: baseline; }
+.bl-books b { font-family: var(--mono); color: var(--ink); font-weight: 600; }
+
 .card {
   background: var(--surface); border: 1px solid var(--line);
   border-radius: var(--radius); overflow: hidden;
@@ -551,6 +629,15 @@ td.wrap { white-space: normal; min-width: 22ch; }
 .odds-cell { font-family: var(--mono); font-variant-numeric: tabular-nums; font-weight: 550; }
 .odds-cell.dim { font-weight: 400; }
 .empty { padding: 22px 12px; text-align: center; color: var(--muted); font-size: 12.5px; }
+/* Rows held back by chunked filling. Says how many, and is itself the way to get
+   the next chunk without scrolling — so held-back rows are never silent. */
+.chunk-more {
+  display: block; width: 100%; padding: 10px 12px; border: 0;
+  border-top: 1px solid var(--line-soft); background: var(--surface-2);
+  color: var(--muted); font: 400 12px/1.4 var(--sans); text-align: center; cursor: pointer;
+}
+.chunk-more:hover { color: var(--ink); background: var(--surface-3, var(--surface-2)); }
+.chunk-more:empty { display: none; }
 
 /* ── odds screen ───────────────────────────────────────────────────────── */
 
@@ -588,6 +675,12 @@ td.wrap { white-space: normal; min-width: 22ch; }
 }
 .oj-board tbody tr:hover { background: var(--surface-2); }
 .oj-board tbody tr { cursor: pointer; }
+/* Deliberately NOT content-visibility: auto on these rows. It reads as the
+   obvious fix for a 1,702-row board, and the computed style even reports it as
+   applied — but CSS containment does not apply to internal table boxes, so it
+   does nothing here. Measured on the live board: 1,085ms of layout before,
+   1,196ms after. Rows are appended a chunk at a time instead (see
+   ``fillInChunks``), which is what actually bounds the cost. */
 .oj-board td { padding: 8px; border-bottom: 1px solid var(--line-soft); vertical-align: middle; }
 .oj-game { min-width: 200px; }
 .oj-game b { display: block; font: 600 13px/1.25 var(--sans); }
@@ -705,6 +798,7 @@ BODY = """
       <a href="#arb">Arbitrage <i id="nav-arb"></i></a>
       <a href="#screen">Odds <i id="nav-screen"></i></a>
       <a href="#promos">Promos <i id="nav-promos"></i></a>
+      <a href="#bets">My bets <i id="nav-bets"></i></a>
       <a href="#events">Games <i id="nav-events"></i></a>
       <details class="nav-more" id="nav-more">
         <summary>More</summary>
@@ -888,6 +982,73 @@ BODY = """
         <summary>Per-book promo health <span class="eyebrow">last scrape</span></summary>
         <div class="card-body">
           <div class="promo-health" id="promo-health"></div>
+        </div>
+      </details>
+    </section>
+
+    <section id="bets">
+      <header>
+        <h2>My bets</h2>
+        <p>What you actually placed, and how it settled. Stored in its own file
+        (<code>data/bets.sqlite3</code>) — never touched by a scrape, never deleted by one.</p>
+      </header>
+
+      <div class="card">
+        <div class="card-head">
+          <h3>Bankroll</h3>
+          <span class="eyebrow" id="bets-summary">nothing logged yet</span>
+        </div>
+        <div class="card-body flush">
+          <div class="stats" id="bets-stats"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h3>Log a bet by hand</h3>
+          <span class="eyebrow" id="bets-add-note">or use “Log this bet” on Arbitrage</span>
+        </div>
+        <div class="brief">
+          <p><b>the fast way is the other one</b> Every arbitrage card has a Log this
+          bet button that carries the teams, market, books, prices and stakes straight
+          across. Use this form for a bet placed somewhere the scrape did not see.</p>
+        </div>
+        <div class="card-body">
+          <div class="bl-form">
+            <label class="bl-field"><span>Book</span>
+              <input id="bl-book" list="bl-books" placeholder="fanduel" autocomplete="off"/>
+              <datalist id="bl-books"></datalist>
+            </label>
+            <label class="bl-field wide"><span>What you bet</span>
+              <input id="bl-what" placeholder="Cubs ML vs Cardinals" autocomplete="off"/>
+            </label>
+            <label class="bl-field"><span>US odds</span>
+              <input id="bl-odds" class="odds" inputmode="numeric" placeholder="-110"/>
+            </label>
+            <label class="bl-field"><span>Stake $</span>
+              <input id="bl-stake" class="money" inputmode="decimal" placeholder="50"/>
+            </label>
+            <label class="bl-field"><span>Status</span>
+              <select id="bl-status"></select>
+            </label>
+            <button type="button" class="bl-btn primary" id="bl-add">Log it</button>
+          </div>
+          <p class="bl-msg" id="bl-add-msg"></p>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h3>Placed</h3>
+          <span class="eyebrow" id="bets-list-note">newest first</span>
+        </div>
+        <div class="card-body" id="bets-list"></div>
+      </div>
+
+      <details class="fold" id="bets-books-fold">
+        <summary>By book <span class="eyebrow">where the money is</span></summary>
+        <div class="card-body">
+          <div class="bl-books" id="bets-books"></div>
         </div>
       </details>
     </section>
@@ -1417,7 +1578,16 @@ BODY = """
 JS = r"""
 'use strict';
 
-const DATA = JSON.parse(document.getElementById('report-data').textContent);
+const DATA = (() => {
+  const island = document.getElementById('report-data');
+  const parsed = JSON.parse(island.textContent);
+  // Drop the source text once it is parsed. It is the largest single thing on the
+  // page — 15.6MB of JSON for a 16-scrape dashboard — and holding both the text and
+  // the object doubles that for the life of the tab, for a string nothing reads
+  // again. Nothing does: this is the only reference to the island at runtime.
+  island.remove();
+  return parsed;
+})();
 const S = DATA.strings;
 const Q = DATA.quotes;              // { columns, rows } — rows across several runs
 const COL = {};
@@ -1457,6 +1627,11 @@ const commissionOf = (key) => sourceInfo(key).commission || '';
 const charges = (key) => Boolean(commissionOf(key));
 /** Consensus / opening columns shown for context — never "best" and never arb. */
 const isViewOnly = (key) => Boolean(sourceInfo(key).view_only);
+/** Whether the venue's rows exist only because somebody offered liquidity — an
+ *  exchange or a prediction market, as the source registry defines it. A sportsbook
+ *  quotes both sides itself, so its two sides summing below 1.0 means the rows are
+ *  mispaired, not that it is paying out more than it takes. */
+const orderDriven = (key) => Boolean(sourceInfo(key).order_driven);
 
 /*  The price after the venue's cut — what you are actually paid.
  *
@@ -1804,7 +1979,153 @@ function skipNote(reason) {
 
 /* ── table helper ────────────────────────────────────────────────────────── */
 
+/* ── chunked row filling ────────────────────────────────────────────────────
+   How many rows go in before the reader has to scroll for more. Comfortably
+   more than a tall screen holds, so the first chunk is never visibly short. */
+const ROW_CHUNK = 120;
+
+/** Fill `tbody` with `make(row)`, a chunk at a time, appending as the reader
+ *  scrolls toward the end.
+ *
+ *  The alternative — every row up front — is what made the odds board cost
+ *  399,055 DOM nodes and 1,143ms of layout: 1,702 games across 22 books, in a
+ *  table 131,883px tall, of which a screen shows about ten rows. Building the
+ *  markup for a row is not free either, so a chunk that is never reached is
+ *  never built.
+ *
+ *  `content-visibility: auto` would be the tidier fix and does not work: CSS
+ *  containment does not apply to internal table boxes. This does.
+ *
+ *  Rows held back are always *stated*, and always reachable by a click as well as
+ *  by scrolling. A page that quietly showed 120 of 1,702 games would be a worse
+ *  bug than the slowness this fixes — the count in the nav would be right and the
+ *  board under it would be a lie — so the scroll trigger is never the only way to
+ *  reach a row. */
+/* The "show more" control has to sit *beside* its container, because a button is
+   not valid inside a table — which means replacing the container does not take the
+   control with it. ``table`` replaces its node outright when a filter empties it,
+   so the control was surviving into the empty state and claiming "Showing 120 of
+   1,702 rows" above the words "No games match these filters", and a second one
+   appeared every time the filter was cleared again.
+
+   What fixes that is dropping the control *before* anything replaces the node —
+   see the call at the top of ``table``. The id-keyed map is a second net for a
+   caller that replaces a node without going through ``table``; every current
+   caller does, so removing the map changes nothing observable today. */
+const chunkControls = new Map();
+
+function dropChunkControl(host) {
+  if (!host) return;
+  // Retire every fill on this host, here rather than in ``fillInChunks``: dropping the
+  // control IS the retirement, and most callers drop it and then return without
+  // starting a new fill. `disconnect()` unobserves every target but is not specified to
+  // discard records already queued for delivery, so an observer retired by a filter
+  // change can still call back once — and for the two game grids the host is its own
+  // tbody, so nothing detaches under a late append. Bumping this in ``fillInChunks``
+  // instead covered only the refill case and left every empty state open: filtering
+  // Games down to nothing, then one queued record, put 120 cards of the previous slate
+  // under "No games match these filters" — and because the callback re-arms itself,
+  // further intersections brought back 1,582 of them.
+  host.__chunkGen = (host.__chunkGen || 0) + 1;
+  if (host.__chunkIO) { host.__chunkIO.disconnect(); host.__chunkIO = null; }
+  const existing = host.id ? chunkControls.get(host.id) : host.__chunkMore;
+  if (existing) {
+    existing.remove();
+    if (host.id) chunkControls.delete(host.id);
+  }
+  host.__chunkMore = null;
+}
+
+/** Empty a region by id, taking any chunk control with it.
+ *
+ *  The one way to blank a region that might be chunked. A bare ``innerHTML = ''``
+ *  leaves the control behind — it is a *sibling*, so emptying the table cannot take it
+ *  with it — and leaves the retired fill able to append into what was just cleared.
+ *  Both failures have shipped, in two different renderers, so the safe form has a
+ *  name. */
+function blankRegion(id) {
+  const node = el(id);
+  if (!node) return;
+  dropChunkControl(node);
+  node.innerHTML = '';
+}
+
+function fillInChunks(host, tbody, rows, make, opts = {}) {
+  dropChunkControl(host);
+
+  // Which fill this is — read, not bumped: the ``dropChunkControl`` above already
+  // retired anything that came before. Every entry point below checks the mark, so a
+  // late callback from a retired fill is a no-op rather than a race.
+  const mark = host.__chunkGen;
+  const current = () => host.__chunkGen === mark;
+
+  let at = 0;
+  const total = rows.length;
+  const label = opts.noun || 'rows';
+
+  const more = () => {
+    if (!host.__chunkMore) return;
+    if (at >= total) { dropChunkControl(host); return; }
+    host.__chunkMore.textContent =
+      `Showing ${at.toLocaleString()} of ${total.toLocaleString()} ${label} — scroll for more, or click here`;
+  };
+
+  const step = () => {
+    if (!current()) return false;
+    if (at >= total) return false;
+    const upto = Math.min(at + ROW_CHUNK, total);
+    let html = '';
+    for (let i = at; i < upto; i += 1) html += make(rows[i], i);
+    tbody.insertAdjacentHTML('beforeend', html);
+    at = upto;
+    more();
+    return true;
+  };
+
+  step();
+  if (at >= total) return;
+  if (typeof IntersectionObserver !== 'function') {
+    while (step());
+    return;
+  }
+
+  // The click path, and the reason a held-back row is never a silent one. Placed
+  // after the container so it works for a table and for a card grid alike.
+  if (typeof document.createElement === 'function' && host.insertAdjacentElement) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'chunk-more';
+    button.addEventListener('click', () => { step(); watchTail(); });
+    host.insertAdjacentElement('afterend', button);
+    host.__chunkMore = button;
+    if (host.id) chunkControls.set(host.id, button);
+    more();
+  }
+
+  // Watching the last row that exists, rather than a sentinel: a sentinel inside
+  // a tbody has to be a row itself, and a fake row is a row that can be clicked.
+  const io = new IntersectionObserver((entries) => {
+    if (!current()) { io.disconnect(); return; }
+    if (!entries.some((e) => e.isIntersecting)) return;
+    io.disconnect();
+    if (step()) watchTail();
+    else host.__chunkIO = null;
+  }, { rootMargin: '600px' });
+  // Held on the host only while it is actually watching something, so a re-render
+  // never has to disconnect an observer that observes nothing.
+  const watchTail = () => {
+    if (!current()) return;
+    const tail = tbody.lastElementChild;
+    if (tail && at < total) { io.observe(tail); host.__chunkIO = io; }
+    else host.__chunkIO = null;
+  };
+  watchTail();
+}
+
 function table(node, columns, rows, opts = {}) {
+  // Before anything replaces this node: the control lives beside it and would
+  // otherwise outlive it, describing rows that are no longer on screen.
+  dropChunkControl(node);
   if (!rows.length) {
     node.innerHTML = '';
     const box = document.createElement('div');
@@ -1845,31 +2166,56 @@ function table(node, columns, rows, opts = {}) {
     `<th class="${[c.num ? 'num' : '', seps.has(i) ? 'gsep' : ''].filter(Boolean).join(' ')}"${
       c.hint ? ` title="${escapeHtml(c.hint)}"` : ''}>${c.label}</th>`
   ).join('');
-  const body = rows.map((r) => '<tr' + (r._attrs || '') + '>' + columns.map((c, i) => {
-    const cell = c.cell(r);
-    const cls = [c.num ? 'num' : '', seps.has(i) ? 'gsep' : '', cell.cls || ''].filter(Boolean).join(' ');
-    return `<td class="${cls}"${cell.title ? ` title="${escapeHtml(cell.title)}"` : ''}>${
-      cell.html !== undefined ? cell.html : escapeHtml(cell.text)}</td>`;
-  }).join('') + '</tr>').join('');
-  node.innerHTML = `<thead>${bandRow}<tr>${head}</tr></thead><tbody>${body}</tbody>`;
-
-  // opts.go turns each row into a link to whatever that row is about. Wired here
-  // rather than in every caller, so a table that drills down cannot forget the
-  // keyboard path or the class that makes it look clickable.
-  if (opts.go) {
-    const trs = node.querySelectorAll('tbody tr');
-    (trs && trs.length ? [...trs] : []).forEach((tr, i) => {
-      const target = opts.go(rows[i]);
-      if (!target) return;
-      tr.classList.add('go');
-      tr.tabIndex = 0;
-      tr.addEventListener('click', () => go(target));
-      tr.addEventListener('keydown', (ev) => {
-        if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); go(target); }
-      });
-    });
-  }
+  // opts.go turns each row into a link to whatever that row is about. Written into
+  // the row's own markup here rather than wired per row afterwards, so a table that
+  // drills down cannot forget the keyboard path or the class that makes it look
+  // clickable — and so the coverage table's 1,704 rows cost one listener instead of
+  // 3,408 plus a class and a tabIndex write each.
+  const makeRow = (r) => {
+    const target = opts.go ? opts.go(r) : null;
+    const attrs = target ? ` class="go" tabindex="0" data-go="${escapeHtml(target)}"` : '';
+    return '<tr' + attrs + '>' + columns.map((c, i) => {
+      const cell = c.cell(r);
+      const cls = [c.num ? 'num' : '', seps.has(i) ? 'gsep' : '', cell.cls || ''].filter(Boolean).join(' ');
+      return `<td class="${cls}"${cell.title ? ` title="${escapeHtml(cell.title)}"` : ''}>${
+        cell.html !== undefined ? cell.html : escapeHtml(cell.text)}</td>`;
+    }).join('') + '</tr>';
+  };
+  node.innerHTML = `<thead>${bandRow}<tr>${head}</tr></thead><tbody></tbody>`;
+  fillInChunks(node, node.querySelector('tbody') || node, rows, makeRow,
+    { noun: opts.noun || 'rows' });
+  if (opts.go) wireRowLinks(node);
   return node;
+}
+
+/** One delegated handler for every drill-down row under `host`.
+ *
+ *  Attached to the container rather than to each row: a per-row listener on the
+ *  odds board and the coverage table meant thousands of closures held for rows
+ *  nobody clicks, and re-attaching them was part of what made a filter keystroke
+ *  cost 50-95ms. Idempotent, so a re-render does not stack handlers. */
+function wireRowLinks(host) {
+  if (!host || host.dataset.rowLinks === '1') return;
+  host.dataset.rowLinks = '1';
+  const targetOf = (ev) => {
+    let node = ev.target;
+    while (node && node !== host) {
+      if (node.dataset && node.dataset.go) return node.dataset.go;
+      node = node.parentNode;
+    }
+    return null;
+  };
+  host.addEventListener('click', (ev) => {
+    const target = targetOf(ev);
+    if (target) go(target);
+  });
+  host.addEventListener('keydown', (ev) => {
+    if (ev.key !== 'Enter' && ev.key !== ' ') return;
+    const target = targetOf(ev);
+    if (!target) return;
+    ev.preventDefault();
+    go(target);
+  });
 }
 const cell = (text, cls, title) => ({ text: txt(text), cls, title });
 const html = (markup, cls, title) => ({ html: markup, cls, title });
@@ -2041,6 +2387,7 @@ const PANELS = {
   arb:       { title: 'Arbitrage' },
   screen:    { title: 'Odds' },
   promos:    { title: 'Promos' },
+  bets:      { title: 'My bets' },
   events:    { title: "Today's games" },
   history:   { title: 'History' },
   overview:  { title: 'How to use' },
@@ -2063,6 +2410,9 @@ const PRIMARY_PANELS = new Set(['arb', 'screen', 'promos', 'events', 'fixture', 
 const LATEST_RUN_ID = DATA.meta.latest_run_id ?? (runs[0] && runs[0].id);
 
 let here = { panel: 'arb', arg: null };
+/** The most recent list panel — the one a drill-down goes back to, and the one
+ *  unloaded when the reader moves to a different list. */
+let lastList = null;
 let currentMarket = 'moneyline';
 let currentLeague = '';
 
@@ -2132,11 +2482,41 @@ function applyRoute() {
     renderRunScoped();
   }
 
-  // Detail panels re-render for the thing being asked for. The list panels are
-  // already current: they are rebuilt whenever the run or sport changes.
-  if (panel === 'book') renderBook(arg);
-  if (panel === 'fixture') selectEvent(arg);
-  if (panel === 'bet') renderBet(arg);
+  // Throw away the panel being left *before* building the one being arrived at.
+  // Building on arrival bounds what arriving costs but not what the document holds:
+  // without this, browsing five panels and scrolling their lists reached 407,670
+  // elements — what the eager render used to reach on load, just spread over a
+  // session instead of a page load.
+  //
+  // The order is load-bearing, not a preference. `overview` and `run` share one
+  // renderer and therefore one set of regions, so evicting afterwards blanked the
+  // panel that had just been revealed: arriving at This scrape from How to use ran
+  // `ensurePanel('run')`, which did nothing because rendering How to use had already
+  // cleared `run` from `stalePanels`, and then `evictPanel('overview')` emptied
+  // `matrix` — the one region This scrape shows. The reader got an empty card under a
+  // note reading "1702 games · click one to compare books", and toggling between the
+  // two panels never recovered. Evicting first means `markStale` re-marks both names
+  // before `ensurePanel` decides, so the arriving panel rebuilds what it owns.
+  //
+  // What gets unloaded is the last *list* panel, not simply the last panel. A game, a
+  // book and a bet are all reached by clicking a row in a list and left by going back
+  // to it, so unloading the list on the way in meant coming back to its first 120
+  // rows: a reader who had scrolled the 1,702-game board, opened one game and pressed
+  // Back needed thirteen more "show more" clicks. The detail panels are small, so
+  // keeping the list behind them costs little.
+  //
+  // Tracking the last list rather than the last panel matters for leaving sideways:
+  // board -> one game -> Games would otherwise unload the game panel and leave the
+  // board resident for the rest of the session.
+  if (!PANELS[panel].parent) {
+    if (lastList !== null && lastList !== panel) evictPanel(lastList);
+    lastList = panel;
+  }
+
+  // Now build what is being navigated to, before it is revealed below. Detail panels
+  // re-render for the thing being asked for; a list panel is built the first time it
+  // is shown and whenever the run or sport has moved under it.
+  showCurrentPanel();
 
   for (const id of Object.keys(PANELS)) {
     const node = el(id);
@@ -2144,7 +2524,7 @@ function applyRoute() {
   }
   const inRail = PANELS[panel].parent || panel;
   const more = el('nav-more');
-  const primaryHrefs = new Set(['#arb', '#screen', '#promos', '#events']);
+  const primaryHrefs = new Set(['#arb', '#screen', '#promos', '#bets', '#events']);
   if (more && !primaryHrefs.has('#' + inRail)) more.open = true;
   for (const link of navLinks()) {
     link.setAttribute('aria-current', String(link.getAttribute('href') === '#' + inRail));
@@ -2216,19 +2596,71 @@ function marketGroups(rows) {
   return groups;
 }
 
-function renderOverview() {
+/** The masthead, lede and pills, which are on screen whatever panel you are on.
+ *
+ *  Split out of renderOverview because the panels are now built on arrival: the
+ *  chrome would otherwise be painted only by a panel that may never be opened.
+ *  Everything here reads the run summary rather than the quote rows, so it is
+ *  cheap enough to repaint on every run and sport change. */
+function renderChrome() {
   const run = runById.get(currentRunId);
   if (!run) {
     el('lede').textContent = 'No scrapes yet. Hit Scrape now (via --serve) to pull prices.';
     el('brand-sub').textContent = DATA.meta.db_name || '';
+    el('masthead-pills').innerHTML = '';
+    el('run-notice').classList.remove('on');
+    el('run-notice').innerHTML = '';
+    paintScrapeStamp();
+    return;
+  }
+  const health = run.sources;
+  const producing = health.filter((h) => h.quote_count > 0);
+  const usableSports = (run.sports || []).filter((entry) => entry.comparable);
+  const singleSports = (run.sports || []).filter((entry) => !entry.comparable);
+
+  el('lede').textContent = DATA.meta.lede;
+  el('brand-sub').textContent = `${DATA.meta.db_name} · ${run.jurisdiction || 'legacy jurisdiction'}`;
+  el('built').innerHTML = `page built ${escapeHtml(fmtClock(DATA.meta.generated_at))}<br>from ${escapeHtml(DATA.meta.db_path)}`;
+  const took = run.duration_ms !== null ? (run.duration_ms / 1000).toFixed(1) + 's' : 'unknown';
+  el('run-meta').textContent = `${run.jurisdiction || 'legacy'} · ${fmtClock(run.started_at)} · ${ago(run.started_at)} · took ${took} · ${runs.length} saved`;
+  paintScrapeStamp();
+
+  el('masthead-pills').innerHTML = [
+    `<span class="pill ${run.ok ? 'ok' : 'bad'}"><i></i>${run.ok ? 'looks healthy' : 'something looked wrong'}</span>`,
+    `<span class="pill ${producing.length >= 2 ? 'flat' : 'bad'}">${producing.length} of ${health.length} books answered</span>`,
+    `<span class="pill ${usableSports.length ? 'ok' : 'bad'}"><i></i>${usableSports.length} sport${
+      usableSports.length === 1 ? '' : 's'} you can compare</span>`,
+    singleSports.length
+      ? `<span class="pill warn"><i></i>${singleSports.length} sport${
+          singleSports.length === 1 ? '' : 's'} only one book covered</span>`
+      : '',
+    currentSport ? `<span class="pill accent">showing ${escapeHtml(sportLabel(currentSport))}</span>` : '',
+    `<span class="pill flat">${runs.length} scrape${runs.length === 1 ? '' : 's'} saved</span>`,
+    ...(DATA.meta.jurisdiction_warnings || []).map((warning) =>
+      `<span class="pill bad" title="${escapeHtml(warning)}">jurisdiction warning</span>`),
+  ].filter(Boolean).join('');
+
+  const notice = el('run-notice');
+  const thin = !rowsByRun.has(currentRunId) && (run.quote_count || 0) > 0 && !detailLoaded(currentRunId);
+  notice.classList.toggle('on', thin);
+  notice.innerHTML = thin
+    ? `<b>&#9432;</b><span>This scrape's ${run.quote_count.toLocaleString()} prices are not
+     included in this page — only the ${DATA.meta.runs_with_rows} most recent scrape(s) carry
+     prices, to keep the file small. The totals below come from its own summary, so the board
+     is empty on purpose. Rebuild with
+     <code>--quote-runs ${DATA.meta.runs_recorded}</code> to include it.</span>`
+    : '';
+}
+
+function renderOverview() {
+  const run = runById.get(currentRunId);
+  if (!run) {
     el('home-stats').innerHTML = '';
     el('stat-strip').innerHTML = '';
     el('flow').innerHTML = '';
-    el('matrix').innerHTML = '';
+    blankRegion('matrix');
+    dropChunkControl(el('browse-games'));
     el('browse-games').innerHTML = '<div class="empty">No scrapes yet.</div>';
-    el('masthead-pills').innerHTML = '';
-    el('run-notice').classList.remove('on');
-    paintScrapeStamp();
     return;
   }
   const rows = currentRows();
@@ -2247,40 +2679,7 @@ function renderOverview() {
   const health = run.sources;
   const producing = health.filter((h) => h.quote_count > 0);
 
-  el('lede').textContent = DATA.meta.lede;
-  el('brand-sub').textContent = `${DATA.meta.db_name} · ${run.jurisdiction || 'legacy jurisdiction'}`;
-  el('built').innerHTML = `page built ${escapeHtml(fmtClock(DATA.meta.generated_at))}<br>from ${escapeHtml(DATA.meta.db_path)}`;
-  const took = run.duration_ms !== null ? (run.duration_ms / 1000).toFixed(1) + 's' : 'unknown';
-  el('run-meta').textContent = `${run.jurisdiction || 'legacy'} · ${fmtClock(run.started_at)} · ${ago(run.started_at)} · took ${took} · ${runs.length} saved`;
-  paintScrapeStamp();
-
   const usableSports = (run.sports || []).filter((entry) => entry.comparable);
-  const singleSports = (run.sports || []).filter((entry) => !entry.comparable);
-  el('masthead-pills').innerHTML = [
-    `<span class="pill ${run.ok ? 'ok' : 'bad'}"><i></i>${run.ok ? 'looks healthy' : 'something looked wrong'}</span>`,
-    `<span class="pill ${producing.length >= 2 ? 'flat' : 'bad'}">${producing.length} of ${health.length} books answered</span>`,
-    `<span class="pill ${usableSports.length ? 'ok' : 'bad'}"><i></i>${usableSports.length} sport${
-      usableSports.length === 1 ? '' : 's'} you can compare</span>`,
-    singleSports.length
-      ? `<span class="pill warn"><i></i>${singleSports.length} sport${
-          singleSports.length === 1 ? '' : 's'} only one book covered</span>`
-      : '',
-    currentSport ? `<span class="pill accent">showing ${escapeHtml(sportLabel(currentSport))}</span>` : '',
-    `<span class="pill flat">${runs.length} scrape${runs.length === 1 ? '' : 's'} saved</span>`,
-    ...(DATA.meta.jurisdiction_warnings || []).map((warning) =>
-      `<span class="pill bad" title="${escapeHtml(warning)}">jurisdiction warning</span>`),
-  ].filter(Boolean).join('');
-
-  const notice = el('run-notice');
-  const thin = !hasRows && (run.quote_count || 0) > 0 && !detailLoaded(currentRunId);
-  notice.classList.toggle('on', thin);
-  notice.innerHTML = thin
-    ? `<b>&#9432;</b><span>This scrape's ${run.quote_count.toLocaleString()} prices are not
-     included in this page — only the ${DATA.meta.runs_with_rows} most recent scrape(s) carry
-     prices, to keep the file small. The totals below come from its own summary, so the board
-     is empty on purpose. Rebuild with
-     <code>--quote-runs ${DATA.meta.runs_recorded}</code> to include it.</span>`
-    : '';
 
   const scoped = currentSport ? ` · ${sportLabel(currentSport)} only` : '';
   const stats = [
@@ -2523,8 +2922,12 @@ function buildLeaguePicker() {
       pick.addEventListener('change', () => {
         currentLeague = pick.value;
         buildLeaguePicker();
-        renderOddsScreen();
-        renderEvents();
+        // Both boards are scoped by the league, so both are now out of date — but
+        // only the one being looked at is worth building.
+        // The rail counts both boards, and the one left unbuilt has no renderer to
+        // write its own count — `refreshPanel` reschedules them for exactly that case.
+        refreshPanel('screen');
+        refreshPanel('events');
       });
     }
   }
@@ -2544,7 +2947,7 @@ function wireMarketTabs() {
   tabs.querySelectorAll('[data-market]').forEach((btn) => {
     btn.addEventListener('click', () => {
       currentMarket = btn.getAttribute('data-market') || 'moneyline';
-      renderOddsScreen();
+      refreshPanel('screen');
     });
   });
 }
@@ -2561,6 +2964,7 @@ function renderOddsScreen() {
   wireMarketTabs();
 
   if (!events.length) {
+    dropChunkControl(host);
     const run = runById.get(currentRunId);
     const thin = run && (run.quote_count || 0) > 0 && !detailLoaded(currentRunId);
     if (note) {
@@ -2586,7 +2990,7 @@ function renderOddsScreen() {
   const head = ['<th class="oj-game">Game</th>']
     .concat(sources.map((s) => `<th class="book">${escapeHtml(book(s))}</th>`))
     .join('');
-  const body = events.map((event) => {
+  const boardRow = (event) => {
     const byBook = boardQuotes(event, currentMarket);
     const sides = boardSideLabels(event, currentMarket);
     const bestBySide = new Map();
@@ -2627,26 +3031,22 @@ function renderOddsScreen() {
       }).join('');
       return `<td class="book"><div class="oj-side">${stack}</div></td>`;
     }).join('');
-    return `<tr data-href="${escapeHtml(href('fixture', event.key))}" tabindex="0">
+    return `<tr data-go="${escapeHtml(href('fixture', event.key))}" tabindex="0">
       <td class="oj-game">
         <b>${escapeHtml(nick(event.awayRaw))} <span class="dim">@</span> ${escapeHtml(nick(event.homeRaw))}</b>
         <span class="when">${escapeHtml(fmtClock(event.commence))} · ${
           escapeHtml(leagueLabel(event.league))} · ${escapeHtml(sportLabel(event.sport))}</span>
       </td>${cells}</tr>`;
-  }).join('');
+  };
 
-  host.innerHTML = `<table class="oj-board"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
-  host.querySelectorAll('tr[data-href]').forEach((tr) => {
-    const open = () => go(tr.getAttribute('data-href'));
-    tr.addEventListener('click', open);
-    tr.addEventListener('keydown', (ev) => {
-      if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); open(); }
-    });
-  });
+  host.innerHTML = `<table class="oj-board"><thead><tr>${head}</tr></thead><tbody></tbody></table>`;
+  fillInChunks(host, host.querySelector('tbody') || host, events, boardRow, { noun: 'games' });
+  wireRowLinks(host);
 }
 
 function renderBrowseGames(node, noteNode, events) {
   events = events || eventSummaries(currentRows());
+  dropChunkControl(node);
   if (!events.length) {
     const run = runById.get(currentRunId);
     const thin = run && (run.quote_count || 0) > 0 && !detailLoaded(currentRunId);
@@ -2667,7 +3067,7 @@ function renderBrowseGames(node, noteNode, events) {
   if (noteNode) {
     noteNode.textContent = `${events.length} game${events.length === 1 ? '' : 's'} · click one to compare books`;
   }
-  node.innerHTML = events.map((e) => {
+  const gameCard = (e) => {
     const ml = moneylineBest(e);
     const line = (sel, label) => {
       const hit = ml[sel];
@@ -2685,7 +3085,11 @@ function renderBrowseGames(node, noteNode, events) {
       ${lines ? `<div class="mlines">${lines}</div>` : ''}
       <span class="cta">Open game &rarr;</span>
     </a>`;
-  }).join('');
+  };
+  // One card per game, and moneylineBest walks the game's rows to build each: on a
+  // full slate that is 1,702 cards nobody scrolls to the end of.
+  node.innerHTML = '';
+  fillInChunks(node, node, events, gameCard, { noun: 'games' });
 }
 
 /* ── promos / bonuses ────────────────────────────────────────────────────── */
@@ -3220,7 +3624,7 @@ function renderArb() {
       The detector looked at ${bag.comparable_group_count || 0} cross-book markets and refused the
       rest for the reasons below — that is a clean board, not a missing feature.</div>`;
   } else {
-    list.innerHTML = opps.map((o) => arbCard(o)).join('');
+    list.innerHTML = opps.map((o, i) => arbCard(o, i)).join('');
   }
 
   const diags = bag.diagnostics || [];
@@ -3233,7 +3637,7 @@ function renderArb() {
   }
 }
 
-function arbCard(o) {
+function arbCard(o, index) {
   const away = nick(o.away_participant || o.away_team);
   const home = nick(o.home_participant || o.home_team);
   const line = o.line === null || o.line === undefined
@@ -3293,7 +3697,623 @@ function arbCard(o) {
     </table>
     <div class="arb-outcomes">outcomes: ${outcomes}</div>
     ${notes}
+    ${BETS_WRITABLE ? `<div class="bl-acts" style="justify-content:flex-start;margin-top:8px">
+      <button type="button" class="bl-btn primary" data-bl="toggle" data-bl-index="${index}"
+        >Log this bet</button>
+      <span class="dim" style="font-size:12px">stakes come across pre-filled</span>
+    </div>` : ''}
+    ${arbLogDrawer(o, index)}
   </article>`;
+}
+
+/* ── placed bets ─────────────────────────────────────────────────────────────
+   The only writing surface on the page. Everything else here renders what a
+   scrape found; this renders what the operator says they did with it, out of a
+   sibling database the collector never touches.
+
+   Two rules shape the whole section. Writing needs the local server, so a
+   ``file://`` copy shows the ledger and disables every control rather than
+   offering buttons that silently do nothing. And every write answers with the
+   *whole* ledger, which replaces ``BETS`` — the page never patches its own copy
+   from what it hoped the server did, so what is on screen is what is in the
+   file even when a request half-succeeds. */
+
+const BET_FALLBACK_STATUSES = ['pending', 'won', 'lost', 'push', 'void', 'cashout'];
+let BETS = DATA.bets || { slips: [], summary: null, statuses: BET_FALLBACK_STATUSES };
+const BET_STATUSES = (BETS.statuses && BETS.statuses.length)
+  ? BETS.statuses : BET_FALLBACK_STATUSES;
+/** A served page can write; a file:// page is a read-only ledger. Same rule the
+ *  Scrape buttons follow, for the same reason: only the server has the file. */
+const BETS_WRITABLE = typeof location !== 'undefined' && location.protocol === 'http:';
+
+const betSummary = () => (BETS && BETS.summary) || {};
+const betSlips = () => (BETS && BETS.slips) || [];
+
+/** Money, always with its sign visible when the sign is the point. */
+function usd(v) {
+  if (v === null || v === undefined) return '—';
+  const n = Number(v);
+  return (n < 0 ? '−$' : '$') + Math.abs(n).toFixed(2);
+}
+function usdSigned(v) {
+  if (v === null || v === undefined) return '—';
+  const n = Number(v);
+  return (n < 0 ? '−$' : '+$') + Math.abs(n).toFixed(2);
+}
+const plClass = (v) => (v === null || v === undefined || Math.abs(v) < 0.005
+  ? '' : (v > 0 ? 'up' : 'down'));
+
+/** One line naming a logged position, from whatever the snapshot kept.
+ *
+ *  A slip logged off an arb card has teams; one typed in by hand may have
+ *  nothing but a leg's description, and printing " @ " around two empty strings
+ *  is worse than printing the description. */
+function slipTitle(slip) {
+  const away = slip.away_team ? nick(slip.away_team) : '';
+  const home = slip.home_team ? nick(slip.home_team) : '';
+  if (away && home) return `${away} @ ${home}`;
+  if (home || away) return home || away;
+  const first = (slip.legs || [])[0];
+  if (first && first.selection) return first.selection;
+  return slip.kind === 'arb' ? 'Arbitrage position' : 'Bet';
+}
+
+function slipMeta(slip) {
+  const bits = [];
+  if (slip.sport) bits.push(sportLabel(slip.sport));
+  if (slip.league) bits.push(leagueLabel(slip.league));
+  if (slip.market) {
+    bits.push(marketOf(slip.market, slip.sport).plain
+      + (slip.period ? ` · ${periodOf(slip.period).plain}` : ''));
+  }
+  if (slip.line !== null && slip.line !== undefined) bits.push(fmtLine(slip.line, slip.market));
+  if (slip.commence_time) bits.push(fmtClock(slip.commence_time));
+  bits.push('placed ' + fmtClock(slip.placed_at));
+  return bits.join(' · ');
+}
+
+/* ── talking to the ledger ───────────────────────────────────────────────── */
+
+/** POST (or GET) one ledger call and adopt whatever ledger comes back.
+ *
+ *  Returns ``{ok, error}``. Callers report the error next to the control that
+ *  caused it rather than in one banner at the top: a stake box that rejects
+ *  what was typed has to say so where the typing happened. */
+async function betApi(path, body) {
+  if (!BETS_WRITABLE) {
+    return { ok: false, error: 'Open the dashboard with --serve to change the ledger.' };
+  }
+  let res;
+  try {
+    const init = body === undefined
+      ? { cache: 'no-store' }
+      : {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        };
+    // Keep every target as a literal so the static-page network guard can
+    // prove that ledger controls only talk to this same-origin server.
+    if (path === '/api/bets') res = await fetch('/api/bets', init);
+    else if (path === '/api/bets/log') res = await fetch('/api/bets/log', init);
+    else if (path === '/api/bets/leg') res = await fetch('/api/bets/leg', init);
+    else if (path === '/api/bets/slip') res = await fetch('/api/bets/slip', init);
+    else if (path === '/api/bets/settle') res = await fetch('/api/bets/settle', init);
+    else if (path === '/api/bets/delete') res = await fetch('/api/bets/delete', init);
+    else return { ok: false, error: 'Unknown ledger action.' };
+  } catch (err) {
+    return { ok: false, error: (err && err.message) ? err.message : String(err) };
+  }
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok || !payload.ok) {
+    return { ok: false, error: payload.error || res.statusText || ('HTTP ' + res.status) };
+  }
+  if (payload.bets) adoptBets(payload.bets);
+  return { ok: true, result: payload.result };
+}
+
+/** Replace the page's ledger and repaint whatever is showing it. */
+function adoptBets(payload) {
+  BETS = payload;
+  markStale('bets');
+  if (here.panel === 'bets') ensurePanel('bets');
+  scheduleNavCounts();
+}
+
+function betMessage(id, text, kind) {
+  const node = el(id);
+  if (!node) return;
+  node.textContent = text || '';
+  node.classList.toggle('bad', kind === 'bad');
+  node.classList.toggle('good', kind === 'good');
+}
+
+/* ── the panel ───────────────────────────────────────────────────────────── */
+
+function renderBets() {
+  const nav = el('nav-bets');
+  const summary = betSummary();
+  const slips = betSlips();
+  if (nav) nav.textContent = slips.length ? String(slips.length) : '';
+
+  const note = el('bets-summary');
+  if (note) {
+    note.textContent = BETS.error
+      ? `ledger unreadable — ${BETS.error}`
+      : (slips.length
+        ? `${slips.length} position${slips.length === 1 ? '' : 's'} · ${
+          summary.pending_legs || 0} leg${summary.pending_legs === 1 ? '' : 's'} still open`
+        : 'nothing logged yet');
+  }
+
+  const stats = el('bets-stats');
+  if (stats) {
+    const roi = summary.roi_pct === null || summary.roi_pct === undefined
+      ? '—' : Number(summary.roi_pct).toFixed(2) + '%';
+    const record = summary.record || {};
+    stats.innerHTML = [
+      ['profit', usdSigned(summary.profit), 'settled bets only'],
+      ['staked', usd(summary.staked), `${summary.leg_count || 0} legs logged`],
+      ['still open', usd(summary.open_stake), `${summary.pending_legs || 0} unsettled`],
+      ['ROI', roi, `on ${usd(summary.settled_stake)} settled`],
+      ['record', `${record.won || 0}-${record.lost || 0}-${
+        (record.push || 0) + (record.void || 0)}`, 'won-lost-push'],
+    ].map(([name, value, sub]) =>
+      `<div class="stat"><span>${escapeHtml(name)}</span><b>${escapeHtml(String(value))}</b>`
+      + `<small>${escapeHtml(sub)}</small></div>`).join('');
+  }
+
+  const listNote = el('bets-list-note');
+  if (listNote) {
+    listNote.textContent = BETS_WRITABLE
+      ? 'newest first · change a stake, price or result and it saves'
+      : 'newest first · view only — start with --serve to edit';
+  }
+
+  const list = el('bets-list');
+  if (list) {
+    list.innerHTML = slips.length
+      ? slips.map((slip) => slipCard(slip)).join('')
+      : `<div class="arb-empty">No bets logged yet. The quickest way in is the
+        <a href="#arb">Arbitrage</a> panel — every card there has a
+        <b>Log this bet</b> button that carries the books, prices and stakes across.
+        ${BETS_WRITABLE ? '' : '<br/>This page was opened from a file, so the ledger is read-only. Start it with <code>python -m src.report --serve 8765 --open</code> to log bets.'}</div>`;
+  }
+
+  const books = el('bets-books');
+  if (books) {
+    const rows = summary.by_book || [];
+    books.innerHTML = rows.length
+      ? rows.map((row) =>
+        `<span>${escapeHtml(book(row.book))} <b>${escapeHtml(usdSigned(row.profit))}</b>`
+        + ` <span class="dim">${row.bets} bet${row.bets === 1 ? '' : 's'},`
+        + ` ${escapeHtml(usd(row.staked))} staked`
+        + `${row.pending ? `, ${escapeHtml(usd(row.open))} open` : ''}</span></span>`
+      ).join('')
+      : '<span class="dim">Nothing logged yet.</span>';
+  }
+
+  const status = el('bl-status');
+  if (status && (!status.options || !status.options.length)) {
+    status.innerHTML = BET_STATUSES.map((value) =>
+      `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`).join('');
+  }
+  const books2 = el('bl-books');
+  if (books2 && (!books2.options || !books2.options.length)) {
+    books2.innerHTML = (DATA.sources || []).map((s) =>
+      `<option value="${escapeHtml(s.key)}">${escapeHtml(s.label || s.key)}</option>`).join('');
+  }
+  const addBtn = el('bl-add');
+  if (addBtn && !BETS_WRITABLE) {
+    addBtn.disabled = true;
+    addBtn.classList.add('is-file');
+    addBtn.title = 'Start the dashboard with: python -m src.report --serve 8765 --open';
+    betMessage('bl-add-msg', 'View only. Run with --serve 8765 --open to log bets.', '');
+  }
+}
+
+function slipCard(slip) {
+  const legs = slip.legs || [];
+  const rw = BETS_WRITABLE;
+  const rows = legs.map((leg) => {
+    const bookCell = rw
+      ? `<input class="bl-text" value="${escapeHtml(leg.book || '')}"
+          data-bl-field="book" data-bl-leg="${leg.id}" list="bl-books"
+          aria-label="Book"/>`
+      : `<b>${escapeHtml(book(leg.book))}</b>`;
+    const selectionCell = rw
+      ? `<input class="bl-text" value="${escapeHtml(leg.selection || '')}"
+          data-bl-field="selection" data-bl-leg="${leg.id}" aria-label="Bet"/>`
+      : escapeHtml(leg.selection || '—');
+    const priceCell = rw
+      ? `<input class="odds" value="${escapeHtml(leg.american_odds === null
+        || leg.american_odds === undefined ? '' : leg.american_odds)}"
+        data-bl-field="american_odds" data-bl-leg="${leg.id}" inputmode="numeric"
+        aria-label="US odds"/>`
+      : escapeHtml(leg.american_odds === null || leg.american_odds === undefined
+        ? '—' : fmtAmerican(leg.american_odds));
+    const stakeCell = rw
+      ? `<input class="money" value="${Number(leg.stake).toFixed(2)}"
+        data-bl-field="stake" data-bl-leg="${leg.id}" inputmode="decimal" aria-label="Stake"/>`
+      : escapeHtml(usd(leg.stake));
+    const statusCell = rw
+      ? `<select data-bl-field="status" data-bl-leg="${leg.id}" aria-label="Result">${
+        BET_STATUSES.map((value) =>
+          `<option value="${escapeHtml(value)}"${value === leg.status ? ' selected' : ''}>${
+            escapeHtml(value)}</option>`).join('')}</select>`
+      : `<span class="bl-status ${escapeHtml(leg.status)}">${escapeHtml(leg.status)}</span>`;
+    // The returned box is only offered once there is an outcome. A pending leg
+    // has not paid anything, and the ledger refuses the pair outright, so
+    // showing the box would be offering an edit that can only fail.
+    const backCell = leg.status === 'pending'
+      ? '<span class="dim">—</span>'
+      : (rw
+        ? `<input class="money" value="${leg.returned === null || leg.returned === undefined
+          ? '' : Number(leg.returned).toFixed(2)}" data-bl-field="returned"
+          data-bl-leg="${leg.id}" inputmode="decimal" aria-label="Returned"
+          placeholder="${Number(leg.to_return).toFixed(2)}"/>`
+        : escapeHtml(usd(leg.returned)));
+    const linked = leg.link_url
+      ? ` <a href="${escapeHtml(leg.link_url)}" target="_blank" rel="noopener noreferrer"
+          title="open the slip at the book">↗</a>`
+      : '';
+    return `<tr>
+      <td>${bookCell}${linked}</td>
+      <td>${selectionCell}${leg.line === null || leg.line === undefined
+        ? '' : ' ' + escapeHtml(fmtLine(leg.line, slip.market))}</td>
+      <td class="num">${priceCell}</td>
+      <td class="num">${stakeCell}</td>
+      <td class="num">${escapeHtml(usd(leg.to_return))}</td>
+      <td>${statusCell}</td>
+      <td class="num">${backCell}</td>
+      <td class="num bl-pl ${plClass(leg.profit)}">${escapeHtml(
+        leg.profit === null || leg.profit === undefined ? '—' : usdSigned(leg.profit))}</td>
+    </tr>`;
+  }).join('');
+
+  const kpis = [
+    `staked <strong>${escapeHtml(usd(slip.stake))}</strong>`,
+    slip.profit === null || slip.profit === undefined
+      ? `open <strong>${escapeHtml(usd(slip.open_stake))}</strong>`
+      : `P/L <strong class="bl-pl ${plClass(slip.profit)}">${escapeHtml(usdSigned(slip.profit))}</strong>`,
+  ];
+  if (slip.open_stake && slip.profit !== null && slip.profit !== undefined) {
+    kpis.push(`still open <strong>${escapeHtml(usd(slip.open_stake))}</strong>`);
+  }
+  if (slip.margin_pct !== null && slip.margin_pct !== undefined) {
+    kpis.push(`edge when placed <strong>${Number(slip.margin_pct).toFixed(2)}%</strong>`);
+  }
+  if (slip.expected_profit !== null && slip.expected_profit !== undefined) {
+    kpis.push(`expected <strong>${escapeHtml(usdSigned(slip.expected_profit))}</strong>`);
+  }
+  // Said out loud rather than folded into the totals: a cashout with no amount
+  // entered is money whose fate the ledger does not know, and averaging it in as
+  // zero would print a loss nobody took.
+  if (slip.unpriced_legs) {
+    kpis.push(`<span class="dim">${slip.unpriced_legs} settled leg${
+      slip.unpriced_legs === 1 ? '' : 's'} with no amount entered</span>`);
+  }
+
+  const acts = BETS_WRITABLE
+    ? `<div class="bl-acts">
+        <button type="button" class="bl-btn" data-bl="settle" data-bl-slip="${slip.id}"
+          data-bl-status="won">All won</button>
+        <button type="button" class="bl-btn" data-bl="settle" data-bl-slip="${slip.id}"
+          data-bl-status="lost">All lost</button>
+        <button type="button" class="bl-btn" data-bl="settle" data-bl-slip="${slip.id}"
+          data-bl-status="push">All push</button>
+        <button type="button" class="bl-btn" data-bl="settle" data-bl-slip="${slip.id}"
+          data-bl-status="pending">Reopen</button>
+        <button type="button" class="bl-btn danger" data-bl="delete" data-bl-slip="${slip.id}"
+          >Delete</button>
+      </div>`
+    : '';
+
+  const openGame = slip.event_key
+    ? ` · <a href="${escapeHtml(href('fixture', slip.event_key))}">open game</a>` : '';
+
+  return `<article class="bl-slip" data-slip="${slip.id}">
+    <div class="bl-top">
+      <div>
+        <b>${escapeHtml(slipTitle(slip))}</b>
+        <div class="bl-meta">${escapeHtml(slipMeta(slip))}${openGame}</div>
+      </div>
+      <span class="bl-status ${escapeHtml(slip.status)}">${escapeHtml(
+        slip.kind === 'arb' ? `arb · ${slip.status}` : slip.status)}</span>
+    </div>
+    <div class="bl-kpis">${kpis.join('')}</div>
+    <table class="bl-legs">
+      <thead><tr>
+        <th>Book</th><th>Bet</th><th>Odds</th><th>Stake</th><th>Pays</th>
+        <th>Result</th><th>Got back</th><th>P/L</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    ${acts}
+    ${rw
+      ? `<textarea class="bl-note" data-bl-slip-field="note" data-bl-slip="${slip.id}"
+          placeholder="Add a note…" aria-label="Bet note">${escapeHtml(slip.note || '')}</textarea>`
+      : (slip.note ? `<p class="bl-note">${escapeHtml(slip.note)}</p>` : '')}
+    <p class="bl-msg" data-bl-msg="${slip.id}"></p>
+  </article>`;
+}
+
+/* ── logging from what was already scraped ───────────────────────────────── */
+
+/** The drawer under an arbitrage card: every leg pre-filled, stakes editable.
+ *
+ *  This is the point of the whole feature. The detector already knows the books,
+ *  the prices, the selections and the stake split that makes the position
+ *  risk-free; retyping any of that by hand is how a logged bet stops matching
+ *  the bet that was placed. The reader changes one number — how much — and the
+ *  rest travels with it. */
+function arbLogDrawer(o, index) {
+  if (!BETS_WRITABLE) return '';
+  const legs = (o.legs || []).map((leg) => ({
+    book: leg.source,
+    selection: leg.selection,
+    line: leg.line,
+    american_odds: leg.american_odds,
+    decimal_odds: leg.decimal_odds,
+    stake: leg.stake,
+    link_url: (leg.link && leg.link.url) || '',
+  }));
+  const slip = {
+    kind: 'arb',
+    sport: o.sport,
+    league: o.league,
+    event_key: o.event_key,
+    home_team: o.home_team,
+    away_team: o.away_team,
+    commence_time: o.commence_time,
+    market: o.market,
+    period: o.period,
+    side: o.side || '',
+    line: o.line,
+    margin_pct: o.margin_pct,
+    expected_profit: o.guaranteed_profit,
+    source_run_id: currentRunId,
+    legs: legs,
+  };
+  const rows = legs.map((leg, i) =>
+    `<tr>
+      <td>${escapeHtml(book(leg.book))}</td>
+      <td>${escapeHtml(leg.selection)}${leg.line === null || leg.line === undefined
+        ? '' : ' ' + escapeHtml(fmtLine(leg.line, o.market))}</td>
+      <td class="num">${escapeHtml(fmtAmerican(leg.american_odds))}</td>
+      <td class="num"><label class="bl-field"><span class="sr-only">Stake at ${
+        escapeHtml(book(leg.book))}</span>
+        <input class="money" data-bl-stake="${i}" inputmode="decimal"
+          value="${Number(leg.stake).toFixed(2)}"/></label></td>
+    </tr>`).join('');
+  return `<div class="bl-drawer" hidden data-bl-drawer="${index}"
+      data-bl-payload="${escapeHtml(JSON.stringify(slip))}">
+    <table class="bl-legs"><tbody>${rows}</tbody></table>
+    <div class="bl-form" style="margin-top:8px">
+      <label class="bl-field"><span>Total $</span>
+        <input class="money" data-bl-total="${index}" inputmode="decimal"
+          value="${Number(o.total_stake).toFixed(2)}"/></label>
+      <button type="button" class="bl-btn primary" data-bl="log-arb" data-bl-index="${index}"
+        >Log ${legs.length} leg${legs.length === 1 ? '' : 's'}</button>
+      <button type="button" class="bl-btn" data-bl="cancel" data-bl-index="${index}">Cancel</button>
+    </div>
+    <p class="bl-msg" data-bl-msg="arb-${index}"></p>
+  </div>`;
+}
+
+/** Rescale every leg to a new bankroll, keeping the ratio the detector chose.
+ *
+ *  Rounding each leg independently is what makes a $100 position add up to
+ *  $99.99; the last leg absorbs the remainder so the stakes always sum to the
+ *  number the reader typed. */
+function rescaleArbStakes(drawer) {
+  const totalBox = drawer.querySelector('[data-bl-total]');
+  const boxes = [...drawer.querySelectorAll('[data-bl-stake]')];
+  if (!totalBox || !boxes.length) return;
+  const wanted = Number(totalBox.value);
+  if (!isFinite(wanted) || wanted <= 0) return;
+  let base;
+  try {
+    base = JSON.parse(drawer.getAttribute('data-bl-payload')).legs.map((leg) => Number(leg.stake));
+  } catch (_) { return; }
+  const sum = base.reduce((n, v) => n + v, 0);
+  if (!(sum > 0)) return;
+  let assigned = 0;
+  boxes.forEach((boxNode, i) => {
+    if (i === boxes.length - 1) {
+      boxNode.value = Math.max(0, wanted - assigned).toFixed(2);
+      return;
+    }
+    const share = Math.round((base[i] / sum) * wanted * 100) / 100;
+    assigned += share;
+    boxNode.value = share.toFixed(2);
+  });
+}
+
+/** Read a drawer back out: the scraped payload, with the stakes as edited. */
+function arbDrawerPayload(drawer) {
+  const slip = JSON.parse(drawer.getAttribute('data-bl-payload'));
+  for (const boxNode of drawer.querySelectorAll('[data-bl-stake]')) {
+    const i = Number(boxNode.getAttribute('data-bl-stake'));
+    if (slip.legs[i]) slip.legs[i].stake = boxNode.value;
+  }
+  return slip;
+}
+
+/** One button's worth of markup for logging a single scraped price. */
+function singleLogButton(payload, label) {
+  if (!BETS_WRITABLE) return '';
+  return `<button type="button" class="bl-btn" data-bl="log-single"
+    data-bl-payload="${escapeHtml(JSON.stringify(payload))}"
+    title="Add this to My bets">${escapeHtml(label || 'log')}</button>`;
+}
+
+/* ── one delegated handler for every bet control on the page ─────────────── */
+
+/** Wired once, at the document, because the controls live in three different
+ *  panels and every one of them is rebuilt by its renderer. Re-attaching per
+ *  render is how a page ends up firing one click five times. */
+function wireBetControls() {
+  if (typeof document === 'undefined' || !document.body
+      || document.body.dataset.betControls === '1') return;
+  document.body.dataset.betControls = '1';
+
+  document.body.addEventListener('click', (ev) => {
+    const node = ev.target && ev.target.closest ? ev.target.closest('[data-bl]') : null;
+    if (!node) return;
+    const kind = node.getAttribute('data-bl');
+    if (kind === 'toggle' || kind === 'cancel') {
+      const index = node.getAttribute('data-bl-index');
+      const drawer = document.querySelector(`[data-bl-drawer="${index}"]`);
+      if (drawer) drawer.hidden = kind === 'cancel' ? true : !drawer.hidden;
+      return;
+    }
+    if (kind === 'log-arb') return void logArbBet(node);
+    if (kind === 'log-single') return void logSingleBet(node);
+    if (kind === 'settle') return void settleSlip(node);
+    if (kind === 'delete') return void deleteSlip(node);
+  });
+
+  // ``change`` rather than ``input``: a stake is saved when the reader is done
+  // typing it, not on every keystroke — otherwise "50" is written as 5 then 50,
+  // and a backspaced field posts a blank the ledger has to refuse.
+  document.body.addEventListener('change', (ev) => {
+    const node = ev.target;
+    if (!node || !node.getAttribute) return;
+    if (node.hasAttribute('data-bl-total')) {
+      const drawer = node.closest('[data-bl-drawer]');
+      if (drawer) rescaleArbStakes(drawer);
+      return;
+    }
+    const field = node.getAttribute('data-bl-field');
+    if (field) { void editLeg(node, field); return; }
+    const slipField = node.getAttribute('data-bl-slip-field');
+    if (slipField) void editSlip(node, slipField);
+  });
+}
+
+async function logArbBet(node) {
+  const index = node.getAttribute('data-bl-index');
+  const drawer = document.querySelector(`[data-bl-drawer="${index}"]`);
+  if (!drawer) return;
+  node.disabled = true;
+  const box = drawer.querySelector(`[data-bl-msg="arb-${index}"]`);
+  if (box) { box.textContent = 'Saving…'; box.classList.remove('bad', 'good'); }
+  const res = await betApi('/api/bets/log', arbDrawerPayload(drawer));
+  node.disabled = false;
+  if (!res.ok) {
+    if (box) { box.textContent = res.error; box.classList.add('bad'); }
+    return;
+  }
+  // The drawer belongs to the arbitrage panel, which this write did not rebuild.
+  if (box) { box.textContent = 'Logged — see My bets.'; box.classList.add('good'); }
+  drawer.hidden = true;
+}
+
+async function logSingleBet(node) {
+  let payload;
+  try {
+    payload = JSON.parse(node.getAttribute('data-bl-payload'));
+  } catch (_) { return; }
+  const stake = window.prompt(
+    `How much did you put on this at ${book(payload.legs[0].book)}?`, '50');
+  if (stake === null) return;
+  payload.legs[0].stake = stake;
+  node.disabled = true;
+  const was = node.textContent;
+  node.textContent = 'saving…';
+  const res = await betApi('/api/bets/log', payload);
+  node.disabled = false;
+  node.textContent = res.ok ? 'logged ✓' : was;
+  if (!res.ok) window.alert('Could not log that bet: ' + res.error);
+}
+
+async function editLeg(node, field) {
+  const legId = Number(node.getAttribute('data-bl-leg'));
+  if (!legId) return;
+  const slipNode = node.closest('[data-slip]');
+  const box = slipNode
+    ? slipNode.querySelector(`[data-bl-msg="${slipNode.getAttribute('data-slip')}"]`) : null;
+  const value = node.value;
+  const body = { leg_id: legId };
+  // A cleared "got back" box means "I do not know what this returned", which is
+  // a real state (an unpriced cashout) and distinct from zero. Sending the empty
+  // string preserves it; sending 0 would invent a total loss.
+  body[field] = (field === 'returned' && String(value).trim() === '') ? null : value;
+  if (box) { box.textContent = 'Saving…'; box.classList.remove('bad', 'good'); }
+  const res = await betApi('/api/bets/leg', body);
+  if (!res.ok) {
+    // The panel was not replaced, so the box still shows the rejected text. Say
+    // why, and leave it there to be corrected rather than silently reverting it.
+    if (box) { box.textContent = res.error; box.classList.add('bad'); }
+    else window.alert(res.error);
+  }
+}
+
+async function editSlip(node, field) {
+  const slipId = Number(node.getAttribute('data-bl-slip'));
+  if (!slipId) return;
+  const box = node.closest('[data-slip]')?.querySelector(`[data-bl-msg="${slipId}"]`);
+  const body = { slip_id: slipId };
+  body[field] = node.value;
+  if (box) { box.textContent = 'Saving…'; box.classList.remove('bad', 'good'); }
+  const res = await betApi('/api/bets/slip', body);
+  if (!res.ok) {
+    if (box) { box.textContent = res.error; box.classList.add('bad'); }
+    else window.alert(res.error);
+  }
+}
+
+async function settleSlip(node) {
+  const slipId = Number(node.getAttribute('data-bl-slip'));
+  const status = node.getAttribute('data-bl-status');
+  const res = await betApi('/api/bets/settle', { slip_id: slipId, status: status });
+  if (!res.ok) window.alert('Could not settle that bet: ' + res.error);
+}
+
+async function deleteSlip(node) {
+  const slipId = Number(node.getAttribute('data-bl-slip'));
+  if (!window.confirm('Delete this logged bet? This cannot be undone.')) return;
+  const res = await betApi('/api/bets/delete', { slip_id: slipId });
+  if (!res.ok) window.alert('Could not delete that bet: ' + res.error);
+}
+
+/** The hand-entry form: one leg, one book, whatever the operator types. */
+async function addManualBet() {
+  const btn = el('bl-add');
+  const bookKey = (el('bl-book').value || '').trim();
+  const what = (el('bl-what').value || '').trim();
+  const odds = (el('bl-odds').value || '').trim();
+  const stake = (el('bl-stake').value || '').trim();
+  const status = el('bl-status').value || 'pending';
+  if (!bookKey) { betMessage('bl-add-msg', 'Which book took the bet?', 'bad'); return; }
+  if (!what) { betMessage('bl-add-msg', 'Say what the bet was.', 'bad'); return; }
+  btn.disabled = true;
+  betMessage('bl-add-msg', 'Saving…', '');
+  const res = await betApi('/api/bets/log', {
+    kind: 'single',
+    note: '',
+    legs: [{
+      book: bookKey,
+      selection: what,
+      american_odds: odds,
+      stake: stake,
+      status: status,
+    }],
+  });
+  btn.disabled = false;
+  if (!res.ok) { betMessage('bl-add-msg', res.error, 'bad'); return; }
+  el('bl-what').value = '';
+  el('bl-odds').value = '';
+  el('bl-stake').value = '';
+  el('bl-status').value = 'pending';
+  betMessage('bl-add-msg', 'Logged.', 'good');
+}
+
+function wireBetForm() {
+  const btn = el('bl-add');
+  if (!btn) return;
+  btn.addEventListener('click', () => { void addManualBet(); });
 }
 
 /* ── sports & leagues ────────────────────────────────────────────────────── */
@@ -3409,7 +4429,7 @@ function renderSources() {
   if (!run) {
     el('nav-sources').textContent = '';
     el('source-cards').innerHTML = '<div class="empty">No scrapes yet.</div>';
-    el('skips').innerHTML = '';
+    blankRegion('skips');
     return;
   }
   const byKey = new Map(run.sources.map((h) => [h.key, h]));
@@ -3420,7 +4440,7 @@ function renderSources() {
     el('source-cards').innerHTML =
       `<div class="empty">No per-venue detail was recorded for this collection. Its
        ${run.quote_count.toLocaleString()} prices are still stored — see Games and All prices.</div>`;
-    el('skips').innerHTML = '';
+    blankRegion('skips');
     return;
   }
 
@@ -3600,27 +4620,46 @@ function renderEvents() {
     })),
     { band: 'totals', label: 'Books', num: true, cell: (e) => cell(e.bySource.size) },
     { band: 'totals', label: 'Prices', num: true, cell: (e) => cell(e.rows.length) },
-  ], events, { className: 'cov', empty: all.length
+  ], events, { className: 'cov', noun: 'games', empty: all.length
       ? 'No games match these filters.'
       : 'No prices stored for this scrape.',
                go: (e) => href('fixture', e.key) });
 
-  // The fixture panel is kept populated even while it is off screen, so a link
-  // straight into it opens on something rather than on an empty state.
-  const keep = events.find((e) => e.key === selectedEvent);
-  selectEvent(keep ? keep.key : (events[0] && events[0].key));
+  // Deliberately does NOT repoint the fixture panel any more. It used to, to keep
+  // that panel populated while off screen; the router now builds it on arrival with
+  // ``defaultFixture()``, so the only thing the repoint still did was overwrite the
+  // game a reader had deliberately opened. That happened for real: type into the
+  // Games search, click a game inside the 140ms debounce window, and the pending
+  // renderEvents fired afterwards, replaced the fixture panel's heading and prices
+  // with the search's top hit, and left the breadcrumb naming the game you clicked.
+  // Nothing corrected it afterwards, because nothing re-rendered.
 }
 
 function selectEvent(key) {
   const events = eventSummaries(currentRows());
   selectedEvent = key;
+  // The `shownChild` tag for this panel is set by showCurrentPanel, the only caller.
+  // A second caller would have to set it too, or showCurrentPanel's dedupe would
+  // believe the panel still holds the game the router last asked for and skip
+  // rebuilding it. An earlier version of renderEvents was such a caller, and the tag
+  // was set here; it no longer repoints the panel, so the assignment was dead.
   const event = events.find((e) => e.key === key);
   if (!event) {
-    el('event-title').textContent = 'Pick a game';
-    el('event-sub').textContent = "Open Today's games and click a card.";
-    el('event-count').textContent = '';
+    // Two different situations, and saying "Pick a game" for both was a lie in the
+    // second: nothing is open, versus a game is open that this scrape does not hold.
+    // The latter is reached by switching scrapes or sports with a game open, and the
+    // breadcrumb still names that game — so the panel has to explain the mismatch
+    // rather than pretend the reader never clicked anything.
+    const asked = key !== null && key !== undefined && key !== '';
+    el('event-title').textContent = asked ? 'Not in this scrape' : 'Pick a game';
+    el('event-sub').textContent = asked
+      ? 'This collection has no prices for that game. Pick another scrape, or open a game from this one.'
+      : "Open Today's games and click a card.";
+    el('event-count').textContent = asked ? key : '';
     table(el('event-detail'), [{ label: '', cell: () => cell('') }], [],
-      { empty: "No game selected. Open Today's games and click a card." });
+      { empty: asked
+        ? 'No prices for this game in this scrape.'
+        : "No game selected. Open Today's games and click a card." });
     return;
   }
 
@@ -3885,10 +4924,36 @@ function renderBet(key) {
         facts.splice(1, 0, ['quoted', fmtOdds(r[COL.decimal_odds]) + ' before commission']);
         facts.push(['commission', commissionOf(source)]);
       }
+      // "I am taking this one, at this book, at this price." Everything the
+      // ledger needs is already on screen, so the button carries it rather than
+      // making the reader retype a price they are looking at.
+      const logIt = singleLogButton({
+        kind: 'single',
+        sport: sport,
+        league: str(r[COL.league]),
+        event_key: spec.event,
+        home_team: home,
+        away_team: away,
+        commence_time: str(r[COL.commence_time]),
+        market: spec.market,
+        period: spec.period,
+        side: spec.side || '',
+        line: spec.line,
+        source_run_id: sample.run.id,
+        legs: [{
+          book: source,
+          selection: spec.selection,
+          line: spec.line,
+          american_odds: americanOf(r),
+          decimal_odds: r[COL.decimal_odds],
+          stake: 0,
+          link_url: '',
+        }],
+      }, 'log');
       return `<div class="qcard ${isBest ? 'top' : ''}${open ? '' : ' off'}">
         <div class="who"><b>${escapeHtml(book(source))}</b>${
           isBest ? '<span class="pill ok"><i></i>best</span>' : ''}${
-          open ? '' : '<span class="pill warn">paused</span>'}</div>
+          open ? '' : '<span class="pill warn">paused</span>'}${logIt}</div>
         <span class="price">${fmtOdds(net)}</span>
         <dl>${facts.map(([k, v]) =>
           `<dt>${escapeHtml(k)}</dt><dd>${escapeHtml(String(v))}</dd>`).join('')}</dl>
@@ -3956,6 +5021,20 @@ function renderBet(key) {
     // "keeps -23.3%" — a 23% edge to the bettor — for a missing draw offer.
     if (!sumsToAMargin(sides)) return null;
     const sum = sides.reduce((a, r) => a + 1 / netOdds(r), 0);
+    // A complete market is not necessarily a correctly paired one, and a cut is only
+    // a cut if the venue could have quoted it. A sportsbook prices both sides itself
+    // and will not price itself to lose, so a sum below 1.0 there is evidence about
+    // the parser — validation says so in those words and fails the run for it. On an
+    // exchange the two sides are separate order books and may cross by a little, so a
+    // small negative is a thin market rather than a mispairing.
+    //
+    // Printed as fact, this read "Hard Rock Bet (VegasInsider) keeps -48.3%" beside
+    // eleven venues keeping 1.5-4.4%, on a market validation had already flagged as
+    // mispaired. A 48% edge to the bettor is not a price anyone can take.
+    if (sum < 1 && !orderDriven(source)) {
+      return `${book(source)} — both sides stored, but they sum to ${
+        (sum * 100).toFixed(1)}%, so they are mispaired rather than a cut`;
+    }
     return `${book(source)} keeps ${((sum - 1) * 100).toFixed(1)}%`;
   }).filter(Boolean);
 
@@ -4464,9 +5543,23 @@ function keepBetter(map, key, row) {
   return map;
 }
 
-function renderMovement() {
-  svgRunsChart();
+/** Every embedded run's prices, joined into one series per bet.
+ *
+ *  Split out of renderMovement so the nav count can be had without building the
+ *  table, and memoized because it is the most expensive scan on the page: it walks
+ *  every embedded run, not just the current one — 88ms of the 95ms the nav counts
+ *  cost.
+ *
+ *  Keyed on the sport alone, deliberately. Price movement is a fact about the
+ *  whole embedded history, so the answer does not depend on which run is being
+ *  viewed — nothing below reads ``currentRunId``. Clearing this on a run change
+ *  (which ``invalidatePanels`` used to do) re-ran the scan to arrive at the same
+ *  number, and cost 88ms on every run switch including switches to a run holding
+ *  no prices at all. */
+let movementCache = null;
 
+function movementAnalysis() {
+  if (movementCache && movementCache.sport === currentSport) return movementCache;
   const ordered = runs.slice().reverse().filter((r) => rowsByRun.has(r.id));
   const anchors = fixtureAnchorsFor(
     ordered.flatMap((run) => rowsByRun.get(run.id) || [])
@@ -4500,6 +5593,20 @@ function renderMovement() {
       });
     })
     .sort((a, b) => b.swing - a.swing);
+
+  movementCache = { sport: currentSport, ordered, series, moved };
+  return movementCache;
+}
+
+/** How many bets changed price — the Movement nav count, without the table. */
+function movedCount() {
+  return movementAnalysis().moved.length;
+}
+
+function renderMovement() {
+  svgRunsChart();
+
+  const { ordered, series, moved } = movementAnalysis();
 
   fillSelect(el('move-source'), [...new Set(moved.map((s) => str(s.row[COL.source])))].sort(),
     'every sportsbook', book);
@@ -4596,10 +5703,13 @@ function renderQuality() {
        openable. ${verdict}
        It stored ${stored} finding(s). Re-run the report with a larger
        <code>--quote-runs</code> to see them here.</div>`;
-    ['findings', 'overround', 'rejections', 'skips'].forEach((id) => {
-      const node = el(id);
-      if (node) node.innerHTML = '';
-    });
+    // dropChunkControl before blanking, because the control is a *sibling*: emptying
+    // the table cannot take it with it. Without this, switching from the newest
+    // scrape to one whose prices are not embedded left "Showing 120 of 500 rows"
+    // under the not-embedded notice, and clicking it appended 120 of the *previous*
+    // scrape's findings into the blanked table — headerless rows that still carried
+    // `data-go` and still navigated to the other scrape's fixtures.
+    ['findings', 'overround', 'rejections', 'skips'].forEach(blankRegion);
     return;
   }
 
@@ -4794,55 +5904,335 @@ function renderReference() {
 
 /* ── wiring ──────────────────────────────────────────────────────────────── */
 
-function renderRunScoped() {
-  renderOverview();
-  renderOddsScreen();
-  renderArb();
-  renderPromos();
-  renderSports();
-  renderSources();
-  renderEvents();            // also fills the fixture panel with a default
-  renderOdds();
-  renderMovement();
-  renderQuality();
-  renderRaw();
-  // The detail panels are rendered even while off screen: a link straight into one
-  // must open on something, and a panel that is only filled on arrival is a panel
-  // whose render path nothing exercises until a reader finds it broken.
-  renderBook(defaultBook());
-  renderBet(defaultBet());
+/* ── render scheduling ──────────────────────────────────────────────────────
+   Every panel used to be built up front, on load and again on every run or
+   sport change.  Measured on a 16-scrape page that is 1,702 games across 22
+   books: 577,098 DOM nodes for thirteen panels when exactly one is on screen,
+   461ms of computation plus roughly as much again building markup, and 1,143ms
+   of layout the moment the odds board was shown.  Chrome does not survive that
+   for long, and an interaction that blocks the main thread for a second is
+   indistinguishable from a crash.
+
+   A panel is now built when it is first shown, and marked stale when the run or
+   sport moves under it.  The guarantee the old comment cared about — that a link
+   straight into a panel opens on something rather than on a blank page — is kept
+   by rendering on arrival, which ``applyRoute`` does before the panel is
+   revealed. ``tests/dashboard_smoke.mjs`` walks every panel so each render path
+   is still exercised on every build.
+
+   The nav counts are the exception: they have to be right *before* you click,
+   so they are computed without building any markup, and after the first paint,
+   because two of them have to scan the quote rows to know the answer. */
+const PANEL_RENDERERS = {
+  overview: renderOverview,
+  run:      renderOverview,      // the dense strip and the flow live on This scrape
+  screen:   renderOddsScreen,
+  arb:      renderArb,
+  promos:   renderPromos,
+  bets:     renderBets,
+  sports:   renderSports,
+  sources:  renderSources,
+  events:   renderEvents,
+  odds:     renderOdds,
+  movement: renderMovement,      // also draws the every-scrape chart
+  quality:  renderQuality,
+  raw:      renderRaw,
+};
+
+/** Panels whose markup no longer matches the run or sport being viewed. */
+const stalePanels = new Set(Object.keys(PANEL_RENDERERS));
+
+/** The regions worth throwing away when their panel leaves the screen.
+ *
+ *  Building one panel at a time bounds what *arriving* costs, and on its own it
+ *  does not bound the document: every panel visited stayed in the DOM, so browsing
+ *  five of them and scrolling their lists reached 407,670 elements — the number the
+ *  eager render used to hit on load. These are the regions big enough to be worth
+ *  rebuilding rather than keeping; the small ones (stat strips, summaries, chrome)
+ *  are cheaper to leave alone. */
+const PANEL_HEAVY = {
+  screen:   ['odds-screen'],
+  events:   ['coverage', 'events-games'],
+  // overview and run are both rendered by renderOverview, so they own the same
+  // regions. Splitting them meant arriving at one built the other's region and threw
+  // it away in the same task, then left it resident for good on the way out. Sharing
+  // them only works because `applyRoute` evicts before it builds — see the note
+  // there; evicting afterwards blanks whichever of the two was just revealed.
+  overview: ['browse-games', 'matrix'],
+  run:      ['browse-games', 'matrix'],
+  odds:     ['odds-table'],
+  movement: ['move-table', 'runs-chart'],
+  quality:  ['findings', 'overround', 'rejections'],
+  raw:      ['raws'],
+  sources:  ['source-cards', 'skips'],
+  // sports-gaps is bigger than the two grids together and was the one region on
+  // Coverage that was never reclaimed.
+  sports:   ['sports-grid', 'leagues-grid', 'sports-gaps'],
+  promos:   ['promo-list'],
+  arb:      ['arb-list'],
+  bets:     ['bets-list'],
+  // No entries for fixture/bet/book. A drill-down is never unloaded: each one owns a
+  // single set of regions that the next game or bet overwrites, so they cannot
+  // accumulate, and keeping them means going Back to the list you came from is free.
+};
+
+/** Mark a panel for rebuilding, and every other name that shares its renderer. */
+function markStale(name) {
+  const render = PANEL_RENDERERS[name];
+  if (!render) return;
+  for (const [key, fn] of Object.entries(PANEL_RENDERERS)) {
+    if (fn === render) stalePanels.add(key);
+  }
 }
 
-/** The book and bet the detail panels sit on until something is clicked. */
+/** Empty a panel's heavy regions and arrange for it to be rebuilt on return. */
+function evictPanel(name) {
+  const ids = PANEL_HEAVY[name];
+  if (!ids) return;
+  for (const id of ids) {
+    const node = el(id);
+    if (!node) continue;
+    dropChunkControl(node);
+    node.innerHTML = '';
+  }
+  markStale(name);
+}
+
+function invalidatePanels() {
+  for (const name of Object.keys(PANEL_RENDERERS)) stalePanels.add(name);
+  shownChild = null;
+  // movementCache is deliberately NOT cleared here: it is keyed on the sport and
+  // answers a question about every embedded run, so a run change cannot change it.
+}
+
+/** A panel's own filter changed: rebuild it if it is on screen, else mark it stale.
+ *
+ *  The filter handlers used to call their renderers directly, which meant a control
+ *  shared between two panels rebuilt both. One league pick on the Games panel wrote
+ *  792,544 bytes of markup, 647,882 of it into the off-screen odds board — which was
+ *  stale anyway and would be rebuilt on arrival, so the work was pure waste and the
+ *  markup pure accumulation. The debounced boxes could do it up to 140ms after the
+ *  reader had already left. */
+function refreshPanel(name) {
+  markStale(name);
+  if (here.panel === name) { ensurePanel(name); return; }
+  // Not rendering means the panel's own renderer is not going to write its nav count,
+  // and that count describes state the filter just changed. Centralised here rather
+  // than at each call site, because every caller has the same obligation and one of
+  // them had already forgotten it: picking a league on Odds narrowed the board to 31
+  // games while "Today's games" in the rail still read 1,702. It also covers the
+  // debounce race — typing in the Games search and leaving inside the 140ms window,
+  // where the pending refresh lands after the reader is somewhere else.
+  scheduleNavCounts();
+}
+
+/** Build a panel unless it is already current. Returns whether it ran. */
+function ensurePanel(name) {
+  const render = PANEL_RENDERERS[name];
+  if (!render || !stalePanels.has(name)) return false;
+  // Cleared first: renderOverview backs two panel names, and a renderer that
+  // throws must not be retried on every route change.
+  for (const [key, fn] of Object.entries(PANEL_RENDERERS)) {
+    if (fn === render) stalePanels.delete(key);
+  }
+  render();
+  return true;
+}
+
+/** The drill-down panel already built, as panel + subject, so one route pass
+ *  that changes the run does not build the same detail panel twice. */
+let shownChild = null;
+
+/** Build whatever is on screen right now, including the drill-down panels.
+ *
+ *  The child panels take their subject from the route rather than from a stale
+ *  render, so changing the run while sitting on one repaints it for the new run. */
+function showCurrentPanel() {
+  const { panel, arg } = here;
+  if (panel === 'book' || panel === 'fixture' || panel === 'bet') {
+    // A bare #book / #fixture / #bet still opens on something, which is what the
+    // eager render used to guarantee. With no data to default to these fall back
+    // to their own empty state, which is the honest answer.
+    const subject = arg !== null && arg !== undefined ? arg
+      : (panel === 'book' ? defaultBook() : panel === 'fixture' ? defaultFixture() : defaultBet());
+    const tag = panel + '\x1f' + (subject === null || subject === undefined ? '' : subject);
+    if (shownChild === tag) return;
+    shownChild = tag;
+    if (panel === 'book') renderBook(subject);
+    else if (panel === 'fixture') selectEvent(subject);
+    else renderBet(subject);
+    return;
+  }
+  ensurePanel(panel);
+}
+
+function renderRunScoped() {
+  renderChrome();
+  // Reconcile the filter state before anything reads it. A league or book chosen
+  // under one sport may not exist under the next, and the code that clears an
+  // impossible choice used to run on every render because every panel rendered.
+  // Now only one panel builds, so a stale choice survived and the nav counts read
+  // it: picking Tennis with the book filter left on a baseball-only book showed
+  // "Games 0" beside a scrape holding 381 tennis games. It also fixes an older
+  // version of the same fault, where the board itself rendered empty because
+  // renderOddsScreen selected its rows before clearing the impossible league.
+  buildEventsFilters();
+  invalidatePanels();
+  showCurrentPanel();
+  scheduleNavCounts();
+}
+
+/* The counts beside each nav entry. Everything here reads a summary or scans
+   rows; nothing builds markup, which is what made the eager render expensive. */
+let navCountTimer = null;
+
+/** Fill the nav counts once the current panel has painted.
+ *
+ *  Deferred rather than inline because the board and games counts have to walk
+ *  the quote rows, and a reader waiting to click should not pay for a number. */
+function scheduleNavCounts() {
+  if (typeof setTimeout !== 'function') { renderNavCounts(); return; }
+  if (navCountTimer !== null) clearTimeout(navCountTimer);
+  navCountTimer = setTimeout(() => { navCountTimer = null; renderNavCounts(); }, 0);
+}
+
+function renderNavCounts() {
+  const run = runById.get(currentRunId);
+  const setCount = (id, value) => { const node = el(id); if (node) node.textContent = String(value); };
+
+  // Before the no-run guard, and outside every filter: the ledger is a record of
+  // what was placed, not a view of a scrape. Blanking it when the run picker has
+  // nothing selected would hide a real open position behind an unrelated state.
+  const slipCount = betSlips().length;
+  setCount('nav-bets', slipCount ? String(slipCount) : '');
+
+  if (!run) {
+    for (const id of ['nav-screen', 'nav-arb', 'nav-promos', 'nav-events', 'nav-odds',
+                      'nav-sports', 'nav-sources', 'nav-move', 'nav-quality', 'nav-raw']) {
+      setCount(id, '');
+    }
+    return;
+  }
+
+  // From the run summary and the embedded bags — no row scan needed.
+  const entries = run.sports || [];
+  setCount('nav-sports', `${entries.filter((e) => e.comparable).length}/${entries.length}`);
+  setCount('nav-sources', `${run.sources.filter((h) => h.ok).length}/${run.sources.length}`);
+  // Mirrors renderArb's three cases: prices not embedded, embedded but not
+  // computed, and computed. They are three different sentences in the panel and
+  // must not collapse to one number here.
+  const bag = arbBundle();
+  setCount('nav-arb', !detailLoaded(currentRunId) ? ''
+    : (!bag ? '—'
+      : String((bag.opportunities || []).filter((o) => !currentSport || o.sport === currentSport).length)));
+  // Unconditional, as renderPromos has it: with no promo scrape the honest count
+  // is 0, and a blank would read as "not counted yet".
+  setCount('nav-promos', String((PROMOS.offers || []).length));
+  const findings = DATA.findings.filter((f) => f.run_id === currentRunId);
+  setCount('nav-quality', !runRows().length && !detailLoaded(currentRunId)
+    ? '—' : (findings.length ? String(findings.length) : 'clear'));
+  setCount('nav-raw', detailLoaded(currentRunId)
+    ? DATA.raws.filter((r) => r.run_id === currentRunId).length
+    : ((run && run.raw_count) || 0));
+
+  // One row scan shared by the two counts that need one.
+  const rows = currentRows();
+  setCount('nav-odds', rows.length.toLocaleString());
+  setCount('nav-screen', eventSummaries(
+    rows.filter((r) => !currentLeague || str(r[COL.league]) === currentLeague)).length);
+  setCount('nav-events', filteredGameEvents().length);
+
+  // Movement is counted separately, and last. It has to join every embedded run's
+  // rows — 88-123ms of the ~100ms this whole pass used to cost — so it waits for
+  // idle rather than riding along with the cheap counts.
+  //
+  // An earlier version guarded this with `if (stalePanels.has('movement'))`,
+  // which selected the expensive case rather than skipping it: stale is exactly
+  // when the cache is cold and the full scan has to run.
+  scheduleMovementCount();
+}
+
+/** Fill the Movement count when the main thread is free.
+ *
+ *  Deferred harder than the other counts because it is the one number that costs a
+ *  cross-run scan. If the panel is opened first it fills the count itself and the
+ *  memo makes this a no-op. */
+let movementCountTimer = null;
+
+function scheduleMovementCount() {
+  const fill = () => {
+    movementCountTimer = null;
+    const node = el('nav-move');
+    if (node) node.textContent = movedCount().toLocaleString();
+  };
+  // A timer, deliberately, not requestIdleCallback. Idle callbacks do not run in a
+  // hidden tab — measured: the count never arrived, even with a 2000ms timeout set —
+  // so the number would be missing or stale for anyone who changed sport, switched
+  // away and came back. A timer fires either way; all this has to buy is "not in the
+  // same task as the click".
+  if (typeof setTimeout !== 'function') { fill(); return; }
+  if (movementCountTimer !== null) clearTimeout(movementCountTimer);
+  movementCountTimer = setTimeout(fill, 200);
+}
+
+/** The book, game and bet the detail panels sit on until something is clicked. */
 function defaultBook() {
   const run = runById.get(currentRunId) || { sources: [] };
   const first = (run.sources || [])[0];
-  return here.panel === 'book' && here.arg ? here.arg : (first ? first.key : null);
+  return first ? first.key : null;
+}
+function defaultFixture() {
+  if (selectedEvent) return selectedEvent;
+  const first = filteredGameEvents()[0] || eventSummaries(currentRows())[0];
+  return first ? first.key : null;
 }
 function defaultBet() {
-  if (here.panel === 'bet' && here.arg) return here.arg;
   const row = currentRows()[0];
   return row ? betKeyOf(row) : null;
 }
 
 buildRunPicker();
 buildSportPicker();
-renderRunScoped();
+renderChrome();
 renderReference();
 
 if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
   window.addEventListener('hashchange', applyRoute);
 }
+// Builds exactly the panel the URL asks for. Everything else is built on arrival.
 applyRoute();
+scheduleNavCounts();
 
-['q', 'f-source', 'f-league', 'f-market', 'f-period', 'f-alt'].forEach((id) => {
-  el(id).addEventListener('input', renderOdds);
+/** Run `fn` once the typing stops.
+ *
+ *  The search boxes rebuilt their whole panel on every keystroke: 50ms a
+ *  character on All prices and 95ms on Games, where each character also rebuilt
+ *  the 1,704-row coverage table. Typing a team name paid that eight times over
+ *  and felt like a hang. A trailing edge is right for a filter — the answer for
+ *  the prefix you are still typing is not one anybody reads. */
+function afterTyping(fn, ms) {
+  let timer = null;
+  return () => {
+    if (typeof setTimeout !== 'function') { fn(); return; }
+    if (timer !== null) clearTimeout(timer);
+    timer = setTimeout(() => { timer = null; fn(); }, ms === undefined ? 140 : ms);
+  };
+}
+
+// Only the typed boxes are debounced. A select fires once on a deliberate pick, so
+// delaying it just makes the page feel late — these repaint immediately.
+const refreshOdds = () => refreshPanel('odds');
+const refreshEvents = () => refreshPanel('events');
+const refilterOdds = afterTyping(refreshOdds);
+el('q').addEventListener('input', refilterOdds);
+['f-source', 'f-league', 'f-market', 'f-period', 'f-alt'].forEach((id) => {
+  el(id).addEventListener('input', refreshOdds);
 });
-['events-q', 'events-book'].forEach((id) => {
-  el(id).addEventListener('input', renderEvents);
-});
-el('cov-mode').addEventListener('change', renderEvents);
-el('move-source').addEventListener('change', renderMovement);
+const refilterEvents = afterTyping(refreshEvents);
+el('events-q').addEventListener('input', refilterEvents);
+el('events-book').addEventListener('input', refreshEvents);
+el('cov-mode').addEventListener('change', refreshEvents);
+el('move-source').addEventListener('change', () => refreshPanel('movement'));
 // The sport filter is bound once, on the element rather than on its options, so
 // rebuilding the list for a different run cannot silently drop the handler.
 el('sport-pick').addEventListener('change', () => {
@@ -5166,8 +6556,16 @@ function wirePromoScrapeButton() {
 }
 wirePromoScrapeButton();
 
+/* The ledger's controls span three panels, so they are wired once at the body
+   rather than by any one renderer. */
+wireBetControls();
+wireBetForm();
+
+const refreshPromos = () => refreshPanel('promos');
+const refilterPromos = afterTyping(refreshPromos);
 ['promo-kind', 'promo-source', 'promo-region', 'promo-q'].forEach((id) => {
   const node = el(id);
-  if (node) node.addEventListener('input', renderPromos);
+  if (!node) return;
+  node.addEventListener('input', id === 'promo-q' ? refilterPromos : refreshPromos);
 });
 """

@@ -137,22 +137,28 @@ python -m src.collector lines --cross-book-only    # best price per market, acro
 python -m src.collector arb --verbose              # arbitrage, and why anything was refused
 python -m src.collector health                     # per-source success rate over time
 python -m src.report --open                        # browsable dashboard (view only)
-python -m src.report --serve 8765 --open           # dashboard + odds/promo Scrape buttons on localhost
+python -m src.report --serve 8765 --open           # dashboard + scrape controls + editable bet ledger
 python -m pytest -q                                # incl. tests over real captured payloads
 ```
 
-Open the dashboard with **`--serve`** if you want the scrape buttons. **Scrape now**
+Open the dashboard with **`--serve`** if you want the scrape buttons or the
+editable **My bets** ledger. Arbitrage cards and scraped prices can prefill the
+book, teams, market, odds, and suggested stakes; you can adjust the amount,
+settle each leg, and edit or delete an entry later. A manual form handles bets
+that were not in the scrape. **Scrape now**
 pulls odds; **Scrape promos** pulls signup bonuses / boosts into the **Promos**
 panel from first-party catalogs plus a TheLines failover (same idea as odds +
 Action Network). A plain `file://` open stays view-only on purpose: the page
-cannot run the collector without a local process. After each scrape the page
+cannot run the collector or change the ledger without a local process. After each scrape the page
 reloads on the newest snapshot; the left rail lists every collection by time so
 you can flip between them (or click bars on **Price changes**).
 
 Everything lands under `data/` (gitignored): raw responses in `data/raw/`,
-normalized rows in `data/collector.sqlite3`, the privacy-reduced egress record in
+normalized rows in `data/collector.sqlite3`, placed bets in the separate
+`data/bets.sqlite3`, the privacy-reduced egress record in
 `data/egress_state.json`, and route results in `data/probe_cache.sqlite3`.
-Override with `ODDS_DATA_DIR`, `ODDS_RAW_DIR`, `ODDS_DB_PATH`, `ODDS_STATE`,
+Override with `ODDS_DATA_DIR`, `ODDS_RAW_DIR`, `ODDS_DB_PATH`,
+`ODDS_BET_DB_PATH`, `ODDS_STATE`,
 `ODDS_INTERVAL_SECONDS`, `ODDS_HTTP_TIMEOUT`, or `ODDS_PROBE_TTL_DAYS` (the older
 `MLB_*` names still work and log a deprecation).
 
@@ -413,9 +419,9 @@ positive cases; they are never presented as observed prices.
 
 ## Dashboard
 
-`python -m src.report` reads the SQLite store and writes one self-contained HTML
-file — no server, no build step, no network access at all. It is strictly a view:
-every number comes from a query in `src/report.py`, so generating it cannot change
+`python -m src.report` reads the SQLite stores and writes one self-contained HTML
+file — no server, no build step, no network access at all. That file is strictly
+a view: every number comes from a query in `src/report.py`, so generating it cannot change
 what was collected. It shows the run end to end, per-source health, a per-sport and
 per-book coverage grid with the two-book bar, every normalized row, price movement
 across runs, validation findings, the raw-capture ledger, and the schema itself.

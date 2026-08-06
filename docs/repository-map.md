@@ -18,6 +18,7 @@ Use this map before exploring. Search for the relevant symbol and its tests, the
 | `src/jurisdictions.py`, `src/state_selection.py` | Retail routing and batch selection | IL/PA/NJ/DC routes, status, detection, selection |
 | `src/egress.py`, `src/probe_cache.py` | Jurisdiction diagnostics | Hashed egress record and TTL/status cache |
 | `src/promos/` | Promotions subsystem | Promo adapters, enrichment, deduplication, storage, planning |
+| `src/betlog.py` | Placed-bet ledger | Position snapshots, settlement edits, exact-money bankroll totals |
 | `src/report.py`, `src/report_assets.py` | Dashboard | Report payload/server and handwritten CSS/HTML/JavaScript |
 | `tests/` | Automated validation | Unit, contract, integration, replay, and dashboard tests |
 | `tests/test_adversarial_findings.py` | Regression archive | Search for the affected symbol or finding; never open the full file by default |
@@ -37,7 +38,7 @@ Search these files by section or symbol before reading ranges:
 | --- | --- |
 | `src/collector.py` | `# ── one run`, `# ── replay`, `# ── CLI`, or the command handler name |
 | `src/report.py` | `build_report`, payload helpers, `# ── rendering`, `# ── CLI`, `_serve` |
-| `src/report_assets.py` | Exactly three handwritten constants: `CSS`, `BODY`, `JS` |
+| `src/report_assets.py` | Exactly three handwritten constants: `CSS`, `BODY`, `JS`; for render scheduling search `PANEL_RENDERERS`, `ensurePanel`, `fillInChunks` |
 | `src/arb.py` | Arithmetic, settlement model, grouping, detection, best-price surface |
 | `src/validation.py` | Row-level, market-level, cross-source, coverage, availability |
 | `src/promos/planner.py` | Text parsing, slate context, solving, payloads, per-offer strategies |
@@ -54,6 +55,7 @@ Search these files by section or symbol before reading ranges:
 - Event matching: `src/events.py` and participant/league modules; validate with event, participant, and integration tests.
 - Arbitrage behavior: `src/arb.py`, commission, settlement, distinctness, or redundancy modules; add focused mathematical and adversarial tests.
 - Promo source or offer logic: remain under `src/promos/`; do not add promo tables to the odds store.
+- Placed-bet persistence or bankroll arithmetic: `src/betlog.py`; keep it out of the replaceable odds and promo databases.
 - Dashboard data and server behavior: `src/report.py`; visual/interaction assets: `src/report_assets.py`; validate through `tests/test_report.py`.
 - Retail state routing: `src/jurisdictions.py`, `src/state_selection.py`, scoped registry builders, batch/run persistence, and focused jurisdiction/probe tests.
 

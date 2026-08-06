@@ -1428,27 +1428,119 @@ def test_the_serve_promo_endpoint_answers_with_plans(
     assert promos["plans"], "the endpoint answered with no plans"
 
 
-def test_report_tests_never_read_the_developers_promo_database(tmp_path) -> None:
+def test_the_serve_bet_endpoints_persist_and_return_the_ledger(
+    populated: Store, tmp_path, monkeypatch,
+) -> None:
+    """The browser's log/edit round trip uses the real localhost control plane."""
+    import http.server
+    import json as json_mod
+    import threading
+    import time
+    import urllib.request
+
+    from src import report as report_mod
+    from src import settings as settings_mod
+
+    bet_db = tmp_path / "bets.sqlite3"
+    monkeypatch.setattr(settings_mod, "BET_DB_PATH", bet_db)
+    monkeypatch.setattr(report_mod.settings, "BET_DB_PATH", bet_db)
+    monkeypatch.setattr(settings_mod, "DB_PATH", populated.path)
+    monkeypatch.setattr(report_mod.settings, "DB_PATH", populated.path)
+
+    page = tmp_path / "dashboard.html"
+    page.write_text(render_page(build_report(populated)), encoding="utf-8")
+
+    captured: dict = {}
+    real_server = http.server.ThreadingHTTPServer
+
+    class _Capturing(real_server):
+        def __init__(self, address, handler):
+            super().__init__(address, handler)
+            captured["server"] = self
+
+    monkeypatch.setattr(http.server, "ThreadingHTTPServer", _Capturing)
+    thread = threading.Thread(
+        target=report_mod._serve,
+        args=(page, 0),
+        kwargs=dict(open_browser=False, run_limit=5,
+                    quote_runs=2, max_quote_rows=50),
+        daemon=True,
+    )
+    thread.start()
+    for _ in range(200):
+        if "server" in captured:
+            break
+        time.sleep(0.01)
+    assert "server" in captured, "the server never started"
+    server = captured["server"]
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+
+    def post(route: str, body: dict) -> dict:
+        request = urllib.request.Request(
+            base + route,
+            data=json_mod.dumps(body).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return json_mod.loads(response.read())
+
+    try:
+        logged = post("/api/bets/log", {
+            "kind": "single",
+            "sport": "baseball",
+            "home_team": "Chicago Cubs",
+            "selection": "Chicago Cubs",
+            "legs": [{
+                "book": "fanduel",
+                "selection": "Chicago Cubs",
+                "american_odds": 120,
+                "stake": 25,
+            }],
+        })
+        leg_id = logged["bets"]["slips"][0]["legs"][0]["id"]
+        settled = post("/api/bets/leg", {
+            "leg_id": leg_id,
+            "status": "won",
+        })
+        edited = post("/api/bets/slip", {
+            "slip_id": logged["result"]["slip_id"],
+            "note": "Ticket checked against the book.",
+        })
+        with urllib.request.urlopen(base + "/api/bets", timeout=30) as response:
+            fetched = json_mod.loads(response.read())
+    finally:
+        server.shutdown()
+
+    assert logged["ok"] is True
+    assert bet_db.exists()
+    assert settled["bets"]["summary"]["profit"] == 30.0
+    assert edited["bets"]["slips"][0]["note"] == "Ticket checked against the book."
+    assert fetched["bets"] == edited["bets"]
+
+
+def test_report_tests_never_read_the_developers_sidecar_databases(tmp_path) -> None:
     """The autouse isolation is in force, and is checked rather than assumed.
 
-    ``build_report`` reads ``settings.PROMO_DB_PATH`` itself, so without the
-    fixture in ``tests/conftest.py`` every report test silently renders whatever
-    was last scraped into ``data/promos.sqlite3`` — which is how a venue's own
-    telemetry script came to be counted as page code.
+    ``build_report`` reads both paths itself, so without the fixture in
+    ``tests/conftest.py`` every report test silently renders whatever was last
+    scraped or logged on the developer's machine.
     """
     from src import report as report_mod
     from src import settings as settings_mod
 
-    default = Path("data/promos.sqlite3").resolve()
-    for module in (settings_mod, report_mod.settings):
-        active = Path(module.PROMO_DB_PATH).resolve()
-        assert active != default, (
-            "a report test is pointed at the real promo database; the autouse "
-            "_hermetic_promo_db fixture in tests/conftest.py is not in force"
-        )
-        assert not active.exists(), (
-            "the isolated promo database should not exist unless a test built it"
-        )
+    for setting, filename in (("PROMO_DB_PATH", "promos.sqlite3"),
+                              ("BET_DB_PATH", "bets.sqlite3")):
+        default = Path("data", filename).resolve()
+        for module in (settings_mod, report_mod.settings):
+            active = Path(getattr(module, setting)).resolve()
+            assert active != default, (
+                f"a report test is pointed at the real {filename}; the autouse "
+                "_hermetic_promo_db fixture in tests/conftest.py is not in force"
+            )
+            assert not active.exists(), (
+                f"the isolated {filename} should not exist unless a test built it"
+            )
 
 
 

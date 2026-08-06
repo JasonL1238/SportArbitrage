@@ -75,6 +75,13 @@ PROMO_RAW_DIR = Path(
     _lookup("PROMO_RAW_DIR", str(DATA_DIR / "raw_promos"))
 ).expanduser()
 
+#: SQLite database of wagers the operator says they actually placed.  Its own
+#: file because it is the only durable *hand-entered* record here: a collector
+#: database can be deleted and re-scraped, and a bet history cannot.
+BET_DB_PATH = Path(
+    _lookup("BET_DB_PATH", str(DATA_DIR / "bets.sqlite3"))
+).expanduser()
+
 
 #: Every ``ODDS_*`` value that could not be honoured, as ready-to-print lines.
 #:

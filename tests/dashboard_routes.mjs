@@ -9,7 +9,7 @@ const script = page.match(/<script>([\s\S]*?)<\/script>\s*<\/body>/)[1];
 
 const nodes = new Map();
 function make(id) {
-  return {
+  const node = {
     id, tagName: 'DIV', tabIndex: 0, value: '', textContent: '', _html: '',
     dataset: {}, style: {},
     classList: {
@@ -18,15 +18,51 @@ function make(id) {
       toggle(c, on) { if (on === undefined) { this._set.has(c) ? this._set.delete(c) : this._set.add(c); } else if (on) this._set.add(c); else this._set.delete(c); },
       contains(c) { return this._set.has(c); },
     },
-    set innerHTML(v) { this._html = v; }, get innerHTML() { return this._html; },
+    // A browser recomputes which option is selected on ANY option replacement, not only
+    // when the old value has disappeared from the list — and `fillSelect` relies on
+    // exactly that to drop a choice the new list no longer offers. Kept identical to
+    // tests/dashboard_smoke.mjs; an earlier version here preserved a value the new
+    // markup still contained, which is the opposite of the rule it claimed to model.
+    set innerHTML(v) {
+      this._html = v;
+      if (/<option/.test(v)) this.value = '';
+    },
+    get innerHTML() { return this._html; },
     setAttribute() {}, getAttribute(n) { return n === 'href' ? '#overview' : null; },
     _listeners: {},
     addEventListener(type, fn) { (this._listeners[type] ||= []).push(fn); },
     dispatch(type) { for (const fn of this._listeners[type] || []) fn(); },
-    querySelectorAll() { return []; }, querySelector() { return null; },
-    replaceWith(other) { nodes.set(other.id || id, other); },
-    insertAdjacentHTML() {}, appendChild() {},
+    querySelectorAll() { return []; },
+    // Returns the node itself so `querySelector('tbody')` lands back here: rows are
+    // appended into the tbody rather than written with the rest of the markup, and a
+    // stub that answered null left every table a header-only shell — so the
+    // not-empty assertions below were satisfied by column headings alone.
+    querySelector() { return node; },
+    replaceWith(other) { nodes.set(other.id || this.id || id, other); },
+    // Only the positions the page uses. Anything else throws rather than quietly
+    // appending: 'afterend' on a tbody foster-parents the rows out of the table in a
+    // browser, leaving a permanently empty table body, and a stub that appends
+    // regardless cannot tell that apart from working.
+    insertAdjacentHTML(where, markup) {
+      if (where !== 'beforeend' && where !== 'afterbegin') {
+        throw new Error(`insertAdjacentHTML position not modelled by this stub: ${where}`);
+      }
+      this._html = where === 'afterbegin' ? markup + this._html : this._html + markup;
+    },
+    appendChild() {},
+    get lastElementChild() { return this._html ? node : null; },
+    // Holds the "show more" control so it does not vanish silently. This harness does
+    // not assert on it — the doubling and orphaning checks live in
+    // tests/dashboard_smoke.mjs — it only has to not lose it.
+    _siblings: [],
+    get _sibling() { return this._siblings[this._siblings.length - 1] || null; },
+    insertAdjacentElement(_where, other) { node._siblings.push(other); other._parent = node; },
+    remove() {
+      const kin = this._parent && this._parent._siblings;
+      if (kin) { const at = kin.indexOf(this); if (at >= 0) kin.splice(at, 1); }
+    },
   };
+  return node;
 }
 globalThis.document = {
   documentElement: make('root'),
@@ -36,7 +72,7 @@ globalThis.document = {
   createElement(tag) { const n = make(''); n.tagName = tag.toUpperCase(); return n; },
 };
 document.getElementById('report-data').textContent = payload;
-globalThis.IntersectionObserver = class { observe() {} };
+globalThis.IntersectionObserver = class { observe() {} disconnect() {} };
 
 // A location whose hash can be set, and a window that forwards hashchange.
 let handler = null;
@@ -92,19 +128,40 @@ const fixtureKey = data.strings[row[COL.event_key]];
 const bookKey = (data.runs.find((r) => r.id === latestId) || data.runs[0]).sources[0].key;
 const betKey = globalThis.__betKeyOf(row);
 
+// "Not empty" is not enough: rows are appended into the tbody after the headings are
+// written, so a table with every row missing still carries its column headings and
+// satisfied every check below. Dropping the first chunk of `fillInChunks` — which leaves
+// no table anywhere on the page holding a single row — passed this file completely. So
+// the rows are counted.
+// Counts data items of either shape the page uses: body rows in a table, and price
+// cards in a grid. A table's column headings are excluded by only looking after the
+// head, so a header-only shell counts as zero — which is what it is.
+const items = (id) => {
+  const html = (nodes.get(id)?.innerHTML) || '';
+  const at = html.lastIndexOf('</thead>');
+  const rows = ((at < 0 ? html : html.slice(at)).match(/<tr[\s>]/g) || []).length;
+  const cards = (html.match(/class="qcard/g) || []).length;
+  return rows + cards;
+};
+
 visit('#fixture/' + encodeURIComponent(fixtureKey));
 if (!text('event-detail')) problems.push('fixture panel rendered nothing');
+if (!items('event-detail')) {
+  problems.push('fixture panel has column headings but no priced rows');
+}
 if (!text('event-title').trim() || text('event-title').startsWith('Pick a')) {
   problems.push(`fixture title not resolved: ${JSON.stringify(text('event-title'))}`);
 }
 
 visit('#book/' + encodeURIComponent(bookKey));
 if (!text('book-stats')) problems.push('book panel rendered nothing');
+if (!items('book-mix')) problems.push('book panel left book-mix with headings but no rows');
 if (text('book-title').startsWith('Pick a')) problems.push('book title not resolved');
 
 visit('#bet/' + encodeURIComponent(betKey));
 for (const id of ['bet-books', 'bet-sides', 'bet-history']) {
   if (!text(id)) problems.push(`bet panel left ${id} empty`);
+  if (!items(id)) problems.push(`bet panel left ${id} with headings but no rows`);
 }
 if (text('bet-title').startsWith('Pick a')) problems.push('bet title not resolved');
 const crumbs = text('crumbs');

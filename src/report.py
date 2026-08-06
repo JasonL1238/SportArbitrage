@@ -41,6 +41,8 @@ from src.arb import (
     merge_counterparty_groups,
 )
 from src.betlinks import link_payload
+from src.betlog import BetLog, BetLogError, empty_payload as empty_bet_payload
+from src.betlog import slip_from_payload
 from src.commission import commission_for, net_decimal_odds
 from src.egress import is_recent, load_detection
 from src.events import reconcile_event_keys
@@ -1221,7 +1223,110 @@ def build_report(
         "strings": strings,
         # Sibling DB — signup bonuses / boosts / free bets.  Never mixed into quotes.
         "promos": _promo_payload(store, quote_run_ids=detail_ids, as_of=generated_at),
+        # Sibling DB — what the operator says they actually placed.  Embedded so a
+        # ``file://`` copy of the page still shows the ledger; only a served page
+        # can change it.
+        "bets": _bets_payload(),
     }
+
+
+#: How many logged positions the page embeds.  A ledger is small and read whole,
+#: unlike quotes; the cap only exists so a pathological file cannot make the
+#: dashboard unopenable.
+BET_EMBED_LIMIT = 1000
+
+
+def _bets_payload(limit: int = BET_EMBED_LIMIT) -> dict[str, Any]:
+    """The placed-bet ledger, or an empty one with the reason it is empty.
+
+    An unreadable or absent ledger must never take the dashboard down: the
+    ledger is a sibling of the odds database, not part of it, and a page that
+    refuses to render prices because a hand-kept bet file is corrupt has the
+    dependency backwards.
+    """
+    if not settings.BET_DB_PATH.exists():
+        return empty_bet_payload()
+    log: BetLog | None = None
+    try:
+        log = BetLog(settings.BET_DB_PATH)
+        return log.payload(limit=limit)
+    except Exception as exc:  # noqa: BLE001
+        payload = empty_bet_payload()
+        payload["error"] = f"{type(exc).__name__}: {exc}"
+        return payload
+    finally:
+        if log is not None:
+            try:
+                log.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+
+def _bet_id(body: Mapping[str, Any], field: str) -> int:
+    """Read a row id out of a request body, refusing anything else by name."""
+    value = body.get(field)
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        raise BetLogError(f"{field} must be a row id, got {value!r}") from None
+
+
+def _bet_changes(body: Mapping[str, Any], allowed: Sequence[str]) -> dict[str, Any]:
+    """The subset of an edit body the ledger is willing to apply.
+
+    Only keys actually present are forwarded, because ``update_leg`` treats
+    presence as intent: sending every field with ``None`` for the untouched ones
+    would blank a note and unsettle a leg the operator only meant to re-price.
+    """
+    return {name: body[name] for name in allowed if name in body}
+
+
+def _log_bet(log: BetLog, body: Mapping[str, Any]) -> dict[str, Any]:
+    slip_id = log.record(slip_from_payload(body))
+    return {"slip_id": slip_id}
+
+
+def _edit_leg(log: BetLog, body: Mapping[str, Any]) -> dict[str, Any]:
+    changes = _bet_changes(body, (
+        "book", "selection", "line", "note", "link_url",
+        "american_odds", "decimal_odds", "stake", "status", "returned",
+        "settled_at",
+    ))
+    return {"slip": log.update_leg(_bet_id(body, "leg_id"), changes)}
+
+
+def _edit_slip(log: BetLog, body: Mapping[str, Any]) -> dict[str, Any]:
+    changes = _bet_changes(body, (
+        "note", "placed_at", "home_team", "away_team", "league", "sport",
+        "market", "period", "side",
+    ))
+    return {"slip": log.update_slip(_bet_id(body, "slip_id"), changes)}
+
+
+def _settle_bet(log: BetLog, body: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "slip": log.settle_slip(
+            _bet_id(body, "slip_id"), str(body.get("status") or "")
+        )
+    }
+
+
+def _delete_bet(log: BetLog, body: Mapping[str, Any]) -> dict[str, Any]:
+    slip_id = _bet_id(body, "slip_id")
+    if not log.delete_slip(slip_id):
+        raise BetLogError(f"no bet with id {slip_id}")
+    return {"deleted": slip_id}
+
+
+#: ``POST`` routes that change the ledger.  A table rather than a chain of
+#: ``if``s so the set of writable endpoints is one readable list.
+_BET_WRITERS: dict[str, Any] = {
+    "/api/bets/log": _log_bet,
+    "/api/bets/leg": _edit_leg,
+    "/api/bets/slip": _edit_slip,
+    "/api/bets/settle": _settle_bet,
+    "/api/bets/delete": _delete_bet,
+}
 
 
 def _promo_payload(
@@ -1933,6 +2038,7 @@ def _source_entry(key: str, *, state: str | None = None) -> dict[str, Any]:
     terms the pipeline does not price it in.
     """
     from src.sources.registry import (
+        BY_KEY,
         REPUBLISHED_SOURCE_KEYS,
         RETAIL_SOURCE_KEYS,
         is_view_only,
@@ -1963,6 +2069,18 @@ def _source_entry(key: str, *, state: str | None = None) -> dict[str, Any]:
     )
     entry["route_scope"] = "state" if key in RETAIL_SOURCE_KEYS else "global"
     entry["diagnostic_only"] = key in REPUBLISHED_SOURCE_KEYS
+    # Whether a row exists only because somebody offered liquidity. A sportsbook
+    # quotes both sides itself and will not price itself to lose, so its two sides
+    # summing below 1.0 is evidence about the parser — ``validation.MIN_OVERROUND``
+    # says exactly that. On an exchange the two sides are separate order books that
+    # can legitimately cross by a little. The page needs the distinction to know when
+    # a negative cut is a mispairing rather than a price, and it is read off the
+    # registry here for the same reason ``collector._order_book_sources`` reads it
+    # there: it is a fact about the venue, not something to infer from the data.
+    registry_entry = BY_KEY.get(key)
+    entry["order_driven"] = bool(
+        registry_entry is not None and registry_entry.kind.has_stated_liquidity
+    )
     return entry
 
 
@@ -2512,6 +2630,12 @@ def _serve(
         "started_at": None,
     }
     state_lock = threading.Lock()
+    # The ledger is written by whichever request thread arrives.  Each one opens
+    # its own connection (SQLite objects are not shareable across threads) and
+    # this serializes the read-modify-write pairs — settling a leg reads the row,
+    # derives a return from it and writes it back, which two concurrent clicks
+    # would otherwise interleave.
+    bet_lock = threading.Lock()
 
     def set_progress(payload: Mapping[str, Any] | None) -> None:
         with state_lock:
@@ -2574,6 +2698,11 @@ def _serve(
             if route in ("/api/status", "/api/promos/status"):
                 self._json(200, status_payload())
                 return
+            if route == "/api/bets":
+                # The ledger itself is the answer; ``_handle_bets`` always
+                # attaches it, so the action has nothing of its own to report.
+                self._handle_bets(lambda _log, _body: None)
+                return
             super().do_GET()
 
         def do_POST(self) -> None:  # noqa: N802
@@ -2584,7 +2713,48 @@ def _serve(
             if route == "/api/promos/collect":
                 self._handle_promos_collect()
                 return
+            handler = _BET_WRITERS.get(route)
+            if handler is not None:
+                self._handle_bets(handler)
+                return
             self.send_error(404, "unknown endpoint")
+
+        def _handle_bets(self, action) -> None:
+            """Run one ledger operation and answer with the whole ledger.
+
+            Every bet endpoint returns the full payload rather than a delta, so
+            the page never has to merge — it replaces ``DATA.bets`` and
+            re-renders.  A ledger is a few hundred rows; the correctness of "what
+            is on screen is what is in the file" is worth more than the bytes.
+            """
+            body: dict[str, Any] = {}
+            if self.command == "POST":
+                parsed, err = self._read_json_body()
+                if parsed is None:
+                    self._json(400, {"ok": False, "error": err})
+                    return
+                body = parsed
+            log: BetLog | None = None
+            try:
+                with bet_lock:
+                    log = BetLog(settings.BET_DB_PATH)
+                    result = action(log, body)
+                    payload = log.payload(limit=BET_EMBED_LIMIT)
+            except BetLogError as exc:
+                # The operator typed something the ledger will not accept.  That
+                # is a 400 with the reason, not a 500 with a traceback.
+                self._json(400, {"ok": False, "error": str(exc)})
+                return
+            except Exception as exc:  # noqa: BLE001
+                self._json(500, {"ok": False, "error": f"{type(exc).__name__}: {exc}"})
+                return
+            finally:
+                if log is not None:
+                    try:
+                        log.close()
+                    except Exception:  # noqa: BLE001
+                        pass
+            self._json(200, {"ok": True, "bets": payload, "result": result})
 
         def _read_json_body(self) -> tuple[dict[str, Any] | None, str | None]:
             length = int(self.headers.get("Content-Length") or 0)
@@ -2805,7 +2975,7 @@ def _serve(
     url = f"http://127.0.0.1:{port}/{path.name}"
     with ThreadingHTTPServer(("127.0.0.1", port), Handler) as httpd:
         print(f"serving {url} — ctrl-c to stop")
-        print("  Scrape buttons (odds + promos) are live on this URL (not on file:// opens)")
+        print("  Scrape controls and the editable bet ledger are live here (file:// is view-only)")
         if open_browser:
             webbrowser.open(url)
         try:

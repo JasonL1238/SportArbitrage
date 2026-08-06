@@ -56,6 +56,7 @@ Start with the test containing the changed symbol or the closest domain group:
 | One source adapter | `python -m pytest tests/test_<venue>_adapter.py -q` when present; otherwise select its tests with `pytest -k <venue>` |
 | Collection/replay | `python -m pytest tests/test_pipeline.py tests/test_fixture_replay.py tests/test_integration.py -q` |
 | Promotions | `python -m pytest tests/test_promos.py tests/test_promo_planner.py -q` |
+| Placed-bet ledger | `python -m pytest tests/test_betlog.py -q` |
 | Dashboard | `python -m pytest tests/test_report.py -q` |
 | Jurisdiction/detection/cache/multi-state batch | `python -m pytest tests/test_jurisdictions.py tests/test_probe_sources.py -q` |
 | First-party research transport / current Hard Rock shape | `python -m pytest tests/test_source_research.py tests/test_draftkings_hardrock.py -q` |

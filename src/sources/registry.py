@@ -501,13 +501,41 @@ def state_sources_for_state(state: str) -> tuple[SourceDescriptor, ...]:
     return tuple(built)
 
 
+def republished_sources_for_state(state: str) -> tuple[SourceDescriptor, ...]:
+    """State-neutral venues, with this state's republished book ids applied.
+
+    A republisher's *host* is state-neutral; the **book** it publishes is not.
+    Action Network files one id per state licence, so collecting in Pennsylvania
+    against the registry's base ids stored New Jersey books under Pennsylvania
+    keys — labelled, validated and compared as if they were local.  This is the
+    republisher counterpart of :func:`state_sources_for_state`, and the reason a
+    state run must not simply reuse :func:`global_sources`.
+
+    ``route_state`` is deliberately **not** set: it becomes the adapter's
+    ``proxy_state`` argument, which is a first-party retail concern.  Action
+    Network answers the same host from any egress; only the requested id changes.
+    """
+    configured = jurisdiction(state)
+    built: list[SourceDescriptor] = []
+    for entry in global_sources():
+        route = configured.republished.get(entry.key)
+        if route is None:
+            built.append(entry)
+            continue
+        if route.status is RouteStatus.UNAVAILABLE:
+            continue
+        built.append(replace(entry, config={**entry.config, **route.config}))
+    return tuple(built)
+
+
 def sources_for_state(state: str) -> tuple[SourceDescriptor, ...]:
     """Build the complete stable registry with available state overrides.
 
-    Unavailable retail descriptors remain registered for contract coverage and
-    historical offline replay, but :func:`state_sources_for_state` is the only
-    live state builder and omits them. Action Network, VegasInsider, exchanges,
-    prediction markets, and offshore books remain state-neutral.
+    Unavailable descriptors remain registered for contract coverage and
+    historical offline replay, but :func:`state_sources_for_state` and
+    :func:`republished_sources_for_state` are the live builders and omit them.
+    Exchanges, prediction markets, and offshore books are genuinely
+    state-neutral and pass through untouched.
     """
     configured = jurisdiction(state)
     state_entries = {entry.key: entry for entry in state_sources_for_state(configured.state)}
@@ -518,6 +546,10 @@ def sources_for_state(state: str) -> tuple[SourceDescriptor, ...]:
                 built.append(state_entries[entry.key])
             else:
                 built.append(entry)
+            continue
+        route = configured.republished.get(entry.key)
+        if route is not None and route.status is not RouteStatus.UNAVAILABLE:
+            built.append(replace(entry, config={**entry.config, **route.config}))
             continue
         built.append(entry)
     return tuple(built)
@@ -623,6 +655,7 @@ __all__ = [
     "global_sources",
     "is_view_only",
     "keys",
+    "republished_sources_for_state",
     "sources_for_state",
     "state_sources_for_state",
     "view_only_for_state",

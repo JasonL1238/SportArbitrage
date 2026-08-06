@@ -62,7 +62,7 @@ class CapturedSource:
 
 @pytest.fixture(autouse=True)
 def _hermetic_promo_db(tmp_path, monkeypatch):
-    """Point the promo sidecar at a per-test path that does not exist.
+    """Point report sidecars at per-test paths that do not exist.
 
     Suite-wide, because the leak is: :func:`src.report.build_report` reads
     :data:`src.settings.PROMO_DB_PATH` itself — no argument carries it — so
@@ -82,7 +82,9 @@ def _hermetic_promo_db(tmp_path, monkeypatch):
     import src.settings as settings_mod
 
     promo_db = tmp_path / "promos-hermetic.sqlite3"
+    bet_db = tmp_path / "bets-hermetic.sqlite3"
     monkeypatch.setattr(settings_mod, "PROMO_DB_PATH", promo_db)
+    monkeypatch.setattr(settings_mod, "BET_DB_PATH", bet_db)
     # ``src.report`` does ``from src import settings``, so it holds the same
     # module object patched above — no second patch is needed, and asserting
     # that keeps a future split of the two from passing silently.

@@ -15,6 +15,13 @@ const script = page.match(/<script>([\s\S]*?)<\/script>\s*<\/body>/)[1];
 
 const nodes = new Map();
 let counted = 0;
+// Writes per region id, rather than per node object. `table` replaces its node outright
+// when a filter empties it, so a counter living on the node resets to zero and a delta
+// taken across that boundary is meaningless — which is how "did this region repaint"
+// ended up being asked of the whole page instead, where any unrelated write answered
+// yes. Keyed on the id, it survives replacement.
+const writesById = new Map();
+const writesTo = (...ids) => ids.reduce((n, id) => n + (writesById.get(id) || 0), 0);
 
 function make(id) {
   const node = {
@@ -33,7 +40,23 @@ function make(id) {
       toggle(c, on) { if (on === undefined) { this._set.has(c) ? this._set.delete(c) : this._set.add(c); } else if (on) this._set.add(c); else this._set.delete(c); },
       contains(c) { return this._set.has(c); },
     },
-    set innerHTML(v) { this._html = v; counted += 1; },
+    // Replacing a select's options resets its value in a browser, and `fillSelect`
+    // relies on exactly that to drop a choice the new list no longer offers. Keyed on
+    // the markup rather than on a tag name, because the stub makes every node a DIV.
+    // `counted` is every write on the page; `_writes` is the writes to THIS node, and
+    // `writesById` the writes to this region id however many nodes have held it. The
+    // global counter cannot answer "did this region repaint", because a run change
+    // rewrites the masthead and ten nav counts either way — so a panel that stopped
+    // following the run still showed a healthy-looking total.
+    _writes: 0,
+    set innerHTML(v) {
+      this._html = v;
+      counted += 1;
+      node._writes += 1;
+      const key = node.id || id;
+      if (key) writesById.set(key, (writesById.get(key) || 0) + 1);
+      if (/<option/.test(v)) this.value = '';   // a browser resets to option 0 on any rewrite
+    },
     get innerHTML() { return this._html; },
     setAttribute() {},
     getAttribute(name) { return name === 'href' ? '#overview' : null; },
@@ -43,12 +66,80 @@ function make(id) {
     // against the run the page happens to open on.
     _listeners: {},
     addEventListener(type, fn) { (this._listeners[type] ||= []).push(fn); },
-    dispatch(type) { for (const fn of this._listeners[type] || []) fn(); },
+    // An event object is passed through, because the drill-down click path is
+    // delegated now: one handler on the container reads `ev.target` and walks
+    // `parentNode` looking for a `data-go`. A dispatch that called handlers with no
+    // argument made that whole path unreachable from here — `targetOf` could be
+    // replaced with `() => null`, killing every row click on every table, and this
+    // file stayed green.
+    dispatch(type, ev) { for (const fn of this._listeners[type] || []) fn(ev || { target: node }); },
     querySelectorAll() { return []; },
-    querySelector() { return null; },
-    replaceWith(other) { nodes.set(other.id || id, other); },
-    insertAdjacentHTML() {},
+    // Returns the node itself so a `querySelector('tbody')` lands back here: the stub
+    // keeps no tree, and rows are appended into the tbody rather than written with the
+    // rest of the markup, so answering null left every chunked table looking empty.
+    // The selector is recorded because "which element did the rows go into" is
+    // otherwise unknowable here — see the tbody assertion in the chunk checks.
+    _queries: [],
+    querySelector(sel) { node._queries.push(sel); return node; },
+    // ``table`` sets the replacement's id *after* replaceWith, so ``other.id`` is
+    // still blank here. ``this.id`` is what keeps the key right when the node being
+    // replaced is itself a replacement — an empty table rendered twice used to
+    // orphan the region under a blank key and read as unfilled.
+    replaceWith(other) { nodes.set(other.id || this.id || id, other); },
+    // Only the two positions the page actually uses are modelled. Anything else
+    // throws rather than quietly appending: `beforeend` and `afterend` differ by
+    // whether the rows land *inside* the tbody or beside it, and a browser
+    // foster-parents the latter out of the table entirely — a permanently empty
+    // table body. A stub that treated every `where` as "append" let that mutation
+    // pass. The position used is recorded so a check can assert it.
+    _inserts: [],
+    insertAdjacentHTML(where, markup) {
+      if (where !== 'beforeend' && where !== 'afterbegin') {
+        throw new Error(`insertAdjacentHTML position not modelled by this stub: ${where}`);
+      }
+      node._inserts.push(where);
+      // 'afterbegin' instead of 'beforeend' would put each new chunk above the rows
+      // already there and scramble the order on every click.
+      this._html = where === 'afterbegin' ? markup + this._html : this._html + markup;
+      counted += 1;
+      node._writes += 1;
+      const key = node.id || id;
+      if (key) writesById.set(key, (writesById.get(key) || 0) + 1);
+    },
     appendChild() {},
+    // Enough of a tail for chunked filling to keep watching: it only needs to know
+    // that a last row exists, and every appended chunk ends in one.
+    get lastElementChild() { return this._html ? node : null; },
+    // The "show more" control is inserted beside the container, so the harness has
+    // to be able to hold it and click it — that click is the guarantee that rows
+    // held back by chunking are reachable without a scroll event.
+    // A list, not a single slot: the doubling this harness checks for is *two*
+    // controls beside one container, which a one-slot stub could never show.
+    _siblings: [],
+    get _sibling() { return this._siblings[this._siblings.length - 1] || null; },
+    // The position matters as much as it does for the markup variant, and for the same
+    // reason: `coverage`, `odds-table` and `findings` are <table> elements, so
+    // 'beforeend' puts the control *inside* the table, where the next
+    // `node.innerHTML = …` destroys it while `chunkControls` still holds a reference.
+    // "Beside, not inside" is the invariant every dropChunkControl path is built on, and
+    // a stub that ignored `where` could not express it.
+    insertAdjacentElement(where, other) {
+      if (where !== 'afterend') {
+        throw new Error(`insertAdjacentElement position not modelled by this stub: ${where}`);
+      }
+      node._siblings.push(other);
+      other._parent = node;
+    },
+    // Detaches from a sibling list, and records that it happened. The flag is what makes
+    // removing a node observable for a node with no parent — the JSON island is one, and
+    // dropping it is how the page frees the largest single thing it holds (15.6MB of
+    // text for a 16-scrape dashboard). Without the flag, never dropping it passed.
+    _removed: false,
+    remove() {
+      node._removed = true;
+      const kin = this._parent && this._parent._siblings;
+      if (kin) { const at = kin.indexOf(this); if (at >= 0) kin.splice(at, 1); }
+    },
   };
   return node;
 }
@@ -65,7 +156,34 @@ globalThis.document = {
 };
 document.getElementById('report-data').textContent = payload;
 
-globalThis.IntersectionObserver = class { observe() {} };
+// Keeps its callback and its targets, so the scroll path of chunked filling can be
+// driven from here. Without that, `watchTail` and the re-observe inside the callback
+// were wholly uncovered — and that is the *primary* way a real reader reaches row
+// 121, so an observer that fires once and then stops watching forever looked fine.
+// Nothing fires by itself: a real preview pane is 0x0 and hidden, where an
+// IntersectionObserver never fires either, so the tests do the scrolling explicitly.
+globalThis.IntersectionObserver = class {
+  constructor(cb) { this._cb = cb; this._targets = []; }
+  observe(target) { this._targets.push(target); }
+  disconnect() { this._targets = []; }
+  /** Deliver an intersection for the tail this observer is watching. */
+  __scroll() {
+    if (!this._targets.length) return false;
+    this._cb([{ isIntersecting: true, target: this._targets[this._targets.length - 1] }], this);
+    return true;
+  }
+  /** Deliver a record that was queued *before* disconnect and arrives after it.
+   *  `disconnect()` unobserves every target but is not specified to discard records
+   *  already queued for delivery, so a real observer retired by a filter change can
+   *  still call back once. Modelling disconnect as "targets cleared, callback
+   *  unreachable" made that impossible to express, and a fill with no defence against
+   *  a late callback looked safe. */
+  __scrollAfterDisconnect() { this._cb([{ isIntersecting: true, target: null }], this); }
+};
+// Routing is how a panel is now built, so the harness needs somewhere for the hash
+// to live. Nothing here fires hashchange; the checks below call applyRoute, which
+// is what the real listener does.
+globalThis.location = { hash: '' };
 globalThis.window = globalThis;
 
 const errors = [];
@@ -98,6 +216,46 @@ try {
     globalThis.__consensusLine = consensusLine;
     globalThis.__fmtAmerican = fmtAmerican;
     globalThis.__betLink = betLink;
+    globalThis.__fillInChunks = fillInChunks;
+    globalThis.__table = table;
+    globalThis.__cell = cell;
+    globalThis.__ROW_CHUNK = ROW_CHUNK;
+    globalThis.__PANELS = PANELS;
+    globalThis.__visitPanel = (name, arg) => { here = { panel: name, arg: arg ?? null }; showCurrentPanel(); };
+    globalThis.__applyRoute = applyRoute;
+    globalThis.__invalidatePanels = invalidatePanels;
+    globalThis.__eventKeys = () => eventSummaries(currentRows()).map((e) => e.key);
+    globalThis.__shownChild = () => shownChild;
+    globalThis.__selectedEvent = () => selectedEvent;
+    globalThis.__renderEvents = renderEvents;
+    globalThis.__movementScope = () => (movementCache ? movementCache.sport : null);
+    globalThis.__currentSport = () => currentSport;
+    globalThis.__movedCount = movedCount;
+    globalThis.__booksBySport = () => {
+      const map = {};
+      for (const r of runRows()) {
+        const sp = str(r[COL.sport]);
+        (map[sp] ||= new Set()).add(str(r[COL.source]));
+      }
+      const rows = {};
+      for (const r of runRows()) {
+        const sp = str(r[COL.sport]);
+        rows[sp] = (rows[sp] || 0) + 1;
+      }
+      return Object.fromEntries(Object.entries(map)
+        .map(([k, v]) => [k, { books: [...v], rows: rows[k] || 0 }]));
+    };
+    globalThis.__embeddedRuns = () => runs.filter((r) => rowsByRun.has(r.id)).map((r) => r.id);
+    globalThis.__renderNavCounts = renderNavCounts;
+    globalThis.__defaults = () => ({ book: defaultBook(), fixture: defaultFixture(), bet: defaultBet() });
+    globalThis.__here = () => here;
+    globalThis.__lastList = () => lastList;
+    globalThis.__PANEL_HEAVY = PANEL_HEAVY;
+    globalThis.__wireRowLinks = wireRowLinks;
+    globalThis.__leaguesOf = () => [...new Set(currentRows().map((r) => str(r[COL.league])).filter(Boolean))];
+    globalThis.__filteredGames = () => filteredGameEvents().length;
+    globalThis.__screenGames = () => eventSummaries(currentRows()
+      .filter((r) => !currentLeague || str(r[COL.league]) === currentLeague)).length;
     globalThis.__promoPlanHtml = promoPlanHtml;
     globalThis.__promoDetailHtml = promoDetailHtml;
     globalThis.__renderPromos = renderPromos;
@@ -123,6 +281,779 @@ if (errors.length) {
   process.exit(1);
 }
 
+// Panels are built on arrival rather than all at once, so the harness has to do
+// the arriving. Walking every one is what keeps "every render path executes" true
+// — without this, loading the page would only ever exercise the panel the URL
+// happens to open on, and the other twelve would rot unnoticed.
+{
+  const visited = [];
+  for (const name of Object.keys(globalThis.__PANELS)) {
+    try {
+      globalThis.__visitPanel(name, null);
+      visited.push(name);
+    } catch (err) {
+      console.error(`RENDER ERROR on panel #${name}:`, err.stack);
+      process.exit(1);
+    }
+  }
+  try {
+    globalThis.__renderNavCounts();
+  } catch (err) {
+    console.error('RENDER ERROR in nav counts:', err.stack);
+    process.exit(1);
+  }
+  if (visited.length < 15) {
+    console.error(`only ${visited.length} panels walked; PANELS should have more`);
+    process.exit(1);
+  }
+  console.log(`walked ${visited.length} panels: ${visited.join(' ')}`);
+}
+
+// Chunked filling must never lose a row. Two ways in, and both are checked: the
+// click, and the scroll. The scroll path cannot fire by itself here — a real preview
+// pane is 0x0 and hidden, where an IntersectionObserver never fires either — so the
+// stub keeps the observer's callback and the checks deliver the intersection
+// themselves. Left undriven, `watchTail` and the re-observe inside the callback were
+// uncovered, and an observer that yields one extra chunk and then stops watching
+// forever passed — that being the way most readers actually reach row 121.
+{
+  const problems = [];
+  const CHUNK = globalThis.__ROW_CHUNK;
+  const total = CHUNK * 3 + 7;                        // a partial last chunk on purpose
+  const rows = Array.from({ length: total }, (_, i) => i);
+  const host = make('chunk-host');
+  const seen = [];
+  globalThis.__fillInChunks(host, host, rows, (r) => { seen.push(r); return `<tr data-i="${r}"></tr>`; },
+    { noun: 'games' });
+
+  if (seen.length !== CHUNK) problems.push(`first chunk built ${seen.length} rows, want ${CHUNK}`);
+  const note = () => (host._sibling ? host._sibling.textContent : '');
+  if (!note().includes(String(total))) {
+    problems.push(`held-back rows not stated; note was ${JSON.stringify(note())}`);
+  }
+
+  // Click until it gives up offering more, with a hard stop so a non-advancing
+  // step cannot spin here forever.
+  let clicks = 0;
+  while (host._sibling && clicks < 100) {
+    host._sibling.dispatch('click');
+    clicks += 1;
+  }
+  if (seen.length !== total) problems.push(`clicking reached ${seen.length} of ${total} rows`);
+  if (new Set(seen).size !== total) problems.push(`rows repeated: ${seen.length - new Set(seen).size} duplicates`);
+  // ...and in order. A chunk appended at the wrong end reads as the slate being
+  // shuffled every time the reader asks for more.
+  const order = [...(host.innerHTML.match(/data-i="(\d+)"/g) || [])].map((m) => Number(m.slice(8, -1)));
+  const sorted = [...order].sort((x, y) => x - y);
+  if (order.join(',') !== sorted.join(',')) {
+    problems.push(`rows are out of order: starts ${order.slice(0, 4).join(',')} after ${clicks} chunk(s)`);
+  }
+  if (host._sibling) problems.push('control still offering more after every row was built');
+  if (clicks !== 3) problems.push(`took ${clicks} clicks to finish 3 remaining chunks`);
+
+  if (problems.length) {
+    console.error('CHUNKED FILL LOSES ROWS:', problems.join('; '));
+    process.exit(1);
+  }
+  console.log(`chunked fill reaches every row (${total} in ${clicks + 1} chunks, none repeated)`);
+}
+
+// The same guarantee by scrolling instead of clicking. Scrolling to the tail has to
+// keep working all the way down: the callback disconnects and must re-observe the new
+// tail, or the reader gets exactly one more chunk and then a list that refuses to grow
+// no matter how far they scroll — with the control still promising more.
+{
+  const problems = [];
+  const CHUNK = globalThis.__ROW_CHUNK;
+  const total = CHUNK * 4;
+  const rows = Array.from({ length: total }, (_, i) => i);
+  const host = make('scroll-host');
+  const seen = [];
+  globalThis.__fillInChunks(host, host, rows, (r) => { seen.push(r); return `<tr data-i="${r}"></tr>`; },
+    { noun: 'games' });
+  if (seen.length !== CHUNK) problems.push(`first chunk built ${seen.length} rows, want ${CHUNK}`);
+  if (!host.__chunkIO) problems.push('nothing is watching the tail after the first chunk');
+
+  // Scroll to the bottom, repeatedly, exactly as a reader would.
+  let scrolls = 0;
+  while (host.__chunkIO && scrolls < 100) {
+    if (!host.__chunkIO.__scroll()) break;
+    scrolls += 1;
+  }
+  if (seen.length !== total) problems.push(`scrolling reached ${seen.length} of ${total} rows`);
+  if (new Set(seen).size !== total) problems.push(`scrolling repeated rows: ${seen.length - new Set(seen).size} duplicates`);
+  if (scrolls !== 3) problems.push(`took ${scrolls} scrolls to finish 3 remaining chunks`);
+  // Finished means finished: nothing left watching, and no control still offering.
+  if (host.__chunkIO) problems.push('still watching the tail after every row was built');
+  if (host._sibling) problems.push('control still offering more after scrolling to the end');
+
+  // A retired fill must not append into a host that has been re-filled. `disconnect`
+  // is not specified to discard records already queued, and renderBrowseGames passes
+  // the grid as its own tbody — so a superseded callback would drop the previous
+  // filter's cards in after the new ones.
+  const reused = make('scroll-host-2');
+  const first = [];
+  globalThis.__fillInChunks(reused, reused, Array.from({ length: CHUNK * 2 }, (_, i) => 'old' + i),
+    (r) => { first.push(r); return `<tr data-i="${r}"></tr>`; }, { noun: 'games' });
+  const staleIO = reused.__chunkIO;
+  const second = [];
+  reused._html = '';
+  globalThis.__fillInChunks(reused, reused, Array.from({ length: CHUNK * 2 }, (_, i) => 'new' + i),
+    (r) => { second.push(r); return `<tr data-i="${r}"></tr>`; }, { noun: 'games' });
+  const before = first.length;
+  const secondBefore = second.length;
+  // A record queued before the retired observer was disconnected, arriving after it.
+  if (staleIO) staleIO.__scrollAfterDisconnect();
+  if (first.length !== before) {
+    problems.push(`a superseded fill appended ${first.length - before} rows after being replaced`);
+  }
+  if (second.length !== secondBefore) {
+    problems.push(`a superseded fill drove the live fill on ${second.length - secondBefore} extra rows`);
+  }
+  if (reused.innerHTML.includes('data-i="old')) {
+    problems.push("the previous fill's rows are in the re-filled host");
+  }
+
+  if (problems.length) {
+    console.error('SCROLLING DOES NOT REACH EVERY ROW:', problems.join('; '));
+    process.exit(1);
+  }
+  console.log(`scrolling reaches every row too (${total} in ${scrolls + 1} chunks), and a replaced fill stops appending`);
+}
+
+// The same guarantee for a fill that is retired WITHOUT a replacement — the case the
+// block above cannot see, because it only ever refills. Most render paths drop the
+// control and then return: an empty result set, a scrape with no embedded prices, an
+// evicted panel. Retiring only on refill left every one of those open, and for the two
+// game grids the host is its own tbody, so nothing detaches under a late append.
+//
+// What that produced: filter Games to something nothing matches, and one queued
+// observer record put 120 cards of the previous slate underneath "No games match these
+// filters" — then, because the callback re-arms itself, kept going.
+//
+// Driven through the real Games filter rather than a synthetic host, so the path is the
+// one a reader takes.
+{
+  onAnEmbeddedRun();
+  const problems = [];
+  globalThis.location.hash = '#events';
+  globalThis.__applyRoute();
+
+  const grid = () => nodes.get('events-games');
+  const cards = () => ((grid()?.innerHTML || '').match(/class="game-card/g) || []).length;
+  const full = cards();
+  if (!full) {
+    console.log('retired-fill check skipped; the Games grid rendered no cards to retire');
+  } else {
+    const staleIO = grid().__chunkIO;
+    // Filter down to nothing, synchronously (the book select is not debounced).
+    const q = nodes.get('events-q');
+    q.value = 'zzzz-no-such-team-anywhere';
+    globalThis.__renderEvents();
+    const emptied = cards();
+    if (emptied !== 0) problems.push(`filtering to nothing still shows ${emptied} card(s)`);
+    if (!(grid().innerHTML || '').includes('No games match these filters')) {
+      problems.push('the empty state is not on screen after filtering to nothing');
+    }
+    if (grid()._siblings.length) {
+      problems.push(`a control survived into the empty state: ${JSON.stringify(grid()._sibling.textContent)}`);
+    }
+
+    // Now the record that was queued before that fill was retired.
+    if (staleIO) staleIO.__scrollAfterDisconnect();
+    if (cards() !== 0) {
+      problems.push(`${cards()} card(s) of the previous slate came back under the empty state`);
+    }
+    // And it must not have re-armed itself to keep going.
+    if (grid().__chunkIO) {
+      grid().__chunkIO.__scrollAfterDisconnect();
+      if (cards() !== 0) problems.push('the retired fill re-armed and kept appending');
+    }
+
+    q.value = '';
+    globalThis.__renderEvents();
+    if (cards() !== full) problems.push(`clearing the filter rebuilt ${cards()} cards, want ${full}`);
+  }
+
+  if (problems.length) {
+    console.error('A RETIRED FILL STILL APPENDS INTO AN EMPTIED REGION:', problems.join('; '));
+    process.exit(1);
+  }
+  console.log('a fill retired by an empty result set cannot append into it');
+}
+
+// Every hand-written blank of a chunked region must go through `blankRegion`.
+//
+// Read off the source rather than exercised, because the branches that get this wrong
+// are the ones no fixture reaches: "this run recorded no per-venue detail" needs a run
+// with an empty `sources` array and all sixteen here have one; "no scrapes yet" needs a
+// page with zero runs. Both would strand a control over an emptied table and append the
+// previous run's rows on a click — the exact bug fixed twice already, in two different
+// renderers, where the only difference was which branch a reader could get to. A data
+// check would pass on this page and ship the third one.
+{
+  const problems = [];
+  // The regions a chunk control can attach to: everything `PANEL_HEAVY` reclaims, plus
+  // the two game grids and the drill-down tables that `table()` fills.
+  const chunked = ['findings', 'overround', 'rejections', 'skips', 'coverage', 'events-games',
+    'odds-table', 'odds-screen', 'move-table', 'raws', 'sports-gaps', 'matrix',
+    'browse-games', 'source-cards', 'promo-list', 'arb-list', 'event-detail',
+    'book-mix', 'bet-books', 'bet-sides', 'bet-history'];
+  for (const id of chunked) {
+    // `el('x').innerHTML = ''` and the `node.innerHTML = ''` form inside a forEach over
+    // ids are both spelled out in the source; the first is what regressed twice.
+    const bare = new RegExp(`el\\(['"]${id}['"]\\)\\.innerHTML\\s*=\\s*['"]['"]`, 'g');
+    const hits = (script.match(bare) || []).length;
+    if (hits) {
+      problems.push(`${id} is blanked ${hits}x with a bare innerHTML = '' instead of blankRegion()`);
+    }
+  }
+  // And the helper has to still exist and still drop the control, or the rule above is
+  // satisfied by a function that does nothing.
+  if (!/function blankRegion\(id\)/.test(script)) {
+    problems.push('blankRegion is gone; the rule above no longer means anything');
+  } else {
+    const body = script.slice(script.indexOf('function blankRegion(id)'));
+    if (!/dropChunkControl\(node\)/.test(body.slice(0, 260))) {
+      problems.push('blankRegion no longer drops the chunk control');
+    }
+  }
+
+  if (problems.length) {
+    console.error('A CHUNKED REGION IS BLANKED WITHOUT DROPPING ITS CONTROL:', problems.join('; '));
+    process.exit(1);
+  }
+  console.log(`all ${chunked.length} chunkable regions are blanked through blankRegion`);
+}
+
+// The two biggest regions must drop their control on their own empty branches too. Only
+// the Checks panel was checked, and it is the smallest of the three: on the odds board a
+// surviving control appended 677,712 chars of the previous scrape's rows — every one
+// still carrying `data-go` to that scrape's fixtures — under the not-embedded notice.
+{
+  const problems = [];
+  // Said out loud when a fixture is too small for a case to mean anything. A page with
+  // fewer rows than one chunk holds nothing back, so there is no control to orphan and no
+  // tail to watch — that is not a pass and it is not a failure, and the small synthetic
+  // pages tests/test_report.py builds are all like this.
+  const inconclusive = [];
+  const embedded = globalThis.__embeddedRuns();
+  const allRuns = globalThis.__DATA.runs.map((r) => r.id);
+  const thin = allRuns.find((id) => !embedded.includes(id));
+  const pick = nodes.get('run-pick');
+  const controls = (id) => ((nodes.get(id) || {})._siblings || []).length;
+  const bulk = (id) => ((nodes.get(id) || {}).innerHTML || '').length;
+
+  // The board: open it on a scrape with rows held back, then pick one with no prices.
+  if (thin === undefined || !embedded.length) {
+    console.log('board orphan-control check skipped; every run in this page is embedded');
+  } else {
+    onAnEmbeddedRun();
+    globalThis.location.hash = '#screen';
+    globalThis.__applyRoute();
+    const had = controls('odds-screen');
+    pick.value = String(thin);
+    pick.dispatch('change');
+    if (controls('odds-screen')) {
+      const say = nodes.get('odds-screen')._sibling.textContent;
+      problems.push(`the board kept its control over an emptied board: ${JSON.stringify(say)}`);
+      const before = bulk('odds-screen');
+      nodes.get('odds-screen')._sibling.dispatch('click');
+      if (bulk('odds-screen') > before) {
+        problems.push(`clicking it appended ${bulk('odds-screen') - before} chars of the previous scrape`);
+      }
+    }
+    if (!had) inconclusive.push('the board held nothing back, so no control could be orphaned');
+    onAnEmbeddedRun();
+  }
+
+  // The games grid: same thing reached by a filter rather than a run change.
+  onAnEmbeddedRun();
+  globalThis.location.hash = '#events';
+  globalThis.__applyRoute();
+  const hadGrid = controls('events-games');
+  const q = nodes.get('events-q');
+  q.value = 'zzzz-no-such-team-anywhere';
+  globalThis.__renderEvents();
+  if (controls('events-games')) {
+    problems.push(`the games grid kept its control over an empty result set: ${JSON.stringify(nodes.get('events-games')._sibling.textContent)}`);
+  }
+  if (!hadGrid) inconclusive.push('the games grid held nothing back, so no control could be orphaned');
+  q.value = '';
+  globalThis.__renderEvents();
+
+  // And leaving a panel has to tear the control and the observer down, not just blank
+  // the markup. A live observer, and a button whose closure pins the whole rows array,
+  // is exactly the retention unloading exists to reclaim.
+  globalThis.location.hash = '#screen';
+  globalThis.__applyRoute();
+  const boardHadControl = controls('odds-screen');
+  // Held onto BEFORE leaving. Reading `__chunkIO` afterwards cannot detect the failure:
+  // clearing that reference without calling `disconnect()` leaves the observer alive and
+  // still watching a row nobody can see, while the reference the check reads is null —
+  // so the check would skip and report nothing.
+  const io = (nodes.get('odds-screen') || {}).__chunkIO;
+  const watchedBefore = io ? io._targets.length : 0;
+  globalThis.location.hash = '#raw';
+  globalThis.__applyRoute();
+  if (controls('odds-screen')) problems.push('leaving the board left its control behind');
+  if (io && io._targets.length) {
+    problems.push(`leaving the board left an observer watching ${io._targets.length} target(s)`);
+  }
+  if (!boardHadControl) inconclusive.push('the board held nothing back before being left');
+  if (!watchedBefore) inconclusive.push('nothing was watching the board before it was left');
+
+  if (problems.length) {
+    console.error('AN EMPTIED OR EVICTED REGION KEEPS ITS CONTROL:', problems.join('; '));
+    process.exit(1);
+  }
+  for (const why of inconclusive) console.log(`  (control check inconclusive: ${why})`);
+  console.log('the board and the games grid drop their controls when emptied, and when left');
+}
+
+// The control sits beside its container, so it does not die with it. Twice over on
+// the live page: a filter that emptied the coverage table left "Showing 120 of
+// 1,702 rows" sitting above "No games match these filters", and clearing the filter
+// again added a second control every time.
+{
+  const problems = [];
+  const CHUNK = globalThis.__ROW_CHUNK;
+  const many = Array.from({ length: CHUNK * 2 }, (_, i) => i);
+  const cols = [{ label: 'n', cell: (r) => globalThis.__cell(String(r)) }];
+  const host = make('chunk-empty-host');
+  nodes.set('chunk-empty-host', host);
+
+  globalThis.__table(host, cols, many, { empty: 'Nothing matches.' });
+  if (!host._sibling) problems.push('no control offered for a table with rows held back');
+  // Rows have to go into the tbody. `table` writes the head and an empty tbody, then
+  // fills the tbody separately, so the element it asks for is the whole of what says
+  // where the rows land — and the stub keeps no tree, so this is the only way to know.
+  // `querySelector('thead')` here puts every row of the coverage, odds, movement, raw
+  // and bet tables inside the table head, which is not a state the stub can otherwise
+  // tell apart from a correct one.
+  if (!host._queries.includes('tbody')) {
+    problems.push(`table rows were inserted into ${JSON.stringify(host._queries)}, not a tbody`);
+  }
+
+  // Same region, now filtered down to nothing.
+  const live = () => nodes.get('chunk-empty-host');
+  globalThis.__table(live(), cols, [], { empty: 'Nothing matches.' });
+  const orphan = [host, live()].flatMap((n) => (n && n._siblings) || []);
+  if (orphan.length) {
+    problems.push(`control survived into the empty state saying ${JSON.stringify(orphan[0].textContent)}`);
+  }
+
+  // ...and back again: exactly one control, not one per cycle.
+  globalThis.__table(live(), cols, many, { empty: 'Nothing matches.' });
+  globalThis.__table(live(), cols, [], { empty: 'Nothing matches.' });
+  globalThis.__table(live(), cols, many, { empty: 'Nothing matches.' });
+  const controls = [host, live()].flatMap((n) => (n && n._siblings) || []);
+  if (controls.length !== 1) problems.push(`${controls.length} controls after three cycles, want 1`);
+
+  if (problems.length) {
+    console.error('CHUNK CONTROL OUTLIVES ITS ROWS:', problems.join('; '));
+    process.exit(1);
+  }
+  console.log('chunk control is dropped with its rows and never doubles up');
+}
+
+// A link straight into a panel has to open on something. The eager render used to
+// guarantee that by building all thirteen panels up front; now it is routing that
+// guarantees it, so routing is what gets checked — hash in, markup out, on a panel
+// that has deliberately been emptied first.
+{
+  const owns = {
+    arb: 'arb-list', screen: 'odds-screen', promos: 'promo-list', events: 'coverage',
+    overview: 'home-stats', run: 'stat-strip', sports: 'sports-grid', sources: 'source-cards',
+    odds: 'odds-table', movement: 'move-table', quality: 'findings', raw: 'raws',
+    // The three drill-downs are checked on the region holding their *content*, not on
+    // their heading. A heading is written either way: with no subject resolved it reads
+    // "Pick a game", so `defaultFixture()` could be made to return nothing and a bare
+    // #fixture would render a placeholder over an empty panel while this check passed.
+    book: 'book-stats', fixture: 'event-detail', bet: 'bet-books',
+  };
+  // ...and a placeholder in the heading is a failure in its own right, because a bare
+  // #fixture, #bet or #book is a link the page itself hands out.
+  const titles = { book: 'book-title', fixture: 'event-title', bet: 'bet-title' };
+  const problems = [];
+  for (const [panel, region] of Object.entries(owns)) {
+    globalThis.__invalidatePanels();
+    const node = nodes.get(region) || document.getElementById(region);
+    node._html = '';
+    node.textContent = '';
+    globalThis.location.hash = '#' + panel;
+    try {
+      globalThis.__applyRoute();
+    } catch (err) {
+      problems.push(`#${panel} threw: ${err.message}`);
+      continue;
+    }
+    const fresh = nodes.get(region);
+    if (!((fresh?.innerHTML || '') + (fresh?.textContent || '')).trim()) {
+      problems.push(`#${panel} left ${region} empty`);
+    }
+    if (titles[panel]) {
+      const heading = String(((nodes.get(titles[panel]) || {}).textContent) ?? '');
+      if (/^(Pick a|Not in this scrape)/.test(heading)) {
+        problems.push(`#${panel} opened on a placeholder: ${JSON.stringify(heading)}`);
+      }
+    }
+  }
+  if (problems.length) {
+    console.error('ROUTING DOES NOT BUILD THE PANEL:', problems.join('; '));
+    process.exit(1);
+  }
+  console.log(`routing builds the panel it opens (${Object.keys(owns).length} panels, each from empty)`);
+
+  // Deliberately does not re-walk the panels here. The block that needs everything on
+  // screen at once does its own walk immediately beforehand, and the next block
+  // invalidates everything anyway, so a walk here was provably dead.
+}
+
+// Arriving at a panel must build ONE screenful, not the whole slate. Reverting the
+// board to `events.map(boardRow).join('')` is a one-line edit that silently restores
+// the 399,090-element render this entire change exists to prevent, and every other
+// check in this file passed with it reverted. So the count itself is pinned.
+{
+  const problems = [];
+  const CHUNK = globalThis.__ROW_CHUNK;
+  if (!(CHUNK >= 20 && CHUNK <= 300)) {
+    problems.push(`ROW_CHUNK is ${CHUNK}; a chunk is meant to be a screenful, not a slate`);
+  }
+
+  globalThis.__invalidatePanels();
+  globalThis.location.hash = '#screen';
+  globalThis.__applyRoute();
+  const board = nodes.get('odds-screen');
+  // Counted by the row link rather than by `<tr`, which would also catch the header.
+  const rows = ((board && board.innerHTML) || '').match(/data-go="#fixture/g) || [];
+  // The note is written by renderOddsScreen itself, so it is an independent account
+  // of how many games there are to show.
+  const stated = Number((((nodes.get('screen-note') || {}).textContent) || '').match(/^([\d,]+) game/)?.[1]?.replace(/,/g, '') || 0);
+
+  if (stated > CHUNK) {
+    if (rows.length > CHUNK) {
+      problems.push(`board built ${rows.length} rows on arrival for ${stated} games; want at most ${CHUNK}`);
+    }
+    // Rows have to go into the tbody. The stub keeps no tree, so the recorded selector
+    // is the only way to tell tbody from thead — and querying the wrong one would put
+    // all 120 board rows inside the table header.
+    if (board && !board._queries.includes('tbody')) {
+      problems.push(`board rows were inserted into ${JSON.stringify(board._queries)}, not a tbody`);
+    }
+    const control = board && board._sibling;
+    if (!control) {
+      problems.push(`${stated - rows.length} games held back with no control offering them`);
+    } else if (!control.textContent.includes(stated.toLocaleString())) {
+      problems.push(`control says ${JSON.stringify(control.textContent)}, which does not name the ${stated} games there are`);
+    }
+  }
+
+  // The two counts that describe games must not be quoting row counts. renderOdds
+  // owns nav-odds (prices); renderOddsScreen and renderEvents own the game counts.
+  globalThis.__visitPanel('events', null);
+  globalThis.__renderNavCounts();
+  const num = (id) => Number((((nodes.get(id) || {}).textContent) || '').replace(/,/g, ''));
+  const gamesStated = Number(((((nodes.get('events-games-note') || {}).textContent) || '').match(/^([\d,]+) game/)?.[1] || '0').replace(/,/g, ''));
+  if (stated && num('nav-screen') !== stated) {
+    problems.push(`nav-screen says ${num('nav-screen')}, the board says ${stated} games`);
+  }
+  if (gamesStated && num('nav-events') !== gamesStated) {
+    problems.push(`nav-events says ${num('nav-events')}, the Games panel says ${gamesStated} games`);
+  }
+
+  if (problems.length) {
+    console.error('ARRIVAL BUILDS TOO MUCH, OR COUNTS DISAGREE:', problems.join('; '));
+    process.exit(1);
+  }
+  console.log(`arrival builds one chunk of ${CHUNK} (${stated} games available) and the nav counts agree with their panels`);
+}
+
+// Switching runs must rebuild the panels, not just the masthead. Dropping
+// `invalidatePanels()` from renderRunScoped leaves the rail, run-meta and nav counts
+// updating while every panel keeps showing the previous run — the worst kind of
+// wrong, because nothing looks broken.
+//
+// Pinned on whether the panel is rebuilt at all, not on its text changing: two runs
+// can legitimately render the same numbers, and on the small fixture pages they do.
+{
+  const embedded = globalThis.__embeddedRuns();
+  if (embedded.length < 2) {
+    console.log(`run-switch rebuild check skipped; only ${embedded.length} embedded run(s)`);
+  } else {
+    const pick = nodes.get('run-pick');
+    // Build the All-prices panel, then leave it, so it is up to date and off screen.
+    pick.value = String(embedded[0]);
+    pick.dispatch('change');
+    globalThis.__visitPanel('odds', null);
+    globalThis.location.hash = '#arb';
+    globalThis.__applyRoute();
+
+    // Switch runs while somewhere else, then arrive at All prices. If the switch
+    // marked the panels stale, arriving rebuilds it and writes markup.
+    pick.value = String(embedded[1]);
+    pick.dispatch('change');
+    const before = counted;
+    globalThis.__visitPanel('odds', null);
+    const wrote = counted - before;
+
+    if (wrote === 0) {
+      console.error('SWITCHING RUNS DOES NOT REBUILD THE PANELS: '
+        + `arriving at All prices after switching to run ${embedded[1]} wrote nothing, `
+        + 'so it is still showing the previous run');
+      process.exit(1);
+    }
+    console.log(`switching runs rebuilds the panel arrived at (${wrote} writes for run ${embedded[1]})`);
+  }
+}
+
+// A drill-down must repaint on a run change too, and it is guarded differently from
+// the list panels: `shownChild` remembers which game/book/bet is on screen so one
+// route pass cannot build it twice, and `invalidatePanels` has to clear that. Without
+// the reset the masthead, run-meta and every nav count update while the open book's
+// own numbers stay on the run the reader just left — nothing looks broken.
+//
+// Counted rather than compared, for the same reason as the block above: the same book
+// can render byte-identical text under two runs, and on these pages it does.
+{
+  const embedded = globalThis.__embeddedRuns();
+  if (embedded.length < 2) {
+    console.log(`drill-down repaint check skipped; only ${embedded.length} embedded run(s)`);
+  } else {
+    const pick = nodes.get('run-pick');
+    pick.value = String(embedded[0]);
+    pick.dispatch('change');
+    const book = globalThis.__defaults().book;
+    globalThis.location.hash = '#book/' + encodeURIComponent(book);
+    globalThis.__applyRoute();
+
+    // Staying on the panel, switch the run under it. Counted per region, not globally:
+    // a run change rewrites the masthead and ten nav counts whether or not the open
+    // panel follows, so a page-wide total says nothing about this panel.
+    const owned = ['book-stats', 'book-mix'];
+    // Keyed on the id, not the node: `book-mix` is a `table()` region, so a book with no
+    // rows replaces the node and a per-node delta straddles that boundary — it can even
+    // go negative, which reads as success.
+    const writes = () => writesTo(...owned);
+    const before = writes();
+    pick.value = String(embedded[1]);
+    pick.dispatch('change');
+    const wrote = writes() - before;
+    if (wrote === 0) {
+      console.error('AN OPEN DRILL-DOWN DOES NOT FOLLOW A RUN CHANGE: '
+        + `switching to run ${embedded[1]} with ${book} open rewrote none of ${owned.join(', ')}, `
+        + 'so it is still showing the previous run');
+      process.exit(1);
+    }
+    // ...and the dedupe tag has to still name what is on screen, or the next route
+    // pass to the same book would skip a rebuild it does need.
+    const tag = globalThis.__shownChild();
+    if (tag !== 'book\x1f' + book) {
+      console.error(`AN OPEN DRILL-DOWN LOST TRACK OF ITS SUBJECT: tag is ${JSON.stringify(tag)}`);
+      process.exit(1);
+    }
+    console.log(`an open drill-down follows a run change (${wrote} writes for ${book} on run ${embedded[1]})`);
+  }
+}
+
+// Picking a league must fix BOTH rail counts, not just the panel in front of you. The
+// league control is duplicated on Odds and on Today's games so a narrowed slate sticks
+// when you flip between them — which means one pick changes what both boards hold while
+// only one of them renders. Nothing else writes the other one's count: its own renderer
+// does, and it did not run.
+//
+// Reachable in one click, and it read as a data error rather than a stale number:
+// picking a league on Odds narrowed the board to 31 games while "Today's games" in the
+// rail went on saying 1,702. The earlier version of this check only ever ran with no
+// league chosen, where the two agree for free.
+{
+  onAnEmbeddedRun();
+  // Let the run change's own nav-count timer land before anything below measures.
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const problems = [];
+  const leagues = globalThis.__leaguesOf();
+  if (leagues.length < 2) {
+    console.log(`league nav-count check skipped; only ${leagues.length} league(s) in this run`);
+  } else {
+    // Stringified first: some writers set a count to a number and some to a string,
+    // and this reader has to survive both.
+    const num = (id) => Number(String(((nodes.get(id) || {}).textContent) ?? '').replace(/,/g, ''));
+    // The counts are written on a timer, so this waits for them to agree rather than
+    // reading them the instant the pick is made. Waiting *for the right answer* means
+    // a stale count costs the budget and then fails, and a correct one costs a tick.
+    const agree = async (budgetMs = 3000) => {
+      const started = Date.now();
+      for (;;) {
+        const want = { screen: globalThis.__screenGames(), events: globalThis.__filteredGames() };
+        const got = { screen: num('nav-screen'), events: num('nav-events') };
+        if (got.screen === want.screen && got.events === want.events) return null;
+        if (Date.now() - started >= budgetMs) return { want, got };
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+    };
+
+    // Pick the league from each panel in turn: the stale count is the *other* panel's
+    // both times, so one direction alone would miss half of it.
+    for (const [panel, control] of [['screen', 'league-pick'], ['events', 'events-league']]) {
+      globalThis.location.hash = '#' + panel;
+      globalThis.__applyRoute();
+      const pick = nodes.get(control);
+      const check = async (what) => {
+        const bad = await agree();
+        if (bad) {
+          problems.push(`${what} on #${panel}: rail says screen=${bad.got.screen} games=${bad.got.events},`
+            + ` the slate holds screen=${bad.want.screen} games=${bad.want.events}`);
+        }
+      };
+      // Set, THEN clear, and assert both. Order matters: clearing from an already-clear
+      // state is a no-op that `agree()` satisfies for free, so checking the clear first
+      // only ever compared '' with '' — and `if (currentLeague) scheduleNavCounts()`
+      // passed, leaving "Today's games 83" in the rail beside a 1,702-game slate.
+      pick.value = '';
+      pick.dispatch('change');
+      await agree();
+      // A yield before measuring, so a nav-count timer left pending by whatever set this
+      // block up cannot be the thing that renders the counts correctly. Without it the
+      // pick's own poll could consume that timer and pass for code that reschedules
+      // nothing, which made the `#screen` half of this check pass on broken code.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      pick.value = leagues[0];
+      pick.dispatch('change');
+      await check('picking a league');
+      pick.value = '';
+      pick.dispatch('change');
+      await check('clearing the league again');
+    }
+  }
+
+  if (problems.length) {
+    console.error('A LEAGUE PICK LEAVES THE RAIL WRONG:', problems.join('; '));
+    process.exit(1);
+  }
+  console.log('picking a league fixes both rail counts, from either panel');
+}
+
+// An open game that the newly-picked scrape does not hold must say so. The panel has
+// two empty states and they are not interchangeable: "Pick a game" is true when nothing
+// is open, and a lie when the breadcrumb overhead is still naming the game the reader
+// clicked. Switching scrapes with a game open reaches the second one in one click.
+{
+  const problems = [];
+  const embedded = globalThis.__embeddedRuns();
+  const runs = globalThis.__DATA.runs.map((r) => r.id);
+  const thin = runs.find((id) => !embedded.includes(id));
+  if (!embedded.length || thin === undefined) {
+    console.log('not-in-this-scrape check skipped; every run in this page is embedded');
+  } else {
+    const pick = nodes.get('run-pick');
+    pick.value = String(embedded[0]);
+    pick.dispatch('change');
+    const key = globalThis.__eventKeys()[0];
+    if (!key) {
+      console.log('not-in-this-scrape check skipped; the embedded run holds no games');
+    } else {
+      globalThis.location.hash = '#fixture/' + encodeURIComponent(key);
+      globalThis.__applyRoute();
+      const title = () => String(((nodes.get('event-title') || {}).textContent) ?? '');
+      if (!title() || /^(Pick a|Not in this)/.test(title())) {
+        problems.push(`opening ${key} showed ${JSON.stringify(title())}`);
+      }
+      // Now switch to a scrape whose prices are not in this file, with that game open.
+      pick.value = String(thin);
+      pick.dispatch('change');
+      if (/^Pick a/.test(title())) {
+        problems.push('a game the scrape does not hold reads "Pick a game", as if nothing were open');
+      }
+      if (!/^Not in this scrape/.test(title())) {
+        problems.push(`expected "Not in this scrape", got ${JSON.stringify(title())}`);
+      }
+      // The trail still names the game, so the panel has to name it too — otherwise the
+      // reader is told a game is open and shown nothing that identifies it.
+      const named = String(((nodes.get('event-count') || {}).textContent) ?? '');
+      if (named !== key) problems.push(`the panel does not name the game it cannot show: ${JSON.stringify(named)}`);
+
+      // The other direction, which matters just as much: with nothing open, the panel
+      // must NOT claim a game is missing. Pinning only the first direction left `asked`
+      // forced true passing — "Not in this scrape" and "pick another scrape" over a
+      // panel where the reader had never opened anything.
+      globalThis.location.hash = '#fixture/';
+      globalThis.__applyRoute();
+      const bare = title();
+      if (/^Not in this scrape/.test(bare)) {
+        problems.push('a bare #fixture with nothing open claims a game is missing');
+      }
+      if (String(((nodes.get('event-count') || {}).textContent) ?? '')) {
+        problems.push('a bare #fixture names a game it is not showing');
+      }
+    }
+  }
+
+  // Put the page back on a scrape whose prices are embedded. This block deliberately
+  // ends on a truncated one, and a later check reads every region expecting content —
+  // leaving it here made that check fail on a page with nothing wrong with it.
+  onAnEmbeddedRun();
+
+  if (problems.length) {
+    console.error('A GAME MISSING FROM A SCRAPE IS NOT REPORTED HONESTLY:', problems.join('; '));
+    process.exit(1);
+  }
+  console.log('a game the scrape does not hold says so, instead of "Pick a game"');
+}
+
+// A chunk control must not survive its rows into the not-embedded state either. The
+// Checks panel blanks four regions by hand when a scrape's prices are not in the file,
+// and the control is a *sibling* — emptying the table cannot take it with it. What was
+// left was "Showing 120 of 500 rows" under the not-embedded notice, and clicking it
+// appended 120 of the PREVIOUS scrape's findings into the blanked table: headerless rows
+// still carrying `data-go`, still navigating to the other scrape's fixtures.
+{
+  const problems = [];
+  const embedded = globalThis.__embeddedRuns();
+  const runs = globalThis.__DATA.runs.map((r) => r.id);
+  const thin = runs.find((id) => !embedded.includes(id));
+  if (!embedded.length || thin === undefined) {
+    console.log('Checks orphan-control check skipped; every run in this page is embedded');
+  } else {
+    const pick = nodes.get('run-pick');
+    pick.value = String(embedded[0]);
+    pick.dispatch('change');
+    globalThis.location.hash = '#quality';
+    globalThis.__applyRoute();
+
+    const regions = ['findings', 'overround', 'rejections', 'skips'];
+    const controls = () => regions.flatMap((id) => ((nodes.get(id) || {})._siblings) || []);
+    const had = controls().length;
+
+    pick.value = String(thin);
+    pick.dispatch('change');
+    const left = controls();
+    if (left.length) {
+      problems.push(`${left.length} control(s) survived into the not-embedded state, saying ${JSON.stringify(left[0].textContent)}`);
+      // And it is not merely cosmetic: it still appends.
+      const host = regions.map((id) => nodes.get(id)).find((n) => n && n._siblings.length);
+      const before = (host.innerHTML || '').length;
+      left[0].dispatch('click');
+      if ((host.innerHTML || '').length > before) {
+        problems.push("clicking it appended the previous scrape's rows into the blanked table");
+      }
+    }
+    if (!problems.length && had === 0) {
+      console.log('Checks orphan-control check inconclusive; the embedded run holds too few findings to hold any back');
+    }
+  }
+
+  // As above: this block ends on a truncated scrape on purpose, so restore one.
+  onAnEmbeddedRun();
+
+  if (problems.length) {
+    console.error('A CHUNK CONTROL SURVIVES INTO THE NOT-EMBEDDED STATE:', problems.join('; '));
+    process.exit(1);
+  }
+  console.log('Checks drops its controls when a scrape has no embedded prices');
+}
+
+
 // Prove the render actually produced markup rather than silently no-oping.
 const required = ['stat-strip', 'flow', 'matrix', 'sports-grid', 'leagues-grid', 'sports-gaps',
   'source-cards', 'skips', 'coverage', 'event-detail', 'odds-table', 'runs-chart',
@@ -145,8 +1076,22 @@ const filled = (id) => {
   const n = nodes.get(id);
   return ((n?.innerHTML || '') + (n?.textContent || '')).trim();
 };
+// Every region at once is not a state the page is ever really in — panels are built
+// on arrival and unloaded when left. Walk them all so this check owns its own
+// starting state rather than inheriting whatever the block above last routed to.
+for (const name of Object.keys(globalThis.__PANELS)) globalThis.__visitPanel(name, null);
 const blank = required.filter((id) => !filled(id));
-console.log(`script ran clean; ${counted} innerHTML writes across ${nodes.size} nodes`);
+console.log(`script ran clean; ${counted} markup writes across ${nodes.size} nodes`);
+
+// The payload text is dropped once parsed. It is the largest single thing the page holds
+// — 15.6MB of JSON for a 16-scrape dashboard — and keeping both the text and the parsed
+// object doubles that for the life of the tab, for a string nothing reads again. Never
+// dropping it changes nothing else that this file measures, so it needs saying here.
+if (!nodes.get('report-data')._removed) {
+  console.error('THE PAYLOAD TEXT IS NEVER DROPPED: the JSON island is still in the document '
+    + 'after parsing, so the page holds the text and the parsed object at once');
+  process.exit(1);
+}
 if (blank.length) {
   console.error('EMPTY REGIONS:', blank.join(', '));
   process.exit(1);
@@ -517,6 +1462,12 @@ for (const id of (process.env.DUMP || '').split(',').filter(Boolean)) {
     const pick = nodes.get('run-pick');
     pick.value = String(missing[0]);
     pick.dispatch('change');
+    // Switching runs rebuilds only the panel on screen, so the panels that carry
+    // these sentences have to be arrived at — as a reader would. Walking them all
+    // also checks every panel's truncated-run copy, not just whichever one the
+    // page happened to be showing.
+    for (const name of Object.keys(globalThis.__PANELS)) globalThis.__visitPanel(name, null);
+    globalThis.__renderNavCounts();
     const text = [...nodes.entries()].filter(([id]) => id !== 'report-data')
       .map(([, n]) => (n.innerHTML || '') + (n.textContent || '')).join(' ');
     const said = text.includes('Rebuild with more --quote-runs');
@@ -836,11 +1787,21 @@ if (process.argv[3]) {
   const COL = globalThis.__COL;
   const data = globalThis.__DATA;
   const S = data.strings;
+  // Selects an embedded run rather than inheriting one. The truncation check above
+  // leaves the picker on a run with no embedded prices and nothing put it back, so this
+  // check disabled itself on every single invocation — it has never once run. On such a
+  // run the strip reads "—" and a loose digit match would pick up the next stat instead,
+  // which is why the guard is here at all; it just has to be a guard rather than the
+  // normal case.
+  //
+  // And it has to route to the panel the strip lives on: only the panel on screen is
+  // built now, so selecting a run alone leaves `stat-strip` holding whatever the last
+  // panel to render it happened to leave there.
+  onAnEmbeddedRun();
+  globalThis.location.hash = '#run';
+  globalThis.__applyRoute();
   const pick = nodes.get('run-pick');
   const currentId = Number(pick && pick.value);
-  // Only meaningful on a run whose prices are embedded; after the truncation
-  // check switches the picker to an unloaded run the strip reads "—" and a
-  // loose digit match would pick up the next stat instead.
   if (!globalThis.__detailLoaded(currentId)) {
     console.log('separate-bets check skipped; current run carries no detail');
   } else {
@@ -1441,4 +2402,812 @@ if (process.argv[3]) {
     ? 'BET LINK RENDER WRONG: ' + problems.join('; ')
     : 'bet links state their precision and escape book-supplied text');
   if (problems.length) process.exit(1);
+}
+
+// The fixture panel must show the game the URL names. `showCurrentPanel` skips a
+// re-render when it believes the panel already holds that subject, and renderEvents
+// repoints the panel at its own default whenever the Games filters change — so the
+// two have to agree about what is on screen. When they did not, clicking a game you
+// had opened before was skipped as redundant and the panel kept whatever the filter
+// change had left there: a breadcrumb naming one game above a heading naming another.
+{
+  const problems = [];
+  const keys = globalThis.__eventKeys();
+  // The key, not the heading: two halves of a doubleheader are different games with
+  // the same team names, and the panel writes the key it is showing into event-count.
+  const showing = () => ((nodes.get('event-count') || {}).textContent) || '';
+  const title = () => ((nodes.get('event-title') || {}).textContent) || '';
+
+  if (keys.length < 2) {
+    console.log(`fixture-identity check skipped; only ${keys.length} game(s) in this run`);
+  } else {
+    const open = (key) => { globalThis.location.hash = '#fixture/' + encodeURIComponent(key); globalThis.__applyRoute(); return showing(); };
+
+    const firstKey = open(keys[0]);
+    const secondKey = open(keys[1]);
+    if (firstKey !== keys[0]) {
+      problems.push(`routing to ${JSON.stringify(keys[0])} showed ${JSON.stringify(firstKey)}`);
+    }
+    if (secondKey !== keys[1]) {
+      problems.push(`routing to ${JSON.stringify(keys[1])} showed ${JSON.stringify(secondKey)} ("${title()}")`);
+    }
+
+    // Now the interference: go back to Games, change a filter, then re-open the game we
+    // were just on. Driven through `__renderEvents` rather than `__visitPanel`, because
+    // `__visitPanel` renders only a *stale* panel — arriving from #fixture leaves Games
+    // fresh, so both calls did nothing at all and the grid's markup was identical either
+    // side of them. The interference this block is named for was never applied.
+    globalThis.location.hash = '#events';
+    globalThis.__applyRoute();
+    const q = nodes.get('events-q');
+    q.value = 'zzzz-no-such-team';
+    globalThis.__renderEvents();
+    q.value = '';
+    globalThis.__renderEvents();
+
+    const reopened = open(keys[1]);
+    if (reopened !== keys[1]) {
+      problems.push(`re-opening ${JSON.stringify(keys[1])} showed ${JSON.stringify(reopened)} ("${title()}")`);
+    }
+  }
+
+  if (problems.length) {
+    console.error('FIXTURE PANEL SHOWS THE WRONG GAME:', problems.join('; '));
+    process.exit(1);
+  }
+  console.log('the fixture panel follows the route, even after a Games filter repoints it');
+}
+
+// Waits for a debounced render rather than sleeping a fixed amount, so a loaded
+// machine cannot turn a slow timer into a failed assertion. A declaration, so a check
+// placed above this line can use it — as a `const` it threw "Cannot access 'settles'
+// before initialization", which is a block-order trap rather than a real failure.
+async function settles(read, changedFrom, budgetMs = 3000) {
+  const started = Date.now();
+  while (Date.now() - started < budgetMs) {
+    if (read() !== changedFrom) return read();
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  return read();
+}
+
+// The typed filters are debounced, so the render happens on a timer. If that timer
+// ever stops calling through, every search box on the page goes dead — typing
+// changes nothing, ever — and nothing else in this file would notice.
+{
+  onAnEmbeddedRun();
+  const problems = [];
+  globalThis.__visitPanel('odds', null);
+  const count = () => ((nodes.get('odds-count') || {}).textContent) || '';
+  const before = count();
+
+  const q = nodes.get('q');
+  q.value = 'zzzz-no-such-team-anywhere';
+  q.dispatch('input');
+  if (count() !== before) problems.push('the typed filter rendered synchronously; it is meant to wait for the typing to stop');
+
+  const after = await settles(count, before);
+  if (after === before) {
+    problems.push(`filter never fired: "${before}" before, "${after}" after waiting out the debounce`);
+  } else if (!/^0 of 0\b/.test(after)) {
+    problems.push(`filter fired but matched something: ${JSON.stringify(after)}`);
+  }
+
+  // A select is a deliberate pick, not a keystroke, and repaints at once.
+  q.value = '';
+  q.dispatch('input');
+  const restored = await settles(count, after);
+  if (restored === after) {
+    problems.push(`clearing the search box never re-ran the filter; still "${after}"`);
+  }
+  // Judged on whether it repainted, not on whether the text changed: on a small
+  // slate a filter can be a no-op and still have to run.
+  const market = nodes.get('f-market');
+  market.value = 'moneyline';
+  const beforeWrites = counted;
+  market.dispatch('input');
+  if (counted === beforeWrites) {
+    problems.push('picking a market did not repaint immediately');
+  }
+
+  // ...and a debounce that fires once per keystroke is not a debounce. Dropping the
+  // clearTimeout leaves every character queueing its own full render, 140ms late —
+  // which is the cost this change exists to remove, plus a pending render that can
+  // land after the reader has navigated away. Only the trailing one should run.
+  // Counted page-wide on purpose. A per-region counter cannot be used here: when the
+  // search matches nothing, `table` replaces the region with an empty-state div, so
+  // the node holding the count is not the node the next render writes. Nothing else
+  // on the page is writing at this point in the block — no run change, no route, no
+  // chrome — so the page total is the render count.
+  const writes = () => counted;
+  // What one render of this panel costs, measured rather than assumed — it is a
+  // handful of writes across the table and its first chunk, and the exact number is
+  // nobody's business here.
+  const settle = async (from) => {
+    await settles(writes, from);
+    // Then keep waiting: the point is what arrives *after* the trailing render. With
+    // one timer per keystroke they are all already scheduled and land within a few ms
+    // of each other, but the extra wait means a slow machine cannot pass this by
+    // simply not having delivered them yet.
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    return writes() - from;
+  };
+  q.value = 'q';
+  q.dispatch('input');
+  const oneRender = await settle(writes());
+  if (oneRender === 0) problems.push('a keystroke never rendered the board at all');
+
+  const typed = 'lakers';
+  const burstFrom = writes();
+  for (const ch of typed) { q.value += ch; q.dispatch('input'); }
+  const burst = await settle(burstFrom);
+  // A word's worth of typing must not cost a word's worth of renders. Doubled to
+  // leave room for a render whose markup differs between the two searches; six times
+  // over — one full render per character — cannot hide under that.
+  if (oneRender && burst > oneRender * 2) {
+    problems.push(`${typed.length} keystrokes cost ${burst} writes where one render costs ${oneRender}`
+      + ' — the debounce is not coalescing');
+  }
+
+  if (problems.length) {
+    console.error('DEBOUNCED FILTERS DO NOT FIRE:', problems.join('; '));
+    process.exit(1);
+  }
+  console.log(`typed filters fire after the typing stops (${typed.length} keystrokes cost ${burst} writes, one render costs ${oneRender}); selects repaint at once`);
+}
+
+// EVERY select repaints at once, not just the one the block above happens to use. The
+// page's rule is "typed boxes wait for the typing to stop, deliberate picks do not", and
+// checking a single control left eleven others free to be debounced by accident — a
+// select that renders 140ms late feels broken, and a debounce with a shared timer can
+// drop the render entirely if another control fires inside the window.
+//
+// The value is deliberately NOT changed. What is being asked is whether the handler
+// renders synchronously, and a filter renders whether or not its value moved — so this
+// separates that question from what the data happens to hold.
+{
+  onAnEmbeddedRun();
+  const problems = [];
+  // Counted on the region the control's panel owns, not page-wide: the league pickers
+  // rebuild both select lists synchronously whatever else they do, so a page-wide
+  // counter says "repainted" for a handler whose actual render is on a timer.
+  const controls = [
+    ['f-source', 'odds', 'input', ['odds-table']],
+    ['f-league', 'odds', 'input', ['odds-table']],
+    ['f-market', 'odds', 'input', ['odds-table']],
+    ['f-period', 'odds', 'input', ['odds-table']],
+    ['f-alt', 'odds', 'input', ['odds-table']],
+    ['events-book', 'events', 'input', ['coverage', 'events-games']],
+    ['cov-mode', 'events', 'change', ['coverage', 'events-games']],
+    ['league-pick', 'screen', 'change', ['odds-screen']],
+    ['events-league', 'events', 'change', ['coverage', 'events-games']],
+    ['move-source', 'movement', 'change', ['move-table']],
+    ['promo-kind', 'promos', 'input', ['promo-list']],
+    ['promo-source', 'promos', 'input', ['promo-list']],
+    ['promo-region', 'promos', 'input', ['promo-list']],
+  ];
+  for (const [id, panel, event, regions] of controls) {
+    const node = nodes.get(id);
+    if (!node || !(node._listeners[event] || []).length) {
+      problems.push(`${id} has no ${event} handler at all`);
+      continue;
+    }
+    globalThis.location.hash = '#' + panel;
+    globalThis.__applyRoute();
+    // EVERY owned region, not any of them: summing them meant a handler that repainted
+    // one synchronously and deferred the other passed. On Games those are the coverage
+    // table and the games grid, and a reader looking at the grid would see it go stale.
+    const before = regions.map((r) => writesTo(r));
+    node.dispatch(event);
+    const after = regions.map((r) => writesTo(r));
+    const stale = regions.filter((_, i) => after[i] === before[i]);
+    if (stale.length) {
+      problems.push(`${id} on #${panel} did not repaint ${stale.join(', ')} synchronously`);
+    }
+  }
+
+  if (problems.length) {
+    console.error('A DELIBERATE PICK DOES NOT REPAINT AT ONCE:', problems.join('; '));
+    process.exit(1);
+  }
+  console.log(`all ${controls.length} select filters repaint synchronously`);
+}
+
+// Several checks below need a run whose prices are embedded — they read the event list
+// before routing anywhere. Left to inherit whatever run the blocks above finished on,
+// they would silently skip (a truncated run has no games) or fail spuriously (an empty
+// slate makes "the filter changed the count" untrue). So they select one explicitly.
+function onAnEmbeddedRun() {   // a declaration, so block order cannot matter
+  const embedded = globalThis.__embeddedRuns();
+  if (!embedded.length) return false;
+  const pick = nodes.get('run-pick');
+  pick.value = String(embedded[0]);
+  pick.dispatch('change');
+  return true;
+}
+
+// renderEvents must leave the fixture panel alone. It used to repoint it at its own
+// top hit, to keep that panel populated while off screen — a job the router now does
+// on arrival. What the repoint still did was overwrite a game the reader had opened:
+// type into the Games search, click a game inside the 140ms debounce window, and the
+// pending renderEvents replaced the heading and the prices with the search's top hit
+// while the breadcrumb went on naming the game you clicked. Nothing corrected it,
+// because nothing re-rendered.
+{
+  onAnEmbeddedRun();
+  const keys = globalThis.__eventKeys();
+  const showing = () => ((nodes.get('event-count') || {}).textContent) || '';
+  const title = () => ((nodes.get('event-title') || {}).textContent) || '';
+
+  if (keys.length < 2) {
+    console.log(`fixture-repoint check skipped; only ${keys.length} game(s) in this run`);
+  } else {
+    globalThis.location.hash = '#fixture/' + encodeURIComponent(keys[0]);
+    globalThis.__applyRoute();
+    if (showing() !== keys[0]) {
+      console.error(`FIXTURE PANEL DID NOT OPEN THE ROUTED GAME: wanted ${JSON.stringify(keys[0])}, showing ${JSON.stringify(showing())}`);
+      process.exit(1);
+    }
+
+    // Narrow Games to a *different* game and repaint it, exactly as a pending
+    // debounce would after the reader has already opened this one.
+    const q = nodes.get('events-q');
+    q.value = keys[1];
+    globalThis.__renderEvents();
+    q.value = '';
+
+    if (showing() !== keys[0]) {
+      console.error('RENDEREVENTS REPOINTED THE OPEN FIXTURE PANEL: '
+        + `it now shows ${JSON.stringify(showing())} ("${title()}") while the route still names `
+        + `${JSON.stringify(keys[0])} — the reader reads one game's prices under another game's name`);
+      process.exit(1);
+    }
+    if (globalThis.__selectedEvent() !== keys[0]) {
+      console.error(`RENDEREVENTS MOVED THE SELECTED GAME: ${JSON.stringify(globalThis.__selectedEvent())}, want ${JSON.stringify(keys[0])}`);
+      process.exit(1);
+    }
+    console.log('renderEvents leaves an open fixture panel alone');
+  }
+}
+
+// Leaving a panel must unload it. Building one panel at a time bounds what arriving
+// costs but not what the document holds: without unloading, browsing five panels and
+// scrolling their lists reached 407,670 elements — the number the eager render used
+// to reach on load, just spread across a session instead of a page load.
+{
+  const problems = [];
+  const heavy = { screen: 'odds-screen', events: 'coverage', odds: 'odds-table', raw: 'raws' };
+  const order = ['screen', 'events', 'odds', 'raw'];
+  // Markup only, for judging whether rows were dropped: an empty result set renders
+  // as text, and text is not what unloading is trying to reclaim.
+  const bulk = (id) => (((nodes.get(id) || {}).innerHTML) || '').length;
+  // Anything at all, for judging whether a panel is present — an empty state counts.
+  const present = (id) => {
+    const n = nodes.get(id);
+    return Boolean((((n && n.innerHTML) || '') + ((n && n.textContent) || '')).trim());
+  };
+
+  for (const panel of order) {
+    globalThis.location.hash = '#' + panel;
+    globalThis.__applyRoute();
+  }
+  // Everything except the last is behind us and should have been dropped.
+  for (const panel of order.slice(0, -1)) {
+    const size = bulk(heavy[panel]);
+    if (size > 500) {
+      problems.push(`#${panel} still holds ${size} chars of ${heavy[panel]} after being left`);
+    }
+  }
+  if (!present(heavy[order[order.length - 1]])) {
+    problems.push(`the panel still on screen (#${order[order.length - 1]}) was unloaded too`);
+  }
+  // ...and going back rebuilds it rather than showing a blank.
+  globalThis.location.hash = '#' + order[0];
+  globalThis.__applyRoute();
+  if (!present(heavy[order[0]])) problems.push(`returning to #${order[0]} left ${heavy[order[0]]} blank`);
+
+  if (problems.length) {
+    console.error('PANELS ARE NOT UNLOADED WHEN LEFT:', problems.join('; '));
+    process.exit(1);
+  }
+  console.log(`leaving a panel unloads it, and returning rebuilds it (${order.join(' -> ')})`);
+}
+
+// ...for EVERY panel that declares regions, not just the four above. `PANEL_HEAVY` is
+// the list of what gets reclaimed, so it is the list that has to be walked: deleting its
+// whole `sports` entry — leaving `sports-gaps`, the 31KB region the production comment
+// calls out as the one thing Coverage never reclaimed, never reclaimed again — passed a
+// suite that only knew about screen/events/odds/raw.
+{
+  onAnEmbeddedRun();
+  const problems = [];
+  const heavy = globalThis.__PANEL_HEAVY;
+  const bulk = (id) => (((nodes.get(id) || {}).innerHTML) || '').length;
+  const present = (id) => {
+    const n = nodes.get(id);
+    return Boolean((((n && n.innerHTML) || '') + ((n && n.textContent) || '')).trim());
+  };
+  const hop = (to) => { globalThis.location.hash = '#' + to; globalThis.__applyRoute(); };
+  // Every panel that owns regions must appear here, so a panel added without an entry
+  // is a visible gap rather than a silent one.
+  const named = Object.keys(heavy);
+  if (named.length < 12) problems.push(`PANEL_HEAVY covers only ${named.length} panels`);
+
+  for (const panel of named) {
+    hop(panel);
+    const built = heavy[panel].filter(present);
+    if (!built.length) {
+      // Legitimately empty for this run/sport (e.g. a panel with nothing to show) —
+      // say so rather than passing quietly.
+      console.log(`  (#${panel} owns no filled region on this run; nothing to reclaim)`);
+      continue;
+    }
+    // Leave sideways to a panel that shares none of its regions.
+    hop(panel === 'raw' ? 'sources' : 'raw');
+    const kept = built.filter((id) => bulk(id) > 500);
+    if (kept.length) {
+      problems.push(`#${panel} still holds ${kept.map((id) => `${id}=${bulk(id)}`).join(', ')} after being left`);
+    }
+    // ...and coming back rebuilds it rather than showing a blank.
+    hop(panel);
+    const blank = built.filter((id) => !present(id));
+    if (blank.length) problems.push(`returning to #${panel} left ${blank.join(', ')} blank`);
+  }
+
+  if (problems.length) {
+    console.error('SOME PANELS ARE NEVER RECLAIMED:', problems.join('; '));
+    process.exit(1);
+  }
+  console.log(`every one of the ${named.length} panels that declares regions reclaims them`);
+}
+
+// Two panel names sharing one renderer must survive a hop between each other. This is
+// the case unloading gets wrong, and it shipped: `overview` and `run` are both drawn
+// by renderOverview and therefore own one set of regions, so with eviction running
+// *after* the arrival render, going from How to use to This scrape left the price-mix
+// matrix — the region This scrape shows — blank, under a note reading "1702 games ·
+// click one to compare books". `ensurePanel('run')` had already been satisfied by the
+// sibling render, so nothing rebuilt it, and toggling between the two never recovered.
+//
+// Checked in both directions, because the region at risk is a different one each way.
+{
+  const problems = [];
+  // The region each name actually shows, which is the whole point: they are NOT the
+  // same region, even though the two panels are rendered by one function.
+  const owns = { overview: 'browse-games', run: 'matrix' };
+  const filled = (id) => {
+    const n = nodes.get(id);
+    return (((n && n.innerHTML) || '') + ((n && n.textContent) || '')).trim().length;
+  };
+  const hop = (to) => { globalThis.location.hash = '#' + to; globalThis.__applyRoute(); };
+
+  for (const [from, to] of [['overview', 'run'], ['run', 'overview']]) {
+    // Arrive from somewhere else first, so `lastList` really is `from` on the hop.
+    hop('arb');
+    hop(from);
+    if (!filled(owns[from])) problems.push(`#${from} did not fill ${owns[from]} on arrival`);
+    hop(to);
+    if (!filled(owns[to])) {
+      problems.push(`#${from} -> #${to} left ${owns[to]} blank — the region #${to} shows`);
+    }
+  }
+  // And a drill-down in between must not change that: a child panel leaves `lastList`
+  // pointing at the list behind it, so #overview -> a game -> #run is the same hazard.
+  hop('arb');
+  hop('overview');
+  hop('fixture');
+  hop('run');
+  if (!filled(owns.run)) problems.push('#overview -> a game -> #run left matrix blank');
+
+  if (problems.length) {
+    console.error('A PANEL SHARING A RENDERER IS BLANKED BY THE ONE IT SHARES WITH:', problems.join('; '));
+    process.exit(1);
+  }
+  console.log('panels sharing a renderer survive a hop between them (overview <-> run)');
+}
+
+// Clicking a row must navigate. This change replaced thousands of per-row listeners
+// with one delegated handler per container, which is the whole reason a filter
+// keystroke stopped costing 50-95ms — and it was the one part of the change with no
+// coverage at all: `targetOf` could be replaced with `() => null`, making every row on
+// every table dead to the mouse and the keyboard, and this file stayed green. Asserting
+// that `data-go="..."` appears in the markup does not test it; the markup is not the
+// handler.
+{
+  const problems = [];
+  const host = document.getElementById('click-probe');
+  const rows = [];
+  globalThis.__fillInChunks(host, host, ['NFL-A@NFL-B', 'NFL-C@NFL-D'],
+    (key) => { rows.push(key); return `<tr class="go" data-go="#fixture/${key}"></tr>`; },
+    { noun: 'games' });
+  globalThis.__wireRowLinks(host);
+
+  // The chain a browser actually hands the handler. Every clickable pixel on the board
+  // is a <b> or a <span> inside a <td>, and there is a tbody and a table between the
+  // <tr> and the container — so the real depth from host to the thing under the cursor
+  // is six nodes. Built three deep, a `targetOf` that walks only one ancestor passed.
+  const table = { dataset: {}, parentNode: host };
+  const tbody = { dataset: {}, parentNode: table };
+  const row = { dataset: { go: '#fixture/' + rows[1] }, parentNode: tbody };
+  const cellInRow = { dataset: {}, parentNode: row };
+  const textInCell = { dataset: {}, parentNode: cellInRow };
+
+  globalThis.location.hash = '';
+  host.dispatch('click', { target: row });
+  if (globalThis.location.hash !== '#fixture/' + rows[1]) {
+    problems.push(`clicking a row went to ${JSON.stringify(globalThis.location.hash)}, want #fixture/${rows[1]}`);
+  }
+
+  for (const [what, target] of [['a cell inside a row', cellInRow], ['text inside a cell', textInCell]]) {
+    globalThis.location.hash = '';
+    host.dispatch('click', { target });
+    if (globalThis.location.hash !== '#fixture/' + rows[1]) {
+      problems.push(`clicking ${what} went to ${JSON.stringify(globalThis.location.hash)}`);
+    }
+  }
+
+  // Enter and Space on a focused row are the keyboard equivalents, and both must stop
+  // the browser's own default — Space scrolls the page otherwise. Production handles
+  // both; only Enter was checked, so dropping Space from the guard passed.
+  for (const key of ['Enter', ' ']) {
+    globalThis.location.hash = '';
+    let prevented = false;
+    host.dispatch('keydown', { key, target: row, preventDefault() { prevented = true; } });
+    const named = key === ' ' ? 'Space' : key;
+    if (globalThis.location.hash !== '#fixture/' + rows[1]) problems.push(`${named} on a row did not navigate`);
+    if (!prevented) problems.push(`${named} on a row did not preventDefault`);
+  }
+
+  // Clicking the empty space around the rows must do nothing rather than navigate to
+  // whatever the last row happened to be.
+  globalThis.location.hash = '#odds';
+  host.dispatch('click', { target: host });
+  if (globalThis.location.hash !== '#odds') {
+    problems.push(`clicking the container itself navigated to ${JSON.stringify(globalThis.location.hash)}`);
+  }
+  // A key that is not Enter or Space must not either.
+  host.dispatch('keydown', { key: 'a', target: row, preventDefault() {} });
+  if (globalThis.location.hash !== '#odds') problems.push('an ordinary keypress on a row navigated');
+
+  // Idempotent across re-renders. A filter change re-runs the renderer, and a handler
+  // added each time means one click firing five navigations — plus a closure per render
+  // held for the life of the tab, which is what the delegation replaced.
+  const beforeListeners = (host._listeners.click || []).length;
+  for (let i = 0; i < 4; i += 1) globalThis.__wireRowLinks(host);
+  const afterListeners = (host._listeners.click || []).length;
+  if (afterListeners !== beforeListeners) {
+    problems.push(`re-wiring stacked handlers: ${beforeListeners} -> ${afterListeners}`);
+  }
+
+  // ...and the wiring has to actually be applied by the two things that render rows.
+  // Everything above tests `wireRowLinks` in isolation, which says nothing about whether
+  // anyone calls it: removing the call from `table()` kills every drill-down row on
+  // coverage, all-prices, movement, raw and the bet panel, and removing it from
+  // `renderOddsScreen` kills all 1,702 board rows — and both passed.
+  for (const [panel, region] of [['screen', 'odds-screen'], ['events', 'coverage']]) {
+    globalThis.location.hash = '#' + panel;
+    globalThis.__applyRoute();
+    const live = nodes.get(region);
+    const listeners = ((live && live._listeners.click) || []).length;
+    if (listeners !== 1) {
+      problems.push(`${region} has ${listeners} click handler(s) after rendering #${panel}, want 1`);
+      continue;
+    }
+    // A real target out of the rendered markup, so this cannot pass on a made-up one.
+    const target = (live.innerHTML.match(/data-go="([^"]+)"/) || [])[1];
+    if (!target) { problems.push(`${region} rendered no clickable row`); continue; }
+    // Focusable, or the keydown handler is unreachable for anyone not using a mouse.
+    // Checked as the affordance rather than as one renderer's spelling: `table` writes
+    // `class="go" tabindex="0" data-go=` and the board writes `data-go=… tabindex="0"`,
+    // both correct, and a check pinned to either order would be a check on the wrong
+    // thing. A <a> row needs no tabindex — it is focusable by being a link.
+    const openTag = (live.innerHTML.match(/<(\w+)\b[^>]*\bdata-go="[^"]*"[^>]*>/) || []);
+    if (openTag[1] && openTag[1].toLowerCase() !== 'a' && !/\btabindex="0"/.test(openTag[0])) {
+      problems.push(`${region} rows are not focusable: ${JSON.stringify(openTag[0].slice(0, 70))}`);
+    }
+    const decoded = target.replace(/&amp;/g, '&').replace(/&#39;/g, "'");
+    globalThis.location.hash = '';
+    live.dispatch('click', { target: { dataset: { go: decoded }, parentNode: live } });
+    if (globalThis.location.hash !== decoded) {
+      problems.push(`a click on a real ${region} row went to ${JSON.stringify(globalThis.location.hash)},`
+        + ` want ${JSON.stringify(decoded)}`);
+    }
+  }
+
+  if (problems.length) {
+    console.error('ROW CLICKS DO NOT NAVIGATE:', problems.join('; '));
+    process.exit(1);
+  }
+  console.log('rows navigate by mouse and keyboard, and both renderers wire their own rows exactly once');
+}
+
+// ...but NOT the list you drilled down from. A game, a book and a bet are reached by
+// clicking a row and left by going back to it. Unloading that list meant coming back
+// to its first chunk: a reader who had scrolled the 1,702-game board, opened one game
+// and pressed Back needed thirteen more "show more" clicks to get where they were.
+{
+  const problems = [];
+  const rows = (id) => ((((nodes.get(id) || {}).innerHTML) || '').match(/data-go="#fixture/g) || []).length;
+
+  globalThis.location.hash = '#screen';
+  globalThis.__applyRoute();
+  // Expand the board past its first chunk, as a reader scrolling would.
+  for (let i = 0; i < 3; i += 1) {
+    const control = (nodes.get('odds-screen') || {})._sibling;
+    if (control) control.dispatch('click');
+  }
+  const expanded = rows('odds-screen');
+  if (expanded <= globalThis.__ROW_CHUNK) {
+    console.log(`drill-down state check skipped; board holds only ${expanded} row(s)`);
+  } else {
+    const keys = globalThis.__eventKeys();
+    globalThis.location.hash = '#fixture/' + encodeURIComponent(keys[0]);
+    globalThis.__applyRoute();
+    globalThis.location.hash = '#screen';
+    globalThis.__applyRoute();
+    const afterBack = rows('odds-screen');
+    if (afterBack < expanded) {
+      problems.push(`board had ${expanded} rows, ${afterBack} after opening a game and going back`);
+    }
+  }
+
+  if (problems.length) {
+    console.error('DRILLING DOWN THROWS AWAY THE LIST BEHIND IT:', problems.join('; '));
+    process.exit(1);
+  }
+  console.log(`drilling into a game and back keeps the board where it was (${expanded} rows)`);
+}
+
+// Leaving sideways — list, drill-down, then a *different* list — must still unload the
+// first list. Keying the unload on "the last panel" instead of "the last list" left the
+// expanded board resident for the rest of the session on that route.
+{
+  const size = (id) => (((nodes.get(id) || {}).innerHTML) || '').length;
+  const keys = globalThis.__eventKeys();
+  if (keys.length < 1) {
+    console.log('sideways-exit check skipped; no games in this run');
+  } else {
+    globalThis.location.hash = '#screen';
+    globalThis.__applyRoute();
+    const built = size('odds-screen');
+    globalThis.location.hash = '#fixture/' + encodeURIComponent(keys[0]);
+    globalThis.__applyRoute();
+    globalThis.location.hash = '#events';
+    globalThis.__applyRoute();
+    const left = size('odds-screen');
+    if (left > 500) {
+      console.error('LEAVING SIDEWAYS STRANDS THE FIRST LIST: '
+        + `the board held ${built} chars, still ${left} after going board -> game -> Games`);
+      process.exit(1);
+    }
+    console.log(`leaving sideways unloads the list behind the drill-down (${built} -> ${left})`);
+  }
+}
+
+// A filter control shared between two panels must not build the panel nobody is
+// looking at. One league pick used to write 792,544 bytes of markup, 647,882 of it
+// into the off-screen odds board — which was stale anyway and rebuilt on arrival, so
+// the work was waste and the markup accumulation.
+{
+  const problems = [];
+  const size = (id) => (((nodes.get(id) || {}).innerHTML) || '').length;
+
+  globalThis.location.hash = '#events';
+  globalThis.__applyRoute();
+  const before = size('odds-screen');
+
+  const league = nodes.get('events-league');
+  const options = (league.innerHTML.match(/value="([^"]+)"/g) || []).map((m) => m.slice(7, -1));
+  if (!options.length) {
+    console.log('cross-panel filter check skipped; no leagues to pick');
+  } else {
+    league.value = options[0];
+    league.dispatch('change');
+    const after = size('odds-screen');
+    if (after > before + 500) {
+      problems.push(`picking a league on Games wrote ${after - before} chars into the off-screen board`);
+    }
+    // And the board must still be correct when arrived at.
+    globalThis.location.hash = '#screen';
+    globalThis.__applyRoute();
+    if (!size('odds-screen')) problems.push('the board was left blank after the league pick');
+  }
+
+  if (problems.length) {
+    console.error('A FILTER BUILT A PANEL NOBODY IS LOOKING AT:', problems.join('; '));
+    process.exit(1);
+  }
+  console.log('a shared filter marks the other panel stale instead of building it');
+}
+
+// A league or book chosen under one sport may not exist under the next. The code that
+// clears an impossible choice used to run on every render because every panel
+// rendered; with one panel building at a time it has to run on the run/sport change
+// itself, or the nav counts read filter state no panel has reconciled — "Games 0"
+// beside a scrape holding 381 of them.
+{
+  const problems = [];
+  const bySport = globalThis.__booksBySport();
+  const sportNode = nodes.get('sport-pick');
+  const bookNode = nodes.get('events-book');
+  const num = (id) => Number((((nodes.get(id) || {}).textContent) || '').replace(/,/g, ''));
+
+  // A sport, and a book that prices some other sport but not this one — so leaving
+  // the filter set is guaranteed to be impossible after the switch.
+  // Busiest sport first, so the check lands on a sport that actually has games —
+  // an empty one reads the same whether the filter was reconciled or not.
+  let target = null;
+  const ranked = Object.entries(bySport).sort((a, b) => b[1].rows - a[1].rows);
+  for (const [sport, info] of ranked) {
+    const elsewhere = ranked
+      .filter(([other]) => other !== sport)
+      .flatMap(([, other]) => other.books)
+      .find((b) => !info.books.includes(b));
+    if (elsewhere) { target = { sport, book: elsewhere }; break; }
+  }
+
+  let ran = false;
+  if (!target) {
+    console.log('stale-filter check skipped; every book prices every sport in this run');
+  } else {
+    globalThis.__visitPanel('events', null);
+    bookNode.value = target.book;
+    // Change the sport from somewhere else. On Games itself the panel's own renderer
+    // reconciles the filter on the way past, which hides the fault entirely — the
+    // reader who hits this picked the sport from the rail while reading another panel.
+    globalThis.location.hash = '#arb';
+    globalThis.__applyRoute();
+    sportNode.value = target.sport;
+    sportNode.dispatch('change');
+
+    globalThis.__renderNavCounts();
+    const navSaid = num('nav-events');
+    // Now open the panel, which reconciles the filters itself, and compare.
+    globalThis.__visitPanel('events', null);
+    const panelSaid = Number(((((nodes.get('events-games-note') || {}).textContent) || '')
+      .match(/^([\d,]+) game/)?.[1] || '0').replace(/,/g, ''));
+    const shown = (((nodes.get('events-games') || {}).innerHTML) || '').match(/game-card/g) || [];
+
+    if (!panelSaid && !shown.length) {
+      console.log(`stale-filter check inert; ${target.sport} shows no games either way`);
+    } else if (((ran = true)) && navSaid !== (panelSaid || shown.length)) {
+      problems.push(`${target.sport} with the ${target.book} filter left set: `
+        + `rail said ${navSaid}, the panel says ${panelSaid || shown.length}`);
+    }
+
+    sportNode.value = '';
+    sportNode.dispatch('change');
+  }
+
+  if (problems.length) {
+    console.error('NAV COUNTS READ UNRECONCILED FILTER STATE:', problems.join('; '));
+    process.exit(1);
+  }
+  console.log(ran
+    ? `the rail agrees with the panel on ${target.sport} with an impossible book filter left set`
+    : 'stale-filter check did not run — nothing asserted');
+}
+
+// The Movement count is scheduled separately from the other nav counts, because it is
+// the one that has to join every embedded run's rows. Scheduled work that never runs
+// is a blank number beside a populated panel — and the first attempt at this used
+// requestIdleCallback, which does not run in a hidden tab at all, so the count simply
+// never arrived. Pinned here: it arrives, and it says what the panel says.
+{
+  const navMove = () => ((nodes.get('nav-move') || {}).textContent) || '';
+  const sportNode = nodes.get('sport-pick');
+
+  nodes.get('nav-move').textContent = '';
+  sportNode.value = '';
+  sportNode.dispatch('change');
+  if (navMove() !== '') {
+    console.log('movement count filled synchronously; nothing to wait for');
+  } else {
+    await settles(navMove, '');
+    if (navMove() === '') {
+      console.error('MOVEMENT COUNT NEVER ARRIVES: the rail is still blank after the schedule should have run');
+      process.exit(1);
+    }
+  }
+
+  // ...and it agrees with the panel that owns the number.
+  const railSaid = navMove();
+  globalThis.__visitPanel('movement', null);
+  const panelSaid = (((nodes.get('move-count') || {}).textContent) || '').match(/^([\d,]+) of/)?.[1] || '';
+  if (panelSaid && railSaid !== panelSaid) {
+    console.error(`MOVEMENT COUNT DISAGREES: rail says ${railSaid}, the panel says ${panelSaid}`);
+    process.exit(1);
+  }
+  console.log(`the movement count arrives and matches its panel (${railSaid})`);
+}
+
+// The movement memo is keyed on the sport, and on nothing else, because price movement
+// is a fact about the whole embedded history rather than about the run being viewed.
+// That keying is what makes a run switch free — but if it stops distinguishing sports,
+// every sport silently reports the all-sports number, and the rail and the panel agree
+// with each other while both being wrong.
+{
+  const sports = Object.keys(globalThis.__booksBySport());
+  const seen = new Map();
+  for (const sport of ['', ...sports]) {
+    const node = nodes.get('sport-pick');
+    node.value = sport;
+    node.dispatch('change');
+    globalThis.__movedCount();                       // force the memo for this scope
+    const scope = globalThis.__movementScope();
+    if (scope !== globalThis.__currentSport()) {
+      console.error('MOVEMENT MEMO IS SERVING THE WRONG SCOPE: '
+        + `computed for ${JSON.stringify(scope)} while the page is showing ${JSON.stringify(globalThis.__currentSport())}`);
+      process.exit(1);
+    }
+    seen.set(sport || '(every sport)', globalThis.__movedCount());
+  }
+  const node = nodes.get('sport-pick');
+  node.value = '';
+  node.dispatch('change');
+
+  // The label agreeing is not enough: deleting the sport filter inside the scan leaves
+  // every scope reporting the all-sports number, with every label still correct. So the
+  // numbers have to disagree with each other somewhere.
+  const everySport = seen.get('(every sport)');
+  const perSport = [...seen.entries()].filter(([k]) => k !== '(every sport)');
+  if (perSport.length > 1 && everySport > 0) {
+    const distinct = new Set(perSport.map(([, v]) => v));
+    if (distinct.size === 1 && distinct.has(everySport)) {
+      console.error('MOVEMENT MEMO IGNORES THE SPORT: '
+        + `all ${perSport.length} sports report ${everySport}, the same as every sport together`);
+      process.exit(1);
+    }
+    const total = perSport.reduce((acc, [, v]) => acc + v, 0);
+    if (total > everySport) {
+      console.error('MOVEMENT COUNTS DO NOT ADD UP: '
+        + `sports sum to ${total}, more than the ${everySport} counted across every sport`);
+      process.exit(1);
+    }
+  }
+  console.log(`the movement memo tracks the sport (${seen.size} scopes: ${[...seen.entries()].map(([k, v]) => k + '=' + v).join(', ')})`);
+}
+
+// A filter choice that is still offered must survive its panel re-rendering. The
+// selects are rebuilt from the current rows on every render (`fillSelect`), and
+// replacing a select's options resets it in a browser — so `fillSelect` has to put the
+// choice back. Without that line every filter silently clears itself the next time
+// anything re-renders, and the reader watches their filter undo itself.
+{
+  onAnEmbeddedRun();
+  const problems = [];
+  globalThis.__visitPanel('odds', null);
+
+  const source = nodes.get('f-source');
+  const options = (source.innerHTML.match(/value="([^"]+)"/g) || []).map((m) => m.slice(7, -1));
+  if (!options.length) {
+    console.log('filter-persistence check skipped; no books to filter by');
+  } else {
+    const chosen = options[0];
+    source.value = chosen;
+    source.dispatch('input');
+    const narrowed = ((nodes.get('odds-count') || {}).textContent) || '';
+    if (source.value !== chosen) {
+      problems.push(`picking ${chosen} did not stick; the select reads ${JSON.stringify(source.value)}`);
+    }
+
+    // Re-render the panel for an unrelated reason and check the choice is still there.
+    globalThis.__visitPanel('events', null);
+    globalThis.__visitPanel('odds', null);
+    if (source.value !== chosen) {
+      problems.push(`${chosen} was dropped by a re-render; the select reads ${JSON.stringify(source.value)}`);
+    }
+    const after = ((nodes.get('odds-count') || {}).textContent) || '';
+    if (after !== narrowed) {
+      problems.push(`the filtered count changed across a re-render: "${narrowed}" then "${after}"`);
+    }
+    source.value = '';
+    source.dispatch('input');
+  }
+
+  if (problems.length) {
+    console.error('A FILTER CHOICE DOES NOT SURVIVE A RE-RENDER:', problems.join('; '));
+    process.exit(1);
+  }
+  console.log('a still-valid filter choice survives its panel re-rendering');
 }

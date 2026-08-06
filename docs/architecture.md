@@ -2,11 +2,13 @@
 
 ## System shape
 
-SportArbitrage is a local Python application with two collection domains and one read-only presentation layer:
+SportArbitrage is a local Python application with two collection domains, a
+hand-entered bet ledger, and a primarily read-only presentation layer:
 
 - The odds pipeline collects venue data, normalizes quotes, reconciles event identity, validates the slate, detects arbitrage, and stores results.
 - The promotions pipeline collects and normalizes offers into a separate database, then builds plans against current odds at report time.
-- The report layer reads stored odds and promotions and produces a self-contained dashboard; its local server optionally invokes the collectors.
+- The bet ledger stores placed positions and settlement progress in its own SQLite database, separate from data that can be re-scraped.
+- The report layer reads stored odds, promotions, and bets and produces a self-contained dashboard; its local server optionally invokes the collectors and is the only dashboard mode that may change the bet ledger.
 - Operational scripts are thin manual entry points over reusable code in `src/`; application modules never import from `scripts/`.
 
 ## Odds data flow
@@ -29,6 +31,19 @@ promo registry -> promo fetch -> shared raw envelope -> promo parse/enrichment
 
 `src/promos/collector.py` orchestrates collection. `src/promos/store.py` deliberately owns a separate database and lifecycle. `src/promos/planner.py` is a pure computation over offers and quotes; plans are not persisted because prices move.
 
+## Bet ledger data flow
+
+```text
+scraped arb/price or manual form -> validated position snapshot
+    -> separate bet SQLite database -> dashboard totals and editable history
+```
+
+`src/betlog.py` owns this database and its arithmetic. Money is stored as integer
+cents, and logged event/market/price fields are snapshots rather than foreign
+keys into collected odds, so pruning or re-scraping odds cannot rewrite history.
+A static dashboard embeds the current ledger read-only; the localhost report
+server exposes the same-origin endpoints used to log, edit, settle, and delete.
+
 ## Major components
 
 | Component | Responsibility |
@@ -45,6 +60,7 @@ promo registry -> promo fetch -> shared raw envelope -> promo parse/enrichment
 | `src/jurisdictions.py`, `src/state_selection.py` | Typed IL/PA/NJ/DC routing and detected batch selection |
 | `src/egress.py`, `src/probe_cache.py` | Privacy-reduced explicit detection and separate live-probe cache |
 | `src/promos/` | Promo collection, normalization, persistence, and planning |
+| `src/betlog.py` | Placed-bet persistence, validation, settlement, and bankroll totals |
 | `src/report.py`, `src/report_assets.py` | Dashboard data construction, serving, and handwritten inline assets |
 | `scripts/` | Manual diagnostics and repository checks; not an application dependency |
 | `tests/fixtures/raw/` | Versioned captured inputs for deterministic parser and replay tests |
@@ -77,8 +93,31 @@ promo registry -> promo fetch -> shared raw envelope -> promo parse/enrichment
 - Global sources are fetched once per batch. Direct global venues remain
   actionable; republished global observations are diagnostic-only.
 - Promotions may reuse settings, raw storage, and transport guards, but its schema, registry, and database remain separate.
-- The report layer may read and combine both domains; collection/domain modules must not depend on report rendering.
+- The bet ledger has a separate schema and lifecycle from both collected odds and promotions; collection never writes or deletes it.
+- The report layer may read and combine all three domains. Only its localhost control plane writes the bet ledger; collection/domain modules must not depend on report rendering.
 - `src/report_assets.py` is handwritten presentation source (`CSS`, `BODY`, and `JS`), not generated output. Generated dashboards and runtime captures belong under ignored `data/` paths.
+- The dashboard builds one panel at a time. A panel is rendered on arrival, marked
+  stale when the run or sport changes, and unloaded when it leaves the screen; only
+  the masthead chrome and the nav counts are computed for panels that are not on
+  screen. Rendering every panel up front cost 577k DOM nodes and about a second of
+  blocked main thread per interaction, and never reclaimed any of it. Long lists are
+  appended in chunks, and rows held back are stated on screen and reachable by
+  click, never only by scrolling.
+- Routing unloads the panel being left *before* building the one being arrived at.
+  Two panel names may share a renderer and therefore a set of regions, so evicting
+  afterwards blanks the panel just revealed and nothing rebuilds it.
+- Filter state (league, book) is reconciled on the run or sport change itself, not
+  inside a panel renderer, because only one panel renders. The nav counts read that
+  state, so a choice left impossible by the new scope has to be cleared before them.
+- A control shared by two panels renders only the panel on screen, so it also has to
+  reschedule the nav counts: the panel left unbuilt has no renderer to write its own
+  count, and would otherwise keep the number from before the filter.
+- Typed inputs are debounced and deliberate picks are not. A panel that cannot show a
+  requested subject says so specifically rather than reusing the nothing-selected
+  wording, because the breadcrumb still names what the reader opened.
+- The embedded payload's text is dropped once parsed, and price-movement analysis is
+  memoized on the sport alone — it answers a question about every embedded run, so
+  the run being viewed cannot change it.
 - Reusable detection, probe-cache, and validation behavior belongs in `src/`; scripts should only parse arguments, call it, and present results.
 - Exact-state retail descriptors pass their state into transport selection.
   `ODDS_HTTP_PROXY_<STATE>` takes precedence over the legacy global proxy, and

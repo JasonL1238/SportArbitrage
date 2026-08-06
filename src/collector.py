@@ -488,7 +488,10 @@ def build_sources(
                 raise ValueError("state is required for explicit all-scope construction")
             descriptors = (
                 *registry.state_sources_for_state(state),
-                *registry.global_sources(),
+                # Not ``global_sources()``: a republisher's book id is per-state
+                # licence, so the state's own ids have to be applied here or the
+                # run stores another state's books under this state's keys.
+                *registry.republished_sources_for_state(state),
             )
         else:
             raise ValueError(f"unknown route scope {route_scope!r}")
