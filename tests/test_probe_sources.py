@@ -95,6 +95,91 @@ def test_state_mismatch_refuses_before_live_probe(monkeypatch, tmp_path, capsys)
     assert "refusing validation" in capsys.readouterr().err
 
 
+def test_the_strict_lookup_really_raises_both_refusals() -> None:
+    """The contract the test below mocks, pinned against the real function.
+
+    Monkeypatching ``descriptor_for_state`` to throw proves the ``except``
+    clause catches what it is handed; it cannot prove the real lookup raises
+    ``RuntimeError`` for a cross-state route, which is the claim the ``except``
+    was widened for. Without this, that claim rests on a docstring.
+
+    The cross-state case is reached through a substitute route because no shipped
+    jurisdiction mis-tags one — that is the invariant, not an oversight, and this
+    test would be dishonest if it implied otherwise.
+    """
+    from dataclasses import replace as _replace
+
+    import pytest as _pytest
+
+    import src.jurisdictions as _j
+    from src.jurisdictions import JURISDICTIONS, RouteStatus, jurisdiction
+    from src.sources.registry import descriptor_for_state
+
+    # 1. No licensed route in this state at all.
+    assert jurisdiction("PA").routes["hardrock"].status is RouteStatus.UNAVAILABLE
+    with _pytest.raises(KeyError, match="no live PA route"):
+        descriptor_for_state("PA", "hardrock")
+
+    # 2. A route that exists but is tagged for another state.
+    pa = JURISDICTIONS["PA"]
+    good = pa.routes["fanduel"]
+    assert good.routed_state == "PA", "fixture assumption changed"
+    mistagged = _replace(good, routed_state="IL")
+    routes = {**pa.routes, "fanduel": mistagged}
+    patched = _replace(pa, routes=routes)
+    original = _j.JURISDICTIONS
+    _j.JURISDICTIONS = {**original, "PA": patched}
+    try:
+        with _pytest.raises(RuntimeError, match="^fanduel route is tagged IL"):
+            descriptor_for_state("PA", "fanduel")
+        # 3. And the refusal is about the book asked for. Resolving the whole
+        # retail set meant this raised ``fanduel route is tagged IL`` while
+        # ``caesars`` was the book being probed — and ``probe_sources.py`` caches
+        # that verdict under the *probed* key, so one bad entry would file every
+        # retail book in the state as unlicensed.
+        other = descriptor_for_state("PA", "caesars")
+        assert other.key == "caesars"
+        assert other.route_state == "PA"
+    finally:
+        _j.JURISDICTIONS = original
+
+
+def test_a_licensing_refusal_is_a_row_not_a_traceback(monkeypatch) -> None:
+    """``descriptor_for_state`` raises two types, and one escaped.
+
+    The strict lookup raises ``KeyError`` when a state declares no route and
+    ``RuntimeError`` when the only route is tagged for another state — and the
+    second is the case this guard was added for.  ``except KeyError`` let it out,
+    and the call sits outside ``probe_registered``'s ``try`` with only a
+    ``finally`` above it, so a defence-in-depth check would have ended the whole
+    probe pass in a traceback.
+    """
+    from scripts import probe_sources
+
+    for error in (
+        KeyError("'hardrock' has no live PA route"),
+        RuntimeError("betrivers_kambi route is tagged IL, not requested state PA"),
+    ):
+        # Patched on the registry, because ``probe_registered`` imports the name
+        # inside the function body.
+        monkeypatch.setattr(
+            "src.sources.registry.descriptor_for_state",
+            lambda state, key, _e=error: (_ for _ in ()).throw(_e),
+        )
+        candidate = probe_sources.Candidate(
+            family="registered",
+            name="BetRivers PA",
+            url="",
+            source_key="betrivers_kambi",
+        )
+        verdict, detail = probe_sources.probe_registered(candidate, state="PA")
+        assert verdict == "UNLICENSED", (verdict, detail)
+        # And it is cached as a licensing fact, not as a broken parser.
+        assert probe_sources._cache_status(verdict, detail) is (
+            probe_sources.ProbeStatus.UNLICENSED
+        )
+
+
 def test_fresh_ok_is_skipped_and_force_reprobes(monkeypatch, tmp_path, capsys) -> None:
     probe_sources = _configure_paths(monkeypatch, tmp_path)
     detection = detection_from_payload(

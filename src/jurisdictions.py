@@ -120,12 +120,19 @@ def _route(
 #: key then state.  A missing state means the operator has no online licence
 #: there to republish, which is an ``UNAVAILABLE`` route rather than a fallback.
 #:
-#: Every id here was confirmed to return moneyline prices on 2026-08-06 by
-#: naming the whole set on one ``web/v2/scoreboard`` request and counting rows
-#: per book.  That check is why the table is trusted and why ``an_superbook``
-#: (Westgate, id 14) is absent: it is a Nevada book that has never appeared in
-#: this payload, and registering it unverified is what bought three permanently
-#: empty sources.
+#: The ids for the nine books above were confirmed to return moneyline prices on
+#: 2026-08-06 by naming the whole set on one request and counting rows per book.
+#: That check is why the table is trusted and why ``an_superbook`` (Westgate,
+#: id 14) is absent: it is a Nevada book that has never appeared in this payload,
+#: and registering it unverified is what bought three permanently empty sources.
+#:
+#: **Do not read that as a check against ``web/v2``.**  An earlier note here said
+#: the request was a ``web/v2/scoreboard`` one; the adapter's
+#: ``DEFAULT_BASE_URL`` is ``web/v1/scoreboard`` and every source above except
+#: ``an_bally`` uses it, so v2 is not the endpoint these ids are asked through.
+#: 36 of the 39 captured Action Network envelopes record v1.  Which version the
+#: 2026-08-06 check actually used is not recorded anywhere, so it is not claimed
+#: here.
 _AN_BOOK_IDS: Mapping[str, Mapping[str, int]] = MappingProxyType(
     {
         "an_fanduel": {"IL": 270, "PA": 255, "NJ": 69},
@@ -137,8 +144,72 @@ _AN_BOOK_IDS: Mapping[str, Mapping[str, int]] = MappingProxyType(
         "an_fanatics": {"IL": 2990, "PA": 2791, "NJ": 2988, "DC": 3679},
         "an_hardrock": {"IL": 3646, "NJ": 2724},
         "an_bally": {"NJ": 4693},
+        # State-licensed books with no first-party adapter here, so the
+        # republished feed is the *only* observation path.  betPARX and Unibet
+        # have no Illinois licence to republish; theScore Bet has one in all
+        # three.
+        #
+        # **These ids are unproven and the captures contradict the NJ ones.**  An
+        # earlier note here claimed each was confirmed to return moneyline rows on
+        # 2026-08-06; nothing in the repository supports that.  The three captures
+        # under ``tests/fixtures/raw/an_{parx,unibet,thescore}__*`` asked for
+        # 1929 / 247 / 4620 and came back carrying odds for *other* books on the
+        # same games — ``{15, 30, 123}``, ``{15, 30, 68, 69, 71, 75}`` and
+        # ``{15, 30, 69, 75}`` — so the requested book was absent rather than the
+        # slate being dead.  The PA ids (74 / 246 / 4623) have never been asked
+        # for at all.  Until a live capture shows otherwise, treat betPARX,
+        # Mohegan Pennsylvania and theScore Bet as declared-but-unobserved in
+        # ``src.coverage``: the table says a feed watches them, and no evidence
+        # here says that feed answers.  Recorded in
+        # ``docs/SOURCE_FEASIBILITY.md``.
+        "an_parx": {"PA": 74, "NJ": 1929},
+        "an_unibet": {"PA": 246, "NJ": 247},
+        "an_thescore": {"IL": 4601, "PA": 4623, "NJ": 4620},
     }
 )
+
+#: The republisher keys whose book is a state licence, in table order.
+AN_BOOK_KEYS: tuple[str, ...] = tuple(_AN_BOOK_IDS)
+
+
+def files_per_state_book_id(source_key: str) -> bool:
+    """Is this **republisher** asked for a different book id per state?
+
+    The single definition of "local" *among the republishers*, because more than
+    one module needs it and two spellings of it would drift.  :mod:`src.coverage`
+    uses it to decide what may corroborate a state licence; :mod:`src.redundancy`
+    uses it to decide whether a feed may be described as failover for a state book.
+
+    False for VegasInsider (``/odds/las-vegas/``, no state parameter), for VSiN's
+    Vegas line tracker, and for an Action Network feed pinned to a fixed id such
+    as Circa or Fliff — each publishes one number for the whole country.
+
+    **It answers about republishers only, and False does not mean nationwide.**
+    The table it reads is :data:`_AN_BOOK_IDS`, so ``fanduel``, ``betmgm`` and
+    ``betrivers_kambi`` are all False while being the most state-scoped sources in
+    the repository — a first-party retail route carries a per-state host, tenant
+    or segment and is pinned by :data:`Jurisdiction.routes`, not by a book id.  The
+    earlier name and docstring said False meant "publishes one number for the whole
+    country", which was untrue of exactly those three, and :mod:`src.redundancy`
+    already had to write ``primary in RETAIL_SOURCE_KEYS or is_local(primary)`` to
+    work around it.  A caller asking "is this source state-scoped at all" wants
+    that union, not this function.
+    """
+    return source_key in _AN_BOOK_IDS
+
+
+def republishes_state_licence(state: str, source_key: str) -> bool:
+    """Does this feed carry ``state``'s own licence for its book?
+
+    Stricter than :func:`files_per_state_book_id`, and the distinction is load
+    bearing: ``an_bally`` files per-state ids but holds only a New Jersey book,
+    so it is state-scoped in general and carries no Pennsylvania price at all.
+    """
+    if not files_per_state_book_id(source_key):
+        return False
+    route = jurisdiction(state).republished.get(source_key)
+    return route is not None and route.status is not RouteStatus.UNAVAILABLE
+
 
 def _republished_for(state: str) -> Mapping[str, RepublishedRoute]:
     """Every Action Network republisher route for one state.
@@ -519,6 +590,7 @@ def route_warnings(state: str) -> tuple[str, ...]:
 
 
 __all__ = [
+    "AN_BOOK_KEYS",
     "IL",
     "DC",
     "JURISDICTIONS",
@@ -529,8 +601,10 @@ __all__ = [
     "RepublishedRoute",
     "RetailRoute",
     "RouteStatus",
+    "files_per_state_book_id",
     "jurisdiction",
     "normalize_state",
+    "republishes_state_licence",
     "route_warnings",
     "source_host",
 ]

@@ -688,6 +688,13 @@ class TestThePipelineCanActuallySurfaceAnOpportunity:
     frozen in the past.  The one guard against a silently disconnected detector
     was itself on a timer, and the failure looked like a real regression rather
     than a stale fixture.
+
+    ``jurisdiction="GLOBAL"`` for the same reason: ``collect_once`` defaults to
+    :data:`settings.STATE` and ``withhold_non_local`` runs unconditionally, so
+    ``book_a``/``book_b`` — invented keys with no entry in the registry at
+    all — read as unreachable from whatever state the fallback picked, and the
+    one opportunity these tests inject was silently withheld. These tests are
+    about the detector, not about any state's retail licensing.
     """
 
     @pytest.fixture()
@@ -739,7 +746,8 @@ class TestThePipelineCanActuallySurfaceAnOpportunity:
         raw_store = RawStore(tmp_path / "raw")
         with Store(tmp_path / "db.sqlite3") as store:
             result = collect_once(
-                rigged_sources, raw_store=raw_store, store=store, as_of=FIXTURE_AS_OF
+                rigged_sources, raw_store=raw_store, store=store, as_of=FIXTURE_AS_OF,
+                jurisdiction="GLOBAL",
             )
 
         assert result.arb is not None
@@ -758,7 +766,8 @@ class TestThePipelineCanActuallySurfaceAnOpportunity:
         raw_store = RawStore(tmp_path / "raw")
         with Store(tmp_path / "db.sqlite3") as store:
             result = collect_once(
-                rigged_sources, raw_store=raw_store, store=store, as_of=FIXTURE_AS_OF
+                rigged_sources, raw_store=raw_store, store=store, as_of=FIXTURE_AS_OF,
+                jurisdiction="GLOBAL",
             )
         legs = {leg.selection.value: leg for leg in result.arb.opportunities[0].legs}
         assert legs["home"].source == "book_a" and legs["home"].decimal_odds == 2.30
@@ -770,7 +779,8 @@ class TestThePipelineCanActuallySurfaceAnOpportunity:
         raw_store = RawStore(tmp_path / "raw")
         with Store(tmp_path / "db.sqlite3") as store:
             result = collect_once(
-                rigged_sources, raw_store=raw_store, store=store, as_of=FIXTURE_AS_OF
+                rigged_sources, raw_store=raw_store, store=store, as_of=FIXTURE_AS_OF,
+                jurisdiction="GLOBAL",
             )
         result.print_summary()
         out = capsys.readouterr().out
@@ -789,7 +799,8 @@ class TestThePipelineCanActuallySurfaceAnOpportunity:
         raw_store = RawStore(tmp_path / "raw")
         with Store(tmp_path / "db.sqlite3") as store:
             result = collect_once(
-                rigged_sources, raw_store=raw_store, store=store, as_of=FIXTURE_AS_OF
+                rigged_sources, raw_store=raw_store, store=store, as_of=FIXTURE_AS_OF,
+                jurisdiction="GLOBAL",
             )
             stored, _ = reconcile_event_keys(store.load_quotes(result.run_id))
         again = find_opportunities(stored)

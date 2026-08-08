@@ -498,6 +498,14 @@ class TestReplayToleratesACapturedRefusal:
             collector.SOURCE_FACTORIES, "bovada",
             lambda **kwargs: Unreadable("bovada", [], leagues=("MLB",)),
         )
+        # ``fanduel`` is a state-sensitive key, so replay resolves it from the run's
+        # jurisdiction rather than from ``SOURCE_FACTORIES``. What is under test here
+        # is replay's tolerance of a captured refusal, not state resolution, so the
+        # seam is pointed back at the patched factories for the duration.
+        monkeypatch.setattr(
+            collector, "replay_factory",
+            lambda state, key: collector.SOURCE_FACTORIES[key],
+        )
 
         sources = [
             FakeSource("fanduel", rows, leagues=("MLB",),
@@ -605,12 +613,18 @@ def _print_lines(quotes, capsys) -> list[str]:
             return {}
 
         def run_row(self, run_id):
+            # ``jurisdiction`` and ``route_scope`` are columns the real row always
+            # carries, and ``lines`` now reads both to say which prices are out of
+            # state. A double that omits a column the production row has does not
+            # simplify the test, it just fails somewhere unrelated later.
             return {
                 "id": run_id,
                 "started_at": now.isoformat(),
                 "finished_at": now.isoformat(),
                 "ok": 1,
                 "quote_count": len(quotes),
+                "jurisdiction": "IL",
+                "route_scope": "state",
             }
 
         def load_quotes(self, run_id, sports=None, leagues=None):
@@ -4533,11 +4547,17 @@ class TestTheChargeAndTheSettlementRuleArePinnedPerVenue:
         "an_circa": "no commission (the venue's margin is already in the price)",
         "an_superbook": "no commission (the venue's margin is already in the price)",
         "an_bally": "no commission (the venue's margin is already in the price)",
+        "an_parx": "no commission (the venue's margin is already in the price)",
+        "an_unibet": "no commission (the venue's margin is already in the price)",
+        "an_thescore": "no commission (the venue's margin is already in the price)",
         "vi_draftkings": "no commission (the venue's margin is already in the price)",
         "vi_caesars": "no commission (the venue's margin is already in the price)",
         "vi_hardrock": "no commission (the venue's margin is already in the price)",
         "vi_fanatics": "no commission (the venue's margin is already in the price)",
         "vi_bet365": "no commission (the venue's margin is already in the price)",
+        "vi_betmgm": "no commission (the venue's margin is already in the price)",
+        "vi_fanduel": "no commission (the venue's margin is already in the price)",
+        "vi_betrivers": "no commission (the venue's margin is already in the price)",
         "vsin_circa": "no commission (the venue's margin is already in the price)",
         "betmgm": "no commission (the venue's margin is already in the price)",
         "betrivers_kambi": "no commission (the venue's margin is already in the price)",
@@ -4573,11 +4593,17 @@ class TestTheChargeAndTheSettlementRuleArePinnedPerVenue:
         "an_circa": 'void_and_refund',
         "an_superbook": 'void_and_refund',
         "an_bally": 'void_and_refund',
+        "an_parx": 'void_and_refund',
+        "an_unibet": 'void_and_refund',
+        "an_thescore": 'void_and_refund',
         "vi_draftkings": 'void_and_refund',
         "vi_caesars": 'void_and_refund',
         "vi_hardrock": 'void_and_refund',
         "vi_fanatics": 'void_and_refund',
         "vi_bet365": 'void_and_refund',
+        "vi_betmgm": 'void_and_refund',
+        "vi_fanduel": 'void_and_refund',
+        "vi_betrivers": 'void_and_refund',
         "vsin_circa": 'void_and_refund',
         "betmgm": 'void_and_refund',
         "betrivers_kambi": 'void_and_refund',
@@ -4954,6 +4980,8 @@ class TestTheWomensMarkerReachesEveryVenueThatNeedsIt:
         "an_bovada", "an_onexbet",
         "an_hardrock", "an_fanatics", "an_fliff", "an_circa",
         "an_superbook", "an_bally",
+        # Same Action Network class, so the same catch-all exposure.
+        "an_parx", "an_unibet", "an_thescore",
     )
 
     #: The rest configure one named competition per route, so a women's fixture
@@ -4962,6 +4990,9 @@ class TestTheWomensMarkerReachesEveryVenueThatNeedsIt:
         "betmgm", "bovada", "caesars", "cloudbet", "draftkings", "hardrock",
         "kalshi", "onexbet", "polymarket", "vi_draftkings", "vi_caesars",
         "vi_hardrock", "vi_fanatics", "vi_bet365",
+        # VegasInsider routes name one league each (see its ``ROUTES``), so a
+        # women's fixture cannot arrive under a men's key.
+        "vi_betmgm", "vi_fanduel", "vi_betrivers",
         "vsin_circa",
     )
 
@@ -9265,7 +9296,7 @@ class TestANarrowedRunStillFilesTheMirrorFinding:
         text = pathlib.Path("src/collector.py").read_text()
         # Shares the slate's one ``find_mirrors`` pass with the gate — the call
         # still names ``unfiltered_quotes``, which is the invariant this locks.
-        assert "_check_distinctness(unfiltered_quotes, report, mirrors=measured_mirrors)" in text
+        assert "_check_distinctness(\n        unfiltered_quotes,\n        report,\n        mirrors=measured_mirrors," in text
         measured = text.index(
             "measured_counterparties = counterparty_groups(all_quotes, mirrors=measured_mirrors)"
         )
@@ -10222,12 +10253,41 @@ class TestShowStatesTheAgeLikeEveryOtherReadCommand:
     with no age, against this module's own promise that the age is stated on
     every run and not only a stale one."""
 
-    def test_show_prints_the_resolved_note(self) -> None:
-        text = pathlib.Path("src/collector.py").read_text()
-        body = text[text.index("def _cmd_show"):]
-        body = body[: body.index("\ndef ")]
-        assert 'print(f"{note}' in body
-        assert 'print(f"run {run_id}{_scope_label(sports, leagues)}: showing' not in body
+    def test_show_prints_the_resolved_note(self, tmp_path, monkeypatch, capsys) -> None:
+        """Asserted on the output, not on the source text.
+
+        This used to match the literal string ``print(f"{note}``, which broke the
+        moment the call was wrapped across lines to add the jurisdiction — a test
+        that fails on reformatting is not testing the promise. The promise is that
+        the resolved note reaches the reader.
+        """
+        import src.collector
+        import src.settings
+        from src.store import Store
+        from src.validation import ValidationReport
+
+        monkeypatch.setattr(src.settings, "DATA_DIR", tmp_path)
+        monkeypatch.setattr(src.settings, "RAW_DIR", tmp_path / "raw")
+        monkeypatch.setattr(src.settings, "DB_PATH", tmp_path / "db.sqlite3")
+
+        rows = [make_quote(source="fanduel", source_market_id="m")]
+        with Store(tmp_path / "db.sqlite3") as store:
+            run = store.start_run(
+                datetime.now(UTC), jurisdiction="PA", route_scope="state",
+            )
+            store.save_quotes_by_source(run, rows)
+            store.finish_run(
+                run, finished_at=datetime.now(UTC),
+                report=ValidationReport(quote_count=len(rows), event_count=1),
+                counterparties={},
+            )
+        assert src.collector.main(["show", "--run", str(run)]) == 0
+        out = capsys.readouterr().out
+        # The age, which is the whole point of reusing ``_resolve_run``'s note...
+        assert "collected" in out, out
+        assert f"run {run}" in out, out
+        # ...and the jurisdiction, which is the other thing a reader needs.
+        assert "[PA]" in out, out
 
 
 class TestThePageOnlySumsAMarketItPricedCompletely:
@@ -10933,11 +10993,17 @@ class TestEachVenuesKindIsPinnedBecauseItPicksTheRule:
         "an_circa": False,
         "an_superbook": False,
         "an_bally": False,
+        "an_parx": False,
+        "an_unibet": False,
+        "an_thescore": False,
         "vi_draftkings": False,
         "vi_caesars": False,
         "vi_hardrock": False,
         "vi_fanatics": False,
         "vi_bet365": False,
+        "vi_betmgm": False,
+        "vi_fanduel": False,
+        "vi_betrivers": False,
         "vsin_circa": False,
         "betmgm": False,
         "betrivers_kambi": False,
@@ -12656,3 +12722,542 @@ class TestOrphanRowsCannotBeWritten:
         with Store(tmp_path / "db.sqlite3") as store:
             with pytest.raises(sqlite3.IntegrityError):
                 store.save_quotes(999_999, [make_quote()])
+
+
+class TestReAnalysisAppliesTheStoredRunsJurisdiction:
+    """``_cmd_arb`` judged every stored run by Illinois's rules and then texted it.
+
+    ``find_opportunities`` was called without ``view_only_sources``, so it fell
+    back to ``registry.VIEW_ONLY_SOURCES`` — frozen at import from
+    ``settings.STATE``.  Analysing a stored Pennsylvania run therefore applied
+    *Illinois's* view-only set, and the exact-state leg filter that
+    ``collect_once`` and ``src.report`` both apply was missing entirely.  The
+    result printed, and with alerts on by default it sent.
+
+    ``--run`` defaults to the latest run, which in a batch is the last state
+    collected, so the operator neither picked the jurisdiction nor was shown it.
+    """
+
+    def _kickoff(self):
+        return datetime.now(UTC) + timedelta(hours=6)
+
+    def _stored_pa_run(self, tmp_path, sources):
+        from src.store import Store
+        from src.validation import ValidationReport
+
+        rows = [
+            make_quote(source=source, selection=selection, decimal_odds=odds,
+                       source_market_id="m", commence_time=self._kickoff())
+            for source, selection, odds in sources
+        ]
+        with Store(tmp_path / "db.sqlite3") as store:
+            run = store.start_run(datetime.now(UTC), jurisdiction="PA")
+            store.save_quotes_by_source(run, rows)
+            store.finish_run(
+                run, finished_at=datetime.now(UTC),
+                report=ValidationReport(quote_count=len(rows), event_count=1),
+                counterparties={},
+            )
+        return run
+
+    def _run_arb(self, tmp_path, monkeypatch, capsys, sources):
+        import src.collector
+        import src.settings
+
+        monkeypatch.setattr(src.settings, "DATA_DIR", tmp_path)
+        monkeypatch.setattr(src.settings, "RAW_DIR", tmp_path / "raw")
+        monkeypatch.setattr(src.settings, "DB_PATH", tmp_path / "db.sqlite3")
+        self._stored_pa_run(tmp_path, sources)
+        assert src.collector.main(["arb", "--no-alert"]) == 0
+        return capsys.readouterr().out
+
+    def test_the_runs_jurisdiction_is_stated(self, tmp_path, monkeypatch, capsys):
+        """An operator who did not choose the state must at least be told it."""
+        out = self._run_arb(tmp_path, monkeypatch, capsys, [
+            ("fanduel", Selection.HOME, 2.10),
+            ("pinnacle", Selection.AWAY, 2.10),
+        ])
+        assert "jurisdiction: PA" in out
+
+    def test_an_arb_with_no_pennsylvania_leg_is_not_reported(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """Every leg offshore or global — a "PA" position with no PA book in it."""
+        out = self._run_arb(tmp_path, monkeypatch, capsys, [
+            ("pinnacle", Selection.HOME, 2.20),
+            ("bovada", Selection.AWAY, 2.20),
+        ])
+        assert "0 opportunities" in out, out
+
+    def test_the_withheld_positions_are_counted_out_loud(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """The filter must not drop silently.
+
+        A bare "0 opportunities" reads as a quiet market, not as a board whose
+        every position needed a book Pennsylvania does not license — and it
+        disagrees with the same run's dashboard with nothing explaining the gap.
+        """
+        out = self._run_arb(tmp_path, monkeypatch, capsys, [
+            ("pinnacle", Selection.HOME, 2.20),
+            ("bovada", Selection.AWAY, 2.20),
+        ])
+        assert "withheld 1 position(s)" in out, out
+        assert "reach from PA" in out, out
+
+    def test_nothing_is_withheld_when_nothing_was_dropped(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """The caveat is guarded on the count, so a clean run does not carry it."""
+        out = self._run_arb(tmp_path, monkeypatch, capsys, [
+            ("fanduel", Selection.HOME, 2.20),
+            ("pinnacle", Selection.AWAY, 2.20),
+        ])
+        assert "withheld" not in out, out
+
+    def test_an_arb_with_a_pennsylvania_leg_still_reports(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """The filter must not simply delete everything."""
+        out = self._run_arb(tmp_path, monkeypatch, capsys, [
+            ("fanduel", Selection.HOME, 2.20),
+            ("pinnacle", Selection.AWAY, 2.20),
+        ])
+        assert "0 opportunities" not in out, out
+
+
+class TestLineShoppingSaysWhichPricesAreOutOfState:
+    """``lines`` printed another state's best price as this state's, unlabelled.
+
+    Run on the committed Pennsylvania run it showed ``home 1.423 onexbet`` and
+    ``away 4.840 pinnacle`` with no jurisdiction and no mark — and its own
+    docstring calls it "the surface arbitrage is drawn from". That is rule (a)'s
+    substitution on an operator-facing surface.
+
+    Marked rather than filtered on purpose: the command exists to tell a genuine
+    "no edge today" apart from a market nobody compared, and dropping the
+    out-of-state books would hide the comparison. So the out-of-state number stays
+    on the page and says what it is, exactly as ``src.coverage`` treats it.
+    """
+
+    def _run_lines(
+        self, tmp_path, monkeypatch, capsys, sources, *, state="PA", scope="state"
+    ):
+        import src.collector
+        import src.settings
+        from src.store import Store
+        from src.validation import ValidationReport
+
+        monkeypatch.setattr(src.settings, "DATA_DIR", tmp_path)
+        monkeypatch.setattr(src.settings, "RAW_DIR", tmp_path / "raw")
+        monkeypatch.setattr(src.settings, "DB_PATH", tmp_path / "db.sqlite3")
+
+        kickoff = datetime.now(UTC) + timedelta(hours=6)
+        rows = [
+            make_quote(source=source, selection=selection, decimal_odds=odds,
+                       source_market_id="m", commence_time=kickoff)
+            for source, selection, odds in sources
+        ]
+        with Store(tmp_path / "db.sqlite3") as store:
+            run = store.start_run(
+                datetime.now(UTC), jurisdiction=state, route_scope=scope,
+            )
+            store.save_quotes_by_source(run, rows)
+            store.finish_run(
+                run, finished_at=datetime.now(UTC),
+                report=ValidationReport(quote_count=len(rows), event_count=1),
+                counterparties={},
+            )
+        assert src.collector.main(["lines", "--run", str(run)]) == 0
+        return capsys.readouterr().out
+
+    def test_an_out_of_state_book_is_named_as_such(self, tmp_path, monkeypatch, capsys):
+        out = self._run_lines(tmp_path, monkeypatch, capsys, [
+            ("pinnacle", Selection.HOME, 2.20),
+            ("pinnacle", Selection.AWAY, 2.20),
+        ])
+        assert "jurisdiction: PA" in out, out
+        assert "not reachable from PA" in out, out
+        # And the price is still shown — marked, not withheld.
+        assert "pinnacle" in out
+
+    def test_a_licensed_book_carries_no_mark(self, tmp_path, monkeypatch, capsys):
+        """The other direction, or the mark means nothing."""
+        out = self._run_lines(tmp_path, monkeypatch, capsys, [
+            ("fanduel", Selection.HOME, 2.20),
+            ("fanduel", Selection.AWAY, 2.20),
+        ])
+        assert "jurisdiction: PA" in out, out
+        assert "not reachable" not in out, out
+
+    @pytest.mark.parametrize("ambient", ["IL", "PA"])
+    def test_the_line_board_is_the_runs_board_not_the_readers(
+        self, tmp_path, monkeypatch, capsys, ambient
+    ):
+        """Which sources are a counterparty is the *run's* question, not the box's.
+
+        ``best_prices`` defaulted to the module-level ``VIEW_ONLY_SOURCES``, frozen
+        at import from ``settings.STATE``. ``hardrock`` is the key that differs
+        between the Illinois and Pennsylvania sets — Illinois licenses it, PA does
+        not — so a stored PA run read from an IL-configured box printed a Hard Rock
+        price as a selection's **best** price on a Pennsylvania board, and the same
+        run read from a PA box left it off. ``collector arb`` on that run already
+        resolved the set from the run's own jurisdiction, so the two commands
+        disagreed about the same stored rows.
+
+        Parametrised over the reader's state because a single value cannot tell "the
+        run decides" from "this box happens to agree with the run".
+
+        The ambient set is patched where it is *read* rather than through
+        ``settings.STATE``: ``VIEW_ONLY_SOURCES`` is computed once at registry import,
+        so setting the environment afterwards changes nothing and a test written that
+        way would pass on the unfixed code.
+        """
+        import src.arb
+        from src.sources import registry
+
+        monkeypatch.setattr(
+            src.arb, "VIEW_ONLY_SOURCES", registry.view_only_for_state(ambient)
+        )
+        out = self._run_lines(tmp_path, monkeypatch, capsys, [
+            ("hardrock", Selection.HOME, 2.20),
+            ("fanduel", Selection.AWAY, 2.20),
+        ])
+        assert "jurisdiction: PA" in out, out
+        assert "fanduel" in out, out
+        assert "hardrock" not in out, out
+
+    def test_no_mirror_can_reach_the_surface_the_mark_is_printed_on(self):
+        """Why ``_elsewhere`` needs no republisher case, asserted rather than assumed.
+
+        Every republisher is absent from ``takeable_from_state`` — nobody places a bet
+        at Action Network — so if one reached the surface it would print "not
+        reachable from PA" beside ``an_fanduel``, which in PA is book id 255, *FanDuel
+        Pennsylvania*, and which ``src.coverage`` asserts at import time carries PA's
+        own licence. It cannot, because ``best_prices`` is given the same set, and
+        that is the invariant holding the mark honest.
+        """
+        from src.sources import registry
+
+        for state in ("PA", "IL", ""):
+            view_only = registry.view_only_for_run(state)
+            assert registry.REPUBLISHED_SOURCE_KEYS <= view_only, state
+
+
+class TestTheCoverageRuleIsActuallyWiredIntoARun:
+    """``src.coverage`` was unit-tested and unreachable-by-test from the collector.
+
+    Replacing the whole ``check_book_coverage(...)`` call in ``collect_once`` with
+    ``pass`` left the pipeline, validation, integration and guard suites green: 190
+    passed. Nothing proved rule (c) ran on a real pass, nor that it was measured on
+    the *unfiltered* rows, nor that ``configured`` named the built sources. All
+    three are separate claims and each gets its own assertion here.
+    """
+
+    def _run(self, tmp_path, sources, *, sports=None, state="PA"):
+        from src.collector import collect_once
+        from src.raw_store import RawStore
+        from src.store import Store
+        from tests.test_pipeline import FakeSource
+
+        kickoff = datetime.now(UTC) + timedelta(hours=6)
+        built = []
+        for key, (league, sport) in sources.items():
+            quotes = [
+                make_quote(
+                    source=key, sport=sport, league=league,
+                    event_key=f"{league}-A@{league}-H:2026-08-07",
+                    home_participant=f"{league}-H", away_participant=f"{league}-A",
+                    selection=selection, decimal_odds=odds,
+                    source_market_id="m", commence_time=kickoff,
+                )
+                for selection, odds in (
+                    (Selection.HOME, 1.95), (Selection.AWAY, 2.05),
+                )
+            ]
+            built.append(FakeSource(key, quotes, leagues=(league,)))
+        with Store(tmp_path / "db.sqlite3") as store:
+            return collect_once(
+                built,
+                raw_store=RawStore(tmp_path / "raw"),
+                store=store,
+                sports=sports,
+                jurisdiction=state,
+                route_scope="state",
+                state_source_keys=tuple(sources),
+                alert=False,
+            )
+
+    def _codes(self, result):
+        return [f.code for f in result.report.findings]
+
+    def test_a_state_run_reports_the_required_book_rule(self, tmp_path):
+        """The wiring itself: a PA run must judge PA's required books."""
+        from src.schema import Sport
+
+        result = self._run(tmp_path, {"fanduel": ("MLB", Sport.BASEBALL)})
+        codes = self._codes(result)
+        assert any(
+            code.startswith("required_book_") or code.startswith("book_coverage_")
+            for code in codes
+        ), codes
+
+    def test_coverage_is_judged_on_the_unfiltered_board(self, tmp_path):
+        """Measured on the rows the books returned, not the rows the run kept.
+
+        ``fanduel`` priced only hockey; the run asked for baseball. Judged on the
+        filtered rows FanDuel is unobserved and reports at ERROR — faulting a book
+        for the operator's scope choice, which is the mistake ``unfiltered_quotes``
+        exists to avoid.
+        """
+        from src.schema import Sport
+
+        result = self._run(
+            tmp_path,
+            {
+                "fanduel": ("NHL", Sport.HOCKEY),
+                "pinnacle": ("MLB", Sport.BASEBALL),
+            },
+            sports=["baseball"],
+        )
+        faulted = [
+            f for f in result.report.findings
+            if f.code.startswith("required_book_") and "FanDuel" in f.message
+        ]
+        assert not faulted, [f.message for f in faulted]
+
+    def test_books_whose_feeds_were_not_requested_are_not_faulted(self, tmp_path):
+        """``configured`` must name the built sources, or a narrow run fails wrongly.
+
+        Nothing here asked for bet365 by any route, so it is ``NOT_REQUESTED``
+        rather than an error. Passing ``configured=None`` would judge all eleven
+        books on a run that collected one.
+        """
+        from src.schema import Sport
+
+        result = self._run(tmp_path, {"fanduel": ("MLB", Sport.BASEBALL)})
+        assert not [
+            f for f in result.report.findings if "bet365" in f.message
+        ], [f.message for f in result.report.findings]
+
+
+class TestTheLiveRunWithholdsTheSamePositionsReAnalysisDoes:
+    """A state run that built no state book skipped the exact-state leg filter.
+
+    The filter was gated on ``state_source_keys`` — *what was built* — and
+    ``collect_batch_once`` then learned to tolerate building nothing, because
+    ``--source pinnacle`` legitimately names no retail book.  The two changes
+    composed into a hole: the one run with no Pennsylvania book in it was the run
+    that reported a "PA" arbitrage with no Pennsylvania leg, and ``alert``
+    defaults to ``True``, so it sent.
+
+    Re-analysing that same stored run through ``arb`` *did* withhold it, so the
+    live path and the historical path disagreed about one run — with the live one
+    permissive.  Both now ask :func:`src.coverage.withhold_non_local`.
+    """
+
+    def _run(self, tmp_path, sources):
+        from src.collector import collect_once
+        from src.raw_store import RawStore
+        from src.store import Store
+        from tests.test_pipeline import FakeSource
+
+        kickoff = datetime.now(UTC) + timedelta(hours=6)
+        built = []
+        for key, rows in sources.items():
+            quotes = [
+                make_quote(source=key, selection=selection, decimal_odds=odds,
+                           source_market_id="m", commence_time=kickoff)
+                for selection, odds in rows
+            ]
+            built.append(FakeSource(key, quotes, leagues=("MLB",)))
+        with Store(tmp_path / "db.sqlite3") as store:
+            return collect_once(
+                built,
+                raw_store=RawStore(tmp_path / "raw"),
+                store=store,
+                jurisdiction="PA",
+                route_scope="state",
+                # The reproducing condition: a PA run in which no exact-state
+                # first-party source was built at all.
+                state_source_keys=(),
+                alert=False,
+            )
+
+    def test_an_offshore_only_position_is_not_reported_on_a_pa_run(self, tmp_path):
+        result = self._run(tmp_path, {
+            "pinnacle": [(Selection.HOME, 2.20)],
+            "bovada": [(Selection.AWAY, 2.20)],
+        })
+        assert result.arb.opportunities == []
+        withheld = [
+            f for f in result.report.findings
+            if f.code == "non_local_positions_withheld"
+        ]
+        assert withheld, [f.code for f in result.report.findings]
+        assert "1 position(s)" in withheld[0].message
+        assert "reachable from PA" in withheld[0].message
+
+    def test_a_position_with_a_pa_leg_survives_the_same_run(self, tmp_path):
+        """Licence, not inventory: ``fanduel`` holds one whether or not it built."""
+        result = self._run(tmp_path, {
+            "fanduel": [(Selection.HOME, 2.20)],
+            "pinnacle": [(Selection.AWAY, 2.20)],
+        })
+        assert len(result.arb.opportunities) == 1
+        assert not [
+            f for f in result.report.findings
+            if f.code == "non_local_positions_withheld"
+        ]
+
+
+class TestEveryReadCommandNamesTheJurisdiction:
+    """One state's prices were shown with nothing on the page naming the state.
+
+    ``--run`` defaults to the latest run, which in a batch is the last state
+    collected — so the operator neither chose the jurisdiction nor was told it.
+    ``arb`` and ``lines`` state it; ``show``, ``replay``, ``mirrors`` and ``runs``
+    did not, and ``runs`` printed a GLOBAL row beside an IL row and a PA row as
+    though they were three passes over the same slate.
+    """
+
+    def _two_state_db(self, tmp_path, monkeypatch):
+        import src.collector
+        import src.settings
+        from src.store import Store
+        from src.validation import ValidationReport
+
+        monkeypatch.setattr(src.settings, "DATA_DIR", tmp_path)
+        monkeypatch.setattr(src.settings, "RAW_DIR", tmp_path / "raw")
+        monkeypatch.setattr(src.settings, "DB_PATH", tmp_path / "db.sqlite3")
+
+        kickoff = datetime.now(UTC) + timedelta(hours=6)
+        runs = {}
+        with Store(tmp_path / "db.sqlite3") as store:
+            for state in ("IL", "PA"):
+                rows = [
+                    make_quote(source=source, selection=selection, decimal_odds=2.05,
+                               source_market_id="m", commence_time=kickoff)
+                    for source, selection in (
+                        ("fanduel", Selection.HOME), ("draftkings", Selection.AWAY),
+                    )
+                ]
+                run = store.start_run(
+                    datetime.now(UTC), jurisdiction=state, route_scope="state",
+                )
+                store.save_quotes_by_source(run, rows)
+                store.finish_run(
+                    run, finished_at=datetime.now(UTC),
+                    report=ValidationReport(quote_count=len(rows), event_count=1),
+                    counterparties={},
+                )
+                runs[state] = run
+        return runs
+
+    def test_runs_prints_the_state_of_each_row(self, tmp_path, monkeypatch, capsys):
+        import src.collector
+
+        runs = self._two_state_db(tmp_path, monkeypatch)
+        assert src.collector.main(["runs"]) == 0
+        out = capsys.readouterr().out
+        assert "state" in out.splitlines()[0], out.splitlines()[0]
+        assert "IL" in out and "PA" in out, out
+        del runs
+
+    def test_show_names_the_state_of_the_rows_it_prints(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        import src.collector
+
+        runs = self._two_state_db(tmp_path, monkeypatch)
+        assert src.collector.main(["show", "--run", str(runs["PA"])]) == 0
+        assert "[PA]" in capsys.readouterr().out
+
+    def test_mirrors_scopes_its_verdict_to_the_state_it_measured(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """The verdict is "remove this from the registry" — an all-states decision."""
+        import src.collector
+
+        runs = self._two_state_db(tmp_path, monkeypatch)
+        assert src.collector.main(["mirrors", "--run", str(runs["IL"])]) == 0
+        assert "[IL]" in capsys.readouterr().out
+
+
+class TestArbAndLinesAgreeAboutTheSameStoredRun:
+    """Two commands, one run, one answer about what is reachable from the state.
+
+    ``withhold_non_local`` was built to end this: three surfaces had spelled the
+    condition three ways. Then ``lines`` grew a *fourth* spelling — the jurisdiction
+    alone, with no scope test — and the pair contradicted each other again on a run
+    whose scope was not ``"state"``:
+
+        arb   →  1 opportunity … pinnacle away … onexbet home …
+        lines →  away 2.200 pinnacle  [not reachable from PA]
+                 home 2.200 onexbet   [not reachable from PA]
+
+    ``arb`` offered a position that ``lines``, one command later, said had no leg the
+    operator could reach. Both directions are pinned, because agreeing to mark
+    everything and agreeing to mark nothing are both agreement, and only one of them
+    is right per scope.
+    """
+
+    def _run(self, tmp_path, monkeypatch, capsys, *, scope):
+        import src.collector
+        import src.settings
+        from src.store import Store
+        from src.validation import ValidationReport
+
+        monkeypatch.setattr(src.settings, "DATA_DIR", tmp_path)
+        monkeypatch.setattr(src.settings, "RAW_DIR", tmp_path / "raw")
+        monkeypatch.setattr(src.settings, "DB_PATH", tmp_path / "db.sqlite3")
+
+        kickoff = datetime.now(UTC) + timedelta(hours=6)
+        rows = [
+            make_quote(source=source, selection=selection, decimal_odds=2.20,
+                       source_market_id="m", commence_time=kickoff)
+            for source, selection in (
+                ("pinnacle", Selection.HOME), ("onexbet", Selection.AWAY),
+            )
+        ]
+        with Store(tmp_path / "db.sqlite3") as store:
+            run = store.start_run(
+                datetime.now(UTC), jurisdiction="PA", route_scope=scope,
+            )
+            store.save_quotes_by_source(run, rows)
+            store.finish_run(
+                run, finished_at=datetime.now(UTC),
+                report=ValidationReport(quote_count=len(rows), event_count=1),
+                counterparties={},
+            )
+        # ``--no-alert`` because ``arb`` texts by default, which is the whole reason
+        # the disagreement mattered rather than being a cosmetic one.
+        assert src.collector.main(
+            ["arb", "--run", str(run), "--no-alert"]
+        ) == 0
+        arb_out = capsys.readouterr().out
+        assert src.collector.main(["lines", "--run", str(run)]) == 0
+        return arb_out, capsys.readouterr().out
+
+    def test_a_legacy_run_is_withheld_by_one_and_marked_by_the_other(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        arb_out, lines_out = self._run(
+            tmp_path, monkeypatch, capsys, scope="legacy"
+        )
+        assert "withheld 1 position(s)" in arb_out, arb_out
+        assert "0 opportunities" in arb_out or "opportunities: 0" in arb_out, arb_out
+        assert "not reachable from PA" in lines_out, lines_out
+
+    def test_a_widened_scope_run_is_offered_by_one_and_unmarked_by_the_other(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """``--scope all`` from PA is a request to see the wider board.
+
+        Fails on the pre-fix ``lines``, which marked both legs of a position ``arb``
+        was offering in the same breath.
+        """
+        arb_out, lines_out = self._run(tmp_path, monkeypatch, capsys, scope="all")
+        assert "withheld" not in arb_out, arb_out
+        assert "not reachable" not in lines_out, lines_out
+        assert "pinnacle" in lines_out, lines_out

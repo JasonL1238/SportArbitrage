@@ -44,6 +44,7 @@ from src.betlinks import link_payload
 from src.betlog import BetLog, BetLogError, empty_payload as empty_bet_payload
 from src.betlog import slip_from_payload
 from src.commission import commission_for, net_decimal_odds
+from src.coverage import withhold_non_local
 from src.egress import is_recent, load_detection
 from src.events import reconcile_event_keys
 from src.jurisdictions import JURISDICTIONS, route_warnings, source_host
@@ -342,6 +343,11 @@ SKIP_NOTES: list[tuple[str, str]] = [
      "Corners rather than goals. A different thing being counted."),
     ("tennis_doubles", "A doubles match: four competitors, not two."),
     ("market_on_doubles_event", "Belongs to a doubles match, which is out of scope."),
+
+    ("incomplete_event_header",
+     "A comparison page listed a game whose header was missing an id, a start time or "
+     "a team name, so the row could not be tied to a fixture. Reading it anyway would "
+     "attach somebody's prices to the wrong game."),
 
     # ── already started, or already collected ────────────────────────────────
     ("event_already_started",
@@ -1028,7 +1034,11 @@ def build_report(
                 "note": row["note"],
                 "jurisdiction": row["jurisdiction"] or "UNKNOWN",
                 "batch_id": row["batch_id"] or "",
-                "route_scope": row["route_scope"] or "state",
+                # Passed through, not defaulted. ``or "state"`` claimed exact-state
+                # collection for a run that recorded no scope at all, which is the
+                # one thing the badge exists to distinguish; the page already renders
+                # a missing value as ``legacy``, the same word the store backfills.
+                "route_scope": row["route_scope"] or "",
                 # Rows the --sport/--league filter dropped on purpose.  The flow
                 # strip rendered "read 5,429 -> checked 5,429 -> stored 2,476"
                 # for a scoped run: 2,953 rows vanish between adjacent boxes,
@@ -1558,63 +1568,119 @@ def _arb_payload(
     with a re-measure, and *as_of* so already-started fixtures are not shown as
     takeable.  Empty runs still get an entry so the UI can say "none" rather than
     "not loaded".
+
+    Each run carries **two** bundles.  The default one is the US-only view, which
+    treats :data:`US_UNAVAILABLE_SOURCE_KEYS` as unstakeable; ``with_offshore``
+    holds the same detector run with those venues allowed as legs.  Detection is
+    Python and the page is a static file, so a reader who wants to see what the
+    offshore books would have added cannot recompute it client-side — the answer
+    has to be precomputed here or it cannot exist.  The offshore bundle is the
+    superset and is stored second, so a run with no offshore edge costs almost
+    nothing beyond the US-only one.
     """
+    from src.sources.registry import (
+        US_UNAVAILABLE_SOURCE_KEYS,
+        VIEW_ONLY_SOURCES,
+        view_only_for_run,
+    )
+
     out: dict[str, Any] = {}
     for run_id in run_ids:
         quotes = store.load_quotes(run_id)
         if not quotes:
-            out[str(run_id)] = {
-                "opportunities": [],
-                "diagnostics": [],
-                "group_count": 0,
-                "comparable_group_count": 0,
-                "stake": total_stake,
-            }
+            out[str(run_id)] = _blank_arb_bundle(total_stake)
             continue
         everything, _ = reconcile_event_keys(quotes)
         # Same rule as ``collector arb``: the recorded full-slate gate is the
         # strong answer; re-measure only when a pre-column run left nothing.
         recorded = store.recorded_counterparty_groups(run_id)
-        from src.sources.registry import REPUBLISHED_SOURCE_KEYS, view_only_for_state
 
         run = store.run_row(run_id)
         state = run["jurisdiction"] if run is not None else ""
-        view_only = (
-            view_only_for_state(state)
-            if state in JURISDICTIONS
-            else REPUBLISHED_SOURCE_KEYS if state == "GLOBAL" else None
+        # ``None`` no longer appears here: it meant "the detector's own default",
+        # which is the ambient ``VIEW_ONLY_SOURCES``, and that is the leak this
+        # helper closes.  ``view_only_for_run`` returns the same fallback set
+        # explicitly for a run with no recognisable jurisdiction.
+        view_only = view_only_for_run(state)
+        one_counterparty = merge_counterparty_groups(
+            {} if recorded else counterparty_groups(everything),
+            recorded,
         )
-        report = find_opportunities(
-            everything,
-            total_stake=total_stake,
-            as_of=as_of,
-            one_counterparty=merge_counterparty_groups(
-                {} if recorded else counterparty_groups(everything),
-                recorded,
-            ),
-            view_only_sources=view_only,
-        )
-        if run is not None and run["route_scope"] == "state" and state in JURISDICTIONS:
-            native = frozenset(JURISDICTIONS[state].routes)
-            report.opportunities = [
-                opportunity
-                for opportunity in report.opportunities
-                if native.intersection(opportunity.sources)
-            ]
-        rejected = {}
-        for diagnostic in report.diagnostics:
-            rejected[diagnostic.code] = rejected.get(diagnostic.code, 0) + 1
-        out[str(run_id)] = {
-            "opportunities": [_opportunity_entry(opp) for opp in report.opportunities],
-            "diagnostics": [
-                {"code": code, "count": count}
-                for code, count in sorted(rejected.items(), key=lambda item: -item[1])
-            ],
-            "group_count": report.group_count,
-            "comparable_group_count": report.comparable_group_count,
-            "stake": total_stake,
-        }
+        # ``JURISDICTIONS[state].routes`` was the wrong table: it holds every
+        # route the registry knows for the state *including the ``UNAVAILABLE``
+        # ones*, so Hard Rock — a book with no Pennsylvania licence at all —
+        # counted as the local leg that made a position takeable from PA.
+        #
+        # And the ``route_scope == "state"`` test that used to guard it was the
+        # wrong question twice over: it made this surface disagree with ``arb`` about
+        # a run recorded ``jurisdiction="PA", route_scope="legacy"``, and then, once
+        # they agreed, it made them agree on *admitting* one — so a historical row,
+        # which is what ``legacy`` marks, offered a position with no reachable leg.
+        # Both the predicate and the decision now live in ``coverage``
+        # (``withhold_non_local`` / ``locality_applies``), so there is no condition
+        # here for the four surfaces to spell differently.
+
+        def bundle(excluded: frozenset[str] | None) -> dict[str, Any]:
+            report = find_opportunities(
+                everything,
+                total_stake=total_stake,
+                as_of=as_of,
+                one_counterparty=one_counterparty,
+                # ``None`` means "the detector's own default", which is
+                # ``VIEW_ONLY_SOURCES``. Unioning an exclusion onto ``None``
+                # would resolve to the exclusion *alone* and silently re-admit
+                # every republished mirror as a leg, so the default is named
+                # explicitly before anything is added to it.
+                view_only_sources=(
+                    view_only if not excluded
+                    else (VIEW_ONLY_SOURCES if view_only is None else frozenset(view_only))
+                    | excluded
+                ),
+            )
+            opportunities, withheld = withhold_non_local(
+                report.opportunities,
+                state,
+                route_scope=(run["route_scope"] if run is not None else "") or "",
+            )
+            rejected: dict[str, int] = {}
+            for diagnostic in report.diagnostics:
+                rejected[diagnostic.code] = rejected.get(diagnostic.code, 0) + 1
+            return {
+                "opportunities": [_opportunity_entry(opp) for opp in opportunities],
+                "diagnostics": [
+                    {"code": code, "count": count}
+                    for code, count in sorted(rejected.items(), key=lambda item: -item[1])
+                ],
+                "group_count": report.group_count,
+                "comparable_group_count": report.comparable_group_count,
+                "stake": total_stake,
+                # Rendered by ``renderArb`` in :mod:`src.report_assets`, which is
+                # the whole point: a reader comparing this against ``arb`` on the
+                # same run must not find two position counts and no explanation.
+                # Shipped without being rendered for one round, which bought the
+                # empty board and none of the account of it.
+                "non_local_withheld": withheld,
+            }
+
+        entry = bundle(US_UNAVAILABLE_SOURCE_KEYS)
+        entry["with_offshore"] = bundle(None)
+        out[str(run_id)] = entry
     return out
+
+
+def _blank_arb_bundle(total_stake: float) -> dict[str, Any]:
+    """A run whose prices are not embedded, in both views."""
+    empty: dict[str, Any] = {
+        "opportunities": [],
+        "diagnostics": [],
+        "group_count": 0,
+        "comparable_group_count": 0,
+        "stake": total_stake,
+        # Same keys as a real bundle: a consumer that reads this one must not have
+        # to branch on which shape it got.
+        "non_local_withheld": 0,
+    }
+    return {**empty, "with_offshore": dict(empty)}
 
 
 def _opportunity_entry(opportunity: Opportunity) -> dict[str, Any]:
@@ -1711,7 +1777,17 @@ def _coverage_for_run(
     # overlap at all — one book's NHL openers against another's friendly — and in
     # that case there is still nothing on the page that can be compared, so the
     # count is shown next to the book count rather than instead of it.
-    cross_book = store.cross_book_event_counts(run_id, min_books=MIN_BOOKS_FOR_COMPARISON)
+    from src.sources.registry import view_only_for_run
+
+    run_state = ""
+    row = store.run_row(run_id)
+    if row is not None:
+        run_state = row["jurisdiction"] or ""
+    cross_book = store.cross_book_event_counts(
+        run_id,
+        min_books=MIN_BOOKS_FOR_COMPARISON,
+        view_only=view_only_for_run(run_state),
+    )
 
     # The run's own scope, honoured before anything is blamed.  League coverage
     # is recorded before the ``--sport``/``--league`` filter — correct for "what
@@ -2041,6 +2117,8 @@ def _source_entry(key: str, *, state: str | None = None) -> dict[str, Any]:
         BY_KEY,
         REPUBLISHED_SOURCE_KEYS,
         RETAIL_SOURCE_KEYS,
+        STATE_LICENSED_REPUBLISHER_KEYS,
+        US_UNAVAILABLE_SOURCE_KEYS,
         is_view_only,
         view_only_for_state,
     )
@@ -2067,8 +2145,22 @@ def _source_entry(key: str, *, state: str | None = None) -> dict[str, Any]:
         if state in JURISDICTIONS
         else is_view_only(key)
     )
-    entry["route_scope"] = "state" if key in RETAIL_SOURCE_KEYS else "global"
+    # A state-licensed republisher is not a global route.  ``an_fanduel`` is asked
+    # for Pennsylvania's own book id (255) on a PA run, so the page must not badge
+    # it GLOBAL beside a Las Vegas column that genuinely is one — that erases the
+    # locality distinction rules (a) and (c) exist to make visible, on the one
+    # panel whose job is to say where each feed's number comes from.
+    entry["route_scope"] = (
+        "state"
+        if key in RETAIL_SOURCE_KEYS or key in STATE_LICENSED_REPUBLISHER_KEYS
+        else "global"
+    )
     entry["diagnostic_only"] = key in REPUBLISHED_SOURCE_KEYS
+    # Independent of ``view_only``: a republished mirror is unstakeable because it
+    # is somebody else's board, this is unstakeable because the venue will not
+    # take a US customer. The page toggles on it rather than hiding it outright,
+    # so a reader can still ask what the sharp offshore line was.
+    entry["us_unavailable"] = key in US_UNAVAILABLE_SOURCE_KEYS
     # Whether a row exists only because somebody offered liquidity. A sportsbook
     # quotes both sides itself and will not price itself to lose, so its two sides
     # summing below 1.0 is evidence about the parser — ``validation.MIN_OVERROUND``

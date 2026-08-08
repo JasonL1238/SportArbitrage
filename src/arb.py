@@ -2606,7 +2606,10 @@ def _build_opportunity(
 
 
 def best_prices(
-    quotes: Sequence[Quote], commissions: Mapping[str, Commission] | None = None
+    quotes: Sequence[Quote],
+    commissions: Mapping[str, Commission] | None = None,
+    *,
+    view_only: Collection[str] | None = None,
 ) -> dict[MarketGroup, dict[Selection, Quote]]:
     """Best available price for every selection of every comparable market.
 
@@ -2620,12 +2623,25 @@ def best_prices(
     which therefore loses. It was the one place the commission model had not been
     applied, and it contradicted the detector on exactly the legs the model
     exists for.
+
+    *view_only* is which sources are not a counterparty, and a **stored run has to
+    be read with the set that run was collected under** rather than with the
+    module-level :data:`VIEW_ONLY_SOURCES`, which is frozen at import from
+    ``settings.STATE``.  ``hardrock`` is the difference: view-only in Pennsylvania,
+    which licenses no Hard Rock book, and a real counterparty in Illinois.  So
+    ``collector lines`` put a Hard Rock price on a Pennsylvania board — as the
+    *best* price for a selection — when read from an Illinois-configured box and
+    left it off when read from a Pennsylvania one, while ``collector arb`` on the
+    same run resolved the set from the run's own jurisdiction.  One stored run, two
+    line boards, and neither command mentioning why.  ``None`` keeps the ambient
+    default for callers with no run in hand.
     """
+    excluded = VIEW_ONLY_SOURCES if view_only is None else frozenset(view_only)
     surface: dict[MarketGroup, dict[Selection, Quote]] = defaultdict(dict)
     for quote in quotes:
         if quote.status is not QuoteStatus.ACTIVE:
             continue
-        if quote.source in VIEW_ONLY_SOURCES:
+        if quote.source in excluded:
             continue
         bucket = surface[group_key(quote)]
         existing = bucket.get(quote.selection)

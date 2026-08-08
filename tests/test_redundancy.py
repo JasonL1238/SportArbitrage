@@ -283,3 +283,108 @@ class TestArbTreatsFailoverAsOneBook:
         groups = merged[EVERY_LEAGUE]
         assert frozenset({"fanduel", "an_fanduel"}) not in groups
         assert frozenset({"an_fanduel", "leovegas_kambi"}) in groups
+
+
+class TestOfflinePrimaryNamesOnlyALocalFailover:
+    """A national board is context for a dark state book, never its stand-in.
+
+    ``primary_source_offline`` used to say "Using the registered republisher as
+    failover for betmgm" whichever republisher had rows.  On a state run whose
+    first-party route was geo-blocked, that put the substitution the coverage
+    rule refuses — a Las Vegas column standing in for the state licence — into
+    the validation report, in the voice of the module a reader trusts to explain
+    the gap.  Both tests fail on the pre-fix single-branch message.
+
+    These two pass no ``state``, so they exercise the weaker
+    ``files_per_state_book_id`` fallback — "does this feed file per-state ids
+    anywhere" — which is the strongest question available when the caller does not
+    know the jurisdiction.  The state-aware predicate is covered by
+    ``TestOneOfflineBookGetsOneAnswer``, which passes ``state="PA"``.
+    """
+
+    def _quotes(self, source: str):
+        return [
+            _ml(source, f"MLB-A@MLB-H:2026-08-06-{index}", selection, price)
+            for index in range(30)
+            for selection, price in (
+                (Selection.HOME, 1.90),
+                (Selection.AWAY, 2.05),
+            )
+        ]
+
+    def _codes(self, source: str) -> list[str]:
+        report = ValidationReport(quote_count=0, event_count=0, source_count=0)
+        check_redundancy(self._quotes(source), report)
+        return [finding.code for finding in report.findings]
+
+    def test_a_state_licence_republisher_is_named_as_failover(self) -> None:
+        """``an_betmgm`` is asked for a per-state book id, so it is failover."""
+        assert "primary_source_offline" in self._codes("an_betmgm")
+
+    def test_a_national_board_is_refused_as_failover(self) -> None:
+        """``vi_betmgm`` is VegasInsider's Las Vegas column, so it is not."""
+        codes = self._codes("vi_betmgm")
+        assert "primary_source_offline_no_local_failover" in codes
+        assert "primary_source_offline" not in codes
+
+
+class TestOneOfflineBookGetsOneAnswer:
+    """Six books have two mirrors, and the per-pair loop answered twice.
+
+    With the first-party route geo-blocked and both republishers up — the case the
+    locality branch was written for — the report carried, adjacent:
+
+        primary_source_offline: draftkings produced no rows while an_draftkings
+            priced the slate. Using the registered republisher as failover
+        primary_source_offline_no_local_failover: draftkings produced no rows.
+            vi_draftkings ... is context and not failover — draftkings is unobserved
+
+    The second sentence is false in exactly the situation that produces it, and
+    both were addressed to the same book. Whether a book has failover is a
+    property of the book, so it is decided once.
+    """
+
+    def _quotes(self, *sources: str):
+        return [
+            _ml(source, f"MLB-A@MLB-H:2026-08-06-{index}", selection, price)
+            for source in sources
+            for index in range(30)
+            for selection, price in (
+                (Selection.HOME, 1.90),
+                (Selection.AWAY, 2.05),
+            )
+        ]
+
+    def _findings(self, *sources: str, state: str | None = "PA"):
+        report = ValidationReport(quote_count=0, event_count=0, source_count=0)
+        check_redundancy(self._quotes(*sources), report, state=state)
+        return [f for f in report.findings if f.source == "draftkings"]
+
+    def test_both_mirrors_live_yields_one_finding_and_it_is_the_true_one(self):
+        findings = self._findings("an_draftkings", "vi_draftkings")
+        codes = [f.code for f in findings]
+
+        assert codes == ["primary_source_offline"], codes
+        # And it names the feed that actually stands in, not the Las Vegas column
+        # beside it — naming that one here is the substitution being refused.
+        assert "an_draftkings" in findings[0].message
+        assert "vi_draftkings" not in findings[0].message
+        assert "is unobserved" not in findings[0].message
+
+    def test_only_the_national_mirror_live_still_refuses_it(self):
+        """The regrouping must not turn the locality branch off."""
+        findings = self._findings("vi_draftkings")
+        assert [f.code for f in findings] == [
+            "primary_source_offline_no_local_failover"
+        ]
+        # It says the mirror is not failover, and stops there. "is unobserved" was
+        # ``src.coverage``'s sentence, reported there at ERROR; both fired on one
+        # book in one run, a word apart and a severity apart, so the exit status
+        # turned on which module spoke. One claim, one owner.
+        assert "context and not failover" in findings[0].message
+        assert "vi_draftkings (60 quotes)" in findings[0].message
+        assert "unobserved" not in findings[0].message
+
+    def test_only_the_local_mirror_live_is_failover(self):
+        findings = self._findings("an_draftkings")
+        assert [f.code for f in findings] == ["primary_source_offline"]

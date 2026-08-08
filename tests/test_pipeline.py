@@ -1058,13 +1058,16 @@ def test_replay_reproduces_a_stored_run(tmp_path: Path, collector, monkeypatch) 
             def fetch_raw(self, *, tier=None):
                 raise AssertionError("replay must never call fetch_raw")
 
-        monkeypatch.setitem(
-            collector.SOURCE_FACTORIES, "fanduel",
-            lambda **kwargs: ReplayOnlySource("fanduel", rows, leagues=("MLB",)),
-        )
-        monkeypatch.setitem(
-            collector.SOURCE_FACTORIES, "pinnacle",
-            lambda **kwargs: ReplayOnlySource("pinnacle", other, leagues=("MLB",)),
+        # Patched on ``replay_factory``, not ``SOURCE_FACTORIES``: replay resolves
+        # a state-scoped run's adapters from the run's own jurisdiction, because the
+        # base descriptors carry whichever state's book ids the base entry names.
+        # That indirection is the documented seam for injecting a replay adapter.
+        replay_fakes = {
+            "fanduel": lambda: ReplayOnlySource("fanduel", rows, leagues=("MLB",)),
+            "pinnacle": lambda: ReplayOnlySource("pinnacle", other, leagues=("MLB",)),
+        }
+        monkeypatch.setattr(
+            collector, "replay_factory", lambda state, key: replay_fakes[key]
         )
         ok, problems = collector.replay_run(
             result.run_id, store=store, raw_store=raw_store
@@ -1091,14 +1094,15 @@ def test_replay_notices_a_parser_that_changed_its_mind(tmp_path: Path, collector
                         raws=[make_raw("{}", source="pinnacle")])],
             raw_store=raw_store, store=store,
         )
-        monkeypatch.setitem(
-            collector.SOURCE_FACTORIES, "fanduel",
-            lambda **kwargs: FakeSource("fanduel", drifted, leagues=("MLB",)),
-        )
-        monkeypatch.setitem(
-            collector.SOURCE_FACTORIES, "pinnacle",
-            lambda **kwargs: FakeSource("pinnacle", [make_quote(source="pinnacle")],
-                                        leagues=("MLB",)),
+        # See the note in ``test_replay_reproduces_a_stored_run``.
+        fakes = {
+            "fanduel": lambda: FakeSource("fanduel", drifted, leagues=("MLB",)),
+            "pinnacle": lambda: FakeSource(
+                "pinnacle", [make_quote(source="pinnacle")], leagues=("MLB",)
+            ),
+        }
+        monkeypatch.setattr(
+            collector, "replay_factory", lambda state, key: fakes[key]
         )
         ok, problems = collector.replay_run(result.run_id, store=store, raw_store=raw_store)
     assert not ok
@@ -1192,3 +1196,49 @@ def test_version_1_envelopes_remain_replayable(tmp_path: Path) -> None:
     loaded = RawStore(tmp_path).read(path)
     assert loaded.json() == {"ok": True}
     assert loaded.headers == {}
+
+
+def test_replay_resolves_adapters_from_the_runs_state_not_the_process(monkeypatch) -> None:
+    """``replay``'s verdict must not depend on an environment variable.
+
+    ``settings.STATE`` used to short-circuit to ``SOURCE_FACTORIES`` whenever the
+    run's jurisdiction matched this process's — and the *matching* case was the
+    broken one, because those are the base descriptors, whose config is whichever
+    state the base entry happens to name. ``an_parx`` is ``book_id 1929`` (New
+    Jersey) there and ``74`` in Pennsylvania.
+
+    So replaying a PA run on a PA-configured box re-parsed PA captures under New
+    Jersey book ids, while the same run replayed from an Illinois box resolved the
+    PA route and got it right. Same bytes, same database, PASS or FAIL depending on
+    ``ODDS_STATE``.
+    """
+    from src import collector, settings
+    from src.sources import registry
+
+    # The two configs that used to be confused, stated so the test cannot pass by
+    # them being equal.
+    assert registry.BY_BASE_KEY["an_parx"].config["book_id"] == 1929      # New Jersey
+    assert registry.replay_descriptor_for_state("PA", "an_parx").config["book_id"] == 74
+
+    base = collector.SOURCE_FACTORIES["an_parx"]
+    for ambient in ("PA", "IL", "NJ", "DC"):
+        monkeypatch.setattr(settings, "STATE", ambient)
+        chosen = collector.replay_factory("PA", "an_parx")
+        assert chosen is not base, (
+            f"with ODDS_STATE={ambient} replay fell back to the base descriptor "
+            "(New Jersey's book id) for a Pennsylvania run"
+        )
+        assert chosen.keywords["book_id"] == 74, (
+            f"with ODDS_STATE={ambient} a PA run resolved book id "
+            f"{chosen.keywords['book_id']} instead of PA's 74"
+        )
+
+
+def test_replay_uses_the_base_factory_only_for_stateless_runs(monkeypatch) -> None:
+    """A run with no jurisdiction, or a GLOBAL one, has no state route to resolve."""
+    from src import collector
+
+    for stateless in ("", "GLOBAL"):
+        assert collector.replay_factory(stateless, "pinnacle") is (
+            collector.SOURCE_FACTORIES["pinnacle"]
+        ), stateless

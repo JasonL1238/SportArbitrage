@@ -39,7 +39,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from inspect import signature
 from pathlib import Path
-from typing import Any, Callable, Iterator, Mapping, Sequence
+from typing import Any, Callable, Collection, Iterator, Mapping, Sequence
 from uuid import uuid4
 
 from src import settings
@@ -64,6 +64,7 @@ from src.distinctness import (
     compare_all,
     find_mirrors,
 )
+from src.coverage import check_book_coverage, locality_applies, withhold_non_local
 from src.redundancy import check_redundancy, is_redundant_pair
 from src.events import reconcile_event_keys
 from src.leagues import LEAGUES, LEAGUES_BY_SPORT, is_known
@@ -95,6 +96,43 @@ log = logging.getLogger("collector")
 SOURCE_FACTORIES: dict[str, Callable[..., OddsSource]] = {
     entry.key: entry.factory() for entry in registry.SOURCES
 }
+
+
+def replay_factory(stored_state: str, source_key: str) -> Callable[..., OddsSource]:
+    """The adapter to re-parse a stored run's captures with.
+
+    Resolved from the **run's** jurisdiction, never from ``settings.STATE``.  A
+    republisher's config *is* a state licence — ``an_parx`` is ``book_id 74`` in
+    Pennsylvania and ``1929`` in New Jersey — and :data:`SOURCE_FACTORIES` holds the
+    base descriptors, whose config is whichever state the base entry happens to
+    name.  ``replay`` used to short-circuit to those whenever the run's state
+    matched this process's, so the *matching* case re-parsed PA captures under NJ
+    book ids while a mismatched box got it right: a PASS/FAIL verdict that turned on
+    an environment variable.
+
+    The lax ``replay_descriptor_for_state`` is correct here, unlike on a fetch path.
+    Replay enumerates whatever the run stored and opens no socket, so a base
+    descriptor for a key the state does not license is the honest way to say "no
+    exact route for this one" rather than a substitution.
+
+    Scoped to the sources whose configuration *is* a state licence — the exact-state
+    retail routes and the state-licensed republishers.  Everything else is
+    state-neutral (Pinnacle asks the same question in every jurisdiction), so it
+    comes from :data:`SOURCE_FACTORIES`, which keeps working as the injection seam
+    for global sources and for the synthetic keys tests build.  Resolving *every*
+    key through the registry would refuse a key the registry has never heard of,
+    which is not a locality problem.
+
+    A single seam on purpose: it is the one place a test can inject a replay-only
+    adapter for a state-sensitive source without having to know how state config is
+    resolved.
+    """
+    state_sensitive = (
+        registry.RETAIL_SOURCE_KEYS | registry.STATE_LICENSED_REPUBLISHER_KEYS
+    )
+    if stored_state in ("", "GLOBAL") or source_key not in state_sensitive:
+        return SOURCE_FACTORIES[source_key]
+    return registry.replay_descriptor_for_state(stored_state, source_key).factory()
 
 
 class CachedOddsSource:
@@ -458,6 +496,7 @@ def build_sources(
     leagues: Sequence[str] | None = None,
     state: str | None = None,
     route_scope: str = "all",
+    allow_empty: bool = False,
 ) -> list[OddsSource]:
     """Instantiate the requested adapters, configured for *leagues*.
 
@@ -483,18 +522,50 @@ def build_sources(
             if state is None:
                 raise ValueError("state is required for state-scoped source construction")
             descriptors = registry.state_sources_for_state(state)
+        elif route_scope == "state_republished":
+            if state is None:
+                raise ValueError(
+                    "state is required for state-republished source construction"
+                )
+            descriptors = registry.republished_sources_for_state(state)
         elif route_scope == "all":
             if state is None:
                 raise ValueError("state is required for explicit all-scope construction")
+            # "All" has to mean all three groups.  Splitting the republishers out
+            # of ``global_sources()`` narrowed this branch to the retail routes
+            # plus the twelve state-licensed republishers, silently dropping every
+            # global venue — Pinnacle, the exchanges, the prediction markets.  No
+            # caller reaches it today (``collect_batch_once`` asks for each scope
+            # by name), which is exactly why it would be believed if one did.
+            # No dedup filter between the three groups, because they are disjoint by
+            # construction: ``global_sources()`` excludes both
+            # ``RETAIL_SOURCE_KEYS`` and ``STATE_LICENSED_REPUBLISHER_KEYS``, and
+            # ``republished_sources_for_state`` returns only keys from the latter.  A
+            # filter here would never fire, and a guard that cannot fire is a
+            # standing claim that these sets might overlap — the opposite of the
+            # invariant the split exists to hold.  It is *asserted* just below
+            # instead, because the dict comprehension that follows would otherwise
+            # absorb an overlap silently, last-wins, having already built and
+            # abandoned the losing adapter with its transport open.
             descriptors = (
                 *registry.state_sources_for_state(state),
-                # Not ``global_sources()``: a republisher's book id is per-state
-                # licence, so the state's own ids have to be applied here or the
-                # run stores another state's books under this state's keys.
+                # The state's own ids, not the base config: a republisher's book id
+                # is a state licence, so applying it here is what stops the run
+                # storing another state's books under this state's keys.
                 *registry.republished_sources_for_state(state),
+                *registry.global_sources(),
             )
         else:
             raise ValueError(f"unknown route scope {route_scope!r}")
+        # Before ``factory()`` is called, so a duplicate cannot leak an instance.
+        seen_keys = Counter(entry.key for entry in descriptors)
+        clashing = sorted(key for key, count in seen_keys.items() if count > 1)
+        if clashing:
+            raise ValueError(
+                f"route scope {route_scope!r} in {state} built {clashing} more than "
+                "once; the scope groups are meant to be disjoint, and one instance "
+                "would silently replace the other"
+            )
         factories = {entry.key: entry.factory() for entry in descriptors}
 
     known = {entry.key for entry in registry.SOURCES}
@@ -525,11 +596,43 @@ def build_sources(
         source = _build_with_leagues(key, factory, tuple(leagues))
         if source is not None:
             built.append(source)
-    if not built:
+    if not built and not allow_empty:
+        # Which question failed matters, because the two answers are different
+        # commands.  Asking for a source this scope does not build is a scope
+        # mismatch: ``build_sources(["an_caesars"], route_scope="global")`` died with
+        # "none of [] can collect league(s) ['MLB', ...]", which blames the league
+        # list for a key the scope had already filtered out, and sends the reader to
+        # look at leagues.  Only the leftover case keeps the league message.
+        outside = [key for key in (keys or ()) if key not in factories]
+        if outside and not selected:
+            where = ", ".join(
+                f"{key} is built by route scope {_scope_that_builds(key)!r}"
+                for key in outside
+            )
+            raise SystemExit(
+                f"route scope {route_scope!r}"
+                + (f" in {state}" if state else "")
+                + f" builds none of the requested source(s) {outside} — {where}. "
+                "That is a scope mismatch, not a league one"
+            )
         raise SystemExit(
             f"none of {selected} can collect league(s) {list(leagues or DEFAULT_LEAGUES)}"
         )
     return built
+
+
+def _scope_that_builds(key: str) -> str:
+    """The ``route_scope`` that instantiates *key*, for error messages.
+
+    Three disjoint groups, and the split is not obvious from a source key: the
+    Action Network mirrors look global — one host, no proxy — but their book id is a
+    state licence, so they are built per state.
+    """
+    if key in registry.RETAIL_SOURCE_KEYS:
+        return "state"
+    if key in registry.STATE_LICENSED_REPUBLISHER_KEYS:
+        return "state_republished"
+    return "global"
 
 
 def _accepts_leagues(factory: Callable[..., OddsSource]) -> bool:
@@ -795,6 +898,17 @@ def collect_once(
                 f"source(s) produced ({', '.join(sorted(native_producing)) or 'none'}); "
                 "global venues cannot make a state slate healthy by themselves",
             )
+        # Every required book either fetched first-party or watched by two
+        # agreeing republishers.  Measured on ``unfiltered_quotes``: a run
+        # narrowed to one sport still collected the whole board for the books it
+        # asked, and judging coverage on the filtered rows would report a book as
+        # unobserved because the operator asked for tennis.
+        check_book_coverage(
+            unfiltered_quotes,
+            run_state,
+            report,
+            configured=[source.source_key for source in sources],
+        )
 
     sports_seen = sport_coverage(all_quotes, coverage)
     _report_sport_coverage(sports_seen, report)
@@ -807,7 +921,13 @@ def collect_once(
             "that was never requested",
             source=source_key,
         )
-    _check_distinctness(unfiltered_quotes, report, mirrors=measured_mirrors)
+    _check_distinctness(
+        unfiltered_quotes,
+        report,
+        mirrors=measured_mirrors,
+        state=None if run_state == "GLOBAL" else run_state,
+        configured=[source.source_key for source in sources],
+    )
 
     for rekey in rekeys:
         report.add(
@@ -833,19 +953,27 @@ def collect_once(
         all_quotes,
         as_of=as_of or datetime.now(UTC),
         one_counterparty=measured_counterparties,
-        view_only_sources=(
-            registry.view_only_for_state(run_state)
-            if run_state != "GLOBAL"
-            else registry.REPUBLISHED_SOURCE_KEYS
-        ),
+        view_only_sources=registry.view_only_for_run(run_state),
     )
-    if route_scope == "state" and state_source_keys:
-        native = frozenset(state_source_keys)
-        arb_report.opportunities = [
-            opportunity
-            for opportunity in arb_report.opportunities
-            if native.intersection(opportunity.sources)
-        ]
+    # Unconditional, because ``withhold_non_local`` owns the decision: gated here
+    # on ``state_source_keys`` it read *what was built* and skipped entirely for a
+    # run that built no PA book — the run that then reported, and texted, a "PA"
+    # arbitrage with no PA leg.  Gated on ``route_scope`` it disagreed with the
+    # dashboard about a ``legacy``-scope PA run, and its ``!= "GLOBAL"`` test let
+    # an unrecognised jurisdiction through to a ``KeyError`` that aborted the pass.
+    # Licence, not inventory, and one condition in one place.
+    arb_report.opportunities, withheld = withhold_non_local(
+        arb_report.opportunities, run_state, route_scope=route_scope
+    )
+    if withheld:
+        report.add(
+            Severity.WARNING,
+            "non_local_positions_withheld",
+            f"{withheld} position(s) had no leg at a venue reachable from "
+            f"{run_state} and are not reported: every leg was a book with no "
+            f"{run_state} licence and no nationwide US access, so nothing there "
+            "could have been staked",
+        )
 
     if store is not None and run_id is not None:
         _progress({
@@ -916,6 +1044,8 @@ def _check_distinctness(
     report: ValidationReport,
     *,
     mirrors: Sequence[Agreement] | None = None,
+    state: str | None = None,
+    configured: Collection[str] | None = None,
 ) -> list[Agreement]:
     """Refuse a run in which two registered sources are one counterparty.
 
@@ -975,7 +1105,7 @@ def _check_distinctness(
             "no position between them is reported",
             source=pair.source_b,
         )
-    check_redundancy(quotes, report)
+    check_redundancy(quotes, report, state=state, configured=configured)
     return mirrors
 
 
@@ -1721,14 +1851,10 @@ def replay_run(
     replayed: list[Quote] = []
     for source_key, paths in by_source_paths.items():
         try:
+            # See ``replay_factory``: resolved from the run's jurisdiction, never
+            # from ``settings.STATE``.
             stored_state = str(run_row["jurisdiction"] or "") if run_row else ""
-            if stored_state in ("", "GLOBAL", settings.STATE):
-                factory = SOURCE_FACTORIES[source_key]
-            else:
-                source_entry = registry.descriptor_for_state(
-                    stored_state, source_key
-                )
-                factory = source_entry.factory()
+            factory = replay_factory(stored_state, source_key)
         except (KeyError, RuntimeError):
             problems.append(f"{source_key}: no adapter available to replay this source")
             continue
@@ -1857,10 +1983,16 @@ def collect_batch_once(
     """Fetch globals once, then combine them with each exact-state retail slate."""
     batch_id = uuid4().hex
     resolved_leagues = resolve_leagues(sports, leagues)
+    # Each scope may legitimately contribute nothing — ``--source an_caesars``
+    # names only a state-licensed republisher, which is no longer a global
+    # source — so emptiness is judged on the batch below, not per scope.  Before
+    # that, asking for one republisher died with "none of [] can collect
+    # league(s) ['MLB']", blaming the league for a scope mismatch.
     globals_built = build_sources(
         source_keys,
         leagues=resolved_leagues,
         route_scope="global",
+        allow_empty=True,
     )
     cached_globals = [
         CachedOddsSource(source, capture_id=batch_id) for source in globals_built
@@ -1889,9 +2021,38 @@ def collect_batch_once(
                 leagues=resolved_leagues,
                 state=state,
                 route_scope="state",
+                allow_empty=True,
             )
             state_keys = tuple(source.source_key for source in retail)
-            combined: list[OddsSource] = [*retail, *cached_globals]
+            # Built per state and *not* cached with the globals: a republisher's
+            # book id is a state licence, so one shared instance can only have
+            # asked for one state's book.  Sharing them stored Caesars NJ
+            # (``bookIds=123``) under every Pennsylvania key.
+            #
+            # Inside its own guard because ``retail`` is already built and holds
+            # open transports: a failure here used to leak all of them, and the
+            # ``finally`` below only covers what the ``try`` after it can reach.
+            try:
+                republished = build_sources(
+                    source_keys,
+                    leagues=resolved_leagues,
+                    state=state,
+                    route_scope="state_republished",
+                    allow_empty=True,
+                )
+            except BaseException:
+                for source in retail:
+                    source.close()
+                raise
+            # Deliberately excluded from ``state_keys``: that set feeds the
+            # "how many exact-state first-party sources produced" gate, and a
+            # republished mirror must not be able to satisfy it.
+            combined: list[OddsSource] = [*retail, *republished, *cached_globals]
+            if not combined:
+                raise SystemExit(
+                    f"none of {list(source_keys or ())} can collect league(s) "
+                    f"{list(resolved_leagues or ())} in {state}"
+                )
             try:
                 result = collect_once(
                     combined,
@@ -1909,7 +2070,7 @@ def collect_batch_once(
                 )
                 runs.append((state, result))
             finally:
-                for source in retail:
+                for source in (*retail, *republished):
                     source.close()
     finally:
         for source in cached_globals:
@@ -2284,8 +2445,10 @@ def _cmd_replay(args: argparse.Namespace) -> int:
         ok, problems = replay_run(
             run_id, store=store, raw_store=raw_store, sports=sports, leagues=leagues
         )
+        replay_row = store.run_row(run_id)
+        replay_state = (replay_row["jurisdiction"] if replay_row else "") or "UNKNOWN"
         print(
-            f"replay of run {run_id}{_scope_label(sports, leagues)}: "
+            f"replay of run {run_id} [{replay_state}]{_scope_label(sports, leagues)}: "
             f"{'PASS' if ok else 'FAIL'}"
         )
         for problem in problems[:25]:
@@ -2300,7 +2463,13 @@ def _cmd_runs(args: argparse.Namespace) -> int:
         if not rows:
             print(f"no runs recorded{_scope_label(sports, leagues)}")
             return 1
-        print(f"{'run':>4}  {'started':<26} {'ok':<3} {'quotes':>7} {'events':>7} {'err':>4} {'warn':>5}")
+        # ``state`` is a column, not a footnote: a batch writes GLOBAL plus one run
+        # per jurisdiction, and without it three rows describing three different
+        # slates read as three passes over the same one.
+        print(
+            f"{'run':>4}  {'started':<26} {'state':<7} {'ok':<3} {'quotes':>7} "
+            f"{'events':>7} {'err':>4} {'warn':>5}"
+        )
         for row in rows:
             # An unfinished run is not a failed one, and printing ``ok=False``
             # for it says the collection ran and the checks found problems —
@@ -2310,7 +2479,8 @@ def _cmd_runs(args: argparse.Namespace) -> int:
             # each other on the same database seconds apart.
             state = "?" if row["finished_at"] is None else str(bool(row["ok"]))
             print(
-                f"{row['id']:>4}  {row['started_at']:<26} {state:<5}"
+                f"{row['id']:>4}  {row['started_at']:<26} "
+                f"{(row['jurisdiction'] or '?'):<7} {state:<5}"
                 f"{row['quote_count']:>7} {row['event_count']:>7}"
                 f"{row['error_count']:>4} {row['warning_count']:>5}"
             )
@@ -2347,7 +2517,12 @@ def _cmd_runs(args: argparse.Namespace) -> int:
                     )
             # Per-sport, because "the run stored 12,000 rows" says nothing about
             # whether any one sport is comparable across books.
-            cross = store.cross_book_event_counts(row["id"], min_books=MIN_HEALTHY_SOURCES)
+            cross = store.cross_book_event_counts(
+                row["id"],
+                min_books=MIN_HEALTHY_SOURCES,
+                # The run's own jurisdiction, not this process's.
+                view_only=registry.view_only_for_run(row["jurisdiction"]),
+            )
             for entry in store.sport_coverage(row["id"]):
                 if sports and entry["sport"] not in sports:
                     continue
@@ -2404,7 +2579,16 @@ def _cmd_show(args: argparse.Namespace) -> int:
         # thirty-six-hour-old prices with no age on them while ``arb`` and
         # ``lines`` stated it, against this module's own promise that the age is
         # stated on every run and not only a stale one.
-        print(f"{note}{_scope_label(sports, leagues)}: showing {len(rows)} rows")
+        # And the jurisdiction, for the same reason the age is stated: these are one
+        # state's prices, and a reader who did not choose the state was being shown
+        # them with nothing on the page naming it.  ``--run`` defaults to the latest
+        # run, which in a batch is the last state collected.
+        show_row = store.run_row(run_id)
+        show_state = (show_row["jurisdiction"] if show_row else "") or "UNKNOWN"
+        print(
+            f"{note}{_scope_label(sports, leagues)} [{show_state}]: "
+            f"showing {len(rows)} rows"
+        )
         for row in rows:
             line = "" if row["line"] is None else f" {row['line']:+g}"
             side = f" {row['side']}" if row["side"] else ""
@@ -2460,24 +2644,60 @@ def _cmd_arb(args: argparse.Namespace) -> int:
             recorded,
         )
         quotes = [q for q in everything if in_scope(q, sports, leagues)]
-        # Gated on the clock by default, exactly as the live path is.  Without
-        # it, re-analysing yesterday's run prints positions on games that have
-        # already been played, indistinguishable from takeable ones — and the
-        # default ``--run`` is the latest run, so the same command was live on
-        # one invocation and historical on the next.
+        # Which jurisdiction's rules apply is a property of the **run**, not of
+        # this process.  Omitting ``view_only_sources`` fell back to the
+        # module-level ``VIEW_ONLY_SOURCES``, which :mod:`src.sources.registry`
+        # freezes at import from ``settings.STATE`` — so analysing a stored PA
+        # run applied *Illinois's* view-only set, and any book Pennsylvania
+        # declares view-only but Illinois does not was eligible to be a leg.
+        # ``collect_once`` and ``src.report`` both resolve this per run; this
+        # command was the one that did not, and it is the one that sends a text.
+        run_row = store.run_row(run_id)
+        run_state = (run_row["jurisdiction"] if run_row is not None else "") or ""
+        run_state = run_state.strip().upper()
         report = find_opportunities(
             quotes,
             total_stake=args.stake,
             min_margin=args.min_margin / 100.0,
+            # Gated on the clock by default, exactly as the live path is.
+            # Without it, re-analysing yesterday's run prints positions on games
+            # that have already been played, indistinguishable from takeable ones
+            # — and the default ``--run`` is the latest run, so the same command
+            # was live on one invocation and historical on the next.
             as_of=None if args.include_started else datetime.now(UTC),
             one_counterparty=measured_counterparties,
+            view_only_sources=registry.view_only_for_run(run_state),
         )
+        # And the exact-state leg requirement, for the same reason.  Without it
+        # this command printed — and texted — a "PA" arbitrage whose every leg
+        # was a global or offshore venue holding no Pennsylvania licence.  The
+        # default ``--run`` is the latest run, which in a batch is the last state
+        # collected, so the operator neither chose that jurisdiction nor was told
+        # which one they got.
+        report.opportunities, non_local_dropped = withhold_non_local(
+            report.opportunities,
+            run_state,
+            # The scope the run was *collected* under, not this process's.
+            route_scope=(run_row["route_scope"] if run_row is not None else "") or "",
+        )
+        print(f"jurisdiction: {run_state or 'UNKNOWN'}")
         if args.include_started:
             print(
                 "including fixtures that have already started — these are a "
                 "historical study, not positions anyone can take"
             )
         print(f"{note}{_scope_label(sports, leagues)}: {report.summary()}")
+        # Printed after the summary, because it explains that count rather than
+        # standing on its own.  Said out loud rather than quietly subtracted: a
+        # reader comparing this against the same run's dashboard would otherwise
+        # see two different position counts with nothing accounting for the gap,
+        # and "0 opportunities" would read as a quiet market rather than as a
+        # board whose every position needed a book this state does not license.
+        if non_local_dropped:
+            print(
+                f"withheld {non_local_dropped} position(s) with no leg you can "
+                f"reach from {run_state} — not takeable from there"
+            )
         for opportunity in report.opportunities:
             print(opportunity.describe())
         rejected = Counter(d.code for d in report.diagnostics)
@@ -2547,7 +2767,16 @@ def _cmd_lines(args: argparse.Namespace) -> int:
         # one thing this command's own contract says must not happen.
         everything, _ = reconcile_event_keys(store.load_quotes(run_id))
         quotes = [quote for quote in everything if in_scope(quote, sports, leagues)]
-        surface = best_prices(quotes)
+        run_row = store.run_row(run_id)
+        lines_state = (run_row["jurisdiction"] if run_row is not None else "") or ""
+        lines_state = lines_state.strip().upper()
+        # Resolved from the **run's** jurisdiction, exactly as ``arb`` does it four
+        # hundred lines up.  ``best_prices`` defaults to the ambient
+        # ``VIEW_ONLY_SOURCES``, frozen at import from ``settings.STATE``, and
+        # ``hardrock`` is the key that differs: a Pennsylvania run read from an
+        # Illinois box put a Hard Rock price on the PA board as a selection's *best*
+        # price, and the same run read from a PA box did not.
+        surface = best_prices(quotes, view_only=registry.view_only_for_run(lines_state))
         sport_of = {quote.event_key: (quote.sport.value, quote.league) for quote in quotes}
         # Measured on the whole run and unioned with the collection-time
         # record, for the same reason ``arb`` does it.  Reuse the already-
@@ -2557,6 +2786,39 @@ def _cmd_lines(args: argparse.Namespace) -> int:
             {} if recorded else counterparty_groups(everything),
             recorded,
         )
+
+        # Which jurisdiction, and which of these books it does not license.
+        #
+        # Deliberately marked rather than filtered: this command's whole purpose is
+        # telling a genuine "no edge today" apart from a market nobody compared, and
+        # dropping the out-of-state books would hide the comparison it exists to
+        # show.  But printing "home 1.423 onexbet" unlabelled on a Pennsylvania run
+        # presents a price the reader cannot take as the state's best — the same
+        # substitution ``src.coverage`` refuses.  So: recorded, named, never silent.
+        lines_scope = (run_row["route_scope"] if run_row is not None else "") or ""
+        # The same condition ``arb`` and the dashboard use, asked of the same
+        # function.  Spelling it here as "is the jurisdiction known" was a fourth
+        # answer: on a run stored with a widened scope, ``arb`` offered a position
+        # while ``lines``, one command later, marked every leg of it unreachable.
+        marking = locality_applies(lines_state, lines_scope)
+        native = registry.takeable_from_state(lines_state) if marking else frozenset()
+        if lines_state:
+            print(f"jurisdiction: {lines_state}")
+
+        def _elsewhere(source_key: str) -> str:
+            """Mark a book the operator cannot reach from this jurisdiction.
+
+            Reachability only, and it needs no republisher case: ``best_prices``
+            above is given this run's view-only set, so every mirror has already been
+            excluded from the surface and nothing here can be one.  A branch marking
+            them would be unreachable, and a mark reading "not reachable from PA"
+            beside ``an_fanduel`` — book id 255, *FanDuel Pennsylvania* — would be
+            false as well, which is why the two facts are kept apart rather than
+            spelled by one string.
+            """
+            if not marking or source_key in native:
+                return ""
+            return f"  [not reachable from {lines_state}]"
 
         shown = 0
         for key in sorted(surface, key=str):
@@ -2597,6 +2859,7 @@ def _cmd_lines(args: argparse.Namespace) -> int:
                 print(
                     f"    {selection.value:<6} {net[selection]:>7.3f} "
                     f"{american:>+6d}  {quote.source}{gross}"
+                    f"{_elsewhere(quote.source)}"
                 )
             shown += 1
             if shown >= args.limit:
@@ -2690,16 +2953,19 @@ def _cmd_mirrors(args: argparse.Namespace) -> int:
             " — measured on the whole run, because narrowing the evidence can "
             "only weaken it" if sports or leagues else ""
         )
+        mirror_row = store.run_row(run_id)
+        mirror_state = (mirror_row["jurisdiction"] if mirror_row else "") or "UNKNOWN"
         print(
-            f"run {run_id}{_scope_label(sports, leagues)}: {len(pairs)} source "
-            f"pair(s){scope_note}"
+            f"run {run_id} [{mirror_state}]{_scope_label(sports, leagues)}: "
+            f"{len(pairs)} source pair(s){scope_note}"
         )
         for pair in pairs:
             print(f"  {pair.summary()}")
         mirrors = [pair for pair in pairs if pair.verdict.blocks_registration]
         if mirrors:
             print(
-                f"\n{len(mirrors)} pair(s) are one counterparty. Remove one of each from "
+                f"\n{len(mirrors)} pair(s) are one counterparty in {mirror_state}. "
+                "Remove one of each from "
                 "src.sources.registry: an arbitrage reported between them is a position "
                 "nobody can hold."
             )
@@ -2728,9 +2994,13 @@ def _cmd_health(args: argparse.Namespace) -> int:
         # about coverage; it must not narrow what the verdict is computed from.
         every_run = store.run_summaries(limit=args.limit)
         per_source: dict[str, list[bool]] = {}
+        per_state: dict[tuple[str, str], list[bool]] = {}
         for row in every_run:
+            state = (row["jurisdiction"] or "?").strip().upper() or "?"
             for health in store.health_for_run(row["id"]):
-                per_source.setdefault(health["source_key"], []).append(bool(health["ok"]))
+                key = health["source_key"]
+                per_source.setdefault(key, []).append(bool(health["ok"]))
+                per_state.setdefault((key, state), []).append(bool(health["ok"]))
 
         print(f"{'source':<18} {'runs':>5} {'ok':>5} {'rate':>6}  last (newest first)")
         below: list[str] = []
@@ -2739,6 +3009,24 @@ def _cmd_health(args: argparse.Namespace) -> int:
             rate = ok_count / len(outcomes)
             recent = "".join("." if ok else "X" for ok in outcomes)
             print(f"{source_key:<18} {len(outcomes):>5} {ok_count:>5} {rate * 100:>5.0f}%  {recent}")
+            # A republisher's route is a *state licence*, so one key can be healthy
+            # in Illinois and dead in Pennsylvania — and the blended rate is what
+            # ``--min-rate`` fires on. Printed as a split rather than replacing the
+            # blend: the blend is still the answer to "is this source worth having",
+            # and the split is the answer to "where is it broken".
+            states = {
+                state: rates
+                for (key, state), rates in per_state.items()
+                if key == source_key
+            }
+            if len(states) > 1 and len(set(
+                sum(r) / len(r) for r in states.values()
+            )) > 1:
+                split = "  ".join(
+                    f"{state} {sum(rates) / len(rates) * 100:.0f}% ({len(rates)})"
+                    for state, rates in sorted(states.items())
+                )
+                print(f"{'':<18} {'':>5} {'':>5} {'':>6}  by state: {split}")
             if rate < args.min_rate:
                 below.append(source_key)
 
@@ -2775,7 +3063,11 @@ def _cmd_health(args: argparse.Namespace) -> int:
             for entry in store.sport_coverage(latest["id"])
             if not sports or entry["sport"] in sports
         ]
-        cross = store.cross_book_event_counts(latest["id"], min_books=MIN_HEALTHY_SOURCES)
+        cross = store.cross_book_event_counts(
+            latest["id"],
+            min_books=MIN_HEALTHY_SOURCES,
+            view_only=registry.view_only_for_run(latest["jurisdiction"]),
+        )
         if not coverage:
             print("  no rows stored for this scope")
         for entry in coverage:

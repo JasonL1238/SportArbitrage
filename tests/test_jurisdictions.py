@@ -5,6 +5,8 @@ import importlib
 import sqlite3
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from src.egress import detection_from_payload, load_detection, save_detection
 from src.jurisdictions import JURISDICTIONS, RouteStatus, jurisdiction, route_warnings
 from src.probe_cache import ProbeCache, ProbeStatus
@@ -265,6 +267,96 @@ def test_batch_fetches_global_sources_once_for_multiple_states(tmp_path, monkeyp
     assert [state for state, _ in seen] == ["GLOBAL", "IL", "PA"]
 
 
+def test_a_failure_building_republishers_does_not_leak_the_retail_transports(
+    monkeypatch, tmp_path,
+) -> None:
+    """``retail`` is built before the ``try``, so its ``finally`` cannot reach it.
+
+    The republisher build sits between the two, and a failure there left every
+    already-open retail transport unclosed for the rest of the process.
+    """
+    from src import collector
+    from src.raw_store import RawStore
+
+    closed: list[str] = []
+
+    class FakeSource:
+        def __init__(self, key: str) -> None:
+            self.source_key = key
+            self.leagues = ("MLB",)
+
+        def close(self) -> None:
+            closed.append(self.source_key)
+
+    calls: list[str] = []
+
+    def build(keys=None, *, state=None, route_scope="all", **kwargs):
+        calls.append(route_scope)
+        if route_scope == "global":
+            return []
+        if route_scope == "state_republished":
+            raise RuntimeError("action network refused the whole state")
+        return [FakeSource(f"retail-{state}")]
+
+    monkeypatch.setattr(collector, "build_sources", build)
+    with pytest.raises(RuntimeError, match="refused the whole state"):
+        collector.collect_batch_once(
+            ("PA",),
+            detected_state="PA",
+            raw_store=RawStore(tmp_path / "raw"),
+            store=None,
+        )
+    assert closed == ["retail-PA"], (closed, calls)
+
+
+def test_the_all_scope_really_means_all_three_groups() -> None:
+    """No caller reaches this branch, which is why a wrong answer would be believed.
+
+    Splitting the state-licensed republishers out of ``global_sources()`` narrowed
+    ``route_scope="all"`` to the retail routes plus those twelve republishers, so
+    it silently stopped returning every global venue — Pinnacle, the exchanges,
+    the prediction markets. ``collect_batch_once`` asks for each scope by name and
+    never noticed.
+    """
+    from src.collector import build_sources
+
+    built = build_sources(None, leagues=("MLB",), state="PA", route_scope="all")
+    try:
+        keys = {source.source_key for source in built}
+    finally:
+        for source in built:
+            source.close()
+
+    assert "fanduel" in keys                      # exact-state retail
+    assert "an_fanduel" in keys                   # state-licensed republisher
+    assert {"pinnacle", "matchbook", "kalshi"} <= keys   # global venues
+    # And no source is built twice under one key.
+    assert len(keys) == len(built)
+
+
+def test_asking_a_scope_for_a_source_it_does_not_build_says_so() -> None:
+    """A scope mismatch must not be reported as a league problem.
+
+    ``build_sources(["an_caesars"], route_scope="global")`` exited with "none of []
+    can collect league(s) ['MLB', 'WNBA', ...]" — the requested key had already been
+    filtered out by the scope, so the message blamed the leagues for it and sent the
+    reader to look at the wrong thing. The Action Network mirrors are the ones this
+    happens to: they look global, one host and no proxy, and their book id is a state
+    licence.
+    """
+    import pytest
+
+    from src.collector import build_sources
+
+    with pytest.raises(SystemExit) as raised:
+        build_sources(["an_caesars"], leagues=("MLB",), route_scope="global")
+    message = str(raised.value)
+    assert "an_caesars" in message
+    assert "state_republished" in message, message
+    assert "scope mismatch" in message, message
+    assert "league" not in message.replace("not a league one", ""), message
+
+
 def test_report_source_metadata_resolves_stored_state_not_hardcoded_il() -> None:
     from src.report import _source_entry
 
@@ -274,3 +366,128 @@ def test_report_source_metadata_resolves_stored_state_not_hardcoded_il() -> None
     hardrock = _source_entry("hardrock", state="PA")
     assert hardrock["route_status"] == "unavailable"
     assert hardrock["view_only"] is True
+
+
+class TestALiveLookupNeverFallsBackToAnotherState:
+    """A probe that validates the wrong licence manufactures false evidence.
+
+    ``sources_for_state`` keeps every key registered and fills the gaps with base
+    descriptors, which is right for replay and wrong for a caller about to open a
+    socket.  ``probe_sources.py`` and ``recon_sources.py`` were both taking the
+    lax path while doing exactly that.
+
+    Neither is known to have produced a false validation — each is protected by
+    an earlier guard (``state_candidates`` skips ``UNAVAILABLE``; ``profile()``
+    raises for an unlicensed book) — so these pin the *lookup*, which is the
+    lock that does not depend on those guards holding.  Every test below fails
+    on the pre-fix lookup; none of them exercises the two scripts, which is why
+    the claim made here is about the lookup and not about them.
+    """
+
+    def test_the_lax_lookup_still_serves_replay(self) -> None:
+        """Not a regression to fix — the stable registry must stay enumerable."""
+        from src.sources.registry import replay_descriptor_for_state
+
+        stale = replay_descriptor_for_state("DC", "betrivers_kambi")
+        assert stale.config["market"] == "US-IL"
+        assert stale.route_state is None
+
+    def test_an_unlicensed_retail_book_is_refused_rather_than_defaulted(self) -> None:
+        from src.sources.registry import descriptor_for_state
+
+        with pytest.raises(KeyError, match="no live DC route"):
+            descriptor_for_state("DC", "betrivers_kambi")
+        with pytest.raises(KeyError, match="not a Pennsylvania online sportsbook"):
+            descriptor_for_state("PA", "hardrock")
+
+    def test_a_republisher_with_no_licence_here_is_refused(self) -> None:
+        """Otherwise the registry's New Jersey defaults answer for every state."""
+        from src.sources.registry import descriptor_for_state
+
+        with pytest.raises(KeyError, match="republishes no IL licence"):
+            descriptor_for_state("IL", "an_parx")
+        with pytest.raises(KeyError, match="republishes no DC licence"):
+            descriptor_for_state("DC", "an_fanduel")
+
+    def test_a_licensed_route_is_built_with_this_state_pinned(self) -> None:
+        from src.sources.registry import descriptor_for_state
+
+        book = descriptor_for_state("PA", "betrivers_kambi")
+        assert book.config["market"] == "US-PA"
+        assert book.route_state == "PA"
+        assert descriptor_for_state("PA", "an_parx").config["book_id"] == 74
+
+    def test_state_neutral_venues_pass_through(self) -> None:
+        """Pinnacle and the exchanges have no jurisdiction to get wrong."""
+        from src.sources.registry import descriptor_for_state
+
+        assert descriptor_for_state("PA", "pinnacle").key == "pinnacle"
+        assert descriptor_for_state("DC", "kalshi").key == "kalshi"
+
+
+def test_every_registry_name_other_modules_use_is_exported() -> None:
+    """``__all__`` was a record of what somebody remembered, not of the surface.
+
+    Renaming ``republished_sources_for_state`` dropped it from ``__all__`` and nothing
+    noticed, because it is reached as ``registry.<name>`` rather than imported by
+    name. ``STATE_LICENSED_REPUBLISHER_KEYS`` and ``BY_BASE_KEY`` were in the same
+    position — used from four modules and two test files, absent from the export list.
+    Derived from real usage so the next rename cannot quietly do it again.
+    """
+    import re
+    from pathlib import Path
+
+    from src.sources import registry
+
+    root = Path(__file__).resolve().parent.parent
+    used: set[str] = set()
+    for path in (*(root / "src").rglob("*.py"), *(root / "scripts").glob("*.py")):
+        if path.name == "registry.py" and path.parent.name == "sources":
+            continue
+        for name in re.findall(r"\bregistry\.([A-Za-z_][A-Za-z0-9_]*)", path.read_text()):
+            if not name.startswith("_"):
+                used.add(name)
+
+    assert used, "the scan found no registry attribute access; fix the pattern"
+    unexported = sorted(
+        name for name in used
+        if hasattr(registry, name) and name not in registry.__all__
+    )
+    assert not unexported, (
+        f"other modules reach registry.{unexported} while __all__ omits them — "
+        "export them or stop using them"
+    )
+    # And nothing exported has since been deleted or renamed away.
+    missing = sorted(name for name in registry.__all__ if not hasattr(registry, name))
+    assert not missing, f"__all__ names {missing}, which no longer exist"
+
+
+def test_the_per_state_book_id_question_is_not_the_state_scoped_question() -> None:
+    """Two things that read alike, and the name used to claim the wider one.
+
+    ``files_per_state_book_id`` answers about **republishers**: is this feed asked for
+    a different Action Network book id per state. Under its old name and docstring —
+    ``files_state_book_ids``, "False means each publishes one number for the whole
+    country" — it returned False for ``fanduel``, ``betmgm`` and ``betrivers_kambi``,
+    the most state-scoped sources in the repository, every one of which carries a
+    per-state host or tenant.
+
+    The workaround is already in the tree: ``src.redundancy`` cannot use it as *the*
+    locality predicate and writes ``primary in RETAIL_SOURCE_KEYS or is_local(primary)``
+    instead. This pins both halves so the next caller reads the union off a test rather
+    than rediscovering it.
+    """
+    from src.jurisdictions import files_per_state_book_id, jurisdiction
+    from src.sources.registry import RETAIL_SOURCE_KEYS
+
+    for key in ("an_fanduel", "an_betmgm", "an_thescore"):
+        assert files_per_state_book_id(key), key
+    for key in ("vi_fanduel", "vsin_circa", "an_circa", "pinnacle"):
+        assert not files_per_state_book_id(key), key
+
+    # False, and every one of them is nonetheless pinned per state — by a route
+    # rather than by a book id, which is the distinction the name now carries.
+    for key in sorted(RETAIL_SOURCE_KEYS):
+        assert not files_per_state_book_id(key), key
+    routes = jurisdiction("PA").routes
+    assert routes["fanduel"].host != jurisdiction("IL").routes["fanduel"].host

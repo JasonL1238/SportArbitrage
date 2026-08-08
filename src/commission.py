@@ -171,11 +171,17 @@ COMMISSIONS: dict[str, Commission] = {
     "an_circa": NO_COMMISSION,
     "an_superbook": NO_COMMISSION,
     "an_bally": NO_COMMISSION,
+    "an_parx": NO_COMMISSION,
+    "an_unibet": NO_COMMISSION,
+    "an_thescore": NO_COMMISSION,
     "vi_draftkings": NO_COMMISSION,
     "vi_caesars": NO_COMMISSION,
     "vi_hardrock": NO_COMMISSION,
     "vi_fanatics": NO_COMMISSION,
     "vi_bet365": NO_COMMISSION,
+    "vi_betmgm": NO_COMMISSION,
+    "vi_fanduel": NO_COMMISSION,
+    "vi_betrivers": NO_COMMISSION,
     "vsin_circa": NO_COMMISSION,
     # ── betting exchanges: a share of net winnings ────────────────────────────
     # CHECK AGAINST YOUR OWN ACCOUNT before staking a Matchbook leg.  Matchbook

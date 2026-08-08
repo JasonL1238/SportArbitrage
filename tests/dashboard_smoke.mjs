@@ -205,6 +205,17 @@ try {
     globalThis.__fixtureBucket = fixtureBucket;
     globalThis.__fixtureWindowMs = fixtureWindowMs;
     globalThis.__marketGroups = marketGroups;
+    globalThis.__isUsUnavailable = isUsUnavailable;
+    globalThis.__currentRows = currentRows;
+    globalThis.__arbBundle = arbBundle;
+    globalThis.__showOffshore = () => showOffshore;
+    globalThis.__setShowOffshore = (on) => {
+      showOffshore = on;
+      const box = el('offshore-toggle');
+      if (box) box.checked = on;
+      buildSportPicker();
+      renderRunScoped();
+    };
     globalThis.__renderBook = renderBook;
     globalThis.__renderSources = renderSources;
     globalThis.__scopesFailedOf = scopesFailedOf;
@@ -1807,6 +1818,12 @@ if (process.argv[3]) {
   } else {
     const rows = ((data.quotes && data.quotes.rows) || [])
       .filter((r) => r[COL.run_id] === currentId)
+      // The strip counts what the page is showing, and the page hides books that
+      // cannot be bet from the US unless the switch is on. Reading the raw
+      // payload here would assert the pre-toggle semantics and fail against a
+      // page that is behaving correctly.
+      .filter((r) => globalThis.__showOffshore()
+        || !globalThis.__isUsUnavailable(data.strings[r[COL.source]]))
       .filter((r) => {
         const i = r[COL.status];
         return i !== null && i !== undefined && i >= 0 && data.strings[i] === 'active';
@@ -1855,6 +1872,91 @@ if (process.argv[3]) {
     }
     console.log(problems.length ? 'SEPARATE-BETS COUNT WRONG: ' + problems.join('; ')
       : `separate bets counts only complete markets (${complete} of ${groups.size})`);
+    if (problems.length) process.exit(1);
+  }
+}
+
+// The offshore switch has to move the whole page, not just the panel on screen.
+//
+// It changes which rows exist, so every count that reads `currentRows()` and the
+// arbitrage bundle itself have to follow it. The failure this guards against is
+// the quiet one: a switch that filters the board but leaves the arb list showing
+// a position whose second leg is at a book the reader cannot reach.
+{
+  const data = globalThis.__DATA;
+  const COL = globalThis.__COL;
+  const offshoreKeys = new Set((data.sources || [])
+    .filter((s) => s.us_unavailable).map((s) => s.key));
+
+  if (!offshoreKeys.size) {
+    // Nothing to move. A page whose sources are all fixtures outside the
+    // registry (or all US-bettable) never disagrees with itself on this axis,
+    // so there is no switch behavior here to prove one way or the other.
+    console.log('offshore switch check skipped; no venue in the payload is flagged us_unavailable');
+  } else {
+    const problems = [];
+    const box = nodes.get('offshore-toggle') || null;
+    if (globalThis.__showOffshore() !== false) {
+      problems.push('the page did not open in the US-only view');
+    }
+
+    // Default view: not one row, and not one arb leg, may come from a book the
+    // reader cannot bet at.
+    globalThis.location.hash = '#odds';
+    globalThis.__applyRoute();
+    const shownSources = () => new Set(globalThis.__currentRows()
+      .map((r) => data.strings[r[COL.source]]));
+    const leaked = [...shownSources()].filter((k) => offshoreKeys.has(k));
+    if (leaked.length) {
+      problems.push(`US-only view still showed rows from ${leaked.join(', ')}`);
+    }
+    const legsOf = (bag) => (bag ? (bag.opportunities || []) : [])
+      .flatMap((o) => (o.legs || []).map((l) => l.source));
+    const usOnlyLegs = legsOf(globalThis.__arbBundle());
+    const badLegs = usOnlyLegs.filter((k) => offshoreKeys.has(k));
+    if (badLegs.length) {
+      problems.push(`US-only arbitrage used unbettable legs: ${[...new Set(badLegs)].join(', ')}`);
+    }
+    const usOnlyRows = globalThis.__currentRows().length;
+    const usOnlyArbs = (globalThis.__arbBundle()?.opportunities || []).length;
+
+    // Flipped on: the same page, with the offshore books admitted everywhere.
+    globalThis.__setShowOffshore(true);
+    globalThis.location.hash = '#odds';
+    globalThis.__applyRoute();
+    const withRows = globalThis.__currentRows().length;
+    const withArbs = (globalThis.__arbBundle()?.opportunities || []).length;
+    const present = [...shownSources()].filter((k) => offshoreKeys.has(k));
+    if (withRows < usOnlyRows) {
+      problems.push(`turning the switch on lost rows (${usOnlyRows} -> ${withRows})`);
+    }
+    if (!present.length) {
+      // Only a real failure when the scrape actually holds offshore prices.
+      const held = (data.quotes?.rows || []).some((r) => offshoreKeys.has(data.strings[r[COL.source]]));
+      if (held) problems.push('the switch was on but no offshore rows came back');
+    }
+    if (withArbs < usOnlyArbs) {
+      problems.push(`allowing more books removed positions (${usOnlyArbs} -> ${withArbs})`);
+    }
+
+    // And back, so the rest of the harness runs against the default view.
+    globalThis.__setShowOffshore(false);
+    globalThis.location.hash = '#odds';
+    globalThis.__applyRoute();
+    if (globalThis.__currentRows().length !== usOnlyRows) {
+      problems.push('flipping the switch back did not restore the US-only view');
+    }
+
+    // Said out loud rather than left implied. This page's fixtures have usually
+    // already started by the time it is built, so both bundles are empty and the
+    // leg assertions above pass without proving anything. The non-vacuous check on
+    // the arb side is test_the_arb_payload_carries_both_the_us_only_and_the_offshore_view,
+    // which controls `as_of`; a silent "ok" here would read as cover it does not give.
+    const arbNote = (usOnlyArbs || withArbs)
+      ? `arbs (${usOnlyArbs} -> ${withArbs})`
+      : 'arb side not exercised: no position is takeable in this page';
+    console.log(problems.length ? 'OFFSHORE SWITCH WRONG: ' + problems.join('; ')
+      : `offshore switch moves rows (${usOnlyRows} -> ${withRows}); ${arbNote}`);
     if (problems.length) process.exit(1);
   }
 }

@@ -92,6 +92,57 @@ server exposes the same-origin endpoints used to log, edit, settle, and delete.
   State tenants are constructor configuration, never new source/counterparty identities.
 - Global sources are fetched once per batch. Direct global venues remain
   actionable; republished global observations are diagnostic-only.
+- Whether a venue can be *bet from the US* is a separate axis from view-only, held
+  in `registry.US_UNAVAILABLE_SOURCE_KEYS`. Those venues stay collected and stored
+  — they carry the sharpest lines — but the dashboard defaults to a US-only view
+  and the switch is opt-in. Because detection is Python and the page is a static
+  file, `_arb_payload` precomputes both bundles per run (`with_offshore` alongside
+  the US-only default); the client selects, it never recomputes.
+- A republisher's host is state-neutral; the book it republishes is not. Action
+  Network files one book id per state licence, so a state run resolves ids
+  through `Jurisdiction.republished` rather than reusing the base registry
+  config. A book with no licence in that state is `UNAVAILABLE` and is not
+  built there — never pointed at another state's book.
+- No required book is trusted on one unconfirmed feed. `src/coverage.py`
+  declares, per jurisdiction, the books that must be observed either
+  first-party or by at least two independent republishers **of that state's own
+  licence** that agree. A state with no declaration is reported as unchecked,
+  not as clean.
+- Republishers that watch a different licence than the state's own book
+  (VegasInsider's Las Vegas column against an Action Network state id) are
+  excluded from the two-feed count **and** from the price-agreement test. They
+  are recorded and named in the finding as context, so a legitimate
+  cross-licence difference cannot masquerade as drift and an out-of-state number
+  cannot stand in for the state licence. A book watched only from out of state
+  is `NON_LOCAL_ONLY`, an error rather than a thin feed.
+- An import-time invariant refuses a required-book table whose locality labels
+  cannot be true: a feed declared same-licence must file a book id for that
+  exact state, checked against the jurisdiction's own republished routes.
+- Two local feeds that were never compared do not satisfy the rule. Below the
+  distinctness module's shared-selection floor the comparison is undecided, which
+  is not agreement, so the book is `AGREEMENT_UNPROVEN` at `WARNING` rather than
+  ticked as cross-checked.
+- Whether a position is takeable from a state is one predicate,
+  `coverage.withhold_non_local`, used by the collector, `collector arb`, `collector
+  lines` and the dashboard alike — and *whether it applies to a given run* is one
+  more, `coverage.locality_applies`, for the same reason. It reads
+  `registry.takeable_from_state`: the state's retail licences **plus** the
+  nationwide first-party venues that hold no state sportsbook licence to begin
+  with. Not `state_licensed_keys` — building it on the licences alone called Kalshi
+  and Polymarket out-of-state in every jurisdiction and withheld a legal position
+  from the report, the dashboard and the SMS. Not the keys a run happened to build,
+  and not the jurisdiction's whole route table, which still lists books the
+  operator holds no licence for. Say "reachable", not "licensed", on every surface
+  that reports it. The count withheld is reported everywhere it is applied; a
+  silently shorter list reads as a quiet market and disagrees with every other
+  surface describing the same run.
+- Only a scope the operator widened on purpose (`global`, `all`) is exempt.
+  `legacy` — what the store backfills onto rows predating the `route_scope` column
+  — is governed, because whether a leg is reachable from a state is a fact about
+  the book and the state, not about what the run claimed to collect. The deny-list
+  direction is deliberate: an unrecognised scope gets the filter, so the cost of
+  being wrong is a withheld position with its count printed rather than an SMS
+  naming a book nobody can reach.
 - Promotions may reuse settings, raw storage, and transport guards, but its schema, registry, and database remain separate.
 - The bet ledger has a separate schema and lifecycle from both collected odds and promotions; collection never writes or deletes it.
 - The report layer may read and combine all three domains. Only its localhost control plane writes the bet ledger; collection/domain modules must not depend on report rendering.
@@ -109,6 +160,11 @@ server exposes the same-origin endpoints used to log, edit, settle, and delete.
 - Filter state (league, book) is reconciled on the run or sport change itself, not
   inside a panel renderer, because only one panel renders. The nav counts read that
   state, so a choice left impossible by the new scope has to be cleared before them.
+- The US-only switch filters at `currentRows()`, the one place every panel reads its
+  rows from, and therefore goes through the same reconcile-then-rebuild path as a
+  sport change rather than repainting the panel on screen. Books is the deliberate
+  exception: it lists every venue and marks the unbettable ones, because hiding one
+  there would make its own health count disagree with the run it describes.
 - A control shared by two panels renders only the panel on screen, so it also has to
   reschedule the nav counts: the panel left unbuilt has no renderer to write its own
   count, and would otherwise keep the number from before the filter.

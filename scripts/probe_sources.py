@@ -224,11 +224,25 @@ def state_candidates(state: str) -> tuple[Candidate, ...]:
 def probe_registered(candidate: Candidate, *, state: str) -> tuple[str, str]:
     """Fetch and parse a small MLB scope through the real configured adapter."""
     from src.sources._common import Tier
-    from src.sources.registry import sources_for_state
+    from src.sources.registry import descriptor_for_state
 
-    descriptor = next(
-        entry for entry in sources_for_state(state) if entry.key == candidate.source_key
-    )
+    # The strict lookup, never ``sources_for_state``: this function opens a
+    # socket and writes the result into the probe cache, so a fallback here
+    # records another state's route as this state's validated one.
+    #
+    # A refusal is one diagnostic row like any other failure.  ``state_candidates``
+    # already skips ``UNAVAILABLE`` routes so this should be unreachable, but the
+    # call sits outside the ``try`` below and the main loop has only a ``finally``
+    # — letting it escape would end the whole probe pass in a traceback, which is
+    # the least useful way for a defence-in-depth check to fire.
+    #
+    # Both exception types, not just ``KeyError``: the same lookup raises
+    # ``RuntimeError`` for the *other* refusal — a route that exists but is tagged
+    # for another state — and that is the one this call was added to catch.
+    try:
+        descriptor = descriptor_for_state(state, candidate.source_key)
+    except (KeyError, RuntimeError) as exc:
+        return "UNLICENSED", str(exc).strip('"')
     # Caesars' currently pinned public competition ids cover NFL/NBA; the other
     # state-sensitive adapters all have an MLB scope.  Probe a scope the real
     # adapter declares instead of manufacturing a universal league.
@@ -345,6 +359,12 @@ def _cache_status(verdict: str, detail: str) -> ProbeStatus:
     lowered = f"{verdict} {detail}".lower()
     if verdict == "OK":
         return ProbeStatus.OK
+    # Checked before the substring markers: a licensing refusal never reached the
+    # network, so the marker sweep below can only mis-file it.  It matched none of
+    # them and was cached as ``PARSE_FAIL`` — a broken parser, for an adapter that
+    # was never built.
+    if verdict == "UNLICENSED":
+        return ProbeStatus.UNLICENSED
     if "geo" in lowered or "not available in your region" in lowered:
         return ProbeStatus.GEO_RESTRICTED
     if any(word in lowered for word in ("403", "blocked", "denied", "waf", "captcha")):
@@ -387,7 +407,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         configured = jurisdiction(args.state)
-    except KeyError as exc:
+    except (KeyError, RuntimeError) as exc:
         print(f"error: {exc.args[0]}", file=sys.stderr)
         return 2
     state = configured.state

@@ -702,6 +702,35 @@ td.wrap { white-space: normal; min-width: 22ch; }
 .oj-board thead th.oj-game { z-index: 3; background: var(--surface); }
 .oj-board tbody tr:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
+/* ── the offshore switch ───────────────────────────────────────────────────
+   A checkbox with its box drawn as a track, so the two states are legible at a
+   glance from the rail without reading the label. */
+
+.switch { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 12px; }
+.switch input {
+  appearance: none; -webkit-appearance: none; margin: 0; flex: none;
+  width: 30px; height: 17px; border-radius: 999px;
+  background: var(--line); border: 1px solid var(--line-soft);
+  position: relative; transition: background .12s ease;
+}
+.switch input::after {
+  content: ''; position: absolute; top: 1px; left: 1px; width: 13px; height: 13px;
+  border-radius: 50%; background: var(--surface); transition: transform .12s ease;
+}
+.switch input:checked { background: var(--warn); }
+.switch input:checked::after { transform: translateX(13px); }
+.switch input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.switch span { color: var(--muted); }
+.switch input:checked ~ span { color: var(--ink); }
+
+/* Marks a venue the reader cannot reach from the US, wherever one is named. */
+.us-off {
+  font-size: 10px; font-weight: 600; letter-spacing: .02em; text-transform: uppercase;
+  padding: 1px 5px; border-radius: 999px; margin-left: 6px; white-space: nowrap;
+  background: var(--warn-soft); color: var(--warn); border: 1px solid currentColor;
+}
+.src.is-us-off { border-style: dashed; }
+
 /* ── source cards ──────────────────────────────────────────────────────── */
 
 .sources { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 10px; }
@@ -856,6 +885,25 @@ BODY = """
       <label for="sport-pick">Sport</label>
       <select id="sport-pick"></select>
       <span class="rail-foot" id="sport-meta" style="margin:0"></span>
+    </div>
+
+    <div class="rail-block">
+      <!-- The block heading deliberately carries no `for`. Pointing it at the
+           checkbox made it win the accessible name, so the switch announced
+           itself as "Where you can bet" — the section it sits in — rather than
+           as what flipping it does. -->
+      <label>Where you can bet</label>
+      <!-- No `for` here either, and this one is not cosmetic: a label that both
+           contains a control *and* points at it fires its activation behaviour on
+           top of the control's own, so a real click toggled twice and landed back
+           where it started. Containment alone is the association; `aria-label`
+           carries the name because the heading above is a bare <label>. -->
+      <label class="switch">
+        <input type="checkbox" id="offshore-toggle"
+               aria-label="Include books you can't bet from the US">
+        <span>Include books you can't bet from the US</span>
+      </label>
+      <span class="rail-foot" id="offshore-meta" style="margin:0"></span>
     </div>
 
     <div class="rail-foot" id="built"></div>
@@ -1627,6 +1675,14 @@ const commissionOf = (key) => sourceInfo(key).commission || '';
 const charges = (key) => Boolean(commissionOf(key));
 /** Consensus / opening columns shown for context — never "best" and never arb. */
 const isViewOnly = (key) => Boolean(sourceInfo(key).view_only);
+/** Whether the venue will not take a bet from somebody sitting in the US.
+ *
+ *  A different question from view-only, and the reason it is a separate flag: a
+ *  republished mirror is unstakeable because it is a copy of somebody else's
+ *  board, while these are real order books that refuse a US customer. Pinnacle
+ *  is the sharpest line on the page and worth reading even when it cannot be
+ *  bet, so the page filters on this rather than dropping it. */
+const isUsUnavailable = (key) => Boolean(sourceInfo(key).us_unavailable);
 /** Whether the venue's rows exist only because somebody offered liquidity — an
  *  exchange or a prediction market, as the source registry defines it. A sportsbook
  *  quotes both sides itself, so its two sides summing below 1.0 means the rows are
@@ -2258,11 +2314,45 @@ for (const row of Q.rows) {
   rowsByRun.get(id).push(row);
 }
 
+/* ── books you cannot bet from the US ──────────────────────────────────────
+   Off by default, which is the whole point: a position is only worth reading if
+   both legs can be placed, and Pinnacle or Bovada standing in for one of them
+   makes a 4% margin that cannot be taken. Turning it on answers the separate
+   question of what the offshore market was pricing, and every count, board and
+   arb list on the page moves together when it flips.
+
+   The choice is remembered, because it is a fact about where the reader lives
+   rather than about the scrape they happen to be looking at. `localStorage`
+   throws on some file:// configurations, so both sides are guarded — a browser
+   that refuses storage still gets a working toggle, just not a sticky one. */
+const OFFSHORE_KEY = 'sportarb.showOffshore';
+
+function readStoredOffshore() {
+  try {
+    return window.localStorage.getItem(OFFSHORE_KEY) === '1';
+  } catch (err) {
+    return false;
+  }
+}
+
+let showOffshore = readStoredOffshore();
+
+function storeOffshore(on) {
+  try {
+    window.localStorage.setItem(OFFSHORE_KEY, on ? '1' : '0');
+  } catch (err) { /* private mode or file://; the toggle still works this session */ }
+}
+
 // '' means every sport.  The filter is applied at the one place the rest of the
 // page reads its rows from, so no section can forget to honour it and show a
-// different sport's numbers under the same heading.
+// different sport's numbers under the same heading.  The offshore filter rides
+// along here for exactly that reason: the board, the games list, the coverage
+// grid, movement and quality all read this, and a panel that reached past it
+// would quietly disagree with the count in the nav beside it.
 let currentSport = '';
-const runRows = () => rowsByRun.get(currentRunId) || [];
+const rawRunRows = () => rowsByRun.get(currentRunId) || [];
+const runRows = () =>
+  showOffshore ? rawRunRows() : rawRunRows().filter((r) => !isUsUnavailable(str(r[COL.source])));
 const currentRows = () =>
   currentSport ? runRows().filter((r) => str(r[COL.sport]) === currentSport) : runRows();
 
@@ -2604,6 +2694,9 @@ function marketGroups(rows) {
  *  cheap enough to repaint on every run and sport change. */
 function renderChrome() {
   const run = runById.get(currentRunId);
+  // Before the early return: the rail line describes the switch, which is on
+  // screen and meaningful even on a page with no scrape to show yet.
+  paintOffshoreMeta();
   if (!run) {
     el('lede').textContent = 'No scrapes yet. Hit Scrape now (via --serve) to pull prices.';
     el('brand-sub').textContent = DATA.meta.db_name || '';
@@ -2635,6 +2728,11 @@ function renderChrome() {
           singleSports.length === 1 ? '' : 's'} only one book covered</span>`
       : '',
     currentSport ? `<span class="pill accent">showing ${escapeHtml(sportLabel(currentSport))}</span>` : '',
+    // Loud on purpose. The default view is the one whose prices can all be
+    // acted on, so the exception is what needs saying on every panel.
+    showOffshore
+      ? `<span class="pill warn" title="Pinnacle, Bovada, Cloudbet, 1xBet, LeoVegas and the offshore exchanges are included. Some positions shown cannot be placed from the US."><i></i>including books you can't bet</span>`
+      : '',
     `<span class="pill flat">${runs.length} scrape${runs.length === 1 ? '' : 's'} saved</span>`,
     ...(DATA.meta.jurisdiction_warnings || []).map((warning) =>
       `<span class="pill bad" title="${escapeHtml(warning)}">jurisdiction warning</span>`),
@@ -3556,9 +3654,34 @@ function renderPromos() {
 
 /* ── arbitrage ───────────────────────────────────────────────────────────── */
 
+/** The arbitrage bundle for the run being viewed, in the view being asked for.
+ *
+ *  Detection is Python and this page is a static file, so the offshore variant
+ *  cannot be recomputed here — `_arb_payload` precomputes both and this picks.
+ *  A payload built before the toggle existed has no `with_offshore`, so turning
+ *  the switch on falls back to the bundle it does have rather than blanking the
+ *  panel; that older bundle was computed with the offshore books allowed, which
+ *  is exactly what the switch is asking for. */
 function arbBundle() {
   const bags = DATA.arbs || {};
-  return bags[String(currentRunId)] || bags[currentRunId] || null;
+  const bag = bags[String(currentRunId)] || bags[currentRunId] || null;
+  if (!bag) return null;
+  return showOffshore ? (bag.with_offshore || bag) : bag;
+}
+
+/** Whether the offshore books changed anything for this run, as a sentence or ''. */
+function offshoreDelta() {
+  const bags = DATA.arbs || {};
+  const bag = bags[String(currentRunId)] || bags[currentRunId] || null;
+  if (!bag || !bag.with_offshore) return '';
+  const sportOf = (list) => (list || []).filter((o) => !currentSport || o.sport === currentSport);
+  const here = sportOf(bag.opportunities).length;
+  const all = sportOf(bag.with_offshore.opportunities).length;
+  if (all === here) return '';
+  const extra = all - here;
+  return showOffshore
+    ? `${extra} of these ${extra === 1 ? 'needs' : 'need'} a book you cannot bet from the US`
+    : `${extra} more ${extra === 1 ? 'position' : 'positions'} exist if offshore books are allowed`;
 }
 
 function renderArb() {
@@ -3600,9 +3723,14 @@ function renderArb() {
     ? `${opps.length} takeable · ${bag.comparable_group_count} cross-book markets`
     : `none · ${bag.comparable_group_count} cross-book markets checked`;
   if (note) {
-    note.textContent = opps.length
+    // The delta is the answer to "am I leaving money on the table by staying
+    // US-only", and it is worth saying whether the switch is on or off — one
+    // way it warns, the other way it invites.
+    const delta = offshoreDelta();
+    const base = opps.length
       ? `stakes sized to $${Number(bag.stake || 100).toFixed(0)} total · sport filter applies`
       : 'same detector as collector arb — empty usually means no edge today';
+    note.textContent = delta ? `${base} · ${delta}` : base;
   }
 
   const best = opps.length
@@ -3618,13 +3746,34 @@ function renderArb() {
     `<div class="stat"><span>${escapeHtml(name)}</span><b>${escapeHtml(String(value))}</b><small>${escapeHtml(sub)}</small></div>`
   ).join('');
 
+  // Positions dropped for having no leg the operator can *reach* from this state.
+  // Said out loud, and in the same place the count is, because "none" and "none you
+  // can take from here" are different boards and `collector arb` prints the
+  // distinction. A number shipped in the payload and rendered nowhere is the gap it
+  // was added to close: the reader compares two surfaces, sees two counts, and is
+  // told nothing.
+  //
+  // "Reachable", not "licensed", and the difference is not pedantry: the filter is
+  // `registry.takeable_from_state`, which admits Kalshi and Polymarket — federally
+  // regulated venues no state licenses as sportsbooks — so a Kalshi/Polymarket
+  // position is kept. Under the word "license" this note invited the reader to
+  // conclude their prediction-market edge had been dropped for licensing, which is
+  // both false and the exact inversion an earlier round of this filter shipped.
+  const withheld = Number(bag.non_local_withheld || 0);
+  const withheldNote = withheld
+    ? `<div class="arb-empty">${withheld} ${withheld === 1 ? 'position was' : 'positions were'}
+       withheld: no leg was at a venue you can reach from this jurisdiction — no licence here and
+       no nationwide US access. They are not a clean board and not an edge — they are somewhere
+       else's.</div>`
+    : '';
+
   if (!opps.length) {
-    list.innerHTML = `<div class="arb-empty">No takeable arbitrage in this scrape
+    list.innerHTML = withheldNote + `<div class="arb-empty">No takeable arbitrage in this scrape
       ${currentSport ? `for ${escapeHtml(sportLabel(currentSport))}` : ''}.
       The detector looked at ${bag.comparable_group_count || 0} cross-book markets and refused the
       rest for the reasons below — that is a clean board, not a missing feature.</div>`;
   } else {
-    list.innerHTML = opps.map((o, i) => arbCard(o, i)).join('');
+    list.innerHTML = withheldNote + opps.map((o, i) => arbCard(o, i)).join('');
   }
 
   const diags = bag.diagnostics || [];
@@ -4488,9 +4637,22 @@ function renderSources() {
       ? `<p class="dim" style="font-size:11.5px">Commission ${escapeHtml(src.commission)}. ${
           escapeHtml(src.settles || '')}</p>`
       : '';
-    return `<a class="src" href="${escapeHtml(href('book', src.key))}">
-      <div class="src-top"><div><b>${escapeHtml(src.label)}</b><code>${escapeHtml(src.host)}</code></div>${kindPill}${pill}</div>
+    // Books is the one panel the switch does not filter: a venue you cannot bet
+    // at is still a venue that answered, and hiding it here would make the
+    // health count on this page disagree with the run it describes. It is
+    // marked instead, and says which state the switch has it in.
+    const offshore = isUsUnavailable(src.key);
+    const offshoreMark = offshore ? '<span class="us-off">can\'t bet from US</span>' : '';
+    const offshoreNote = offshore
+      ? `<p class="dim" style="font-size:11.5px">Not bettable from the United States${
+          showOffshore
+            ? ' — its prices are being included anyway, so a position using it cannot be placed.'
+            : " — its prices are excluded from the board and from arbitrage. Turn on “Include books you can't bet from the US” to see them."}</p>`
+      : '';
+    return `<a class="src${offshore ? ' is-us-off' : ''}" href="${escapeHtml(href('book', src.key))}">
+      <div class="src-top"><div><b>${escapeHtml(src.label)}</b>${offshoreMark}<code>${escapeHtml(src.host)}</code></div>${kindPill}${pill}</div>
       <p>${escapeHtml(src.what)}</p>
+      ${offshoreNote}
       ${cut}
       <div class="src-grid">${cells.map(([k, v]) =>
         `<div><span>${escapeHtml(k)}</span><b>${escapeHtml(String(v))}</b></div>`).join('')}</div>
@@ -6241,6 +6403,44 @@ el('sport-pick').addEventListener('change', () => {
   buildSportPicker();
   renderRunScoped();
 });
+
+/* The offshore switch. Goes through the same path as changing the sport, and for
+   the same reason: it changes which rows exist, so the sport list, the filter
+   reconciliation, every panel and every nav count have to be redone rather than
+   just the panel on screen. The selected game is dropped because a fixture only
+   an offshore book priced stops existing when the switch goes off. */
+const offshoreToggle = el('offshore-toggle');
+if (offshoreToggle) {
+  offshoreToggle.checked = showOffshore;
+  offshoreToggle.addEventListener('change', () => {
+    showOffshore = offshoreToggle.checked;
+    storeOffshore(showOffshore);
+    selectedEvent = null;
+    buildSportPicker();
+    renderRunScoped();
+  });
+}
+
+/** The rail's line under the switch: what it is currently hiding or admitting. */
+function paintOffshoreMeta() {
+  const node = el('offshore-meta');
+  if (!node) return;
+  const hidden = new Set();
+  for (const row of rawRunRows()) {
+    const key = str(row[COL.source]);
+    if (isUsUnavailable(key)) hidden.add(key);
+  }
+  if (!hidden.size) {
+    node.textContent = 'this scrape has no offshore prices';
+    return;
+  }
+  const names = [...hidden].map(book).sort();
+  const list = names.slice(0, 3).join(', ') + (names.length > 3 ? `, +${names.length - 3} more` : '');
+  node.textContent = showOffshore
+    ? `showing ${names.length} unbettable book(s): ${list}`
+    : `hiding ${names.length} book(s) you can't bet: ${list}`;
+}
+
 /* ── scrape from the UI (only when served on localhost) ──────────────────── */
 
 function scrapeScopePayload() {

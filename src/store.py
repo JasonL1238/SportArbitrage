@@ -35,7 +35,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Iterable, Sequence
+from typing import TYPE_CHECKING, Any, Collection, Iterable, Sequence
 
 from src.leagues import league as get_league
 from src.participants import canonical_participant
@@ -924,7 +924,16 @@ class Store:
         ("collection_run", "counterparty_groups", "TEXT"),
         ("collection_run", "jurisdiction", "TEXT NOT NULL DEFAULT ''"),
         ("collection_run", "batch_id", "TEXT NOT NULL DEFAULT ''"),
-        ("collection_run", "route_scope", "TEXT NOT NULL DEFAULT 'state'"),
+        # ``legacy`` on the *migration*, deliberately different from the CREATE
+        # TABLE default above.  ``jurisdiction`` and ``route_scope`` were added in
+        # different commits, so a database written between them has a populated
+        # jurisdiction and no scope — and SQLite backfills every existing row with
+        # whatever default this ALTER declares.  Backfilling ``'state'`` asserted
+        # that historical runs had collected exact-state retail routes, which they
+        # had not, and ``coverage.withhold_non_local`` then withheld their
+        # positions on exactly the reasoning its own docstring warns about.  A row
+        # that predates the column has no scope; ``legacy`` is what that is called.
+        ("collection_run", "route_scope", "TEXT NOT NULL DEFAULT 'legacy'"),
     )
 
     def _add_missing_columns(self) -> None:
@@ -1376,7 +1385,13 @@ class Store:
             (run_id,),
         ).fetchall()
 
-    def cross_book_event_counts(self, run_id: int, *, min_books: int = 2) -> dict[str, int]:
+    def cross_book_event_counts(
+        self,
+        run_id: int,
+        *,
+        min_books: int = 2,
+        view_only: Collection[str] | None = None,
+    ) -> dict[str, int]:
         """Per sport: how many fixtures were priced by *min_books* or more books.
 
         The sharper measure of whether a sport is usable.  "Two books produced
@@ -1387,10 +1402,21 @@ class Store:
 
         View-only feeds (AN Open) do not count toward the book total — they are
         on the board for context, not a counterparty that makes a sport comparable.
+
+        *view_only* is the exclusion set, and it belongs to the **run**.  Defaulted
+        to the module-level ``VIEW_ONLY_SOURCES`` this asked whichever question
+        ``ODDS_STATE`` happened to configure: that constant is
+        ``REPUBLISHED_SOURCE_KEYS | jurisdiction(<ambient state>).view_only_sources``,
+        so it holds 27 keys under IL and 28 under PA (``hardrock``, which PA cannot
+        stake).  Reading a PA run from an IL-configured box therefore counted Hard
+        Rock as a counterparty and printed a sport as ``usable``; reading an IL run
+        from a PA box excluded it and printed ``NO OVERLAP``.  Same run, same
+        database, two answers from an environment variable — the defect
+        ``collector arb`` fixed for itself and left open here.
         """
         from src.sources.registry import VIEW_ONLY_SOURCES
 
-        exclude = tuple(sorted(VIEW_ONLY_SOURCES))
+        exclude = tuple(sorted(VIEW_ONLY_SOURCES if view_only is None else view_only))
         banned = (
             f" AND source NOT IN ({','.join('?' * len(exclude))})" if exclude else ""
         )

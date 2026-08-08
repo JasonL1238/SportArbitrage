@@ -1735,3 +1735,477 @@ def test_the_page_builds_promo_plans_behind_a_counterparty_gate(tmp_path, monkey
     assert gate, f"the page built plans with no counterparty gate: {seen!r}"
     pairs = [frozenset(group) for groups in gate.values() for group in groups]
     assert frozenset({"betrivers_kambi", "leovegas_kambi"}) in pairs, gate
+
+
+# ── books you cannot bet from the US ─────────────────────────────────────────
+#
+# Pinnacle and the offshore exchanges publish the sharpest lines on the page, so
+# they stay in the data.  What must not happen is the page presenting a position
+# as takeable when one of its legs is at a venue that will not accept a US
+# customer: the reader stakes the licensed side and finds no counterparty for the
+# other, which is an unhedged bet rather than a slightly optimistic margin.
+
+
+def test_every_venue_says_whether_it_can_be_bet_from_the_us() -> None:
+    """The flag is read off the registry, not restated in the report layer.
+
+    A literal list here would drift the moment a source was added, and drift
+    silently: an unflagged offshore book renders identically to a licensed one.
+    """
+    from src.report import _source_entry
+    from src.sources.registry import US_UNAVAILABLE_SOURCE_KEYS, keys
+
+    for key in keys():
+        entry = _source_entry(key)
+        assert "us_unavailable" in entry, f"{key} does not say whether it is bettable"
+        assert entry["us_unavailable"] == (key in US_UNAVAILABLE_SOURCE_KEYS), key
+
+    entry = _source_entry("pinnacle")
+    assert entry["us_unavailable"] is True
+    # Independent of view-only: Pinnacle is a real order book, not a mirror, and
+    # collapsing the two axes would drop it out of best-price highlighting.
+    assert entry["view_only"] is False, (
+        "Pinnacle was marked view-only; that is a different question, and "
+        "answering it this way removes the sharpest line on the board"
+    )
+
+
+def test_a_us_regulated_venue_is_not_marked_unbettable() -> None:
+    """Kalshi and Polymarket are the two that must not be swept up by the set."""
+    from src.report import _source_entry
+
+    for key in ("kalshi", "polymarket", "fanduel", "draftkings"):
+        assert _source_entry(key)["us_unavailable"] is False, key
+
+
+def test_the_arb_payload_carries_both_the_us_only_and_the_offshore_view(
+    populated: Store,
+) -> None:
+    """Detection is Python, so the toggle cannot recompute — both are precomputed.
+
+    The default bundle is the US-only one.  ``with_offshore`` is the superset,
+    and the fixture's ``smarkets`` legs are the thing that separates them.
+    """
+    from src.report import _arb_payload
+    from src.sources.registry import US_UNAVAILABLE_SOURCE_KEYS
+
+    with populated as store:
+        run_ids = [row["id"] for row in store.run_summaries(limit=5)]
+        payload = _arb_payload(store, run_ids, as_of=datetime(2026, 7, 28, 8, 0, tzinfo=UTC))
+
+    assert payload, "no arb bundles were built for the fixture's runs"
+    for run_id, bundle in payload.items():
+        assert "with_offshore" in bundle, f"run {run_id} carries only one view"
+        # The whole promise of the default view: no opportunity it lists can
+        # have a leg the reader is unable to place.
+        for opportunity in bundle["opportunities"]:
+            legs = {leg["source"] for leg in opportunity["legs"]}
+            offshore = US_UNAVAILABLE_SOURCE_KEYS.intersection(legs)
+            assert not offshore, (
+                f"the US-only view offered a position needing {sorted(offshore)}, "
+                "which cannot be staked from the United States"
+            )
+        # Removing legs can only ever remove positions, never invent them.
+        assert len(bundle["opportunities"]) <= len(bundle["with_offshore"]["opportunities"])
+
+
+def test_the_us_only_view_still_refuses_the_republished_mirrors(populated: Store) -> None:
+    """The regression the exclusion set is easy to write wrong.
+
+    ``find_opportunities(view_only_sources=None)`` means "use the process
+    default", so unioning the offshore keys onto ``None`` resolves to the
+    offshore keys *alone* and quietly re-admits every Action Network and
+    VegasInsider mirror as a leg — turning a book and its own republished copy
+    into the two sides of a fictional arbitrage.
+    """
+    from src.report import _arb_payload
+    from src.sources.registry import REPUBLISHED_SOURCE_KEYS
+
+    with populated as store:
+        run_ids = [row["id"] for row in store.run_summaries(limit=5)]
+        payload = _arb_payload(store, run_ids, as_of=datetime(2026, 7, 28, 8, 0, tzinfo=UTC))
+
+    for bundle in payload.values():
+        for opportunity in bundle["opportunities"]:
+            legs = {leg["source"] for leg in opportunity["legs"]}
+            mirrors = REPUBLISHED_SOURCE_KEYS.intersection(legs)
+            assert not mirrors, f"a republished mirror became a leg: {sorted(mirrors)}"
+
+
+def _pa_state_run(tmp_path, sources) -> tuple[Path, list[int]]:
+    """One PA run recorded under ``route_scope="state"``, with the given legs."""
+    from src.validation import ValidationReport
+
+    kickoff = datetime.now(UTC) + timedelta(hours=6)
+    rows = [
+        make_quote(source=source, selection=selection, decimal_odds=odds,
+                   source_market_id="m", commence_time=kickoff)
+        for source, selection, odds in sources
+    ]
+    path = tmp_path / "db.sqlite3"
+    with Store(path) as opened:
+        run = opened.start_run(
+            datetime.now(UTC), jurisdiction="PA", route_scope="state",
+        )
+        opened.save_quotes_by_source(run, rows)
+        opened.finish_run(
+            run, finished_at=datetime.now(UTC),
+            report=ValidationReport(quote_count=len(rows), event_count=1),
+            counterparties={},
+        )
+    return path, [run]
+
+
+def test_the_dashboard_withholds_positions_with_no_state_licensed_leg(tmp_path) -> None:
+    """The dashboard's half of the exact-state leg rule, which was unpinned.
+
+    Setting ``state_scoped = False`` left ``tests/test_report.py`` byte-identical,
+    so the surface a reader actually looks at could render every out-of-state-only
+    position on a Pennsylvania board — and report ``non_local_withheld: 0`` while
+    doing it. ``--serve`` rebuilds through this same function.
+    """
+    from src.report import _arb_payload
+
+    path, run_ids = _pa_state_run(tmp_path, [
+        ("pinnacle", Selection.HOME, 2.20),
+        ("bovada", Selection.AWAY, 2.20),
+    ])
+    with Store(path) as opened:
+        payload = _arb_payload(opened, run_ids, as_of=datetime.now(UTC))
+
+    # Measured on the offshore-admitted view: the US-only default drops Bovada as
+    # a leg first, so the locality rule would have nothing left to act on and the
+    # assertion would pass without exercising it.
+    bundle = payload[str(run_ids[0])]["with_offshore"]
+    assert bundle["opportunities"] == []
+    assert bundle["non_local_withheld"] == 1
+
+
+def test_the_dashboard_keeps_positions_that_do_have_one(tmp_path) -> None:
+    """The other direction: the filter must not empty a legitimate PA board."""
+    from src.report import _arb_payload
+
+    path, run_ids = _pa_state_run(tmp_path, [
+        ("fanduel", Selection.HOME, 2.20),
+        ("pinnacle", Selection.AWAY, 2.20),
+    ])
+    with Store(path) as opened:
+        payload = _arb_payload(opened, run_ids, as_of=datetime.now(UTC))
+
+    bundle = payload[str(run_ids[0])]["with_offshore"]
+    assert len(bundle["opportunities"]) == 1
+    assert bundle["non_local_withheld"] == 0
+
+
+def test_a_state_licensed_republisher_is_not_badged_global() -> None:
+    """The Books panel's one job is saying where each feed's number comes from.
+
+    ``route_scope`` was ``"state" if key in RETAIL_SOURCE_KEYS else "global"``,
+    written before the state-licensed republishers were split out of
+    ``global_sources()``. ``an_fanduel`` is asked for Pennsylvania's own book id
+    (255) on a PA run, so badging it GLOBAL beside ``vi_fanduel`` — a Las Vegas
+    column that genuinely is one — erases the distinction rules (a) and (c) exist
+    to make visible.
+    """
+    from src.report import _source_entry
+
+    for key in ("fanduel", "an_fanduel", "an_parx", "an_thescore"):
+        assert _source_entry(key)["route_scope"] == "state", key
+    # Feeds that publish one board for the whole country stay global — including
+    # ``an_circa``, an Action Network feed pinned to a fixed id rather than a
+    # per-state one, which is the case a membership test on the ``an_`` prefix
+    # would have got wrong.
+    for key in ("vi_fanduel", "vsin_circa", "an_circa", "pinnacle", "smarkets"):
+        assert _source_entry(key)["route_scope"] == "global", key
+
+
+def test_a_legacy_scope_run_is_treated_the_same_way_arb_treats_it(tmp_path) -> None:
+    """One run must not have two position counts — and ``legacy`` is governed.
+
+    Sharing the predicate was not enough — the three callers spelled the *decision*
+    three ways, so a run recorded ``jurisdiction="PA", route_scope="legacy"`` was
+    filtered by ``arb`` (which keyed on the jurisdiction) and not by the dashboard
+    (which keyed on ``route_scope``): 1 position here, 0 there, nothing accounting
+    for the gap.
+
+    **This test previously pinned the opposite answer, and that was a money-path
+    defect.** Agreeing was right; agreeing on *admitting* was not. ``jurisdiction``
+    and ``route_scope`` were added in different commits, so a database migrated
+    across the gap holds rows with a real jurisdiction and ``'legacy'`` — the rows
+    ``arb --run <old>`` and this payload read — and on those, ``arb`` printed **and
+    texted** a "PA" arbitrage whose two legs were an offshore book and a book that
+    geoblocks the US. Only a scope the operator widened on purpose (``global``,
+    ``all``) is exempt, because that is a request to see the wider board; a
+    forgotten scope is not.
+
+    The legs here are ``pinnacle``/``bovada`` — nothing reachable from
+    Pennsylvania — so the position is withheld and *counted*, never silently
+    dropped.
+    """
+    from src.report import _arb_payload
+    from src.validation import ValidationReport
+
+    kickoff = datetime.now(UTC) + timedelta(hours=6)
+    rows = [
+        make_quote(source=source, selection=selection, decimal_odds=2.20,
+                   source_market_id="m", commence_time=kickoff)
+        for source, selection in (
+            ("pinnacle", Selection.HOME), ("bovada", Selection.AWAY),
+        )
+    ]
+    path = tmp_path / "db.sqlite3"
+    with Store(path) as store:
+        run = store.start_run(
+            datetime.now(UTC), jurisdiction="PA", route_scope="legacy",
+        )
+        store.save_quotes_by_source(run, rows)
+        store.finish_run(
+            run, finished_at=datetime.now(UTC),
+            report=ValidationReport(quote_count=len(rows), event_count=1),
+            counterparties={},
+        )
+    with Store(path) as store:
+        payload = _arb_payload(store, [run], as_of=datetime.now(UTC))
+
+    bundle = payload[str(run)]["with_offshore"]
+    assert bundle["opportunities"] == []
+    assert bundle["non_local_withheld"] == 1
+
+
+def test_a_global_run_is_not_filtered_by_jurisdiction(tmp_path) -> None:
+    """"GLOBAL" is not a jurisdiction, so nothing about it is out of state."""
+    from src.report import _arb_payload
+    from src.validation import ValidationReport
+
+    kickoff = datetime.now(UTC) + timedelta(hours=6)
+    rows = [
+        make_quote(source=source, selection=selection, decimal_odds=2.20,
+                   source_market_id="m", commence_time=kickoff)
+        for source, selection in (
+            ("pinnacle", Selection.HOME), ("bovada", Selection.AWAY),
+        )
+    ]
+    path = tmp_path / "db.sqlite3"
+    with Store(path) as store:
+        run = store.start_run(
+            datetime.now(UTC), jurisdiction="GLOBAL", route_scope="global",
+        )
+        store.save_quotes_by_source(run, rows)
+        store.finish_run(
+            run, finished_at=datetime.now(UTC),
+            report=ValidationReport(quote_count=len(rows), event_count=1),
+            counterparties={},
+        )
+    with Store(path) as store:
+        payload = _arb_payload(store, [run], as_of=datetime.now(UTC))
+
+    bundle = payload[str(run)]["with_offshore"]
+    assert len(bundle["opportunities"]) == 1
+    assert bundle["non_local_withheld"] == 0
+
+
+def test_every_key_the_arb_payload_ships_is_read_by_the_page() -> None:
+    """A payload key with no renderer is a fix that stopped halfway.
+
+    ``non_local_withheld`` shipped for a round with nothing reading it, so the
+    dashboard showed an empty Pennsylvania board while ``collector arb`` printed
+    "withheld 4 position(s)" for the same run — the exact two-counts-no-explanation
+    failure the key was added to prevent. Asserted over every key rather than that
+    one, so the next key added to this payload cannot repeat it.
+    """
+    from src.report_assets import JS
+    from src.report import _blank_arb_bundle
+
+    shipped = set(_blank_arb_bundle(100.0)) - {"with_offshore"}
+    assert "non_local_withheld" in shipped, "the payload key vanished; update this test"
+    unread = sorted(key for key in shipped if key not in JS)
+    assert not unread, (
+        f"the arb payload ships {unread} and no dashboard code reads it — either "
+        "render it or stop shipping it"
+    )
+
+
+def test_the_page_tells_the_reader_when_positions_were_withheld() -> None:
+    """Reading the number is not the same as accounting for it.
+
+    The distinction has to reach words: "none" and "none you can take from here"
+    are different boards, and only one of them is a clean one.
+    """
+    from src.report_assets import JS
+
+    branch = JS[JS.index("non_local_withheld"):]
+    branch = branch[:branch.index("if (!opps.length)")]
+    assert "withheld" in branch
+    # And it has to be the *right* words. The filter is
+    # ``registry.takeable_from_state``, which keeps Kalshi and Polymarket — venues
+    # no state licenses as sportsbooks — so a note saying "this jurisdiction does
+    # not license" told the reader their prediction-market edge had been dropped for
+    # licensing. Reachability is the claim the code makes.
+    note = branch[branch.index("withheldNote"):]
+    assert "reach from this jurisdiction" in note
+    assert "does not license" not in note
+
+
+def test_a_run_predating_the_scope_column_is_not_migrated_into_state_scope(tmp_path) -> None:
+    """The migration default decided the locality question for every old run.
+
+    ``jurisdiction`` and ``route_scope`` were added to the schema in *different*
+    commits, so a database written between them has a populated jurisdiction and no
+    scope. SQLite backfills every existing row with the ALTER's default, so
+    declaring ``'state'`` asserted that historical runs had collected exact-state
+    retail routes, which is a claim about a run nobody recorded. A row that predates
+    the column has no scope, which is what ``legacy`` means.
+
+    The stamp is honest; the *consequence* is that rule (a) still governs the row.
+    This test asserted the opposite for a round — 1 opportunity, 0 withheld — which
+    is how ``arb --run <old>`` came to print and text a "PA" arbitrage between an
+    offshore book and one that geoblocks the US. What the run recorded about its
+    slate does not change whether a Pennsylvania operator can reach Bovada.
+    """
+    import sqlite3
+
+    from src.report import _arb_payload
+    from src.validation import ValidationReport
+
+    kickoff = datetime.now(UTC) + timedelta(hours=6)
+    rows = [
+        make_quote(source=source, selection=selection, decimal_odds=2.20,
+                   source_market_id="m", commence_time=kickoff)
+        for source, selection in (
+            ("pinnacle", Selection.HOME), ("bovada", Selection.AWAY),
+        )
+    ]
+    path = tmp_path / "db.sqlite3"
+    with Store(path) as store:
+        run = store.start_run(
+            datetime.now(UTC), jurisdiction="PA", route_scope="legacy",
+        )
+        store.save_quotes_by_source(run, rows)
+        store.finish_run(
+            run, finished_at=datetime.now(UTC),
+            report=ValidationReport(quote_count=len(rows), event_count=1),
+            counterparties={},
+        )
+
+    # Simulate the older schema: the column simply did not exist yet.
+    with sqlite3.connect(path) as conn:
+        conn.execute("ALTER TABLE collection_run DROP COLUMN route_scope")
+    with Store(path) as store:                      # reopening runs the migration
+        migrated = store.run_row(run)["route_scope"]
+        payload = _arb_payload(store, [run], as_of=datetime.now(UTC))
+
+    assert migrated == "legacy", (
+        f"the migration backfilled {migrated!r}; a run that predates the column "
+        "did not collect exact-state routes and must not be claimed to have"
+    )
+    bundle = payload[str(run)]["with_offshore"]
+    assert bundle["opportunities"] == []
+    assert bundle["non_local_withheld"] == 1
+
+
+def test_the_comparable_sport_count_does_not_depend_on_the_reading_process(tmp_path) -> None:
+    """Same run, same database — one answer, whatever ``ODDS_STATE`` says.
+
+    ``cross_book_event_counts`` read the module-level ``VIEW_ONLY_SOURCES``, which is
+    frozen at import from ``settings.STATE``: 27 keys under IL and 28 under PA,
+    because Pennsylvania cannot stake Hard Rock. So a PA run read from an
+    IL-configured box counted Hard Rock as a counterparty and printed a sport
+    ``usable``, while an IL run read from a PA box excluded it and printed
+    ``NO OVERLAP``. ``runs`` and ``health`` both render that bar.
+    """
+    from src.sources import registry
+    from src.store import Store
+    from src.validation import ValidationReport
+
+    assert "hardrock" in registry.view_only_for_run("PA"), "fixture assumption changed"
+    assert "hardrock" not in registry.view_only_for_run("IL")
+
+    kickoff = datetime.now(UTC) + timedelta(hours=6)
+    rows = [
+        make_quote(source=source, selection=selection, decimal_odds=2.05,
+                   source_market_id="m", commence_time=kickoff)
+        for source, selection in (
+            ("fanduel", Selection.HOME), ("hardrock", Selection.AWAY),
+        )
+    ]
+    path = tmp_path / "db.sqlite3"
+    with Store(path) as store:
+        run = store.start_run(
+            datetime.now(UTC), jurisdiction="PA", route_scope="state",
+        )
+        store.save_quotes_by_source(run, rows)
+        store.finish_run(
+            run, finished_at=datetime.now(UTC),
+            report=ValidationReport(quote_count=len(rows), event_count=1),
+            counterparties={},
+        )
+        # The run is a PA run, so Hard Rock is not a counterparty in it — whatever
+        # this process is configured for. One fixture, one pair, so the count is
+        # zero when Hard Rock is correctly excluded and one when it is not.
+        counted = store.cross_book_event_counts(
+            run, min_books=2, view_only=registry.view_only_for_run("PA"),
+        )
+        assert counted.get("baseball", 0) == 0, counted
+
+        # And the ambient constant is what used to be used, so this states the gap
+        # rather than leaving it implied.
+        ambient = store.cross_book_event_counts(
+            run, min_books=2, view_only=registry.VIEW_ONLY_SOURCES,
+        )
+        if "hardrock" not in registry.VIEW_ONLY_SOURCES:
+            assert ambient.get("baseball", 0) == 1, (
+                "this box is configured for a state that can stake Hard Rock, so "
+                "the ambient set would have counted it — which is the defect"
+            )
+
+
+def test_a_run_with_no_recorded_jurisdiction_gets_one_answer_too(monkeypatch) -> None:
+    """The rows the resolver exists for were the ones it still answered ambiently.
+
+    ``view_only_for_run`` fixed four hand-written copies of "which sources are not a
+    counterparty" and then fell back to the ambient ``VIEW_ONLY_SOURCES`` for any
+    state it did not recognise. ``jurisdiction`` migrates with ``DEFAULT ''``, so
+    *every row predating that column* reads as empty — precisely the stored runs
+    ``runs``, ``health`` and ``report`` are asked about — and on those the answer
+    stayed a function of the reader's ``ODDS_STATE``, ``hardrock`` being the key that
+    differs between the IL and PA sets.
+
+    Deterministic beats exact about a state nobody recorded: the mirrors are what is
+    knowable without a jurisdiction.
+    """
+    from src.sources import registry
+
+    assert registry.view_only_for_state("PA") != registry.view_only_for_state("IL")
+    for ambient in ("PA", "IL"):
+        monkeypatch.setattr(
+            registry, "VIEW_ONLY_SOURCES", registry.view_only_for_state(ambient)
+        )
+        for state in ("", "GLOBAL", "XX", None):
+            assert registry.view_only_for_run(state) == registry.REPUBLISHED_SOURCE_KEYS
+
+
+
+def test_the_runs_table_does_not_relabel_a_scopeless_run_as_state_scoped(tmp_path) -> None:
+    """``or "state"`` claimed exact-state collection for a run that recorded none.
+
+    The badge exists to distinguish exactly that, and the page already renders a
+    missing value as ``legacy`` — the word the store backfills onto rows predating
+    the column — so the coercion could only replace the honest answer with a
+    confident one.
+    """
+    from src.store import Store
+    from src.validation import ValidationReport
+
+    path = tmp_path / "db.sqlite3"
+    with Store(path) as store:
+        run = store.start_run(datetime.now(UTC), jurisdiction="PA", route_scope="")
+        store.finish_run(
+            run, finished_at=datetime.now(UTC),
+            report=ValidationReport(quote_count=0, event_count=0),
+            counterparties={},
+        )
+    with Store(path) as store:
+        data = build_report(store)
+
+    entry = next(row for row in data["runs"] if row["id"] == run)
+    assert entry["route_scope"] == ""

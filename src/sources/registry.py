@@ -44,7 +44,13 @@ from typing import Any, Callable, Mapping, Sequence
 
 from src import settings
 from src.commission import COMMISSIONS
-from src.jurisdictions import RouteStatus, jurisdiction
+from src.jurisdictions import (
+    AN_BOOK_KEYS,
+    JURISDICTIONS,
+    Jurisdiction,
+    RouteStatus,
+    jurisdiction,
+)
 from src.settlement import SETTLEMENT
 from src.sources.base import OddsSource
 from src.sources.actionnetwork import ActionNetworkAdapter
@@ -102,8 +108,55 @@ REPUBLISHED_SOURCE_KEYS: frozenset[str] = frozenset(
         "vi_hardrock", "vi_fanatics", "vi_bet365", "an_hardrock",
         "an_fanatics", "an_fliff", "an_circa", "an_superbook", "an_bally",
         "an_bet365", "an_open", "an_fanduel", "an_betrivers", "an_betmgm",
-        "an_bovada", "an_onexbet",
+        "an_bovada", "an_onexbet", "an_parx", "an_unibet", "an_thescore",
+        "vi_betmgm", "vi_fanduel", "vi_betrivers",
     )
+)
+
+# Venues at which somebody sitting in the United States cannot actually place the
+# wager the price implies.  A *separate* axis from view-only: a republished mirror
+# is unstakeable because it is a copy of somebody else's board, while these are
+# genuine first-party order books that will not take a US customer.
+#
+# Deliberately **not** folded into ``VIEW_ONLY_SOURCES``.  These carry the sharpest
+# lines on the page — Pinnacle in particular is the reference every other book is
+# measured against — so dropping them from the data would cost more than it saves.
+# The dashboard exposes the distinction as a toggle instead, defaulting to the
+# US-only view so no arbitrage is presented as takeable unless it is.
+#
+# Why each one is here:
+#   pinnacle        No US licence; geoblocks US traffic and has excluded US
+#                   customers for years.
+#   leovegas_kambi  The registered tenant is the Kambi ``leo`` GB market
+#                   (``market: "GB"``) — a UK licence, not a US book at all.
+#   bovada          Offshore (Curacao).  Takes US signups but holds no US state
+#                   licence and self-blocks NJ/NY/NV/DE/MD.  Grouped here because
+#                   reachable is not licensed, and a leg placed there carries
+#                   counterparty risk a licensed book does not.
+#   cloudbet        Offshore crypto book; does not accept US customers.
+#   onexbet         Offshore; not US licensed, blocks US customers.
+#   matchbook       UK/Malta licensed exchange; no US access.
+#   smarkets        UK licensed exchange; no US access.
+#   sxbet           Offshore crypto exchange.
+#   an_bovada       Action Network mirrors of two of the above.  Already
+#   an_onexbet      view-only, but they have to disappear *with* their book, or
+#                   the US-only view still shows its price as context.
+#
+# Kalshi and Polymarket are deliberately absent: both operate under US regulation
+# and are executable from the US.
+US_UNAVAILABLE_SOURCE_KEYS: frozenset[str] = frozenset(
+    {
+        "pinnacle",
+        "leovegas_kambi",
+        "bovada",
+        "cloudbet",
+        "onexbet",
+        "matchbook",
+        "smarkets",
+        "sxbet",
+        "an_bovada",
+        "an_onexbet",
+    }
 )
 
 VIEW_ONLY_SOURCES: frozenset[str] = REPUBLISHED_SOURCE_KEYS | jurisdiction(
@@ -115,8 +168,45 @@ def view_only_for_state(state: str) -> frozenset[str]:
     return REPUBLISHED_SOURCE_KEYS | jurisdiction(state).view_only_sources
 
 
+def view_only_for_run(state: str) -> frozenset[str]:
+    """Which sources are not a counterparty, for a run recorded under *state*.
+
+    One resolution of a mapping that had grown four hand-written copies —
+    ``collect_once``, ``_cmd_arb``, ``report._arb_payload`` and
+    ``store.cross_book_event_counts`` — and the last of them did not do it at all.
+    It read the module-level :data:`VIEW_ONLY_SOURCES`, which is frozen at import
+    from ``settings.STATE``: 27 keys under IL and 28 under PA (``hardrock``, which
+    Pennsylvania cannot stake).  So ``runs`` and ``health`` printed a sport as
+    ``usable`` or ``NO OVERLAP`` for the same stored run depending on which state
+    the reading process was configured for.
+
+    ``GLOBAL`` is not a jurisdiction and has no per-state view-only list; there,
+    every republished mirror is the whole answer.
+
+    An unrecognised or empty state gets that same answer rather than the ambient
+    :data:`VIEW_ONLY_SOURCES`, and the difference is the whole point of the
+    function.  Empty is not a rare case: ``jurisdiction`` migrates with
+    ``DEFAULT ''``, so **every row predating that column** reads as empty, and those
+    are exactly the stored runs ``runs``, ``health`` and ``report`` are asked
+    about.  Falling back to the ambient constant left the defect above alive on
+    precisely those rows — ``hardrock`` is the one key that differs between the IL
+    and PA sets, and it is a real source — so the answer stayed a function of the
+    reader's ``ODDS_STATE``.  The mirrors are what is knowable without a
+    jurisdiction, and being deterministic and slightly generous is better than being
+    exact about a state nobody recorded.
+    """
+    normalized = (state or "").strip().upper()
+    if normalized in JURISDICTIONS:
+        return view_only_for_state(normalized)
+    return REPUBLISHED_SOURCE_KEYS
+
+
 def is_view_only(key: str) -> bool:
     return key in VIEW_ONLY_SOURCES
+
+
+def is_us_unavailable(key: str) -> bool:
+    return key in US_UNAVAILABLE_SOURCE_KEYS
 
 
 class SourceKind(StrEnum):
@@ -335,6 +425,37 @@ _BASE_SOURCES: tuple[SourceDescriptor, ...] = (
         kind=SourceKind.SPORTSBOOK,
         config={"book": "bet365"},
     ),
+    # VegasInsider already parses these three columns — they were simply never
+    # registered.
+    #
+    # **They close no coverage gap, and the earlier note here claiming they did was
+    # wrong.**  :mod:`src.coverage` declares every ``vi_*`` feed
+    # ``Corroboration.OTHER_LICENCE``, which that module never counts towards the
+    # two and never price-compares, so BetMGM / FanDuel / BetRivers read
+    # ``SINGLE_SOURCE`` with these registered exactly as they did without them.
+    # What they actually buy is *context*: a named out-of-state number beside a
+    # book whose state feed is thin or dark, plus drift evidence through
+    # ``REDUNDANT_PAIRS``.  That is worth three fetches a run; being able to
+    # satisfy rule (c) is not what it is worth, and writing that down as though it
+    # were is how a Las Vegas column ends up counted.
+    SourceDescriptor(
+        key="vi_betmgm",
+        adapter=VegasInsiderAdapter,
+        kind=SourceKind.SPORTSBOOK,
+        config={"book": "betmgm"},
+    ),
+    SourceDescriptor(
+        key="vi_fanduel",
+        adapter=VegasInsiderAdapter,
+        kind=SourceKind.SPORTSBOOK,
+        config={"book": "fanduel"},
+    ),
+    SourceDescriptor(
+        key="vi_betrivers",
+        adapter=VegasInsiderAdapter,
+        kind=SourceKind.SPORTSBOOK,
+        config={"book": "betrivers"},
+    ),
     SourceDescriptor(
         key="vsin_circa",
         adapter=VsinCircaAdapter,
@@ -400,6 +521,31 @@ _BASE_SOURCES: tuple[SourceDescriptor, ...] = (
         adapter=ActionNetworkAdapter,
         kind=SourceKind.SPORTSBOOK,
         config={"book_id": 79, "fetch_book_ids": "123"},
+    ),
+    # State-licensed books with no first-party adapter here.  The ids below are
+    # New Jersey's, which is what a GLOBAL run republishes: Action Network files
+    # no national book for a state-licensed operator, so a run with no
+    # jurisdiction has to name *some* licence, and NJ is the one the rest of this
+    # block already used.  A state run replaces the id from
+    # :attr:`Jurisdiction.republished`, where betPARX and Unibet are
+    # ``UNAVAILABLE`` in Illinois and are not built there at all.
+    SourceDescriptor(
+        key="an_parx",
+        adapter=ActionNetworkAdapter,
+        kind=SourceKind.SPORTSBOOK,
+        config={"book_id": 1929, "fetch_book_ids": "1929"},
+    ),
+    SourceDescriptor(
+        key="an_unibet",
+        adapter=ActionNetworkAdapter,
+        kind=SourceKind.SPORTSBOOK,
+        config={"book_id": 247, "fetch_book_ids": "247"},
+    ),
+    SourceDescriptor(
+        key="an_thescore",
+        adapter=ActionNetworkAdapter,
+        kind=SourceKind.SPORTSBOOK,
+        config={"book_id": 4620, "fetch_book_ids": "4620"},
     ),
     # Consensus / opening lines on the AN scoreboard — view-only; see
     # :data:`VIEW_ONLY_SOURCES`.  Not a book you can stake at.
@@ -467,8 +613,17 @@ _BASE_SOURCES: tuple[SourceDescriptor, ...] = (
 
 
 def global_sources() -> tuple[SourceDescriptor, ...]:
-    """State-neutral venues and republished diagnostics, in registry order."""
-    return tuple(entry for entry in _BASE_SOURCES if entry.key not in RETAIL_SOURCE_KEYS)
+    """Genuinely state-neutral venues and republished diagnostics, registry order.
+
+    Excludes the state-licensed republishers as well as the first-party retail
+    books.  Both are state-scoped for the same reason — the book they describe
+    depends on the jurisdiction — and ``collect_batch`` fetches this list once and
+    shares the instances across every run in the batch, which is exactly what a
+    per-state book id cannot survive.  See
+    :data:`STATE_LICENSED_REPUBLISHER_KEYS`.
+    """
+    excluded = RETAIL_SOURCE_KEYS | STATE_LICENSED_REPUBLISHER_KEYS
+    return tuple(entry for entry in _BASE_SOURCES if entry.key not in excluded)
 
 
 def state_sources_for_state(state: str) -> tuple[SourceDescriptor, ...]:
@@ -483,33 +638,134 @@ def state_sources_for_state(state: str) -> tuple[SourceDescriptor, ...]:
     for entry in _BASE_SOURCES:
         if entry.key not in RETAIL_SOURCE_KEYS:
             continue
-        route = configured.routes.get(entry.key)
-        if route is None or route.status is RouteStatus.UNAVAILABLE:
-            continue
-        if route.routed_state != configured.state:
-            raise RuntimeError(
-                f"{entry.key} route is tagged {route.routed_state}, not "
-                f"requested state {configured.state}; cross-state fallback refused"
-            )
-        built.append(
-            replace(
-                entry,
-                config={**entry.config, **route.config},
-                route_state=configured.state,
-            )
-        )
+        resolved = _state_retail_descriptor(entry, configured)
+        if resolved is not None:
+            built.append(resolved)
     return tuple(built)
 
 
-def republished_sources_for_state(state: str) -> tuple[SourceDescriptor, ...]:
-    """State-neutral venues, with this state's republished book ids applied.
+def _state_retail_descriptor(
+    entry: SourceDescriptor, configured: Jurisdiction
+) -> SourceDescriptor | None:
+    """One retail book's exact-state descriptor, or ``None`` if unlicensed here.
 
-    A republisher's *host* is state-neutral; the **book** it publishes is not.
-    Action Network files one id per state licence, so collecting in Pennsylvania
-    against the registry's base ids stored New Jersey books under Pennsylvania
-    keys — labelled, validated and compared as if they were local.  This is the
-    republisher counterpart of :func:`state_sources_for_state`, and the reason a
-    state run must not simply reuse :func:`global_sources`.
+    Factored out so a caller asking about a single book is answered about *that*
+    book.  ``descriptor_for_state`` used to build the whole retail set, so one
+    mis-tagged route raised for whoever was asking: ``probe_sources.py`` turns the
+    refusal into an ``UNLICENSED`` verdict and caches it under the key it was
+    probing, which would have filed every retail book in the state as unlicensed
+    on the strength of one bad entry.
+
+    Raises ``RuntimeError`` for a route tagged for another state — never a
+    fallback, which is the whole point of the exact-state rule.
+    """
+    route = configured.routes.get(entry.key)
+    if route is None or route.status is RouteStatus.UNAVAILABLE:
+        return None
+    if route.routed_state != configured.state:
+        raise RuntimeError(
+            f"{entry.key} route is tagged {route.routed_state}, not "
+            f"requested state {configured.state}; cross-state fallback refused"
+        )
+    return replace(
+        entry,
+        config={**entry.config, **route.config},
+        route_state=configured.state,
+    )
+
+
+def state_licensed_keys(state: str) -> frozenset[str]:
+    """Which source keys hold a first-party licence in *state*.
+
+    One definition, because there were three and they disagreed.  ``collect_once``
+    used the keys it had actually *built* — so a run narrowed to
+    ``--source pinnacle`` built no retail book, the set came back empty, and the
+    exact-state leg requirement was skipped rather than failing everything.
+    :mod:`src.report` used ``JURISDICTIONS[state].routes`` directly, which still
+    contains the books the operator holds **no** licence for: Hard Rock is an
+    ``UNAVAILABLE`` PA route, and it counted as Pennsylvania's local leg.
+
+    Derived from :func:`state_sources_for_state` so the answer cannot drift from
+    what that function would agree to build.
+
+    This is a question about **retail licences**, and it is *not* the same question
+    as "can the operator bet here from that state" — see
+    :func:`takeable_from_state`, which is what a locality filter must ask.
+    """
+    return frozenset(entry.key for entry in state_sources_for_state(state))
+
+
+def takeable_from_state(state: str) -> frozenset[str]:
+    """Every venue the operator can actually place a bet at from *state*.
+
+    A retail licence is one way to be reachable, not the only one.  Kalshi and
+    Polymarket are federally regulated US venues with no per-state sportsbook
+    licence to hold — this registry says so itself, in the note explaining why they
+    are absent from :data:`US_UNAVAILABLE_SOURCE_KEYS` — so a filter built on
+    :func:`state_licensed_keys` alone called them out-of-state everywhere.
+
+    That inverted the rule it was written to serve: a Kalshi/Polymarket position on
+    a Pennsylvania run was **withheld from the report, the dashboard and the SMS**,
+    under a warning saying "every leg was a global or offshore venue", about two
+    venues legal in Pennsylvania.  Rule (a) exists to stop an unreachable price
+    being presented as the state's own; it was never a reason to hide a reachable
+    one.
+
+    Retail keys still have to earn their place per state — ``hardrock`` is
+    US-executable in general and ``UNAVAILABLE`` in Pennsylvania, so it is takeable
+    in IL and NJ and not here.  Only the non-retail first-party venues are admitted
+    by nationwide reachability, and only when they are not offshore.
+
+    **The nationwide half is state-invariant, and that is a real limit of this
+    function rather than a claim about the world.**  The comprehension below never
+    reads *state*: the non-retail contribution is ``{kalshi, polymarket}``
+    identically in IL, PA, NJ and DC, because the only lever is the all-or-nothing
+    :data:`US_UNAVAILABLE_SOURCE_KEYS` and no per-state table mentions either venue.
+    Kalshi's sports contracts are the one venue where per-state availability is
+    genuinely contested, so if that ever has to be answered per state it needs a
+    table in :mod:`src.jurisdictions` first — do not read a per-state answer out of
+    this name until one exists.
+    """
+    nationwide = frozenset(
+        entry.key
+        for entry in _BASE_SOURCES
+        if entry.key not in RETAIL_SOURCE_KEYS
+        and entry.key not in REPUBLISHED_SOURCE_KEYS
+        and entry.key not in US_UNAVAILABLE_SOURCE_KEYS
+    )
+    return state_licensed_keys(state) | nationwide
+
+
+#: Republishers whose book is a **state licence**, so which book they publish
+#: depends on the jurisdiction being collected.
+#:
+#: These cannot ride along with the cached global fetch.  ``collect_batch``
+#: fetches globals once and reuses those instances for the ``GLOBAL`` run and
+#: every state run, which is right for Pinnacle and the exchanges and wrong here:
+#: one shared ``an_caesars`` can only have asked for one book id, so a
+#: Pennsylvania run reusing it stored ``bookIds=123`` — Caesars **NJ** — under a
+#: PA key.  Measured on run 22 before this split, where every republished row in
+#: the PA run came from the New Jersey licence.
+#:
+#: They are therefore state-scoped like the first-party retail books, and absent
+#: from :func:`global_sources`: a state-licensed book in a run labelled ``GLOBAL``
+#: is the same mislabelling in a different place.  Read off the jurisdiction
+#: table so the two cannot drift.
+STATE_LICENSED_REPUBLISHER_KEYS: frozenset[str] = frozenset(AN_BOOK_KEYS)
+
+#: The unconfigured base descriptors by key.  Distinct from :data:`BY_KEY`, which
+#: is resolved for ``settings.STATE`` — a lookup that needs to apply *another*
+#: state's route has to start from the unresolved entry or it inherits this
+#: process's state.
+BY_BASE_KEY: dict[str, SourceDescriptor] = {entry.key: entry for entry in _BASE_SOURCES}
+
+
+def republished_sources_for_state(state: str) -> tuple[SourceDescriptor, ...]:
+    """State-licensed republishers, carrying this state's book ids.
+
+    Built per state and never cached across runs, for the reason recorded on
+    :data:`STATE_LICENSED_REPUBLISHER_KEYS`.  A book with no licence in this
+    state is omitted rather than pointed at another state's id.
 
     ``route_state`` is deliberately **not** set: it becomes the adapter's
     ``proxy_state`` argument, which is a first-party retail concern.  Action
@@ -517,12 +773,11 @@ def republished_sources_for_state(state: str) -> tuple[SourceDescriptor, ...]:
     """
     configured = jurisdiction(state)
     built: list[SourceDescriptor] = []
-    for entry in global_sources():
-        route = configured.republished.get(entry.key)
-        if route is None:
-            built.append(entry)
+    for entry in _BASE_SOURCES:
+        if entry.key not in STATE_LICENSED_REPUBLISHER_KEYS:
             continue
-        if route.status is RouteStatus.UNAVAILABLE:
+        route = configured.republished.get(entry.key)
+        if route is None or route.status is RouteStatus.UNAVAILABLE:
             continue
         built.append(replace(entry, config={**entry.config, **route.config}))
     return tuple(built)
@@ -555,7 +810,21 @@ def sources_for_state(state: str) -> tuple[SourceDescriptor, ...]:
     return tuple(built)
 
 
-def descriptor_for_state(state: str, key: str) -> SourceDescriptor:
+def replay_descriptor_for_state(state: str, key: str) -> SourceDescriptor:
+    """Registry-order lookup, **including** the replay fallbacks.
+
+    Backed by :func:`sources_for_state`, so a retail book with no route in this
+    state answers with the base descriptor rather than raising.  That is right
+    for replay and for anything enumerating the stable registry, and wrong for
+    anything that is about to send a request — see :func:`descriptor_for_state`.
+
+    The name carries the warning, because a docstring could not.  This pair used
+    to be ``descriptor_for_state`` (this one) and ``live_descriptor_for_state``
+    (the strict one), which gave the obvious name to the lookup that silently
+    answers with *another state's* configuration, and left the safe one to be
+    reached for on purpose.  Two fetch paths had already reached for the wrong one.
+    ``replay`` is the only thing a fallback like that is honestly for.
+    """
     entries = {entry.key: entry for entry in sources_for_state(state)}
     try:
         return entries[key]
@@ -563,6 +832,67 @@ def descriptor_for_state(state: str, key: str) -> SourceDescriptor:
         raise KeyError(
             f"source {key!r} is unavailable for {jurisdiction(state).state}"
         ) from None
+
+
+def descriptor_for_state(state: str, key: str) -> SourceDescriptor:
+    """The descriptor to *fetch* with, or a refusal — never a fallback.
+
+    :func:`sources_for_state` keeps every key registered so replay and coverage
+    can enumerate the stable set, and fills the gaps with base descriptors —
+    which for an unlicensed state means another state's configuration:
+
+        sources_for_state("DC")["betrivers_kambi"] → operator rsiusil, US-IL
+        sources_for_state("PA")["hardrock"]        → {} → DEFAULT_SEGMENT "nj"
+        sources_for_state("IL")["an_parx"]         → book_id 1929 (New Jersey)
+
+    That is right for replay — :func:`replay_descriptor_for_state`, which is where
+    that behaviour now says its own name — and wrong for a caller about to open a
+    socket, and ``probe_sources.py`` and ``recon_sources.py`` were both reaching
+    for the lax lookup while doing exactly that.  **Neither is known to have
+    produced a false
+    validation**: ``state_candidates`` skips ``UNAVAILABLE`` routes before it
+    builds a candidate, and ``recon_sources`` calls ``profile()`` first, which
+    raises for an unlicensed book.  So this is a second lock on a door whose
+    first lock currently holds, rather than a fix for an observed incident.
+
+    It is worth having as a *lookup* rather than as care at each call site
+    because of what the failure would cost if a guard upstream were relaxed: a
+    probe that validates another state's route does not merely fail to help, it
+    writes ``ProbeStatus.OK`` under this state's key and manufactures the
+    evidence the jurisdiction rules are supposed to rest on.  A refusal is
+    cheap; a false ``ok`` row is believed for as long as it is cached.
+    """
+    configured = jurisdiction(state)
+    if key in RETAIL_SOURCE_KEYS:
+        # Resolved for **this book alone**.  Building the whole retail set here
+        # meant one mis-tagged route in the state answered for every book:
+        # ``probe_sources.py`` turns the refusal into an ``UNLICENSED`` verdict for
+        # whichever candidate it happened to be probing and caches
+        # ``ProbeStatus.UNLICENSED`` under *that* key, so a single bad entry would
+        # have filed every retail book in the state as unlicensed.
+        route = configured.routes.get(key)
+        resolved = _state_retail_descriptor(BY_BASE_KEY[key], configured)
+        if resolved is None:
+            reason = (
+                route.detail or f"no licensed route is available in {configured.state}"
+                if route is not None
+                else f"{configured.state} declares no route for this book"
+            )
+            raise KeyError(
+                f"{key!r} has no live {configured.state} route: {reason}. Refusing "
+                "to fall back to another state's configuration — a probe that "
+                "validates the wrong licence manufactures false evidence"
+            )
+        return resolved
+    if key in STATE_LICENSED_REPUBLISHER_KEYS:
+        built = {entry.key: entry for entry in republished_sources_for_state(configured.state)}
+        if key not in built:
+            raise KeyError(
+                f"{key!r} republishes no {configured.state} licence, so there is "
+                "no book id to ask for. Refusing to fall back to another state's id"
+            )
+        return built[key]
+    return replay_descriptor_for_state(configured.state, key)
 
 
 # Active-state compatibility for existing callers.  Processes that need to
@@ -641,11 +971,17 @@ _check_registry()
 
 
 __all__ = [
+    # Public by use, so public by export.  Three names in this list were reachable
+    # from four modules and two test files while being absent from it, which makes
+    # ``__all__`` a record of what somebody remembered rather than of the surface.
+    "BY_BASE_KEY",
     "BY_KEY",
     "SOURCES",
     "SLOW_SOURCES",
     "REPUBLISHED_SOURCE_KEYS",
     "RETAIL_SOURCE_KEYS",
+    "STATE_LICENSED_REPUBLISHER_KEYS",
+    "US_UNAVAILABLE_SOURCE_KEYS",
     "VIEW_ONLY_SOURCES",
     "SourceDescriptor",
     "SourceKind",
@@ -653,10 +989,15 @@ __all__ = [
     "descriptor",
     "descriptor_for_state",
     "global_sources",
+    "is_us_unavailable",
     "is_view_only",
     "keys",
+    "replay_descriptor_for_state",
     "republished_sources_for_state",
     "sources_for_state",
+    "state_licensed_keys",
+    "takeable_from_state",
     "state_sources_for_state",
+    "view_only_for_run",
     "view_only_for_state",
 ]

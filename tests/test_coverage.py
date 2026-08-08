@@ -1,0 +1,951 @@
+"""No required book is trusted on one feed, or on an out-of-state one.
+
+Two rules are pinned here, and they are separate claims.  The first is that a
+book seen by exactly one republisher must not read as a book fetched
+first-party.  The second is that only a feed carrying *this state's* licence
+counts towards the two — a Las Vegas column is context, not corroboration.
+
+The tests under "the rule itself" and "the locality label cannot be faked" fail
+on the code that preceded their respective rules.  The rest are declaration and
+wiring checks: they hold the table to the registry and the jurisdiction map, and
+they pass on any code where those agree.
+"""
+from __future__ import annotations
+
+import pytest
+
+from src.coverage import (
+    Access,
+    Corroboration,
+    REQUIRED_BOOKS,
+    RequiredBook,
+    _check_locality_declarations,
+    check_book_coverage,
+    coverage_for_state,
+    withhold_non_local,
+)
+from src.jurisdictions import JURISDICTIONS, RouteStatus, jurisdiction
+from src.schema import Selection
+from src.sources.registry import BY_KEY, REPUBLISHED_SOURCE_KEYS, RETAIL_SOURCE_KEYS
+from src.validation import Severity, ValidationReport
+from tests.conftest import make_quote
+
+
+def _ml(source: str, selection: Selection, decimal_odds: float, event: str = "a"):
+    """One moneyline row, priced so a pair of them is a plausible market."""
+    return make_quote(
+        source=source,
+        event_key=f"MLB-AWAY@MLB-HOME:2026-08-06-{event}",
+        selection=selection,
+        decimal_odds=decimal_odds,
+        home_participant="MLB-HOME",
+        away_participant="MLB-AWAY",
+        home_team="Home",
+        away_team="Away",
+    )
+
+
+def _book(source: str, *, events: int = 30, offset: float = 0.0):
+    """Enough rows from one source to clear ``MIN_SHARED_SELECTIONS``."""
+    rows = []
+    for index in range(events):
+        rows.append(_ml(source, Selection.HOME, 1.90 + offset, f"e{index}"))
+        rows.append(_ml(source, Selection.AWAY, 2.05 + offset, f"e{index}"))
+    return rows
+
+
+def _find(rows, book: str):
+    return next(entry for entry in rows if entry.book == book)
+
+
+@pytest.fixture
+def two_local_feeds(monkeypatch):
+    """A substitute PA table for one book watched by two same-licence feeds.
+
+    No shipped PA book has two, so the satisfied and disagreeing branches of the
+    two-feed path are unreachable through the real table.  Testing them against
+    a substitute keeps the shipped table honest — the alternative is relaxing the
+    rule so the tests have something to pass on, which inverts what the tests are
+    for.  ``an_caesars`` and ``an_fanatics`` are stand-ins chosen because both
+    file a Pennsylvania book id, which is the property under test.
+    """
+    entry = RequiredBook(
+        book="TwoLocalFeeds",
+        direct=None,
+        republishers={
+            "an_caesars": Corroboration.SAME_LICENCE,
+            "an_fanatics": Corroboration.SAME_LICENCE,
+        },
+    )
+    monkeypatch.setitem(REQUIRED_BOOKS, "PA", (entry,))
+    return entry
+
+
+# ── the rule itself ──────────────────────────────────────────────────────────
+
+
+def test_first_party_rows_satisfy_the_rule_alone():
+    """A book fetched from the book needs no corroboration."""
+    measured = _find(coverage_for_state(_book("fanduel"), "PA"), "FanDuel")
+    assert measured.access is Access.DIRECT
+    assert measured.satisfied
+    assert measured.direct_rows == 60
+
+
+def test_one_republisher_is_not_enough():
+    """The defect this rule exists for: a single feed nothing can contradict.
+
+    ``vi_hardrock`` alone produced the market that rendered as
+    "Hard Rock Bet keeps -48.3%".  One feed is unfalsifiable, so it fails.
+    """
+    measured = _find(coverage_for_state(_book("an_fanatics"), "PA"), "Fanatics")
+    assert measured.access is Access.SINGLE_SOURCE
+    assert not measured.satisfied
+    assert "nothing can contradict it" in measured.detail
+
+
+def test_two_agreeing_local_republishers_satisfy_the_rule(two_local_feeds):
+    """Two feeds carrying *this state's* licence, agreeing, is the second path.
+
+    Declared through a substitute table because no PA book currently has two
+    same-licence feeds — which is itself the finding recorded in
+    ``docs/SOURCE_FEASIBILITY.md``, not a reason to weaken the rule here.
+    """
+    quotes = [*_book("an_caesars"), *_book("an_fanatics")]
+    measured = _find(coverage_for_state(quotes, "PA"), "TwoLocalFeeds")
+    assert measured.access is Access.CROSS_CHECKED
+    assert measured.satisfied
+    assert measured.local_republishers == ("an_caesars", "an_fanatics")
+    # Also the guard for ``AGREEMENT_UNPROVEN``, which was carved out of this state
+    # and must not swallow it: a thick overlap carries no "never compared" caveat.
+    # It was a separate test building this same input under this same fixture.
+    assert "never compared" not in measured.detail
+
+
+def test_two_local_feeds_nobody_compared_do_not_satisfy_the_rule(two_local_feeds):
+    """"Two feeds that agree" is not satisfied by two feeds and no comparison.
+
+    Below ``MIN_SHARED_SELECTIONS`` the comparison returns ``UNDECIDED``, which
+    ``_agreement`` reports as "no disagreement found".  Folded into
+    ``CROSS_CHECKED`` that made the rule's second half satisfiable by two feeds
+    nobody had compared, and the caveat explaining it was attached to a ``detail``
+    string no surface renders — ``BookCoverage`` reaches no report or dashboard.
+
+    A thin slate is the slate's fault, not the book's, so this is a WARNING and
+    its own state rather than an error or a tick.
+    """
+    thin = [
+        *_book("an_caesars", events=3),
+        *_book("an_fanatics", events=3),
+    ]
+    report = ValidationReport(quote_count=0, event_count=0, source_count=0)
+    measured = _find(check_book_coverage(thin, "PA", report), "TwoLocalFeeds")
+
+    assert measured.access is Access.AGREEMENT_UNPROVEN
+    assert not measured.satisfied
+    assert measured.local_republishers == ("an_caesars", "an_fanatics")
+    assert "never compared" in measured.detail
+
+    finding = next(
+        f for f in report.findings if f.code == "required_book_agreement_unproven"
+    )
+    assert finding.severity is Severity.WARNING
+    assert "fewer than the 20 needed to judge" in finding.message
+
+
+def test_a_cross_licence_feed_does_not_count_towards_the_two():
+    """The locality half of the rule, and the reason it is not a refinement.
+
+    Fails on the pre-rule code, where ``an_fanatics`` + ``vi_fanatics`` read as
+    ``CROSS_CHECKED``.  ``vi_fanatics`` is VegasInsider's ``/odds/las-vegas/``
+    column: a different licence of the same brand, so it cannot confirm or
+    contradict what Fanatics is pricing in Pennsylvania.
+    """
+    quotes = [*_book("an_fanatics"), *_book("vi_fanatics")]
+    measured = _find(coverage_for_state(quotes, "PA"), "Fanatics")
+
+    assert measured.access is Access.SINGLE_SOURCE
+    assert not measured.satisfied
+    assert measured.local_republishers == ("an_fanatics",)
+    assert measured.non_local_republishers == ("vi_fanatics",)
+    # Both are still shown — the out-of-state number is context, not evidence.
+    assert measured.republishers == ("an_fanatics", "vi_fanatics")
+    assert "context only" in measured.detail
+
+
+def test_a_book_seen_only_from_out_of_state_is_an_error_not_a_thin_feed():
+    """``NON_LOCAL_ONLY`` exists so this cannot read as under-corroborated.
+
+    Nothing carrying Pennsylvania's licence priced Fanatics at all, so there is
+    no PA number on the page — only a Las Vegas one wearing the same brand.
+    That is a worse condition than one local feed, and is reported as such.
+    """
+    measured = _find(coverage_for_state(_book("vi_fanatics"), "PA"), "Fanatics")
+    assert measured.access is Access.NON_LOCAL_ONLY
+    assert not measured.satisfied
+    assert measured.local_republishers == ()
+    assert measured.access.is_unobserved_locally
+
+    # Reported alongside a live local feed on another book, so the slate-outage
+    # collapse is not what is being measured here — see the pair of tests below.
+    quotes = [*_book("vi_fanatics"), *_book("an_caesars")]
+    report = ValidationReport(quote_count=0, event_count=0, source_count=0)
+    check_book_coverage(quotes, "PA", report)
+    finding = next(
+        f for f in report.findings if f.code == "required_book_non_local_only"
+    )
+    assert finding.severity is Severity.ERROR
+
+
+def test_live_out_of_state_columns_make_the_collapse_an_error_not_an_excuse():
+    """Every local feed dark while Las Vegas prices a full slate.
+
+    Two failure modes meet here and the guard has to refuse both.  Reported per
+    book it is eleven findings for one condition, which is the nightly noise the
+    collapse exists to stop.  Collapsed to the WARNING it asserted a slate with no
+    pre-match games left while four out-of-state feeds sat on the same page holding
+    sixty rows each — a confidently false cause, which is worse than noise because
+    it tells the reader to ignore it.  (That wording is gone from the WARNING now,
+    for the same reason: it could not establish it.)
+
+    So: one finding, and it says what is true.  Fails both on the pre-rule guard
+    (which counted out-of-state columns and emitted seven errors) and on the
+    first fix for it (which emitted the WARNING and its false cause).
+    """
+    quotes = [
+        row
+        for key in ("vi_fanduel", "vi_betmgm", "vi_caesars", "vi_fanatics")
+        for row in _book(key)
+    ]
+    report = ValidationReport(quote_count=0, event_count=0, source_count=0)
+    check_book_coverage(quotes, "PA", report)
+
+    codes = [f.code for f in report.findings]
+    # One finding for the outage, plus PlaySugarHouse — which no feed watches at
+    # all, so a feed outage does not explain it and it is not collapsed over.
+    assert codes == ["book_coverage_local_feeds_dark", "required_book_missing"]
+    finding = report.findings[0]
+    assert finding.severity is Severity.ERROR
+    assert "no pre-match games" not in finding.message
+    assert "cannot stand in for them" in finding.message
+
+
+def test_any_live_venue_in_the_run_refuses_the_no_games_left_excuse():
+    """The collapse is falsified by *the run*, not by the declared columns.
+
+    ``pinnacle`` is in no ``REQUIRED_BOOKS`` entry, so a guard that falsified
+    itself only against the declared ``vi_*`` columns could not see it — and
+    Pinnacle, Kalshi, Polymarket, Bovada and sxbet all list days ahead, which is
+    precisely the overnight window the collapse was written for.  A total
+    Pennsylvania blackout therefore printed "nothing else priced the slate
+    either" beside sixty contradicting rows, and stayed a WARNING, so the run
+    exited 0.
+    """
+    report = ValidationReport(quote_count=0, event_count=0, source_count=0)
+    check_book_coverage(_book("pinnacle"), "PA", report)
+
+    finding = next(
+        f for f in report.findings if f.code == "book_coverage_local_feeds_dark"
+    )
+    assert finding.severity is Severity.ERROR
+    assert "no pre-match games" not in finding.message
+    assert "pinnacle" in finding.message
+
+
+def test_the_benign_collapse_survives_for_a_genuinely_empty_run():
+    """Nothing priced anything — now the *only* case this WARNING covers.
+
+    "Genuinely empty" has to mean the run itself is empty. It previously meant
+    sixty Pinnacle rows, which is a live slate by any reading.
+
+    Once the collapse is falsified against the run rather than against the declared
+    columns, that narrowing has a consequence worth stating: the overnight window
+    this branch was written for no longer reaches it, because Pinnacle and the
+    exchanges list days ahead and so take the ERROR path. The message must claim
+    only what is left — an empty run — and not the old guess about the slate.
+    """
+    report = ValidationReport(quote_count=0, event_count=0, source_count=0)
+    check_book_coverage([], "PA", report)
+
+    codes = [f.code for f in report.findings]
+    assert codes == ["book_coverage_unobservable", "required_book_missing"]
+    assert report.findings[0].severity is Severity.WARNING
+    assert "the run is empty" in report.findings[0].message
+    # The cause it can no longer establish must not be asserted.
+    assert "no pre-match games left" not in report.findings[0].message
+
+
+def test_first_party_rows_break_the_collapse_outright():
+    """300 rows from five routes is proof the slate is live.
+
+    The collapse's whole premise is that nothing could be priced.  First-party
+    rows falsify it, so the books nothing watched are genuinely unobserved and
+    each is reported.  Fails on the pre-fix guard, which consulted only the
+    republishers and swallowed five real gaps behind one WARNING.
+    """
+    quotes = [
+        row
+        for key in ("fanduel", "betmgm", "caesars", "draftkings", "betrivers_kambi")
+        for row in _book(key)
+    ]
+    report = ValidationReport(quote_count=0, event_count=0, source_count=0)
+    measured = check_book_coverage(quotes, "PA", report)
+    codes = [f.code for f in report.findings]
+
+    assert "book_coverage_unobservable" not in codes
+    assert "book_coverage_local_feeds_dark" not in codes
+    assert _find(measured, "FanDuel").access is Access.DIRECT
+    assert codes.count("required_book_missing") == 6
+
+
+def test_one_dark_local_feed_among_live_ones_still_raises_its_own_finding():
+    """The collapse must not become a way for a real local gap to hide."""
+    quotes = [*_book("an_caesars"), *_book("vi_fanatics")]
+    report = ValidationReport(quote_count=0, event_count=0, source_count=0)
+    check_book_coverage(quotes, "PA", report)
+    codes = [f.code for f in report.findings]
+
+    assert "book_coverage_unobservable" not in codes
+    assert "required_book_non_local_only" in codes
+
+
+def test_a_run_asking_only_for_out_of_state_context_is_not_faulted():
+    """``--source vi_fanatics`` never asked to observe Fanatics locally.
+
+    Judgeability keys on the feeds that could *satisfy* the rule.  Keyed on every
+    named feed, this run was judged and — because its only feed is non-local —
+    failed at ERROR, which sets ``report.ok`` False and exits non-zero on a scope
+    the operator deliberately chose.  Fails on the pre-fix membership test.
+    """
+    report = ValidationReport(quote_count=0, event_count=0, source_count=0)
+    measured = check_book_coverage(
+        _book("vi_fanatics"), "PA", report, configured=["vi_fanatics"]
+    )
+    assert _find(measured, "Fanatics").access is Access.NOT_REQUESTED
+    # Nothing is said about Fanatics.  PlaySugarHouse still reports, because it
+    # declares no feed at all — see the test below.
+    #
+    # Asserted on the codes rather than on the absence of the substring
+    # "Fanatics": the collapse message names the lowercase source key
+    # ``vi_fanatics``, so a substring check passes while the run is being
+    # collapsed over — it escaped the ``configured``-narrowing mutant on that
+    # accident alone.
+    assert [f.code for f in report.findings] == ["required_book_missing"]
+    assert "PlaySugarHouse" in report.findings[0].message
+
+
+def test_the_collapse_counts_only_feeds_the_run_asked_for():
+    """``watched`` must be narrowed by ``configured``, or the collapse fires wrongly.
+
+    A run asking only for two first-party books has *no* republisher in scope, so
+    there is no local feed to have gone dark and nothing for the collapse to
+    explain.  Without the ``configured`` filter, ``watched`` picked up all ten of
+    Pennsylvania's declared republishers — none of which the run asked for — and
+    the collapse fired, replacing two ERROR-level unobserved books with one
+    WARNING that asserts a false cause and counts ten feeds that were never
+    requested.
+    """
+    report = ValidationReport(quote_count=0, event_count=0, source_count=0)
+    check_book_coverage([], "PA", report, configured=["fanduel", "betmgm"])
+
+    codes = [f.code for f in report.findings]
+    assert "book_coverage_unobservable" not in codes, codes
+    assert "book_coverage_local_feeds_dark" not in codes, codes
+    named = {
+        book
+        for book in ("FanDuel", "BetMGM", "PlaySugarHouse")
+        for f in report.findings
+        if book in f.message
+    }
+    assert named == {"FanDuel", "BetMGM", "PlaySugarHouse"}, named
+    assert all(
+        f.severity is Severity.ERROR
+        for f in report.findings
+        if f.code == "required_book_missing"
+    )
+
+
+def test_no_feed_at_all_is_missing_not_merely_unconfirmed():
+    """PlaySugarHouse has no feed, and must not read the same as a thin one."""
+    measured = _find(coverage_for_state(_book("fanduel"), "PA"), "PlaySugarHouse")
+    assert measured.access is Access.MISSING
+    assert measured.republishers == ()
+
+
+def test_two_disagreeing_local_republishers_fail_the_book(two_local_feeds):
+    """Two same-licence feeds that differ is a real finding, not an average.
+
+    Built from two *local* keys, because only those are compared: this is the
+    case the agreement test exists for.
+    """
+    quotes = [*_book("an_caesars"), *_book("an_fanatics", offset=0.60)]
+    measured = _find(coverage_for_state(quotes, "PA"), "TwoLocalFeeds")
+    assert measured.access is Access.DISAGREEING
+    assert not measured.satisfied
+
+    report = ValidationReport(quote_count=0, event_count=0, source_count=0)
+    check_book_coverage(quotes, "PA", report)
+    finding = next(
+        f
+        for f in report.findings
+        if f.code == "required_book_observations_disagree"
+    )
+    assert finding.severity is Severity.ERROR
+
+
+def test_a_cross_licence_price_gap_never_fails_the_book():
+    """A Las Vegas column differing from the state licence is not a defect.
+
+    Holding ``vi_*`` to same-licence agreement would fault every book forever,
+    which is why it is excluded from the price comparison as well as from the
+    count.  Excluded from *both*, or the rule contradicts itself.
+    """
+    quotes = [*_book("an_caesars"), *_book("vi_caesars", offset=0.60)]
+    measured = _find(coverage_for_state(quotes, "PA"), "Caesars")
+    assert measured.access is Access.SINGLE_SOURCE
+
+    report = ValidationReport(quote_count=0, event_count=0, source_count=0)
+    check_book_coverage(quotes, "PA", report)
+    assert not [
+        finding
+        for finding in report.findings
+        if finding.code == "required_book_observations_disagree"
+    ]
+
+
+def test_cross_licence_corroborator_is_recorded_but_never_counted():
+    """VegasInsider publishes a Las Vegas column, not the state licence."""
+    entry = next(b for b in REQUIRED_BOOKS["PA"] if b.book == "Fanatics")
+    assert entry.republishers["an_fanatics"] is Corroboration.SAME_LICENCE
+    assert entry.republishers["an_fanatics"].is_local
+    assert entry.republishers["vi_fanatics"] is Corroboration.OTHER_LICENCE
+    assert not entry.republishers["vi_fanatics"].is_local
+
+
+# ── the locality label cannot be faked ───────────────────────────────────────
+
+
+def test_a_national_feed_cannot_be_declared_local():
+    """The one-word edit this invariant exists to refuse.
+
+    Relabelling ``vi_fanatics`` SAME_LICENCE would not make VegasInsider serve a
+    Pennsylvania page; it would only let its Las Vegas column count towards the
+    two-feed requirement, which is exactly the substitution the rule forbids.
+    """
+    faked = RequiredBook(
+        book="Fanatics",
+        direct=None,
+        republishers={"vi_fanatics": Corroboration.SAME_LICENCE},
+    )
+    with pytest.raises(RuntimeError, match="files no per-state book id"):
+        _check_locality_declarations({"PA": (faked,)})
+
+
+def test_a_state_scoped_feed_cannot_be_discarded_as_non_local():
+    """The mirror error: throwing away a real local observation."""
+    discarded = RequiredBook(
+        book="Fanatics",
+        direct=None,
+        republishers={"an_fanatics": Corroboration.OTHER_LICENCE},
+    )
+    with pytest.raises(RuntimeError, match="republishes PA's own licence"):
+        _check_locality_declarations({"PA": (discarded,)})
+
+
+def test_a_feed_with_no_licence_in_this_state_cannot_be_declared_local():
+    """``AN_BOOK_KEYS`` is a weaker property than the one being claimed.
+
+    ``an_bally`` files per-state book ids, but only a New Jersey one.  Declaring
+    it local in Pennsylvania asserts a licence that does not exist, and the
+    membership-only check accepted it.
+    """
+    from src.jurisdictions import RouteStatus, jurisdiction
+
+    assert jurisdiction("PA").republished["an_bally"].status is RouteStatus.UNAVAILABLE
+    overreaching = RequiredBook(
+        book="Bally Bet",
+        direct=None,
+        republishers={"an_bally": Corroboration.SAME_LICENCE},
+    )
+    with pytest.raises(RuntimeError, match="republishes no PA licence"):
+        _check_locality_declarations({"PA": (overreaching,)})
+
+
+def test_a_table_keyed_in_the_wrong_case_is_refused():
+    """``normalize_state`` in the invariant, the raw key at run time.
+
+    Checking only the normalized form let ``"pa"`` pass every consistency check
+    here and then match nothing in ``coverage_for_state``, which looks the table
+    up by the normalized state — Pennsylvania would have reported
+    ``book_coverage_not_declared`` while this invariant had just read its entries
+    and pronounced them sound.
+    """
+    entry = RequiredBook(book="betPARX", direct=None, republishers={})
+    with pytest.raises(RuntimeError, match="keyed exactly"):
+        _check_locality_declarations({"pa": (entry,)})
+
+
+def test_the_shipped_table_satisfies_the_invariant():
+    """Import already ran this; pin it so a later edit cannot pass silently."""
+    _check_locality_declarations(REQUIRED_BOOKS)
+
+
+def test_no_pa_book_yet_has_two_same_licence_feeds():
+    """Guards the written record, not the rule.
+
+    ``docs/SOURCE_FEASIBILITY.md`` records that the two-feed path is currently
+    unreachable for every Pennsylvania book — one Action Network id each, and
+    VegasInsider's Las Vegas column is a different licence.  ``two_local_feeds``
+    exists as a substitute table precisely because of that.
+
+    The day a real second PA-licensed feed is added this fails, which is the
+    point: the doc, the substitute fixture, and this test all become stale in the
+    same commit and the failure says so rather than letting the record rot.
+    """
+    doubled = {
+        entry.book: sorted(
+            key
+            for key, kind in entry.republishers.items()
+            if kind is Corroboration.SAME_LICENCE
+        )
+        for entry in REQUIRED_BOOKS["PA"]
+    }
+    assert doubled, "the PA table went empty; this test would pass vacuously"
+    with_two = {book: feeds for book, feeds in doubled.items() if len(feeds) >= 2}
+    assert not with_two, (
+        "a PA book now has two same-licence feeds: update the Pennsylvania "
+        "section of docs/SOURCE_FEASIBILITY.md and reconsider whether the "
+        f"two_local_feeds substitute table is still needed — {with_two}"
+    )
+
+
+# ── how failures surface ─────────────────────────────────────────────────────
+
+
+def test_missing_book_is_an_error_and_single_source_is_a_warning():
+    report = ValidationReport(quote_count=0, event_count=0, source_count=0)
+    check_book_coverage(_book("an_fanatics"), "PA", report)
+    by_code = {finding.code: finding for finding in report.findings}
+
+    assert by_code["required_book_single_source"].severity is Severity.WARNING
+    assert by_code["required_book_missing"].severity is Severity.ERROR
+    # The message has to name the rule, or a reader cannot tell what to fix.
+    assert "two agreeing republishers" in by_code["required_book_missing"].message
+
+
+def test_the_cross_licence_clause_only_appears_where_one_was_seen():
+    """A book nothing reached must not read as one whose out-of-state number was weighed.
+
+    The clause is the point of the rule where a Las Vegas column *did* answer,
+    and misdirection where none did: appended unconditionally, every
+    ``required_book_missing`` row invited the reader to look for a cross-licence
+    feed that had never been in the picture.
+    """
+    report = ValidationReport(quote_count=0, event_count=0, source_count=0)
+    check_book_coverage([*_book("an_fanatics"), *_book("vi_bet365")], "PA", report)
+    by_code = {finding.code: finding for finding in report.findings}
+
+    # BetMGM: no feed of any licence produced a row.
+    missing = by_code["required_book_missing"].message
+    assert "two agreeing republishers" in missing
+    assert "another state's licence" not in missing
+
+    # bet365: seen, but only from outside Pennsylvania — the clause explains it.
+    non_local = by_code["required_book_non_local_only"].message
+    assert "another state's licence never counts towards the two" in non_local
+
+    # And the same holds for the thin-feed warning, where the one feed is local.
+    single = by_code["required_book_single_source"].message
+    assert "another state's licence" not in single
+
+
+def test_undeclared_state_warns_rather_than_passing_silently():
+    """An empty checklist must not render as a clean one."""
+    assert "NJ" not in REQUIRED_BOOKS
+    report = ValidationReport(quote_count=0, event_count=0, source_count=0)
+    assert check_book_coverage(_book("fanduel"), "NJ", report) == ()
+    codes = [finding.code for finding in report.findings]
+    assert codes == ["book_coverage_not_declared"]
+
+
+def test_no_state_checks_nothing():
+    report = ValidationReport(quote_count=0, event_count=0, source_count=0)
+    assert check_book_coverage(_book("fanduel"), None, report) == ()
+    assert report.findings == []
+
+
+# ── the declaration is wired to something real ───────────────────────────────
+
+
+@pytest.mark.parametrize("state", sorted(REQUIRED_BOOKS))
+def test_every_declared_state_is_a_known_jurisdiction(state):
+    assert state in JURISDICTIONS
+
+
+@pytest.mark.parametrize(
+    ("book", "source_key"),
+    [
+        (book.book, key)
+        for entry in REQUIRED_BOOKS.values()
+        for book in entry
+        for key in (*( (book.direct,) if book.direct else () ), *book.republishers)
+    ],
+)
+def test_every_named_source_is_registered(book, source_key):
+    """A typo'd key would otherwise read as a permanently missing book."""
+    assert source_key in BY_KEY, f"{book} names unregistered source {source_key}"
+
+
+@pytest.mark.parametrize(
+    ("book", "key"),
+    [
+        (book.book, key)
+        for entry in REQUIRED_BOOKS.values()
+        for book in entry
+        for key in book.republishers
+    ],
+)
+def test_republishers_are_republishers_and_direct_routes_are_not(book, key):
+    assert key in REPUBLISHED_SOURCE_KEYS, f"{book}: {key} is not a republisher"
+    assert key not in RETAIL_SOURCE_KEYS
+
+
+def test_pennsylvania_declares_every_book_the_operator_named():
+    """The eleven PA books, so quietly dropping one is a failing test."""
+    assert {book.book for book in REQUIRED_BOOKS["PA"]} == {
+        "bet365",
+        "BetMGM",
+        "betPARX",
+        "BetRivers",
+        "Caesars",
+        "DraftKings",
+        "FanDuel",
+        "Fanatics",
+        "Mohegan Pennsylvania",
+        "PlaySugarHouse",
+        "theScore Bet",
+    }
+
+
+def test_unlicensed_republisher_explains_itself_rather_than_reading_as_a_gap():
+    """``UNAVAILABLE`` is a licensing fact, not a broken feed.
+
+    betPARX has no Illinois book to republish.  Were Illinois to declare it
+    required, the message must say that rather than "no feed produced a row".
+    """
+    configured = jurisdiction("IL")
+    assert configured.republished["an_parx"].status is RouteStatus.UNAVAILABLE
+    assert jurisdiction("PA").republished["an_parx"].status is RouteStatus.VALIDATED
+
+
+def test_a_narrowed_run_does_not_fault_books_it_never_asked_for():
+    """``--source an_caesars`` must not report the other ten books missing.
+
+    It did: a run naming three sources produced eleven ``required_book_missing``
+    errors, which is the same fault ``validation``'s *capabilities* argument
+    exists to prevent — blaming a book for a scope the operator chose.
+    """
+    quotes = _book("fanduel")
+    report = ValidationReport(quote_count=0, event_count=0, source_count=0)
+    measured = check_book_coverage(quotes, "PA", report, configured=["fanduel"])
+
+    assert _find(measured, "FanDuel").access is Access.DIRECT
+    assert _find(measured, "Caesars").access is Access.NOT_REQUESTED
+    assert not _find(measured, "Caesars").access.is_judgeable
+    # One finding, and it is the book that has no feed in any scope.
+    assert [finding.code for finding in report.findings] == ["required_book_missing"]
+    assert "PlaySugarHouse" in report.findings[0].message
+
+
+def test_a_book_with_no_feed_at_all_is_never_exempted_as_unrequested():
+    """``PlaySugarHouse`` declares no direct route and no republisher.
+
+    An empty feed set intersects nothing, so the ``NOT_REQUESTED`` exemption
+    swallowed it on every run that passes a ``configured`` list — which is every
+    production run, since the collector always passes one.  The single book in
+    the table whose whole purpose is to fail loudly was the single book that
+    could not.  Fails on the pre-fix membership test.
+    """
+    for configured in (["fanduel"], ["vi_fanatics"], ["an_caesars", "caesars"]):
+        report = ValidationReport(quote_count=0, event_count=0, source_count=0)
+        measured = check_book_coverage(
+            _book("fanduel"), "PA", report, configured=configured
+        )
+        entry = _find(measured, "PlaySugarHouse")
+        assert entry.access is Access.MISSING, configured
+        assert entry.access.is_judgeable
+
+
+def test_a_requested_book_that_produced_nothing_is_recorded_as_missing():
+    """The not-requested exemption is scoped to what was never asked for.
+
+    A book whose feed *was* requested and produced nothing is recorded
+    ``MISSING`` — never ``NOT_REQUESTED``.  It is reported rather than collapsed,
+    because FanDuel's sixty first-party rows are proof this slate had something
+    to price: the collapse only speaks for a run that observed nothing at all.
+    """
+    report = ValidationReport(quote_count=0, event_count=0, source_count=0)
+    measured = check_book_coverage(
+        _book("fanduel"), "PA", report, configured=["fanduel", "an_caesars"]
+    )
+    assert _find(measured, "Caesars").access is Access.MISSING
+    codes = [f.code for f in report.findings]
+    assert "book_coverage_unobservable" not in codes
+    assert {"required_book_missing"} == set(codes)
+
+
+def test_omitting_configured_judges_every_book():
+    """A full pass passes no source list, and must still hold every book."""
+    report = ValidationReport(quote_count=0, event_count=0, source_count=0)
+    measured = check_book_coverage(_book("fanduel"), "PA", report)
+    assert not any(entry.access is Access.NOT_REQUESTED for entry in measured)
+
+
+def test_a_slate_wide_outage_is_one_finding_not_eleven():
+    """Overnight, every game on the republisher's board is already under way.
+
+    Measured at 02:20 ET: all ten PA book ids still returned prices and all
+    eighteen games were ``complete`` or ``inprogress``, so every adapter
+    correctly parsed nothing.  Eleven errors for one condition is noise, and a
+    nightly false alarm is a check that stops being read.
+
+    Collapsing is what is under test, so the run holds nothing else — a live
+    venue in it is a different case, and now a different finding.  What must not
+    return is one error per book.
+    """
+    report = ValidationReport(quote_count=0, event_count=0, source_count=0)
+    check_book_coverage([], "PA", report)
+    codes = [finding.code for finding in report.findings]
+    # The outage, and the one book no feed watches. Not eleven.
+    assert codes == ["book_coverage_unobservable", "required_book_missing"]
+
+
+def test_the_collapse_does_not_swallow_a_book_nothing_watches():
+    """A feed outage cannot explain a book that has no feed to lose.
+
+    ``PlaySugarHouse`` is declared required and watched by nothing — no
+    first-party route, no republisher.  It is the one entry whose entire purpose
+    is to stay loud, and the slate-outage collapse returned before reporting it,
+    so the nightly window was also the window in which a permanent configuration
+    gap disappeared from the report.
+    """
+    report = ValidationReport(quote_count=0, event_count=0, source_count=0)
+    check_book_coverage([], "PA", report)
+    missing = [f for f in report.findings if f.code == "required_book_missing"]
+
+    assert len(missing) == 1, [f.code for f in report.findings]
+    assert "PlaySugarHouse" in missing[0].message
+    assert missing[0].severity is Severity.ERROR
+    # And the collapse still fired, so this is not just "the collapse broke".
+    assert any(f.code == "book_coverage_unobservable" for f in report.findings)
+
+
+def test_one_dark_book_among_healthy_ones_is_still_its_own_error():
+    """The collapse must not become a way for a real gap to hide."""
+    quotes = [*_book("fanduel"), *_book("an_caesars"), *_book("vi_caesars")]
+    report = ValidationReport(quote_count=0, event_count=0, source_count=0)
+    check_book_coverage(quotes, "PA", report)
+    codes = [finding.code for finding in report.findings]
+    assert "book_coverage_unobservable" not in codes
+    assert "required_book_missing" in codes
+
+
+# ── which positions are takeable from the state ───────────────────────────────
+
+
+class _Position:
+    """Only ``sources`` is read, which is all the predicate needs."""
+
+    def __init__(self, *sources: str) -> None:
+        self.sources = frozenset(sources)
+
+
+def test_an_unlicensed_route_is_not_a_local_leg():
+    """``JURISDICTIONS[state].routes`` was the wrong table to ask.
+
+    It holds every route the registry knows for the state *including the
+    ``UNAVAILABLE`` ones*.  Hard Rock is an ``UNAVAILABLE`` Pennsylvania route —
+    the operator holds no PA licence for it — and :mod:`src.report` counted it as
+    the local leg that made a position takeable from PA, on the dashboard, while
+    ``collector arb`` withheld the same position.
+    """
+    assert jurisdiction("PA").routes["hardrock"].status is RouteStatus.UNAVAILABLE
+    assert "hardrock" in JURISDICTIONS["PA"].routes      # the old, wrong answer
+
+    kept, withheld = withhold_non_local(
+        [_Position("hardrock", "pinnacle")], "PA", route_scope="state"
+    )
+    assert kept == []
+    assert withheld == 1
+
+
+def test_a_licensed_route_is_a_local_leg():
+    """The predicate must not simply refuse everything."""
+    kept, withheld = withhold_non_local(
+        [_Position("fanduel", "pinnacle")], "PA", route_scope="state"
+    )
+    assert len(kept) == 1
+    assert withheld == 0
+
+
+def test_a_state_with_no_licence_at_all_withholds_rather_than_skipping(monkeypatch):
+    """An empty licensed set means "nothing here is takeable", never "no filter".
+
+    "No licence" is the direction the mistake goes in: the live collector shipped
+    one round with this filter gated on the keys a run had *built*, so the run that
+    built no state book skipped the filter entirely and reported the position
+    instead of withholding it.
+
+    Reached through a substitute because every shipped jurisdiction has at least
+    four licensed retail routes — asserted below, so this stops being a substitute
+    the day one does not.
+    """
+    from src.sources import registry
+
+    assert all(
+        registry.state_licensed_keys(state) for state in JURISDICTIONS
+    ), "a shipped state now has no licensed route; test it directly instead"
+
+    monkeypatch.setattr(registry, "state_licensed_keys", lambda state: frozenset())
+    kept, withheld = withhold_non_local(
+        [_Position("pinnacle", "bovada")], "PA", route_scope="state"
+    )
+    assert kept == []
+    assert withheld == 1
+
+
+def test_a_us_regulated_venue_is_reachable_from_every_state():
+    """The rule was inverted for Kalshi and Polymarket, and it cost real positions.
+
+    Both are federally regulated US venues with no per-state sportsbook licence to
+    hold — this registry says so itself, in the note explaining why they are absent
+    from ``US_UNAVAILABLE_SOURCE_KEYS``. Built on ``state_licensed_keys`` alone, the
+    locality filter called them out-of-state in *every* jurisdiction, so a legal
+    Kalshi/Polymarket arbitrage on a Pennsylvania run was withheld from the report,
+    the dashboard and the SMS — under a warning saying "every leg was a global or
+    offshore venue".
+
+    Rule (a) stops an unreachable price being presented as the state's own. It was
+    never a reason to hide a reachable one.
+    """
+    kept, withheld = withhold_non_local(
+        [_Position("kalshi", "polymarket")], "PA", route_scope="state"
+    )
+    assert len(kept) == 1, "a legal US position was withheld from a PA run"
+    assert withheld == 0
+
+
+def test_reachability_is_not_the_same_question_as_a_retail_licence():
+    """Three sets, and conflating any two of them broke something.
+
+    ``hardrock`` is retail and US-executable, and holds no PA licence — so it is
+    reachable from IL and NJ and not from PA. ``kalshi`` holds no retail licence
+    anywhere and is reachable from all four. ``pinnacle`` is reachable from none.
+    """
+    from src.sources import registry
+
+    assert "hardrock" in registry.takeable_from_state("IL")
+    assert "hardrock" not in registry.takeable_from_state("PA")
+    for state in JURISDICTIONS:
+        assert "kalshi" in registry.takeable_from_state(state), state
+        assert "polymarket" in registry.takeable_from_state(state), state
+        assert "pinnacle" not in registry.takeable_from_state(state), state
+        # A republished mirror is never somewhere you can place a bet.
+        assert not registry.takeable_from_state(state) & REPUBLISHED_SOURCE_KEYS
+
+
+# ── which runs the rule governs ──────────────────────────────────────────────
+
+
+def test_a_legacy_scope_run_with_a_real_jurisdiction_is_governed():
+    """The scope test was inverted, and ``legacy`` is the value it mattered for.
+
+    ``jurisdiction`` and ``route_scope`` were added to the schema in *different*
+    commits, so every row a database migrated across that gap holds carries a real
+    jurisdiction and ``route_scope='legacy'`` — and those are exactly the rows
+    ``arb --run <old>`` and the dashboard read.  Requiring ``route_scope ==
+    "state"`` therefore turned the rule off on the historical half of the store: a
+    PA run with a ``pinnacle``/``onexbet`` position printed it **and texted it**,
+    two legs neither of which a Pennsylvania operator can reach.
+
+    Fails on the previous predicate, which returned the position untouched.
+    """
+    kept, withheld = withhold_non_local(
+        [_Position("pinnacle", "onexbet")], "PA", route_scope="legacy"
+    )
+    assert kept == []
+    assert withheld == 1
+
+
+@pytest.mark.parametrize("scope", ["global", "all"])
+def test_a_scope_the_operator_widened_on_purpose_is_exempt(scope):
+    """``--scope all`` from Pennsylvania is a request to see the wider board.
+
+    The one direction that must stay exempt: filtering it hides what was asked
+    for, which is what broke four integration tests the first time the decision was
+    keyed on the jurisdiction alone.
+    """
+    kept, withheld = withhold_non_local(
+        [_Position("pinnacle", "onexbet")], "PA", route_scope=scope
+    )
+    assert len(kept) == 1
+    assert withheld == 0
+
+
+def test_an_unrecognised_scope_gets_the_filter_rather_than_a_pass():
+    """A deny-list, so the money-safe answer is the default.
+
+    A scope value this module has never heard of is governed.  Being wrong that way
+    costs a withheld position with its count printed; being wrong the other way
+    sends a text message naming a book nobody can reach.
+    """
+    kept, withheld = withhold_non_local(
+        [_Position("pinnacle", "onexbet")], "PA", route_scope="some_future_scope"
+    )
+    assert kept == []
+    assert withheld == 1
+
+
+@pytest.mark.parametrize("state", ["GLOBAL", "", "XX"])
+def test_a_run_with_no_jurisdiction_is_never_filtered(state):
+    """Nothing is out of state when there is no state, and ``XX`` must not raise.
+
+    The jurisdiction test is also what stops an unrecognised one reaching
+    ``jurisdiction("XX")`` and aborting a whole pass with a ``KeyError``.
+    """
+    kept, withheld = withhold_non_local(
+        [_Position("pinnacle", "onexbet")], state, route_scope="state"
+    )
+    assert len(kept) == 1
+    assert withheld == 0
+
+
+def test_every_surface_asks_one_function_whether_the_rule_applies():
+    """The condition is a function, not a sentence three callers each spell.
+
+    ``lines`` grew a fourth spelling — the jurisdiction alone, with no scope test —
+    and on a widened-scope run ``arb`` offered a position that ``lines``, one
+    command later, marked as having no leg reachable from the state.
+    """
+    from src.coverage import locality_applies
+
+    assert locality_applies("PA", "state")
+    assert locality_applies("PA", "legacy")
+    assert locality_applies("pa", " STATE ")          # normalised, both arguments
+    assert not locality_applies("PA", "global")
+    assert not locality_applies("GLOBAL", "state")
+    assert not locality_applies(None, "state")
+
+
+def test_global_is_not_asked_to_declare_a_required_book_list():
+    """``GLOBAL`` licenses nothing, so there is no checklist it could declare.
+
+    A missing declaration is a warning on purpose — an unchecked jurisdiction is
+    not a clean one — but ``GLOBAL`` is not a jurisdiction, and ``collect_once``
+    passed it straight through, so every global run in every batch carried
+    ``book_coverage_not_declared`` telling the operator to declare books for a
+    non-state.  ``check_redundancy`` next to it already had the special case.
+    """
+    report = ValidationReport(quote_count=0, event_count=0, source_count=0)
+    assert check_book_coverage(_book("pinnacle"), "GLOBAL", report) == ()
+    assert report.findings == []

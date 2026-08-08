@@ -59,6 +59,7 @@ Start with the test containing the changed symbol or the closest domain group:
 | Placed-bet ledger | `python -m pytest tests/test_betlog.py -q` |
 | Dashboard | `python -m pytest tests/test_report.py -q` |
 | Jurisdiction/detection/cache/multi-state batch | `python -m pytest tests/test_jurisdictions.py tests/test_probe_sources.py -q` |
+| Required-book observation rule (per-state book ids, two-feed cross-check) | `python -m pytest tests/test_coverage.py -q` |
 | First-party research transport / current Hard Rock shape | `python -m pytest tests/test_source_research.py tests/test_draftkings_hardrock.py -q` |
 | Agent documentation | `python -m pytest tests/test_agent_docs.py -q` then `python scripts/check_agent_docs.py` |
 

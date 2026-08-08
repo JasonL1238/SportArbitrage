@@ -16,6 +16,7 @@ Use this map before exploring. Search for the relevant symbol and its tests, the
 | `src/alerts.py` | Arb notification | ROI floor, dedupe, Messages/Twilio transports, fail-soft send |
 | `src/store.py`, `src/raw_store.py` | Persistence | SQLite schema/migrations and raw replay envelopes |
 | `src/jurisdictions.py`, `src/state_selection.py` | Retail routing and batch selection | IL/PA/NJ/DC routes, status, detection, selection |
+| `src/coverage.py` | State locality: required-book rule and output withholding | `check_book_coverage` (per-state book list, first-party vs two-agreeing-republisher) plus `withhold_non_local` / `locality_applies` |
 | `src/egress.py`, `src/probe_cache.py` | Jurisdiction diagnostics | Hashed egress record and TTL/status cache |
 | `src/promos/` | Promotions subsystem | Promo adapters, enrichment, deduplication, storage, planning |
 | `src/betlog.py` | Placed-bet ledger | Position snapshots, settlement edits, exact-money bankroll totals |
@@ -58,6 +59,7 @@ Search these files by section or symbol before reading ranges:
 - Placed-bet persistence or bankroll arithmetic: `src/betlog.py`; keep it out of the replaceable odds and promo databases.
 - Dashboard data and server behavior: `src/report.py`; visual/interaction assets: `src/report_assets.py`; validate through `tests/test_report.py`.
 - Retail state routing: `src/jurisdictions.py`, `src/state_selection.py`, scoped registry builders, batch/run persistence, and focused jurisdiction/probe tests.
+- Which books a state must be able to see, and through how many feeds: `src/coverage.py` plus the republished id table in `src/jurisdictions.py`; validate with `tests/test_coverage.py`.
 
 ## Validation shortcuts
 
@@ -70,6 +72,7 @@ python -m pytest tests/test_source_contract.py tests/test_<venue>_adapter.py -q
 python -m pytest tests/test_promos.py tests/test_promo_planner.py -q
 python -m pytest tests/test_report.py -q
 python -m pytest tests/test_jurisdictions.py tests/test_probe_sources.py -q
+python -m pytest tests/test_coverage.py tests/test_redundancy.py -q
 python -m pytest tests/test_source_research.py tests/test_draftkings_hardrock.py -q
 python -m pytest tests/test_agent_docs.py -q
 python scripts/check_agent_docs.py

@@ -87,11 +87,20 @@ MIRROR_BOOK: Mapping[str, str] = {
     "an_hardrock": "hardrock",
     "an_onexbet": "onexbet",
     "an_superbook": "superbook",
+    "an_parx": "parx",
+    "an_thescore": "thescore",
+    # Action Network files this book as ``UnibetPA``; the Pennsylvania online
+    # skin ran on Unibet's licence, so the front door is Unibet's.  Recorded
+    # here rather than under a Mohegan URL because that mapping is unverified.
+    "an_unibet": "unibet",
     "vi_bet365": "bet365",
     "vi_caesars": "caesars",
     "vi_draftkings": "draftkings",
     "vi_fanatics": "fanatics",
     "vi_hardrock": "hardrock",
+    "vi_betmgm": "betmgm",
+    "vi_betrivers": "betrivers_kambi",
+    "vi_fanduel": "fanduel",
     "vsin_circa": "circa",
 }
 
@@ -122,6 +131,9 @@ SITE: Mapping[str, str] = {
     "polymarket": "https://polymarket.com",
     "smarkets": "https://smarkets.com",
     "superbook": "https://co.superbook.com",
+    "parx": "https://www.betparx.com",
+    "thescore": "https://www.thescore.bet",
+    "unibet": "https://pa.unibet.com",
     "sxbet": "https://sx.bet",
 }
 

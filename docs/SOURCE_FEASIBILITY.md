@@ -132,6 +132,66 @@ but the full offline suite remains blocked until Action Network restores those
 tenants or a different genuine feed is integrated under an accurately named
 source.
 
+### Pennsylvania: no book reaches the two-feed bar
+
+Recorded so this is not rediscovered. Under the rule in `docs/agent-guidelines.md`
+§ Scrape, a book counts as observed through one first-party route **or** two
+republished feeds carrying *Pennsylvania's own* licence that agree on price.
+
+**No PA book reaches the two-feed bar.** Ten of the eleven file exactly one
+same-licence feed — Action Network's per-state book id — and PlaySugarHouse files
+none at all. The only second feed available anywhere is VegasInsider, whose
+`/odds/las-vegas/` column is a different licence of the same brand; it is
+recorded as context and excluded from both the count and the price comparison.
+
+That is a statement about the *second* path only. Five books are satisfied
+through the **first** path — a first-party route — and the table's own "best
+reachable state" column says so. The six with no first-party route are the ones
+with no way to comply at all.
+
+| Book | First party | Same-licence feed (AN book id) | Cross-licence only | Best reachable state |
+|---|---|---|---|---|
+| BetMGM | `betmgm` | `an_betmgm` (280) | `vi_betmgm` | `DIRECT` |
+| BetRivers | `betrivers_kambi` | `an_betrivers` (122) | `vi_betrivers` | `DIRECT` |
+| Caesars | `caesars` | `an_caesars` (1906) | `vi_caesars` | `DIRECT` |
+| DraftKings | `draftkings` | `an_draftkings` (1534) | `vi_draftkings` | `DIRECT` |
+| FanDuel | `fanduel` | `an_fanduel` (255) | `vi_fanduel` | `DIRECT` |
+| bet365 | none | `an_bet365` (3547) | `vi_bet365` | `SINGLE_SOURCE` (warning) |
+| Fanatics | none | `an_fanatics` (2791) | `vi_fanatics` | `SINGLE_SOURCE` (warning) |
+| betPARX | none | `an_parx` (74) — **unproven** | none | `SINGLE_SOURCE` (warning) |
+| Mohegan Pennsylvania | none | `an_unibet` (246) — **unproven** | none | `SINGLE_SOURCE` (warning) |
+| theScore Bet | none | `an_thescore` (4623) — **unproven** | none | `SINGLE_SOURCE` (warning) |
+| PlaySugarHouse | none | none | none | `MISSING` (error) |
+
+**The three unproven feeds.** `an_parx`, `an_unibet` and `an_thescore` are the
+*only* observation path for their books, and no capture in the repository shows
+any of them returning a row. The captures taken 2026-08-07T01:55Z asked for the
+New Jersey ids 1929 / 247 / 4620 and came back carrying odds for other books on
+the same games (`{15, 30, 123}`, `{15, 30, 68, 69, 71, 75}`, `{15, 30, 69, 75}`)
+— the requested book was absent, not the slate. The Pennsylvania ids 74 / 246 /
+4623 have never been requested. So for these three the coverage table asserts a
+watcher that is not known to answer; if a live capture confirms the ids are
+wrong, the honest record is no working feed rather than a thin one. Until then
+they are `SINGLE_SOURCE` on paper and `MISSING` in practice.
+
+**The three new VegasInsider columns.** `vi_betmgm`, `vi_betrivers` and
+`vi_fanduel` are the opposite case — the adapters work and the captures are the
+problem. Their 2026-08-07T01:55Z captures parse to zero rows, but so does
+`vi_caesars` against that same overnight page, and feeding the live 2026-08-03
+page to each of the three new parsers yields 48 quotes apiece. They need a
+recapture on a live slate, not a code change; `test_the_adapter_produced_rows_at_all`
+would currently fail on all six, masked only by the pre-existing
+`an_fliff` / `an_circa` / `an_superbook` fixture gap that errors first.
+
+bet365 and Fanatics previously read as cross-checked; their second feed was the
+Las Vegas column, so they no longer can. For the six books with no first-party
+route the only path to compliance is a genuine Pennsylvania first-party adapter
+or a second PA-licensed republisher — **not** relabelling a national feed as
+local, which `src/coverage.py`'s import-time invariant refuses outright.
+
+`an_bally` and `an_hardrock` are `UNAVAILABLE` in PA (no licence) and are not
+built there.
+
 ### First-party endpoint findings
 
 | Source | Result from Illinois |

@@ -13,6 +13,12 @@ class ProbeStatus(StrEnum):
     GEO_RESTRICTED = "geo_restricted"
     BLOCKED = "blocked"
     PARSE_FAIL = "parse_fail"
+    #: The registry refused to hand out a route for this state at all — no
+    #: licensed route exists, or the only one is tagged for another state.  Its own
+    #: value because it is a fact about the licence, not about the response: the
+    #: site was never asked, so filing it as ``PARSE_FAIL`` blames an adapter that
+    #: never ran and ``BLOCKED`` blames a venue that never answered.
+    UNLICENSED = "unlicensed"
     UNTESTED = "untested"
 
 
