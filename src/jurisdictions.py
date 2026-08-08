@@ -154,43 +154,27 @@ _AN_BOOK_IDS: Mapping[str, Mapping[str, int]] = MappingProxyType(
         # have no Illinois licence to republish; theScore Bet has one in all
         # three.
         #
-        # **The Pennsylvania ids answer; no capture has parsed one into a row
-        # yet.**  Keep those two facts apart — the first is about the endpoint,
-        # the second about the clock.
+        # **All three now parse.**  Captured 2026-08-08T16:38Z from a Pennsylvania
+        # egress against a live pregame slate: 74 → 255 rows, 4623 → 225, 246 →
+        # 195, no rejections, and all three period windows present.  Those
+        # captures are the committed fixtures.
         #
-        # Answering: on 2026-08-08 each PA id was asked alone on ``web/v2`` and
-        # each came back — 74, 246 and 4623, alongside the defaults 15 and 30.
-        # The NJ-era doubt this note used to record was a version artefact: the
-        # committed captures under
-        # ``tests/fixtures/raw/an_{parx,unibet,thescore}__*`` asked 1929 / 247 /
-        # 4620 through ``web/v1`` and came back carrying *other* books, which is
-        # what v1 does with an id it does not know.
+        # Two things had to be true at once and neither was, which is why this
+        # note used to be long.  The endpoint: the ids are on ``web/v2`` and the
+        # nine v1 tenants asking for them got other books back, because that is
+        # what v1 does with an id it does not know.  The clock: the 2026-08-07
+        # runs hit a dead slate — every game ``complete`` or ``inprogress`` — so
+        # even the rows that came back produced nothing after the pregame filter.
+        # A capture taken then was an empty fixture however healthy the run
+        # looked.
         #
-        # Not parsed, and for two reasons that must not be run together.
-        #
-        # The endpoint.  On 2026-08-07T02:36Z every Pennsylvania tenant asked for
-        # the whole PA set, but only ``an_fanatics`` was configured for v2 —
-        # ``an_hardrock`` and ``an_bally`` hold no PA licence and are not built
-        # here.  Its payload returned all ten ids on MLB, nine on WNBA, seven on
-        # NFL and five on soccer.  The nine v1 tenants got none of the ten on
-        # MLB, NHL and soccer, and exactly two on WNBA and NFL: 74 (betPARX) and
-        # 122 (BetRivers).  So v1 is not blind to every modern id.
-        #
-        # Mohegan's 246 and theScore's 4623 *are* on disk with real prices — in
-        # that v2 payload, which is stored under ``an_fanatics``.  ``parse``
-        # selects on the book id in the envelope's own label, so a capture filed
-        # under one tenant can never produce another's rows: the ids have been
-        # observed and these two sources have not.  That is the distinction the
-        # recapture has to close, and it is why a fixture under the *right* key
-        # is the only thing that counts.
-        #
-        # The clock.  Every game in that run was ``complete`` or ``inprogress``,
-        # so the rows that *were* returned produce nothing after the pregame
-        # filter — including betPARX's.  A fixture taken then is an empty fixture
-        # however healthy the run looked.  Until a pregame capture on v2 exists,
-        # betPARX, Mohegan Pennsylvania and theScore Bet stay
-        # declared-but-unobserved in ``src.coverage``.  Recorded in
-        # ``docs/SOURCE_FEASIBILITY.md``.
+        # The brands are settled too, and not by inference:
+        # ``api.actionnetwork.com/web/v1/books`` is Action Network's own
+        # catalogue and names 74 ``'Parx'``/``paparx``, 4623 ``'theScore Bet
+        # PA'`` and 246 ``'UnibetPA'``.  So this table's betPARX and theScore Bet
+        # entries are confirmed, and 246 is **Unibet Pennsylvania** — the
+        # catalogue holds no book named Mohegan at all.  See ``src.coverage``,
+        # where that distinction decides what may be claimed.
         "an_parx": {"PA": 74, "NJ": 1929},
         "an_unibet": {"PA": 246, "NJ": 247},
         "an_thescore": {"IL": 4601, "PA": 4623, "NJ": 4620},

@@ -1193,13 +1193,51 @@ def _check_price_agreement(
     consensus between them: their median is the midpoint and each is equally far
     from it, so one flipped book would indict the honest one just as hard.
     """
+    # Which sources price a draw on each moneyline, so a two-way contract is
+    # never compared against a three-way one.
+    #
+    # They are different bets and their prices are not commensurable: on the
+    # 2026-08-08 Pennsylvania board, Caesars posted a **two-way** first-inning
+    # moneyline (home -210, away +170) while BetRivers, betPARX and theScore
+    # posted a **three-way** one (home +210, away +400, draw -129).  Both are
+    # coherent books — 4.7% and 8.6% vig respectively — but the two-way home
+    # price implies 0.677 and the three-way home price implies 0.323, because
+    # the three-way one loses when the inning is scoreless and the two-way one
+    # does not.  Compared as one market that is a 0.35 deviation, and this check
+    # reported all 30 first-inning moneylines as Caesars pricing a bet wrongly.
+    #
+    # :mod:`src.arb` already draws this distinction — ``contract_shape`` keeps
+    # the shapes in separate groups and ``ambiguous_tie_settlement`` refuses the
+    # two-way one outright in a draw-pricing window — so no position could be
+    # built from the pair.  The defect was confined to this report, and that is
+    # bad in its own way: an ERROR that fires every run on a known-benign cause
+    # is how a report stops being read.
+    #
+    # Keyed per ``side`` as well, because a source can price the main line
+    # three-way and an alternate two-way.
+    #
+    # The ``is MONEYLINE`` guard below states the intent and cannot currently
+    # change an answer: ``prices_draw`` is built from ``DRAW`` rows, which are
+    # moneyline rows, so the market is already in the tuple and a spread never
+    # matches.  Removing it is a no-op today and a defect the moment anything
+    # else carries a ``DRAW``.
+    prices_draw: set[tuple[str, str, Market, Period, Any]] = set()
+    for quote in quotes:
+        if quote.selection is Selection.DRAW and quote.status is QuoteStatus.ACTIVE:
+            prices_draw.add(
+                (quote.source, quote.event_key, quote.market, quote.period, quote.side)
+            )
+
     groups: dict[tuple, dict[str, float]] = defaultdict(dict)
     for quote in quotes:
         if quote.status is not QuoteStatus.ACTIVE:
             continue
+        shape = quote.market is Market.MONEYLINE and (
+            quote.source, quote.event_key, quote.market, quote.period, quote.side
+        ) in prices_draw
         key = (
             quote.event_key, quote.market, quote.period, quote.side,
-            quote.line, quote.selection,
+            quote.line, quote.selection, shape,
         )
         # Best price per source, not first: ``is_alternate`` is not in the key,
         # so a source with a main and an extra row at one number would otherwise
@@ -1220,9 +1258,16 @@ def _check_price_agreement(
     by_sport_compared: Counter[tuple[str, str]] = Counter()
     sport_of: dict[tuple, str] = {}
     for quote in quotes:
+        # Same key as ``groups``, shape included.  A six-element key here would
+        # miss every lookup and silently grade every outlier under sport ``""``,
+        # which disables the per-sport rate entirely — the half of this check
+        # that catches a source mirrored in one sport only.
+        shape = quote.market is Market.MONEYLINE and (
+            quote.source, quote.event_key, quote.market, quote.period, quote.side
+        ) in prices_draw
         sport_of.setdefault(
             (quote.event_key, quote.market, quote.period, quote.side,
-             quote.line, quote.selection),
+             quote.line, quote.selection, shape),
             quote.sport.value,
         )
     # Per (source, market) rather than per selection, so an order-driven venue
@@ -1256,11 +1301,11 @@ def _check_price_agreement(
         # Negating the away side states both halves from the home side and keeps
         # the two contracts apart.  Totals are untouched: OVER and UNDER already
         # share one number, and neither is ``AWAY``.
-        event_key, market, period, side, line, selection = key
+        event_key, market, period, side, line, selection, shape = key
         canonical = (
             -line if line is not None and selection is Selection.AWAY else line
         )
-        market_key = (event_key, market, period, side, canonical)
+        market_key = (event_key, market, period, side, canonical, shape)
         for source, implied in per_source.items():
             compared[source] += 1
             by_sport_compared[(source, sport)] += 1

@@ -1875,6 +1875,157 @@ class TestOneSourceCannotDisagreeWithEverybodyAboutAPrice:
             if f.code == "prices_disagree_with_every_other_source"
         ]
 
+    def _first_inning_slate(self, count: int = 40):
+        """Three books pricing a three-way first-inning moneyline, one two-way.
+
+        Modelled on the 2026-08-08 Pennsylvania board, where BetRivers, betPARX
+        and theScore posted a three-way first-inning moneyline and Caesars posted
+        a two-way one.  Both are honest books pricing different bets.
+
+        The prices are drawn further apart than that board's, deliberately: the
+        real gap between the two shapes was 0.35, but a *swap* within the
+        three-way shape has to clear ``MAX_PRICE_DEVIATION`` too, and exchanging
+        +210 with +400 moves the price only 0.12.  A test built on the live
+        numbers would have reported the swap as undetectable when it is merely
+        small.
+        """
+        rows = []
+        for index in range(count):
+            key = f"MLB-ATH@MLB-BOS:2026-08-{1 + index % 20}#{index}"
+            for source in ("three_way_one", "three_way_two", "three_way_three"):
+                for selection, odds in (
+                    (Selection.HOME, 1.50),
+                    (Selection.AWAY, 8.00),
+                    (Selection.DRAW, 3.50),
+                ):
+                    rows.append(make_quote(
+                        source=source, event_key=key, source_event_id=f"e{index}",
+                        market=Market.MONEYLINE, period=Period.FIRST_1_INNING,
+                        selection=selection, line=None, decimal_odds=odds,
+                        commence_time=LATER, sport=Sport.BASEBALL,
+                        source_market_id=f"{source}-m{index}",
+                    ))
+            for selection, odds in ((Selection.HOME, 3.00), (Selection.AWAY, 1.55)):
+                rows.append(make_quote(
+                    source="two_way", event_key=key, source_event_id=f"e{index}",
+                    market=Market.MONEYLINE, period=Period.FIRST_1_INNING,
+                    selection=selection, line=None, decimal_odds=odds,
+                    commence_time=LATER, sport=Sport.BASEBALL,
+                    source_market_id=f"two_way-m{index}",
+                ))
+        return rows
+
+    def test_a_two_way_moneyline_is_not_judged_against_a_three_way_one(self) -> None:
+        """Different contracts, so their prices are not commensurable.
+
+        The three-way home price loses when the inning is scoreless and the
+        two-way one does not, so 0.323 and 0.677 are both right.  Compared as one
+        market that is a 0.35 deviation, and this check indicted all thirty of
+        Pennsylvania's first-inning moneylines the day period markets were first
+        collected.
+
+        ``src.arb`` already keeps the two shapes apart — ``contract_shape``
+        groups them separately and ``ambiguous_tie_settlement`` refuses the
+        two-way one outright in a draw-pricing window — so no position was ever
+        at risk.  The cost was an ERROR firing every run for a benign reason,
+        which is how a report stops being read.
+        """
+        from src.validation import validate
+
+        report = validate(self._first_inning_slate())
+        assert not [
+            f for f in report.findings
+            if f.code == "prices_disagree_with_every_other_source"
+        ], "a two-way book must not be indicted for not being a three-way one"
+
+    def test_a_swapped_three_way_book_is_still_caught_beside_a_two_way_one(self) -> None:
+        """The fix above must not become a way to hide a real fault.
+
+        Same slate, but one of the three-way books has home and away exchanged —
+        the permutation the whole check exists for.  Grouping by contract shape
+        must separate it from the two-way book *without* also separating it from
+        the two honest three-way books it has to be judged against.
+        """
+        from src.validation import Severity, validate
+
+        swapped = [
+            q.model_copy(update={
+                "decimal_odds": 8.00 if q.selection is Selection.HOME else 1.50,
+                "implied_probability": 1 / (
+                    8.00 if q.selection is Selection.HOME else 1.50
+                ),
+            })
+            if q.source == "three_way_one" and q.selection is not Selection.DRAW
+            else q
+            for q in self._first_inning_slate()
+        ]
+        found = [
+            f for f in validate(swapped).findings
+            if f.code == "prices_disagree_with_every_other_source"
+        ]
+        assert found, "a genuine swap must survive the shape split"
+        assert found[0].severity is Severity.ERROR
+        assert found[0].source == "three_way_one"
+
+    def test_a_book_mirrored_in_one_sport_is_not_diluted_by_the_ones_it_gets_right(
+        self,
+    ) -> None:
+        """The per-sport rate, which nothing else exercises.
+
+        A source swapped in **one** sport is diluted below the overall threshold
+        by the sports it prices correctly — measured before this check graded per
+        sport, BetRivers mirrored in basketball alone was 17% of its basketball
+        markets and 1.99% overall, just under the 2% bar, for 58 phantom
+        positions and no finding.
+
+        Here: 200 baseball fixtures priced correctly and 3 basketball fixtures
+        with home and away exchanged.  Six outliers against 406 comparisons is
+        1.5% overall and 100% of basketball, so only the per-sport rate can
+        report it.
+
+        Pinned because that rate is reached through a ``sport_of`` lookup keyed
+        on the *same* tuple as ``groups``.  The two keys have to be built
+        identically, and when they are not every lookup misses, every outlier is
+        filed under sport ``""``, and the per-sport rate silently collapses back
+        onto the overall one — the exact dilution above, restored by a typo.
+        """
+        from src.validation import Severity, validate
+
+        rows = []
+        for index in range(200):
+            key = f"MLB-CIN@MLB-PHI:2026-08-{1 + index % 20}#{index}"
+            for source in ("book_one", "book_two", "book_three"):
+                for selection, odds in ((Selection.HOME, 1.50), (Selection.AWAY, 8.00)):
+                    rows.append(make_quote(
+                        source=source, event_key=key, source_event_id=f"mlb{index}",
+                        market=Market.MONEYLINE, selection=selection,
+                        decimal_odds=odds, commence_time=LATER,
+                        source_market_id=f"{source}-mlb{index}",
+                    ))
+        for index in range(3):
+            key = f"NBA-LAL@NBA-BOS:2026-08-{1 + index}#{index}"
+            for source in ("book_one", "book_two", "book_three"):
+                for selection, odds in ((Selection.HOME, 1.50), (Selection.AWAY, 8.00)):
+                    if source == "book_two":
+                        odds = 8.00 if selection is Selection.HOME else 1.50
+                    rows.append(make_quote(
+                        source=source, event_key=key, source_event_id=f"nba{index}",
+                        sport=Sport.BASKETBALL, league="NBA",
+                        home_participant="NBA-BOS", away_participant="NBA-LAL",
+                        home_team="Boston Celtics", away_team="Los Angeles Lakers",
+                        market=Market.MONEYLINE, selection=selection,
+                        decimal_odds=odds, commence_time=LATER,
+                        source_market_id=f"{source}-nba{index}",
+                    ))
+
+        found = [
+            f for f in validate(rows).findings
+            if f.code == "prices_disagree_with_every_other_source"
+        ]
+        assert found, "a swap confined to one sport must still be reported"
+        assert found[0].severity is Severity.ERROR
+        assert found[0].source == "book_two"
+
     def test_two_sources_alone_are_not_judged(self) -> None:
         """Their median is their midpoint, so each is equally far from it and a
         flipped book would indict the honest one just as hard."""

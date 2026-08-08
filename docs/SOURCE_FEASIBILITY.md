@@ -11,6 +11,79 @@ python scripts/detect_state.py
 python scripts/probe_sources.py --state IL
 ```
 
+## Action Network publishes its book catalogue — 2026-08-08
+
+`https://api.actionnetwork.com/web/v1/books` returns **456 books**, each with an
+`id`, a `display_name` and a `source_name`. Anonymous GET, no key, same headers as
+the scoreboard. There is no `web/v2` equivalent — `v2/books`, `v1/sportsbooks` and
+`v2/sportsbooks` are all `404 {"statusCode":404,"error":"Not Found"}`.
+
+This settles by evidence a question three files had recorded as unanswerable. The
+note in `src/coverage.py` said the payload carries no book catalogue "so the
+mapping cannot be settled from the bytes we collect" — true of the *scoreboard*
+payload, and false of the API. Every numeric id in this repository can now be
+tied to a brand. A copy is kept at `data/research/actionnetwork_books_20260808.json`.
+
+Pennsylvania's shelf, as Action Network names it:
+
+| id | `display_name` | `source_name` | asked by |
+|---|---|---|---|
+| 74 | `Parx` | `paparx` | `an_parx` |
+| 122 | `BetRivers PA` | `pabetrivers` | `an_betrivers` |
+| 246 | `UnibetPA` | `paunibet` | `an_unibet` |
+| 255 | `FanDuel PA` | `fanduelpa` | `an_fanduel` |
+| 280 | `BetMGM PA` | `betmgmpa` | `an_betmgm` |
+| 912 | `Betway PA` | `betwaypa` | *nobody — not named by the operator* |
+| 1534 | `DK PA` | `draftkingspa` | `an_draftkings` |
+| 1906 | `Caesars PA` | `caesarspa` | `an_caesars` |
+| 2791 | `Fanatics PA` | `fanaticspa` | `an_fanatics` |
+| 3547 | `bet365 PA` | `bet365pa` | `an_bet365` |
+| 4623 | `theScore Bet PA` | `thescorebetpa` | `an_thescore` |
+
+Ten of the eleven are asked for and every one is the book its source key claims.
+Three things follow that were open before:
+
+- **theScore Bet is not gone.** The catalogue lists twenty-one live per-state
+  theScore Bet books, 4623 among them. An earlier note asserting a US withdrawal
+  had no support and has been removed.
+- **246 is Unibet Pennsylvania, and no book in the catalogue is named Mohegan** —
+  nothing matches `mohegan`, `sun` or `pocono`. Mohegan Sun Pocono's PA skin did
+  run as Unibet, so the mapping is plausible, but it is a licence-holder question
+  and no amount of further scraping closes it.
+- **`an_superbook` asks for id 14, which is `Westgate`.** There is no SuperBook in
+  the catalogue under any spelling (`super` matches only Superbet RO/PL/BR, and
+  `sbk` is 3088). The key claims a brand it is not configured for; if id 14 ever
+  returned rows they would be Westgate's, published as SuperBook.
+
+Two ids that appear when a request is refused rather than answered: **15 is
+`Consensus` and 30 is `Open`** — not sportsbooks. That pair is what comes back
+when v2 is asked for a book it does not carry, which is how the failure below
+looks like success.
+
+### Three registered ids carry no odds on either endpoint — 2026-08-08
+
+`an_fliff` (2292 `Fliff`), `an_circa` (78 `Circa`) and `an_superbook` (14
+`Westgate`) are all in the catalogue and all return **nothing**. Asked alone on
+MLB from a PA egress, each on both versions:
+
+| source | id | v1 books returned | v2 books returned |
+|---|---|---|---|
+| `an_fliff` | 2292 | 15, 30, 68, 69, 71, 75 | 15, 30 |
+| `an_circa` | 78 | 15, 30 | 15, 30 |
+| `an_superbook` | 14 | 15, 30 | 15, 30 |
+
+Fifteen games on the board each time, and the asked-for id in none of them. In
+the live run this is `empty_after_parse: parsed 0 quotes from 5 responses;
+skipped={'odds_for_other_book': 934}` — the payload is full of prices, none of
+them this book's.
+
+**These three are the entire 1617-error baseline.** `conftest.py::_load` is
+session-scoped and asserts a fixture exists for every registered source, so three
+missing fixtures abort the whole contract suite rather than three tests of it. No
+fixture can be captured, because there is nothing to capture. They stay registered
+and failing per the agreed plan — recording the numbers rather than unregistering
+— which means the contract suite stays dark until that call is revisited.
+
 ## Action Network: the two endpoint versions are different catalogues — 2026-08-08
 
 Egress: PA (`data/egress_state.json`, detected 2026-08-07T02:24Z). Both versions
@@ -204,6 +277,72 @@ The advice above still stands for the sources ahead: theScore Bet belongs in
 `RETAIL_SOURCE_KEYS` with per-state routes, and ProphetX and Novig must be
 classified explicitly before they can be registered — that is now enforced rather
 than remembered.
+
+## The Pennsylvania recapture — 2026-08-08T16:38Z
+
+`configured=PA detected_egress=PA fingerprint=78e5c3810511`, 12:38 ET on a
+Saturday, so the whole slate was pregame — the condition the 2026-08-07 attempts
+lacked. Run 27, thirteen sources asked, alerts off.
+
+| source | id | brand | quotes | events |
+|---|---|---|---|---|
+| `an_betrivers` | 122 | BetRivers PA | 376 | 35 |
+| `an_parx` | 74 | Parx | 376 | 35 |
+| `an_caesars` | 1906 | Caesars PA | 331 | 35 |
+| `an_fanduel` | 255 | FanDuel PA | 331 | 35 |
+| `an_unibet` | 246 | UnibetPA | 316 | 35 |
+| `an_draftkings` | 1534 | DK PA | 301 | 35 |
+| `an_betmgm` | 280 | BetMGM PA | 267 | 35 |
+| `an_thescore` | 4623 | theScore Bet PA | 250 | 19 |
+| `an_bet365` | 3547 | bet365 PA | 173 | 19 |
+| `an_fanatics` | 2791 | Fanatics PA | 150 | 15 |
+| `an_fliff` | 2292 | Fliff | **0** | 0 |
+| `an_circa` | 78 | Circa | **0** | 0 |
+| `an_superbook` | 14 | Westgate | **0** | 0 |
+
+**2871 quotes across ten of Pennsylvania's twelve republished feeds**, where nine
+of them had been dark. betPARX, theScore Bet PA and Unibet PA produced rows for
+the first time. The three zeros are the ids that carry no odds at all, recorded
+above.
+
+MLB captures for `an_parx`, `an_thescore` and `an_unibet` replaced the committed
+fixtures, which asked New Jersey ids (1929 / 247 / 4620) through v1 and parsed to
+nothing. Offline, those three now parse to 255 / 225 / 195 rows with **no
+rejections** and all three period windows — `full_game`, `first_5_innings`,
+`first_1_inning` — which is the `periods=` fix demonstrated end to end rather
+than argued.
+
+The run raised `prices_disagree_with_every_other_source` against `an_caesars` —
+30 of 312 shared markets more than 0.15 of implied probability from the rest,
+worst 0.35, on ATH@BOS, ATL@NYY, BAL@TEX and others. **All thirty are
+`moneyline/first_1_inning`, and Caesars is right.** From the raw payload for
+ATH@BOS:
+
+| book | first-inning moneyline | vig |
+|---|---|---|
+| 122 BetRivers PA | home +210, away +400, **draw −129** | 8.6% |
+| 1906 Caesars PA | home −210, away +170, **no draw** | 4.7% |
+
+Two coherent books pricing **different bets**. The three-way home leg loses when
+the inning is scoreless; the two-way one does not, which is the whole 0.323 →
+0.677 difference. betPARX and theScore Bet post the three-way market too, so
+Caesars was the minority of one and got graded for it.
+
+No position was ever at risk: `src.arb` groups by `contract_shape` and refuses a
+two-way moneyline in a draw-pricing window outright (`ambiguous_tie_settlement`),
+which is a rule that already names first-five-innings as its case. The defect was
+confined to the report — but an ERROR firing every run for a benign reason is how
+a report stops being read, so `_check_price_agreement` now carries the contract
+shape in its grouping key, the same distinction `src.arb` was already making. The
+Pennsylvania board revalidates with that error gone and the swap detection intact.
+
+Two things this run did **not** settle:
+
+- Every republished row is view-only, so the run reports 0 comparable markets and
+  0 arbitrage. Correct, not a regression: none of these is a counterparty.
+  Pennsylvania still has no first-party route promoted, which is the next step.
+- `an_fanatics` (15 events) and `an_bet365` (19) cover materially less of the
+  board than the 35 the rest return. Not investigated.
 
 ## Polymarket: two venues share the brand — 2026-08-08
 

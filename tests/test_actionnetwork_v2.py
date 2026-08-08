@@ -299,6 +299,51 @@ def test_a_second_licences_capture_is_refused_not_quietly_preferred() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    "source,book_id",
+    (("an_parx", 74), ("an_thescore", 4623), ("an_unibet", 246)),
+)
+def test_pennsylvanias_own_books_are_captured_and_parse_with_periods(
+    source: str, book_id: int
+) -> None:
+    """The three feeds this work existed to unblock, held to what they produced.
+
+    Each of these shipped a fixture that asked a **New Jersey** id through v1 —
+    1929, 247, 4620 — and parsed to zero rows, so every contract test over them
+    passed by having nothing to check. Replaced 2026-08-08 with a Pennsylvania
+    capture on v2 against a live pregame slate.
+
+    Three properties, and each one failed before the recapture: the fixture asks
+    Pennsylvania's id, it parses to rows rather than an empty outcome, and the
+    period windows are present — which is `periods=` demonstrated on committed
+    bytes rather than argued from a live request that nobody can replay.
+    """
+    paths = sorted(FIXTURE_RAW_DIR.glob(f"{source}__*.json"))
+    assert paths, f"{source} lost its capture"
+    raws = [RawStore(FIXTURE_RAW_DIR).read(path) for path in paths]
+
+    assert all(f":{book_id}:" in raw.endpoint for raw in raws), (
+        f"{source} must be captured on Pennsylvania's own id {book_id}"
+    )
+    assert all(f"/web/v2/" in raw.url for raw in raws), "captured on v2"
+    assert all("periods=" in raw.url for raw in raws), (
+        "the capture has to have asked, or full-game-only is all it can hold"
+    )
+
+    adapter = registry.descriptor(source).replay_instance()
+    try:
+        outcome = adapter.parse(raws)
+    finally:
+        adapter.close()
+
+    assert outcome.quotes, f"{source} parses to nothing — an empty fixture again"
+    assert not outcome.rejections, [str(r) for r in outcome.rejections[:3]]
+    assert {quote.period for quote in outcome.quotes} > {Period.FULL_GAME}, (
+        "a v2 capture that asked for periods and came back full-game-only means "
+        "the parameter stopped working, which is silent in production"
+    )
+
+
 @pytest.mark.parametrize("state", sorted(JURISDICTIONS))
 def test_no_republished_route_claims_to_have_been_validated(state: str) -> None:
     """A status nothing can earn is worse than no status.

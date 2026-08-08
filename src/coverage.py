@@ -209,26 +209,43 @@ def _required(
 #: record the feed that exists rather than the feed one would want, and say so
 #: here rather than looking clean in the report:
 #:
-#: * ``Mohegan Pennsylvania`` is watched through Action Network's ``UnibetPA``
-#:   book (id 246).  Mohegan Sun Pocono's online skin ran on Unibet's
-#:   Pennsylvania licence, so this is the right feed if that arrangement still
-#:   stands and the wrong one if the brand has since moved.  Unverified.
-#: * ``theScore Bet`` resolves to id 4623.  Both ids answer: asked alone on
-#:   ``web/v2`` on 2026-08-08, 246 and 4623 each came back with prices.  **That
-#:   is a fact about the ids and not about the brands.**  An earlier note here
-#:   asserted that theScore Bet had withdrawn from the United States; nothing in
-#:   this repository establishes that, and a feed answering under the label is
-#:   weak evidence either way, since Action Network can republish a successor
-#:   brand under an old id without renaming it.  The payload carries no book
-#:   catalogue — only numeric ids — so the mapping cannot be settled from the
-#:   bytes we collect.  Both books therefore stay on one feed and are reported as
-#:   ``SINGLE_SOURCE`` rather than corroborated: a second feed watching the same
-#:   unverified id would corroborate the id, not the brand.
+#: * ``theScore Bet`` resolves to id 4623, and that is now **settled by name**.
+#:   ``https://api.actionnetwork.com/web/v1/books`` returns Action Network's own
+#:   catalogue — 456 books, each with a ``display_name`` and a ``source_name`` —
+#:   and 4623 is ``'theScore Bet PA'`` / ``thescorebetpa``.  An earlier note here
+#:   said the payload carries no catalogue and the mapping could not be settled
+#:   from the bytes we collect; that was true of the *scoreboard* payload and
+#:   false of the API, and it is the reason the question stayed open for so long.
+#:   The catalogue also disposes of the claim that theScore Bet had withdrawn
+#:   from the United States: it lists twenty-one live per-state theScore Bet
+#:   books.  Still ``SINGLE_SOURCE``, because one feed is one feed — but the
+#:   uncertainty is now about redundancy, not identity.
+#: * ``Mohegan Pennsylvania`` is watched through id 246, which the same catalogue
+#:   names ``'UnibetPA'`` / ``paunibet``.  **No book in the catalogue is named
+#:   Mohegan** — not under ``mohegan``, ``sun`` or ``pocono``.  So the feed is
+#:   Unibet Pennsylvania, and whether that is Mohegan's price is a question about
+#:   which company holds the licence behind the brand, not about which id to ask
+#:   for.  Mohegan Sun Pocono's online skin did run as Unibet in Pennsylvania, so
+#:   the mapping is plausible and stays; what has changed is that the doubt is
+#:   now located precisely, and it is no longer a doubt this repository can close
+#:   with more scraping.  It needs the operator's own licence record.
+#:   Reported as ``SINGLE_SOURCE`` and labelled unverified, as before.
 #: * ``PlaySugarHouse`` has **no** feed.  Action Network's only SugarHouse book
 #:   (id 708) returns nothing even when named explicitly — re-measured
 #:   2026-08-08 on both endpoint versions, MLB and soccer, absent from all four —
-#:   and VegasInsider has no such column.  The entry exists to fail loudly
-#:   instead of being forgotten.
+#:   and VegasInsider has no such column.  The catalogue lists it as
+#:   ``'SugarHouse'`` / ``sugarhouse`` with no state suffix, while the book it
+#:   names ``'BetRivers NJ'`` carries ``source_name`` ``njsugarhouse`` — Action
+#:   Network's own record of the two brands being one platform, which is the
+#:   independent corroboration for treating PlaySugarHouse as a mirror rather
+#:   than a source.  The entry exists to fail loudly instead of being forgotten.
+#:
+#: Every other Pennsylvania id in this table was confirmed against that catalogue
+#: on 2026-08-08 and none needed changing: 74 ``'Parx'``/``paparx``, 122
+#: ``'BetRivers PA'``, 255 ``'FanDuel PA'``, 280 ``'BetMGM PA'``, 1534 ``'DK PA'``,
+#: 1906 ``'Caesars PA'``, 2791 ``'Fanatics PA'``, 3547 ``'bet365 PA'``.  The one
+#: Pennsylvania book Action Network carries and this table does not ask for is 912
+#: ``'Betway PA'``, which the operator did not name.
 #:
 #: A first-party Kambi route would satisfy the rule outright for the first three,
 #: since Rush Street's own books are Kambi tenants.  It does not exist under the
