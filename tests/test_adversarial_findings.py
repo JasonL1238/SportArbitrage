@@ -12779,33 +12779,39 @@ class TestReAnalysisAppliesTheStoredRunsJurisdiction:
         ])
         assert "jurisdiction: PA" in out
 
-    def test_an_arb_with_no_pennsylvania_leg_is_not_reported(
+    def test_an_arb_with_no_pennsylvania_leg_is_reported_flagged(
         self, tmp_path, monkeypatch, capsys
     ):
-        """Every leg offshore or global — a "PA" position with no PA book in it."""
-        out = self._run_arb(tmp_path, monkeypatch, capsys, [
-            ("pinnacle", Selection.HOME, 2.20),
-            ("bovada", Selection.AWAY, 2.20),
-        ])
-        assert "0 opportunities" in out, out
+        """Every leg offshore or global — a "PA" position with no PA book in it.
 
-    def test_the_withheld_positions_are_counted_out_loud(
-        self, tmp_path, monkeypatch, capsys
-    ):
-        """The filter must not drop silently.
-
-        A bare "0 opportunities" reads as a quiet market, not as a board whose
-        every position needed a book Pennsylvania does not license — and it
-        disagrees with the same run's dashboard with nothing explaining the gap.
+        Shown, because national and out-of-state odds may be displayed — but
+        never unmarked: the position carries per-leg labels and an
+        informational line, so nothing here can read as a PA price.
         """
         out = self._run_arb(tmp_path, monkeypatch, capsys, [
             ("pinnacle", Selection.HOME, 2.20),
             ("bovada", Selection.AWAY, 2.20),
         ])
-        assert "withheld 1 position(s)" in out, out
-        assert "reach from PA" in out, out
+        assert "0 opportunities" not in out, out
+        assert "[not reachable from PA]" in out, out
+        assert "no leg reachable from PA — informational" in out, out
 
-    def test_nothing_is_withheld_when_nothing_was_dropped(
+    def test_the_flagged_positions_are_counted_out_loud(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """The marking must not rely on per-leg tags alone.
+
+        A reader skimming for a count should learn how many positions are
+        wholly foreign without reading every leg — and the count is what keeps
+        this surface agreeing with the same run's dashboard.
+        """
+        out = self._run_arb(tmp_path, monkeypatch, capsys, [
+            ("pinnacle", Selection.HOME, 2.20),
+            ("bovada", Selection.AWAY, 2.20),
+        ])
+        assert "1 position(s) have no leg you can reach from PA" in out, out
+
+    def test_nothing_is_flagged_when_every_position_has_a_local_leg(
         self, tmp_path, monkeypatch, capsys
     ):
         """The caveat is guarded on the count, so a clean run does not carry it."""
@@ -12813,12 +12819,13 @@ class TestReAnalysisAppliesTheStoredRunsJurisdiction:
             ("fanduel", Selection.HOME, 2.20),
             ("pinnacle", Selection.AWAY, 2.20),
         ])
-        assert "withheld" not in out, out
+        assert "no leg you can reach" not in out, out
+        assert "informational" not in out, out
 
     def test_an_arb_with_a_pennsylvania_leg_still_reports(
         self, tmp_path, monkeypatch, capsys
     ):
-        """The filter must not simply delete everything."""
+        """The marking must not delete or bury anything."""
         out = self._run_arb(tmp_path, monkeypatch, capsys, [
             ("fanduel", Selection.HOME, 2.20),
             ("pinnacle", Selection.AWAY, 2.20),
@@ -13041,22 +13048,23 @@ class TestTheCoverageRuleIsActuallyWiredIntoARun:
         ], [f.message for f in result.report.findings]
 
 
-class TestTheLiveRunWithholdsTheSamePositionsReAnalysisDoes:
-    """A state run that built no state book skipped the exact-state leg filter.
+class TestTheLiveRunFlagsTheSamePositionsReAnalysisDoes:
+    """A state run that built no state book skipped the exact-state leg rule.
 
-    The filter was gated on ``state_source_keys`` — *what was built* — and
+    The rule was gated on ``state_source_keys`` — *what was built* — and
     ``collect_batch_once`` then learned to tolerate building nothing, because
     ``--source pinnacle`` legitimately names no retail book.  The two changes
     composed into a hole: the one run with no Pennsylvania book in it was the run
     that reported a "PA" arbitrage with no Pennsylvania leg, and ``alert``
     defaults to ``True``, so it sent.
 
-    Re-analysing that same stored run through ``arb`` *did* withhold it, so the
-    live path and the historical path disagreed about one run — with the live one
-    permissive.  Both now ask :func:`src.coverage.withhold_non_local`.
+    Re-analysing that same stored run through ``arb`` *did* apply the rule, so
+    the live path and the historical path disagreed about one run — with the
+    live one permissive.  Both now ask :func:`src.coverage.locality_marking`,
+    which keeps the position and flags it rather than withholding it.
     """
 
-    def _run(self, tmp_path, sources):
+    def _run(self, tmp_path, sources, *, alert=False):
         from src.collector import collect_once
         from src.raw_store import RawStore
         from src.store import Store
@@ -13081,24 +13089,24 @@ class TestTheLiveRunWithholdsTheSamePositionsReAnalysisDoes:
                 # The reproducing condition: a PA run in which no exact-state
                 # first-party source was built at all.
                 state_source_keys=(),
-                alert=False,
+                alert=alert,
             )
 
-    def test_an_offshore_only_position_is_not_reported_on_a_pa_run(self, tmp_path):
+    def test_an_offshore_only_position_is_reported_flagged_on_a_pa_run(self, tmp_path):
         result = self._run(tmp_path, {
             "pinnacle": [(Selection.HOME, 2.20)],
             "bovada": [(Selection.AWAY, 2.20)],
         })
-        assert result.arb.opportunities == []
-        withheld = [
+        assert len(result.arb.opportunities) == 1
+        flagged = [
             f for f in result.report.findings
-            if f.code == "non_local_positions_withheld"
+            if f.code == "non_local_positions_flagged"
         ]
-        assert withheld, [f.code for f in result.report.findings]
-        assert "1 position(s)" in withheld[0].message
-        assert "reachable from PA" in withheld[0].message
+        assert flagged, [f.code for f in result.report.findings]
+        assert "1 position(s)" in flagged[0].message
+        assert "reachable from PA" in flagged[0].message
 
-    def test_a_position_with_a_pa_leg_survives_the_same_run(self, tmp_path):
+    def test_a_position_with_a_pa_leg_is_not_flagged_on_the_same_run(self, tmp_path):
         """Licence, not inventory: ``fanduel`` holds one whether or not it built."""
         result = self._run(tmp_path, {
             "fanduel": [(Selection.HOME, 2.20)],
@@ -13107,8 +13115,130 @@ class TestTheLiveRunWithholdsTheSamePositionsReAnalysisDoes:
         assert len(result.arb.opportunities) == 1
         assert not [
             f for f in result.report.findings
-            if f.code == "non_local_positions_withheld"
+            if f.code == "non_local_positions_flagged"
         ]
+
+    def _armed_alerts(self, monkeypatch):
+        import src.alerts as alerts_mod
+        import src.settings as settings_mod
+
+        sent: list[str] = []
+        monkeypatch.setattr(settings_mod, "ALERT_TRANSPORT", "twilio")
+        monkeypatch.setattr(settings_mod, "TWILIO_ACCOUNT_SID", "ACxxxx")
+        monkeypatch.setattr(settings_mod, "TWILIO_AUTH_TOKEN", "token")
+        monkeypatch.setattr(settings_mod, "TWILIO_FROM_NUMBER", "+15551234567")
+        monkeypatch.setattr(settings_mod, "ALERT_TO", "+18479070871")
+        monkeypatch.setattr(
+            alerts_mod,
+            "DEFAULT_BOOK",
+            alerts_mod.AlertBook(send=lambda body: sent.append(body) or "SMid"),
+        )
+        return sent
+
+    def test_the_text_for_a_flagged_position_carries_the_disclaimer(
+        self, tmp_path, monkeypatch
+    ):
+        """Showing and disclaiming travel together, all the way to the SMS.
+
+        The policy that lets a wholly non-local position out of the collector is
+        the labelling; a text that reaches a phone without the disclaimer is the
+        old defect with extra steps.
+        """
+        sent = self._armed_alerts(monkeypatch)
+        result = self._run(tmp_path, {
+            "pinnacle": [(Selection.HOME, 2.20)],
+            "bovada": [(Selection.AWAY, 2.20)],
+        }, alert=True)
+        assert len(result.arb.opportunities) == 1
+        assert len(sent) == 1, "the flagged position no longer texts at all"
+        assert "NO LEG reachable from PA — informational, not PA prices" in sent[0]
+        assert "[not reachable from PA]" in sent[0]
+
+    def test_the_live_summary_prints_the_same_labels(self, tmp_path, capsys):
+        """`collect` itself is a rendering surface, and it was the unlabelled one.
+
+        The old filter reassigned the report's list before ``RunResult`` was
+        built, so ``print_summary`` never saw a wholly-foreign position; keeping
+        the position without threading the marking through would print it here
+        bare — the one surface the finding's own "shown and labelled" text
+        cannot excuse.
+        """
+        result = self._run(tmp_path, {
+            "pinnacle": [(Selection.HOME, 2.20)],
+            "bovada": [(Selection.AWAY, 2.20)],
+        })
+        capsys.readouterr()
+        result.print_summary()
+        out = capsys.readouterr().out
+        assert "[not reachable from PA]" in out, out
+        assert "no leg reachable from PA — informational, not PA prices" in out, out
+
+    def test_the_live_summary_accounts_for_positions_past_its_slice(self, capsys):
+        """`print_summary` shows ten positions; the eleventh must not vanish.
+
+        The flagged finding says every position is shown and labelled, and a
+        silent ``[:10]`` slice made that false for whatever ranked eleventh.
+        """
+        from src.arb import ArbReport
+        from src.collector import RunResult
+        from src.validation import ValidationReport
+        from tests.test_alerts import _opportunity
+
+        result = RunResult(
+            None, [], [], ValidationReport(quote_count=0, event_count=0),
+            ArbReport(opportunities=[_opportunity() for _ in range(12)],
+                      diagnostics=[]),
+        )
+        result.print_summary()
+        out = capsys.readouterr().out
+        assert "... 2 more position(s)" in out, out
+        assert "prints all of a stored run" in out, out
+
+    def test_the_re_analysis_text_carries_the_disclaimer_too(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """`arb --run` is the other path that texts, and it must not diverge.
+
+        Its twin defect is the round's origin story: the stored-run path once
+        printed and texted a "PA" position no Pennsylvanian could take.  The
+        collect-path test above cannot cover it — the two call sites build their
+        markings independently, so dropping ``marking=`` from this one leaves
+        every other test green.
+        """
+        import src.collector
+
+        sent = self._armed_alerts(monkeypatch)
+        import src.settings
+
+        monkeypatch.setattr(src.settings, "DATA_DIR", tmp_path)
+        monkeypatch.setattr(src.settings, "RAW_DIR", tmp_path / "raw")
+        monkeypatch.setattr(src.settings, "DB_PATH", tmp_path / "db.sqlite3")
+        from src.store import Store
+        from src.validation import ValidationReport
+
+        kickoff = datetime.now(UTC) + timedelta(hours=6)
+        rows = [
+            make_quote(source=source, selection=selection, decimal_odds=2.20,
+                       source_market_id="m", commence_time=kickoff)
+            for source, selection in (
+                ("pinnacle", Selection.HOME), ("bovada", Selection.AWAY),
+            )
+        ]
+        with Store(tmp_path / "db.sqlite3") as store:
+            run = store.start_run(
+                datetime.now(UTC), jurisdiction="PA", route_scope="state",
+            )
+            store.save_quotes_by_source(run, rows)
+            store.finish_run(
+                run, finished_at=datetime.now(UTC),
+                report=ValidationReport(quote_count=len(rows), event_count=1),
+                counterparties={},
+            )
+        assert src.collector.main(["arb", "--run", str(run)]) == 0
+        capsys.readouterr()
+        assert len(sent) == 1, "the arb command no longer texts the position"
+        assert "NO LEG reachable from PA — informational, not PA prices" in sent[0]
+        assert "[not reachable from PA]" in sent[0]
 
 
 class TestEveryReadCommandNamesTheJurisdiction:
@@ -13187,7 +13317,7 @@ class TestEveryReadCommandNamesTheJurisdiction:
 class TestArbAndLinesAgreeAboutTheSameStoredRun:
     """Two commands, one run, one answer about what is reachable from the state.
 
-    ``withhold_non_local`` was built to end this: three surfaces had spelled the
+    The shared locality rule was built to end this: three surfaces had spelled the
     condition three ways. Then ``lines`` grew a *fourth* spelling — the jurisdiction
     alone, with no scope test — and the pair contradicted each other again on a run
     whose scope was not ``"state"``:
@@ -13196,10 +13326,12 @@ class TestArbAndLinesAgreeAboutTheSameStoredRun:
         lines →  away 2.200 pinnacle  [not reachable from PA]
                  home 2.200 onexbet   [not reachable from PA]
 
-    ``arb`` offered a position that ``lines``, one command later, said had no leg the
-    operator could reach. Both directions are pinned, because agreeing to mark
-    everything and agreeing to mark nothing are both agreement, and only one of them
-    is right per scope.
+    ``arb`` offered, unmarked, a position that ``lines``, one command later, said
+    had no leg the operator could reach. Both now mark identically: the same
+    ``[not reachable from PA]`` tag on the same legs, from the same
+    :func:`src.coverage.locality_marking`. Both directions are pinned, because
+    marking everything and marking nothing are both agreement, and only one of
+    them is right per scope.
     """
 
     def _run(self, tmp_path, monkeypatch, capsys, *, scope):
@@ -13239,17 +13371,21 @@ class TestArbAndLinesAgreeAboutTheSameStoredRun:
         assert src.collector.main(["lines", "--run", str(run)]) == 0
         return arb_out, capsys.readouterr().out
 
-    def test_a_legacy_run_is_withheld_by_one_and_marked_by_the_other(
+    def test_a_legacy_run_is_marked_the_same_way_by_both(
         self, tmp_path, monkeypatch, capsys
     ):
         arb_out, lines_out = self._run(
             tmp_path, monkeypatch, capsys, scope="legacy"
         )
-        assert "withheld 1 position(s)" in arb_out, arb_out
-        assert "0 opportunities" in arb_out or "opportunities: 0" in arb_out, arb_out
-        assert "not reachable from PA" in lines_out, lines_out
+        assert "withheld" not in arb_out, arb_out
+        assert "1 position(s) have no leg you can reach from PA" in arb_out, arb_out
+        # The exact framing ``lines`` uses — two spaces, brackets — so the two
+        # commands' markers cannot drift apart one character at a time.
+        assert "  [not reachable from PA]" in arb_out, arb_out
+        assert "no leg reachable from PA — informational" in arb_out, arb_out
+        assert "  [not reachable from PA]" in lines_out, lines_out
 
-    def test_a_widened_scope_run_is_offered_by_one_and_unmarked_by_the_other(
+    def test_a_widened_scope_run_is_unmarked_by_both(
         self, tmp_path, monkeypatch, capsys
     ):
         """``--scope all`` from PA is a request to see the wider board.
@@ -13258,6 +13394,7 @@ class TestArbAndLinesAgreeAboutTheSameStoredRun:
         was offering in the same breath.
         """
         arb_out, lines_out = self._run(tmp_path, monkeypatch, capsys, scope="all")
-        assert "withheld" not in arb_out, arb_out
+        assert "not reachable" not in arb_out, arb_out
+        assert "no leg you can reach" not in arb_out, arb_out
         assert "not reachable" not in lines_out, lines_out
         assert "pinnacle" in lines_out, lines_out

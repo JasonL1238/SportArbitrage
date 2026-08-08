@@ -930,9 +930,11 @@ class Store:
         # jurisdiction and no scope — and SQLite backfills every existing row with
         # whatever default this ALTER declares.  Backfilling ``'state'`` asserted
         # that historical runs had collected exact-state retail routes, which they
-        # had not, and ``coverage.withhold_non_local`` then withheld their
-        # positions on exactly the reasoning its own docstring warns about.  A row
-        # that predates the column has no scope; ``legacy`` is what that is called.
+        # had not, and the locality rule (then ``coverage.withhold_non_local``,
+        # since replaced by ``locality_marking``, which labels rather than
+        # withholds) withheld their positions on exactly the reasoning its own
+        # docstring warned about.  A row that predates the column has no scope;
+        # ``legacy`` is what that is called.
         ("collection_run", "route_scope", "TEXT NOT NULL DEFAULT 'legacy'"),
     )
 

@@ -3313,3 +3313,118 @@ function onAnEmbeddedRun() {   // a declaration, so block order cannot matter
   }
   console.log('a still-valid filter choice survives its panel re-rendering');
 }
+
+// A non-local leg must never render as the state's own price. The payload's
+// per-leg `non_local_label` and per-opportunity `no_local_leg` are composed in
+// Python; this block proves the page actually PAINTS them. A substring pin on
+// the JS source cannot tell a rendered badge from a comment — dead-coding the
+// badge while leaving its name in the file survived exactly that pin, which is
+// why this executes the renderer and reads the DOM instead.
+{
+  onAnEmbeddedRun();
+  const problems = [];
+  // A leftover sport filter would make the bundle-vs-DOM comparison below
+  // read a mismatch that is really the filter's doing.
+  const sportNode = nodes.get('sport-pick');
+  sportNode.value = '';
+  sportNode.dispatch('change');
+  // The flagged position may exist only in the offshore-admitted view — a
+  // US-unavailable leg is dropped from the US-only bundle before locality is
+  // even asked — so flip the switch on for this check and back after. And it
+  // may live in any embedded run, so scan them rather than trusting the first.
+  globalThis.__setShowOffshore(true);
+  globalThis.location.hash = '#arb';
+  globalThis.__applyRoute();
+  const pick = nodes.get('run-pick');
+  let opps = [];
+  for (const runId of globalThis.__embeddedRuns()) {
+    pick.value = String(runId);
+    pick.dispatch('change');
+    const bag = globalThis.__arbBundle();
+    const candidates = bag ? (bag.opportunities || []) : [];
+    if (candidates.some((o) => (o.legs || []).some((l) => l.non_local_label))) {
+      opps = candidates;
+      break;
+    }
+  }
+  const flagged = opps.filter((o) => o.no_local_leg);
+  const labelled = opps.filter((o) => (o.legs || []).some((l) => l.non_local_label));
+  if (!labelled.length) {
+    console.log('locality labels not exercised: no position in this page carries a non-local leg');
+  } else {
+    const list = ((nodes.get('arb-list') || {}).innerHTML) || '';
+    const label = labelled[0].legs.find((l) => l.non_local_label).non_local_label;
+    if (!list.includes(label)) {
+      problems.push(`a leg labelled ${JSON.stringify(label)} rendered without its badge`);
+    }
+    if (flagged.length) {
+      if (!list.includes('no leg reachable from this jurisdiction')) {
+        problems.push('a wholly-foreign position rendered without its position-level pill');
+      }
+      if (!list.includes('reach from this jurisdiction')) {
+        problems.push(`${flagged.length} flagged position(s) rendered with no note accounting for them`);
+      }
+      // The headline numbers are money claims, so a wholly-foreign position
+      // must not count toward any of them — the stat tile, the summary line,
+      // or the rail badge. Each is written independently in renderArb, so each
+      // is pinned; the tile alone let the other two revert unnoticed.
+      const statsHtml = ((nodes.get('arb-stats') || {}).innerHTML) || '';
+      const takeable = opps.length - flagged.length;
+      const positionsStat = statsHtml.match(/positions<\/span><b>(\d+)</);
+      if (!positionsStat) {
+        problems.push('the positions stat tile is missing, so the takeable count is unchecked');
+      } else if (Number(positionsStat[1]) !== takeable) {
+        problems.push(`the positions stat says ${positionsStat[1]}; only ${takeable} are takeable`);
+      }
+      const summarySaid = (((nodes.get('arb-summary') || {}).textContent) || '');
+      const expectedLead = takeable ? `${takeable} takeable` : 'none takeable';
+      if (!summarySaid.startsWith(expectedLead)) {
+        problems.push(`the summary says ${JSON.stringify(summarySaid)}; expected it to open with ${JSON.stringify(expectedLead)}`);
+      }
+      const navSaid = (((nodes.get('nav-arb') || {}).textContent) || '');
+      if (navSaid !== String(takeable)) {
+        problems.push(`the rail badge says ${JSON.stringify(navSaid)}; only ${takeable} are takeable`);
+      }
+      // The rail is also written by the deferred nav-count refresher, which
+      // fires on a timer AFTER renderArb's synchronous write and wins. It
+      // counted the flagged positions once, silently overwriting the honest
+      // badge — so the badge is read again after the timers land.
+      globalThis.__renderNavCounts();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const navLater = (((nodes.get('nav-arb') || {}).textContent) || '');
+      if (navLater !== String(takeable)) {
+        problems.push(`after the deferred nav refresh the rail badge says ${JSON.stringify(navLater)}; only ${takeable} are takeable`);
+      }
+    }
+
+    // And the note must stay honest under a sport filter: pick a sport the
+    // flagged position is not in, and the labels leave the page — so the note
+    // has to stop claiming they are "shown below" and say the filter hid them.
+    if (flagged.length) {
+      const sports = new Set(opps.map((o) => o.sport));
+      const options = (sportNode.innerHTML.match(/value="([^"]+)"/g) || [])
+        .map((m) => m.slice(7, -1)).filter((v) => v && !sports.has(v));
+      if (!options.length) {
+        console.log('  (filtered-note check skipped; every sport in this page holds a flagged position)');
+      } else {
+        sportNode.value = options[0];
+        sportNode.dispatch('change');
+        const filteredList = ((nodes.get('arb-list') || {}).innerHTML) || '';
+        if (!filteredList.includes('hidden by the sport filter')) {
+          problems.push(`filtered to ${options[0]}, the flagged position left the page but the note does not say the filter hid it`);
+        }
+        if (filteredList.includes('shown below with labels')) {
+          problems.push('the note claims labels are shown below while the sport filter hides every flagged card');
+        }
+        sportNode.value = '';
+        sportNode.dispatch('change');
+      }
+    }
+    if (problems.length) {
+      console.error('LOCALITY LABELS DO NOT RENDER:', problems.join('; '));
+      process.exit(1);
+    }
+    console.log(`locality labels render (${labelled.length} labelled, ${flagged.length} wholly foreign)`);
+  }
+  globalThis.__setShowOffshore(false);
+}

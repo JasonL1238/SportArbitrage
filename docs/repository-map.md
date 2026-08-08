@@ -16,7 +16,7 @@ Use this map before exploring. Search for the relevant symbol and its tests, the
 | `src/alerts.py` | Arb notification | ROI floor, dedupe, Messages/Twilio transports, fail-soft send |
 | `src/store.py`, `src/raw_store.py` | Persistence | SQLite schema/migrations and raw replay envelopes |
 | `src/jurisdictions.py`, `src/state_selection.py` | Retail routing and batch selection | IL/PA/NJ/DC routes, status, detection, selection |
-| `src/coverage.py` | State locality: required-book rule and output withholding | `check_book_coverage` (per-state book list, first-party vs two-agreeing-republisher) plus `withhold_non_local` / `locality_applies` |
+| `src/coverage.py` | State locality: required-book rule and output labelling | `check_book_coverage` (per-state book list, first-party vs two-agreeing-republisher) plus `locality_marking` / `locality_applies` |
 | `src/egress.py`, `src/probe_cache.py` | Jurisdiction diagnostics | Hashed egress record and TTL/status cache |
 | `src/promos/` | Promotions subsystem | Promo adapters, enrichment, deduplication, storage, planning |
 | `src/betlog.py` | Placed-bet ledger | Position snapshots, settlement edits, exact-money bankroll totals |

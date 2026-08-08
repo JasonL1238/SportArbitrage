@@ -64,7 +64,7 @@ from src.distinctness import (
     compare_all,
     find_mirrors,
 )
-from src.coverage import check_book_coverage, locality_applies, withhold_non_local
+from src.coverage import LocalityMarking, check_book_coverage, locality_marking
 from src.redundancy import check_redundancy, is_redundant_pair
 from src.events import reconcile_event_keys
 from src.leagues import LEAGUES, LEAGUES_BY_SPORT, is_known
@@ -371,6 +371,7 @@ class RunResult:
         coverage: Sequence[SportCoverage] = (),
         league_coverage: Sequence[LeagueCoverage] = (),
         excluded_by_filter: int = 0,
+        marking: LocalityMarking | None = None,
     ) -> None:
         self.run_id = run_id
         self.quotes = quotes
@@ -380,6 +381,7 @@ class RunResult:
         self.coverage = list(coverage)
         self.league_coverage = list(league_coverage)
         self.excluded_by_filter = excluded_by_filter
+        self.marking = marking
 
     @property
     def ok(self) -> bool:
@@ -440,8 +442,31 @@ class RunResult:
 
         if self.arb is not None:
             print(f"  arbitrage: {self.arb.summary()}")
+            # The same labels ``arb`` prints for the same run: this summary is
+            # the *live* path's only rendering, so leaving the tags off here
+            # showed a wholly-foreign position as though it were the state's.
+            marking = self.marking
+            note = (
+                None
+                if marking is None
+                else (lambda s: "" if marking.leg_is_local(s) else f"  [{marking.label()}]")
+            )
             for opportunity in self.arb.opportunities[:10]:
-                print(opportunity.describe())
+                print(opportunity.describe(leg_note=note))
+                if marking is not None and not marking.has_local_leg(opportunity):
+                    print(
+                        f"    no leg reachable from {marking.state} — "
+                        f"informational, not {marking.state} prices"
+                    )
+            # Accounted out loud: the flagged finding says every position is
+            # shown and labelled, and a silent [:10] slice would make that
+            # false for whatever ranked eleventh.
+            overflow = len(self.arb.opportunities) - 10
+            if overflow > 0:
+                print(
+                    f"    ... {overflow} more position(s); "
+                    "`collector arb --run <this run>` prints all of a stored run"
+                )
             # Rejections are printed because "found nothing" and "found
             # something and refused it for a stated reason" are different facts.
             rejected = Counter(d.code for d in self.arb.diagnostics)
@@ -955,24 +980,24 @@ def collect_once(
         one_counterparty=measured_counterparties,
         view_only_sources=registry.view_only_for_run(run_state),
     )
-    # Unconditional, because ``withhold_non_local`` owns the decision: gated here
-    # on ``state_source_keys`` it read *what was built* and skipped entirely for a
-    # run that built no PA book — the run that then reported, and texted, a "PA"
-    # arbitrage with no PA leg.  Gated on ``route_scope`` it disagreed with the
-    # dashboard about a ``legacy``-scope PA run, and its ``!= "GLOBAL"`` test let
-    # an unrecognised jurisdiction through to a ``KeyError`` that aborted the pass.
-    # Licence, not inventory, and one condition in one place.
-    arb_report.opportunities, withheld = withhold_non_local(
-        arb_report.opportunities, run_state, route_scope=route_scope
-    )
-    if withheld:
+    # Unconditional, because ``locality_marking`` owns the decision: gated here
+    # on ``state_source_keys`` its predecessor read *what was built* and skipped
+    # entirely for a run that built no PA book — the run that then reported, and
+    # texted, a "PA" arbitrage with no PA leg.  Gated on ``route_scope`` it
+    # disagreed with the dashboard about a ``legacy``-scope PA run, and its
+    # ``!= "GLOBAL"`` test let an unrecognised jurisdiction through to a
+    # ``KeyError`` that aborted the pass.  Licence, not inventory, and one
+    # condition in one place.  Positions are kept and labelled, not withheld.
+    marking = locality_marking(run_state, route_scope=route_scope)
+    flagged = marking.count_without_local_leg(arb_report.opportunities)
+    if flagged:
         report.add(
             Severity.WARNING,
-            "non_local_positions_withheld",
-            f"{withheld} position(s) had no leg at a venue reachable from "
-            f"{run_state} and are not reported: every leg was a book with no "
-            f"{run_state} licence and no nationwide US access, so nothing there "
-            "could have been staked",
+            "non_local_positions_flagged",
+            f"{flagged} position(s) have no leg at a venue reachable from "
+            f"{run_state}; shown and labelled as non-local — every leg is a book "
+            f"with no {run_state} licence and no nationwide US access, so nothing "
+            f"in them can be staked from {run_state}",
         )
 
     if store is not None and run_id is not None:
@@ -1023,7 +1048,7 @@ def collect_once(
     # Fail-soft: missing Twilio credentials skip; a Twilio error must not
     # abort an otherwise good collect (especially ``--watch``).
     if alert and arb_report.opportunities:
-        notified = notify_opportunities(arb_report.opportunities)
+        notified = notify_opportunities(arb_report.opportunities, marking=marking)
         if notified:
             log.info("texted %d arb(s) at >= %.1f%% ROI", len(notified), settings.ALERT_MIN_ROI * 100.0)
 
@@ -1036,6 +1061,7 @@ def collect_once(
         coverage=sports_seen,
         league_coverage=coverage,
         excluded_by_filter=excluded,
+        marking=marking,
     )
 
 
@@ -2008,7 +2034,15 @@ def collect_batch_once(
                 leagues=leagues,
                 tier=tier,
                 on_progress=on_progress,
-                alert=alert,
+                # The state passes are the alerting surfaces: their marking is
+                # governed, so their texts carry the locality disclaimer.  The
+                # GLOBAL pass sees the same cross-global positions minutes
+                # earlier with an ungoverned marking — letting it text first
+                # sends the bare body, and the dedupe key holds no
+                # jurisdiction, so the labelled state-pass text is then
+                # swallowed as a duplicate.  Only a batch with no state pass
+                # at all keeps its alert here.
+                alert=alert and not states,
                 jurisdiction="GLOBAL",
                 batch_id=batch_id,
                 route_scope="global",
@@ -2668,18 +2702,18 @@ def _cmd_arb(args: argparse.Namespace) -> int:
             one_counterparty=measured_counterparties,
             view_only_sources=registry.view_only_for_run(run_state),
         )
-        # And the exact-state leg requirement, for the same reason.  Without it
+        # And the exact-state leg marking, for the same reason.  Without it
         # this command printed — and texted — a "PA" arbitrage whose every leg
-        # was a global or offshore venue holding no Pennsylvania licence.  The
-        # default ``--run`` is the latest run, which in a batch is the last state
-        # collected, so the operator neither chose that jurisdiction nor was told
-        # which one they got.
-        report.opportunities, non_local_dropped = withhold_non_local(
-            report.opportunities,
+        # was a global or offshore venue holding no Pennsylvania licence, with
+        # nothing saying so.  The default ``--run`` is the latest run, which in a
+        # batch is the last state collected, so the operator neither chose that
+        # jurisdiction nor was told which one they got.
+        arb_marking = locality_marking(
             run_state,
             # The scope the run was *collected* under, not this process's.
             route_scope=(run_row["route_scope"] if run_row is not None else "") or "",
         )
+        non_local_flagged = arb_marking.count_without_local_leg(report.opportunities)
         print(f"jurisdiction: {run_state or 'UNKNOWN'}")
         if args.include_started:
             print(
@@ -2687,19 +2721,30 @@ def _cmd_arb(args: argparse.Namespace) -> int:
                 "historical study, not positions anyone can take"
             )
         print(f"{note}{_scope_label(sports, leagues)}: {report.summary()}")
-        # Printed after the summary, because it explains that count rather than
-        # standing on its own.  Said out loud rather than quietly subtracted: a
-        # reader comparing this against the same run's dashboard would otherwise
-        # see two different position counts with nothing accounting for the gap,
-        # and "0 opportunities" would read as a quiet market rather than as a
-        # board whose every position needed a book this state does not license.
-        if non_local_dropped:
+        # Printed after the summary, because it explains the labels below rather
+        # than standing on its own.  Said out loud rather than left to per-leg
+        # tags alone: a reader skimming for a count should learn how many
+        # positions are wholly foreign without reading every leg.
+        if non_local_flagged:
             print(
-                f"withheld {non_local_dropped} position(s) with no leg you can "
-                f"reach from {run_state} — not takeable from there"
+                f"{non_local_flagged} position(s) have no leg you can reach from "
+                f"{run_state} — shown and labelled, not takeable from there"
             )
         for opportunity in report.opportunities:
-            print(opportunity.describe())
+            print(
+                opportunity.describe(
+                    leg_note=lambda s: (
+                        ""
+                        if arb_marking.leg_is_local(s)
+                        else f"  [{arb_marking.label()}]"
+                    )
+                )
+            )
+            if not arb_marking.has_local_leg(opportunity):
+                print(
+                    f"    no leg reachable from {run_state} — informational, "
+                    f"not {run_state} prices"
+                )
         rejected = Counter(d.code for d in report.diagnostics)
         if rejected:
             print(f"\nrejected: {dict(rejected)}")
@@ -2708,7 +2753,7 @@ def _cmd_arb(args: argparse.Namespace) -> int:
                     print(f"  [{diagnostic.code}] {diagnostic.event_key} "
                           f"{diagnostic.market.value}/{diagnostic.period.value}: {diagnostic.detail}")
         if report.opportunities and not args.no_alert:
-            notified = notify_opportunities(report.opportunities)
+            notified = notify_opportunities(report.opportunities, marking=arb_marking)
             if notified:
                 print(
                     f"\ntexted {len(notified)} arb(s) "
@@ -2800,8 +2845,7 @@ def _cmd_lines(args: argparse.Namespace) -> int:
         # function.  Spelling it here as "is the jurisdiction known" was a fourth
         # answer: on a run stored with a widened scope, ``arb`` offered a position
         # while ``lines``, one command later, marked every leg of it unreachable.
-        marking = locality_applies(lines_state, lines_scope)
-        native = registry.takeable_from_state(lines_state) if marking else frozenset()
+        lines_marking = locality_marking(lines_state, route_scope=lines_scope)
         if lines_state:
             print(f"jurisdiction: {lines_state}")
 
@@ -2816,9 +2860,9 @@ def _cmd_lines(args: argparse.Namespace) -> int:
             false as well, which is why the two facts are kept apart rather than
             spelled by one string.
             """
-            if not marking or source_key in native:
+            if lines_marking.leg_is_local(source_key):
                 return ""
-            return f"  [not reachable from {lines_state}]"
+            return f"  [{lines_marking.label()}]"
 
         shown = 0
         for key in sorted(surface, key=str):

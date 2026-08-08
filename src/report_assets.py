@@ -351,6 +351,7 @@ tbody tr.go:focus-visible { outline: 2px solid var(--accent); outline-offset: -2
   font: 600 12px/1.2 var(--mono); font-variant-numeric: tabular-nums;
 }
 .arb-pill.ok { color: var(--up); }
+.arb-pill.warn { color: var(--warn); }
 .arb-kpis {
   display: flex; flex-wrap: wrap; gap: 8px 16px; margin: 0 0 10px;
   font: 400 12px/1.35 var(--sans); color: var(--ink-2);
@@ -3669,12 +3670,17 @@ function arbBundle() {
   return showOffshore ? (bag.with_offshore || bag) : bag;
 }
 
-/** Whether the offshore books changed anything for this run, as a sentence or ''. */
+/** Whether the offshore books changed anything for this run, as a sentence or ''.
+ *  Counts only takeable positions: a wholly-foreign position the offshore view
+ *  itself labels informational is not a reason to flip the switch, and "1 more
+ *  position exists" pointing at a non-edge is the invitation this note must not
+ *  make. */
 function offshoreDelta() {
   const bags = DATA.arbs || {};
   const bag = bags[String(currentRunId)] || bags[currentRunId] || null;
   if (!bag || !bag.with_offshore) return '';
-  const sportOf = (list) => (list || []).filter((o) => !currentSport || o.sport === currentSport);
+  const sportOf = (list) => (list || []).filter((o) =>
+    (!currentSport || o.sport === currentSport) && !o.no_local_leg);
   const here = sportOf(bag.opportunities).length;
   const all = sportOf(bag.with_offshore.opportunities).length;
   if (all === here) return '';
@@ -3718,62 +3724,78 @@ function renderArb() {
     if (currentSport && o.sport !== currentSport) return false;
     return true;
   });
-  if (nav) nav.textContent = String(opps.length);
-  summary.textContent = opps.length
-    ? `${opps.length} takeable · ${bag.comparable_group_count} cross-book markets`
-    : `none · ${bag.comparable_group_count} cross-book markets checked`;
+  // The headline numbers are money claims, so they count only positions with a
+  // leg the reader can reach from this jurisdiction. A wholly-foreign position
+  // is rendered below with its labels, but calling it "takeable" or adding its
+  // profit to "guaranteed $" would make the labels a footnote to a lie.
+  const takeable = opps.filter((o) => !o.no_local_leg);
+  if (nav) nav.textContent = String(takeable.length);
+  summary.textContent = takeable.length
+    ? `${takeable.length} takeable · ${bag.comparable_group_count} cross-book markets`
+    : `none takeable · ${bag.comparable_group_count} cross-book markets checked`;
   if (note) {
     // The delta is the answer to "am I leaving money on the table by staying
     // US-only", and it is worth saying whether the switch is on or off — one
     // way it warns, the other way it invites.
     const delta = offshoreDelta();
-    const base = opps.length
+    const base = takeable.length
       ? `stakes sized to $${Number(bag.stake || 100).toFixed(0)} total · sport filter applies`
-      : 'same detector as collector arb — empty usually means no edge today';
+      : (opps.length
+        ? "nothing takeable from this jurisdiction — the positions below are somewhere else's prices"
+        : 'same detector as collector arb — empty usually means no edge today');
     note.textContent = delta ? `${base} · ${delta}` : base;
   }
 
-  const best = opps.length
-    ? Math.max(...opps.map((o) => o.margin_pct || 0))
+  const best = takeable.length
+    ? Math.max(...takeable.map((o) => o.margin_pct || 0))
     : 0;
-  const profit = opps.reduce((n, o) => n + (o.guaranteed_profit || 0), 0);
+  const profit = takeable.reduce((n, o) => n + (o.guaranteed_profit || 0), 0);
   stats.innerHTML = [
-    ['positions', opps.length, 'risk-free right now'],
-    ['best margin', opps.length ? `${best.toFixed(2)}%` : '—', 'headline edge'],
-    ['guaranteed $', opps.length ? profit.toFixed(2) : '—', `on $${Number(bag.stake || 100).toFixed(0)} each`],
+    ['positions', takeable.length, 'risk-free right now'],
+    ['best margin', takeable.length ? `${best.toFixed(2)}%` : '—', 'headline edge'],
+    ['guaranteed $', takeable.length ? profit.toFixed(2) : '—', `on $${Number(bag.stake || 100).toFixed(0)} each`],
     ['markets checked', bag.comparable_group_count || 0, `${bag.group_count || 0} total groups`],
   ].map(([name, value, sub]) =>
     `<div class="stat"><span>${escapeHtml(name)}</span><b>${escapeHtml(String(value))}</b><small>${escapeHtml(sub)}</small></div>`
   ).join('');
 
-  // Positions dropped for having no leg the operator can *reach* from this state.
-  // Said out loud, and in the same place the count is, because "none" and "none you
-  // can take from here" are different boards and `collector arb` prints the
-  // distinction. A number shipped in the payload and rendered nowhere is the gap it
-  // was added to close: the reader compares two surfaces, sees two counts, and is
-  // told nothing.
+  // Positions whose every leg is at a venue the operator cannot *reach* from this
+  // state. Shown below with labels rather than dropped, but still said out loud in
+  // one place, because a reader skimming for a count should not have to read every
+  // leg to learn how many positions are wholly somewhere else's. A number shipped
+  // in the payload and rendered nowhere is the gap this note exists to close.
   //
-  // "Reachable", not "licensed", and the difference is not pedantry: the filter is
+  // "Reachable", not "licensed", and the difference is not pedantry: the marking is
   // `registry.takeable_from_state`, which admits Kalshi and Polymarket — federally
   // regulated venues no state licenses as sportsbooks — so a Kalshi/Polymarket
-  // position is kept. Under the word "license" this note invited the reader to
-  // conclude their prediction-market edge had been dropped for licensing, which is
-  // both false and the exact inversion an earlier round of this filter shipped.
-  const withheld = Number(bag.non_local_withheld || 0);
-  const withheldNote = withheld
-    ? `<div class="arb-empty">${withheld} ${withheld === 1 ? 'position was' : 'positions were'}
-       withheld: no leg was at a venue you can reach from this jurisdiction — no licence here and
-       no nationwide US access. They are not a clean board and not an edge — they are somewhere
-       else's.</div>`
-    : '';
+  // position is unlabelled. Under the word "license" this note invited the reader to
+  // conclude their prediction-market edge had been flagged for licensing, which is
+  // both false and the exact inversion an earlier round of this rule shipped.
+  // Counted from the cards actually rendered below, not from the bundle total:
+  // with a sport filter active the two differ, and "shown below with labels"
+  // must be true of what is below. The bundle's own count still matters — any
+  // flagged positions the filter hides are named so the note and the whole-run
+  // total cannot silently disagree.
+  const flagged = opps.filter((o) => o.no_local_leg).length;
+  const flaggedHidden = Number(bag.non_local_flagged || 0) - flagged;
+  const flaggedNote = flagged
+    ? `<div class="arb-empty">${flagged} ${flagged === 1 ? 'position has' : 'positions have'}
+       no leg at a venue you can reach from this jurisdiction — no licence here and
+       no nationwide US access. They are shown below with labels: informational,
+       somewhere else's prices, not an edge you can take from here.${
+         flaggedHidden > 0 ? ` (${flaggedHidden} more under other sports.)` : ''}</div>`
+    : (flaggedHidden > 0
+      ? `<div class="arb-empty">${flaggedHidden} flagged position(s) with no reachable leg
+         are hidden by the sport filter.</div>`
+      : '');
 
   if (!opps.length) {
-    list.innerHTML = withheldNote + `<div class="arb-empty">No takeable arbitrage in this scrape
+    list.innerHTML = flaggedNote + `<div class="arb-empty">No takeable arbitrage in this scrape
       ${currentSport ? `for ${escapeHtml(sportLabel(currentSport))}` : ''}.
       The detector looked at ${bag.comparable_group_count || 0} cross-book markets and refused the
       rest for the reasons below — that is a clean board, not a missing feature.</div>`;
   } else {
-    list.innerHTML = withheldNote + opps.map((o, i) => arbCard(o, i)).join('');
+    list.innerHTML = flaggedNote + opps.map((o, i) => arbCard(o, i)).join('');
   }
 
   const diags = bag.diagnostics || [];
@@ -3801,8 +3823,11 @@ function arbCard(o, index) {
     const net = Math.abs((leg.net_decimal_odds || 0) - (leg.decimal_odds || 0)) > 1e-9
       ? ` <span class="dim">net ${Number(leg.net_decimal_odds).toFixed(3)}</span>`
       : '';
+    const nonLocal = leg.non_local_label
+      ? ` <span class="pill warn">${escapeHtml(leg.non_local_label)}</span>`
+      : '';
     return `<tr>
-      <td><b>${escapeHtml(book(leg.source))}</b></td>
+      <td><b>${escapeHtml(book(leg.source))}</b>${nonLocal}</td>
       <td>${escapeHtml(leg.selection)}${escapeHtml(selLine)}</td>
       <td class="num">${escapeHtml(fmtAmerican(leg.american_odds))}${net}</td>
       <td class="num">$${Number(leg.stake).toFixed(2)}</td>
@@ -3829,7 +3854,9 @@ function arbCard(o, index) {
           · <a href="${escapeHtml(href('fixture', o.event_key))}">open game</a>
         </div>
       </div>
-      <span class="arb-pill ok">${Number(o.margin_pct).toFixed(2)}% edge</span>
+      <span>${o.no_local_leg
+        ? '<span class="arb-pill warn">no leg reachable from this jurisdiction</span> '
+        : ''}<span class="arb-pill ok">${Number(o.margin_pct).toFixed(2)}% edge</span></span>
     </div>
     <div class="arb-kpis">
       <span>guaranteed <strong>$${Number(o.guaranteed_profit).toFixed(2)}</strong></span>
@@ -6282,11 +6309,16 @@ function renderNavCounts() {
   setCount('nav-sources', `${run.sources.filter((h) => h.ok).length}/${run.sources.length}`);
   // Mirrors renderArb's three cases: prices not embedded, embedded but not
   // computed, and computed. They are three different sentences in the panel and
-  // must not collapse to one number here.
+  // must not collapse to one number here — and the computed one counts only
+  // takeable positions, exactly as renderArb's badge does. This refresher runs
+  // on a timer after renderArb's synchronous write, so counting the flagged
+  // positions here silently overwrote the honest badge with the bigger number.
   const bag = arbBundle();
   setCount('nav-arb', !detailLoaded(currentRunId) ? ''
     : (!bag ? '—'
-      : String((bag.opportunities || []).filter((o) => !currentSport || o.sport === currentSport).length)));
+      : String((bag.opportunities || [])
+        .filter((o) => !currentSport || o.sport === currentSport)
+        .filter((o) => !o.no_local_leg).length)));
   // Unconditional, as renderPromos has it: with no promo scrape the honest count
   // is 0, and a blank would read as "not counted yet".
   setCount('nav-promos', String((PROMOS.offers || []).length));

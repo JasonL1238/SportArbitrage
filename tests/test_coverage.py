@@ -22,7 +22,7 @@ from src.coverage import (
     _check_locality_declarations,
     check_book_coverage,
     coverage_for_state,
-    withhold_non_local,
+    locality_marking,
 )
 from src.jurisdictions import JURISDICTIONS, RouteStatus, jurisdiction
 from src.schema import Selection
@@ -754,7 +754,7 @@ def test_one_dark_book_among_healthy_ones_is_still_its_own_error():
 
 
 class _Position:
-    """Only ``sources`` is read, which is all the predicate needs."""
+    """Only ``sources`` is read, which is all the marking needs."""
 
     def __init__(self, *sources: str) -> None:
         self.sources = frozenset(sources)
@@ -772,29 +772,37 @@ def test_an_unlicensed_route_is_not_a_local_leg():
     assert jurisdiction("PA").routes["hardrock"].status is RouteStatus.UNAVAILABLE
     assert "hardrock" in JURISDICTIONS["PA"].routes      # the old, wrong answer
 
-    kept, withheld = withhold_non_local(
-        [_Position("hardrock", "pinnacle")], "PA", route_scope="state"
-    )
-    assert kept == []
-    assert withheld == 1
+    marking = locality_marking("PA", route_scope="state")
+    position = _Position("hardrock", "pinnacle")
+    assert not marking.has_local_leg(position)
+    assert marking.non_local_sources(position) == ("hardrock", "pinnacle")
+    assert marking.count_without_local_leg([position]) == 1
 
 
 def test_a_licensed_route_is_a_local_leg():
-    """The predicate must not simply refuse everything."""
-    kept, withheld = withhold_non_local(
-        [_Position("fanduel", "pinnacle")], "PA", route_scope="state"
-    )
-    assert len(kept) == 1
-    assert withheld == 0
+    """The marking must not simply flag everything."""
+    marking = locality_marking("PA", route_scope="state")
+    position = _Position("fanduel", "pinnacle")
+    assert marking.has_local_leg(position)
+    assert marking.leg_is_local("fanduel")
+    assert not marking.leg_is_local("pinnacle")
+    assert marking.non_local_sources(position) == ("pinnacle",)
+    assert marking.count_without_local_leg([position]) == 0
 
 
-def test_a_state_with_no_licence_at_all_withholds_rather_than_skipping(monkeypatch):
-    """An empty licensed set means "nothing here is takeable", never "no filter".
+def test_the_label_names_the_state_and_reachability():
+    """One phrase for every surface — "reachable", never "licensed"."""
+    marking = locality_marking("PA", route_scope="state")
+    assert marking.label() == "not reachable from PA"
+
+
+def test_a_state_with_no_licence_at_all_flags_rather_than_skipping(monkeypatch):
+    """An empty licensed set means "nothing here is takeable", never "no marking".
 
     "No licence" is the direction the mistake goes in: the live collector shipped
-    one round with this filter gated on the keys a run had *built*, so the run that
-    built no state book skipped the filter entirely and reported the position
-    instead of withholding it.
+    one round with this rule gated on the keys a run had *built*, so the run that
+    built no state book skipped the rule entirely and reported the position
+    unlabelled instead of flagging it.
 
     Reached through a substitute because every shipped jurisdiction has at least
     four licensed retail routes — asserted below, so this stops being a substitute
@@ -807,11 +815,8 @@ def test_a_state_with_no_licence_at_all_withholds_rather_than_skipping(monkeypat
     ), "a shipped state now has no licensed route; test it directly instead"
 
     monkeypatch.setattr(registry, "state_licensed_keys", lambda state: frozenset())
-    kept, withheld = withhold_non_local(
-        [_Position("pinnacle", "bovada")], "PA", route_scope="state"
-    )
-    assert kept == []
-    assert withheld == 1
+    marking = locality_marking("PA", route_scope="state")
+    assert marking.count_without_local_leg([_Position("pinnacle", "bovada")]) == 1
 
 
 def test_a_us_regulated_venue_is_reachable_from_every_state():
@@ -820,19 +825,19 @@ def test_a_us_regulated_venue_is_reachable_from_every_state():
     Both are federally regulated US venues with no per-state sportsbook licence to
     hold — this registry says so itself, in the note explaining why they are absent
     from ``US_UNAVAILABLE_SOURCE_KEYS``. Built on ``state_licensed_keys`` alone, the
-    locality filter called them out-of-state in *every* jurisdiction, so a legal
+    locality rule called them out-of-state in *every* jurisdiction, so a legal
     Kalshi/Polymarket arbitrage on a Pennsylvania run was withheld from the report,
     the dashboard and the SMS — under a warning saying "every leg was a global or
     offshore venue".
 
     Rule (a) stops an unreachable price being presented as the state's own. It was
-    never a reason to hide a reachable one.
+    never a reason to hide — or label — a reachable one.
     """
-    kept, withheld = withhold_non_local(
-        [_Position("kalshi", "polymarket")], "PA", route_scope="state"
-    )
-    assert len(kept) == 1, "a legal US position was withheld from a PA run"
-    assert withheld == 0
+    marking = locality_marking("PA", route_scope="state")
+    position = _Position("kalshi", "polymarket")
+    assert marking.has_local_leg(position), "a legal US position flagged on a PA run"
+    assert marking.non_local_sources(position) == ()
+    assert marking.count_without_local_leg([position]) == 0
 
 
 def test_reachability_is_not_the_same_question_as_a_retail_licence():
@@ -866,58 +871,58 @@ def test_a_legacy_scope_run_with_a_real_jurisdiction_is_governed():
     ``arb --run <old>`` and the dashboard read.  Requiring ``route_scope ==
     "state"`` therefore turned the rule off on the historical half of the store: a
     PA run with a ``pinnacle``/``onexbet`` position printed it **and texted it**,
-    two legs neither of which a Pennsylvania operator can reach.
+    two legs neither of which a Pennsylvania operator can reach, with nothing
+    saying so.
 
-    Fails on the previous predicate, which returned the position untouched.
+    Fails on the previous predicate, which left the position unmarked.
     """
-    kept, withheld = withhold_non_local(
-        [_Position("pinnacle", "onexbet")], "PA", route_scope="legacy"
-    )
-    assert kept == []
-    assert withheld == 1
+    marking = locality_marking("PA", route_scope="legacy")
+    assert marking.marking
+    assert marking.count_without_local_leg([_Position("pinnacle", "onexbet")]) == 1
 
 
 @pytest.mark.parametrize("scope", ["global", "all"])
 def test_a_scope_the_operator_widened_on_purpose_is_exempt(scope):
     """``--scope all`` from Pennsylvania is a request to see the wider board.
 
-    The one direction that must stay exempt: filtering it hides what was asked
-    for, which is what broke four integration tests the first time the decision was
-    keyed on the jurisdiction alone.
+    The one direction that must stay exempt: marking it against one state answers
+    a question nobody asked, which is what broke four integration tests the first
+    time the decision was keyed on the jurisdiction alone.
     """
-    kept, withheld = withhold_non_local(
-        [_Position("pinnacle", "onexbet")], "PA", route_scope=scope
-    )
-    assert len(kept) == 1
-    assert withheld == 0
+    marking = locality_marking("PA", route_scope=scope)
+    position = _Position("pinnacle", "onexbet")
+    assert marking.reachable is None
+    assert not marking.marking
+    assert marking.leg_is_local("pinnacle")
+    assert marking.has_local_leg(position)
+    assert marking.non_local_sources(position) == ()
+    assert marking.count_without_local_leg([position]) == 0
 
 
-def test_an_unrecognised_scope_gets_the_filter_rather_than_a_pass():
+def test_an_unrecognised_scope_gets_the_marking_rather_than_a_pass():
     """A deny-list, so the money-safe answer is the default.
 
     A scope value this module has never heard of is governed.  Being wrong that way
-    costs a withheld position with its count printed; being wrong the other way
-    sends a text message naming a book nobody can reach.
+    costs a labelled position with its count reported; being wrong the other way
+    sends an unlabelled text message naming a book nobody can reach.
     """
-    kept, withheld = withhold_non_local(
-        [_Position("pinnacle", "onexbet")], "PA", route_scope="some_future_scope"
-    )
-    assert kept == []
-    assert withheld == 1
+    marking = locality_marking("PA", route_scope="some_future_scope")
+    assert marking.marking
+    assert marking.count_without_local_leg([_Position("pinnacle", "onexbet")]) == 1
 
 
 @pytest.mark.parametrize("state", ["GLOBAL", "", "XX"])
-def test_a_run_with_no_jurisdiction_is_never_filtered(state):
+def test_a_run_with_no_jurisdiction_is_never_marked(state):
     """Nothing is out of state when there is no state, and ``XX`` must not raise.
 
     The jurisdiction test is also what stops an unrecognised one reaching
     ``jurisdiction("XX")`` and aborting a whole pass with a ``KeyError``.
     """
-    kept, withheld = withhold_non_local(
-        [_Position("pinnacle", "onexbet")], state, route_scope="state"
-    )
-    assert len(kept) == 1
-    assert withheld == 0
+    marking = locality_marking(state, route_scope="state")
+    position = _Position("pinnacle", "onexbet")
+    assert not marking.marking
+    assert marking.has_local_leg(position)
+    assert marking.count_without_local_leg([position]) == 0
 
 
 def test_every_surface_asks_one_function_whether_the_rule_applies():

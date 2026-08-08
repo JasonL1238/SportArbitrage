@@ -59,12 +59,13 @@ independent ways one book was seen.  The public entry point here is therefore
 :func:`check_book_coverage`, so that grepping either name lands in one layer.
 
 And the module is *state locality*, not only corroboration.  Counting feeds
-(:func:`check_book_coverage`) is rule (c); :func:`withhold_non_local` and
+(:func:`check_book_coverage`) is rule (c); :func:`locality_marking` and
 :func:`locality_applies` are the same rule (a) applied to arb **output** rather
 than to inputs — never present a price as this state's when it cannot be reached
-from here.  They live beside the corroboration rule because both answer from the
-same tables and must not drift apart, and because a reader who finds one has to
-find the other.
+from here.  A position with an unreachable leg is shown, but every surface labels
+that leg so nobody mistakes it for the state's own price.  They live beside the
+corroboration rule because both answer from the same tables and must not drift
+apart, and because a reader who finds one has to find the other.
 """
 from __future__ import annotations
 
@@ -88,7 +89,7 @@ if TYPE_CHECKING:
 
 
 class _HasSources(Protocol):
-    """The one thing :func:`withhold_non_local` needs of an ``Opportunity``.
+    """The one thing :class:`LocalityMarking` needs of an ``Opportunity``.
 
     Structural rather than imported, for cost rather than for a cycle: importing
     :mod:`src.arb` to name one attribute would pull :mod:`src.validation`,
@@ -713,9 +714,9 @@ _check_locality_declarations(REQUIRED_BOOKS)
 #: Scopes that widen a run past its own jurisdiction *on purpose*.
 #:
 #: A deny-list rather than an allow-list, so the money-safe answer is the default:
-#: a scope value this module has never heard of gets the filter, and the cost of
-#: being wrong is a withheld position with its count printed, not a text message
-#: pointing at a book the operator cannot reach.
+#: a scope value this module has never heard of gets the marking, and the cost of
+#: being wrong is a labelled position with its count reported, not an unlabelled
+#: text naming a book the operator cannot reach.
 WIDENED_SCOPES: frozenset[str] = frozenset({"global", "all"})
 
 
@@ -734,8 +735,8 @@ def locality_applies(state: str | None, route_scope: str) -> bool:
     aborting a whole pass with a ``KeyError``, and it is why ``GLOBAL`` and an
     empty jurisdiction pass through untouched.  And the scope must not be one the
     operator widened deliberately: ``--scope global`` or ``all`` from Pennsylvania
-    is a request to *see* the offshore board, and filtering it hides what was asked
-    for.
+    is a request to *see* the whole board, and marking it against one state answers
+    a question nobody asked.
 
     Everything else — including ``legacy``, the value the store backfills onto
     every row predating the ``route_scope`` column — is governed.  This is the
@@ -748,8 +749,8 @@ def locality_applies(state: str | None, route_scope: str) -> bool:
     "PA" arbitrage whose two legs were an offshore book and a book that geoblocks
     the United States.  Whether a leg is reachable from a state is a fact about the
     book and the state, not about what the run claimed to have collected: a
-    forgotten scope is a reason to be careful, not a reason to admit an untakeable
-    position to the alert path.
+    forgotten scope is a reason to be careful, not a reason to let an untakeable
+    position reach the alert path unmarked.
     """
     return (
         normalize_state(state or "") in JURISDICTIONS
@@ -757,72 +758,103 @@ def locality_applies(state: str | None, route_scope: str) -> bool:
     )
 
 
-def withhold_non_local(
-    opportunities: Sequence[_HasSources], state: str, *, route_scope: str
-) -> tuple[list[_HasSources], int]:
-    """Keep only positions with at least one leg the operator can reach from *state*.
+@dataclass(frozen=True)
+class LocalityMarking:
+    """Which legs of a run's positions are reachable from its jurisdiction.
 
     The same rule as the rest of this module, applied to the output instead of the
-    input: a position whose every leg is unreachable from this jurisdiction is not a
-    position in it, whoever is asking.
+    input: a leg unreachable from this jurisdiction is somewhere else's price, and
+    every surface must say so.  Positions are shown whole — an earlier version
+    (``withhold_non_local``) deleted any position with no reachable leg, which hid
+    a real number behind a bare count; now the position appears with each foreign
+    leg labelled, and the surfaces report how many positions have no local leg at
+    all.
 
     "Reachable" is :func:`registry.takeable_from_state`, **not** the state's retail
-    licences.  Built on the licences alone this filter called Kalshi and Polymarket
+    licences.  Built on the licences alone this rule called Kalshi and Polymarket
     out-of-state in every jurisdiction and withheld a legal, takeable position from
     the report, the dashboard and the SMS — inverting the rule it serves.  Rule (a)
-    stops an unreachable price being shown as the state's own; it is not a reason to
-    hide a reachable one.
+    stops an unreachable price being shown as the state's own; it is not a reason
+    to hide, or mark, a reachable one.
 
     One implementation, because there were three call sites with three different
     answers and the most permissive one was the live path that sends the text.
-    ``collect_once`` filtered on the keys it had *built* — empty under
-    ``--source pinnacle``, which skipped the filter entirely rather than
-    withholding everything — while :mod:`src.report` filtered on
-    ``JURISDICTIONS[state].routes``, which includes books the operator holds no
-    licence for.
+    Every surface builds this object through :func:`locality_marking` and asks it,
+    rather than re-deriving reachability at the call site.
+    """
 
-    Returns the kept positions and how many were withheld, because the count has
-    to be reportable: a silently shorter list is indistinguishable from a quiet
-    market, and it disagrees with every other surface describing the same run.
+    state: str  #: normalized; "" when the rule does not govern
+    reachable: frozenset[str] | None  #: None => rule (a) does not govern this run
 
-    **The decision whether to filter lives here too**, not at the call sites.
+    @property
+    def marking(self) -> bool:
+        return self.reachable is not None
+
+    def leg_is_local(self, source: str) -> bool:
+        return self.reachable is None or source in self.reachable
+
+    def non_local_sources(self, position: _HasSources) -> tuple[str, ...]:
+        """The position's foreign legs, sorted; empty when not marking."""
+        if self.reachable is None:
+            return ()
+        return tuple(
+            sorted({s for s in position.sources if s not in self.reachable})
+        )
+
+    def has_local_leg(self, position: _HasSources) -> bool:
+        return self.reachable is None or bool(
+            self.reachable.intersection(position.sources)
+        )
+
+    def count_without_local_leg(self, positions: Sequence[_HasSources]) -> int:
+        """How many positions have no reachable leg at all.
+
+        The count has to be reportable: labels on a page a reader has not opened
+        do not warn anyone, so every surface applying the marking states how many
+        positions are wholly foreign rather than leaving the labels to speak.
+        """
+        return sum(1 for position in positions if not self.has_local_leg(position))
+
+    def label(self) -> str:
+        """The one phrase every surface uses for a foreign leg."""
+        return f"not reachable from {self.state}"
+
+
+def locality_marking(state: str | None, *, route_scope: str) -> LocalityMarking:
+    """Build the run's marking; the decision *whether* to mark lives here.
+
     Sharing only the predicate was not enough: the three callers tested three
     different conditions, and a run recorded ``jurisdiction="PA"`` with
     ``route_scope="legacy"`` — ``collect_once``'s own default — was filtered by
     ``arb`` and not by the dashboard, so one run had two position counts and no
     explanation.  Both arguments are therefore required, and neither caller may
-    decide for itself.
+    decide for itself.  Which runs are governed is :func:`locality_applies`, asked
+    here so no surface spells the condition again.
 
-    Which runs it applies to is :func:`locality_applies`, and every surface must
-    ask that one function rather than spell the condition again.
+    An empty reachable set is possible in principle — a jurisdiction licensing no
+    retail book at all — and needs no branch: nothing intersects with it, so every
+    leg is foreign, which is the same sentence the general case says.  In practice
+    the nationwide venues are in every state's set.
     """
+    if not locality_applies(state, route_scope):
+        return LocalityMarking(state="", reachable=None)
     from src.sources import registry
 
-    if not locality_applies(state, route_scope):
-        return list(opportunities), 0
-    # Empty is possible in principle — a jurisdiction licensing no retail book at
-    # all — and needs no branch: intersecting with an empty set keeps nothing, so
-    # the answer is "none withheld from nothing takeable", which is the same
-    # sentence the general case says.  An earlier version had a special case here
-    # claiming to handle it, and it was unreachable, because the nationwide venues
-    # are in every state's set.
-    native = registry.takeable_from_state(state)
-    kept = [
-        opportunity
-        for opportunity in opportunities
-        if native.intersection(opportunity.sources)
-    ]
-    return kept, len(opportunities) - len(kept)
+    normalized = normalize_state(state or "")
+    return LocalityMarking(
+        state=normalized, reachable=registry.takeable_from_state(normalized)
+    )
 
 
 __all__ = [
     "Access",
     "BookCoverage",
     "Corroboration",
+    "LocalityMarking",
     "REQUIRED_BOOKS",
     "RequiredBook",
     "check_book_coverage",
     "coverage_for_state",
     "locality_applies",
-    "withhold_non_local",
+    "locality_marking",
 ]

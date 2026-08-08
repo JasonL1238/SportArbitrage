@@ -787,6 +787,94 @@ def test_the_page_script_runs_against_a_truncated_payload(
     assert "named on screen" in result.stdout
 
 
+def test_the_page_paints_the_locality_labels(populated: Store, tmp_path) -> None:
+    """Execute the renderer against a run that actually carries a flagged position.
+
+    The static pins on the JS source (`no_local_leg` / `non_local_label` appear in
+    the text) cannot tell a rendered badge from a comment: dead-coding the badge
+    while leaving its name in the file survives them. The harness's locality block
+    reads the painted DOM instead — and this test is what keeps that block from
+    reporting "not exercised" forever, by storing a PA state run whose only
+    position has no reachable leg.
+    """
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed; the dashboard's script cannot be executed here")
+
+    from src.validation import ValidationReport
+
+    kickoff = datetime.now(UTC) + timedelta(hours=6)
+    rows = [
+        make_quote(source=source, selection=selection, decimal_odds=odds,
+                   source_market_id="m", commence_time=kickoff)
+        for source, selection, odds in (
+            ("pinnacle", Selection.HOME, 2.20),
+            ("bovada", Selection.AWAY, 2.20),
+            # A worse local price on the same market. It changes no leg of the
+            # position, but the page opens on this run in the US-only view, and
+            # with pinnacle and bovada both offshore an all-offshore slate would
+            # leave that view rowless — which fails the routing check for
+            # reasons that have nothing to do with locality.
+            ("fanduel", Selection.HOME, 2.00),
+        )
+    ]
+    # A second sport with no flagged position, so the harness can filter the
+    # flagged one off the page and check the note admits the filter hid it —
+    # with one sport in the run that branch of the locality block never runs.
+    rows += [
+        make_quote(source=source, selection=selection, decimal_odds=odds,
+                   sport=Sport.HOCKEY, league="NHL",
+                   event_key=f"NHL-PIT@NHL-PHI:{kickoff:%Y-%m-%d}",
+                   source_event_id="evt-nhl", source_market_id="m-nhl",
+                   home_participant="NHL-PHI", away_participant="NHL-PIT",
+                   home_team="Philadelphia Flyers", away_team="Pittsburgh Penguins",
+                   commence_time=kickoff)
+        for source, selection, odds in (
+            ("fanduel", Selection.HOME, 1.90),
+            ("draftkings", Selection.AWAY, 1.90),
+        )
+    ]
+    started = datetime(2026, 7, 28, 5, 0, tzinfo=UTC)
+    run = populated.start_run(
+        started, jurisdiction="PA", route_scope="state",
+    )
+    populated.save_quotes_by_source(run, rows)
+    # The page opens on this run, and the harness refuses a page with empty
+    # regions — so the run needs the same health/skip furniture the fixture's
+    # own runs carry, not just its three quotes.
+    from src.sources.base import SourceHealth
+
+    for source in ("pinnacle", "bovada", "fanduel"):
+        count = len([q for q in rows if q.source == source])
+        populated.save_health(
+            run,
+            SourceHealth(
+                source_key=source, ok=True, checked_at=started, request_count=1,
+                raw_bytes=1024, latency_ms=40.0, quote_count=count,
+                event_count=1, skipped_count=1,
+            ),
+        )
+    populated.save_skipped(run, "pinnacle", {"matchup_type:special": 1})
+    populated.finish_run(
+        run, finished_at=started + timedelta(seconds=1),
+        report=ValidationReport(quote_count=len(rows), event_count=1),
+        counterparties={},
+    )
+
+    page = tmp_path / "dashboard-locality.html"
+    page.write_text(render_page(build_report(populated)), encoding="utf-8")
+    harness = Path(__file__).parent / "dashboard_smoke.mjs"
+    result = subprocess.run(
+        [node, str(harness), str(page)], capture_output=True, text=True, timeout=60
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "locality labels render" in result.stdout, result.stdout
+    # The filtered-view half of the block skips itself when every sport holds a
+    # flagged position; this page carries the NHL game precisely so it cannot,
+    # and losing those rows must fail here rather than shrink the check.
+    assert "filtered-note check skipped" not in result.stdout, result.stdout
+
+
 def test_the_page_describes_a_quarter_line_the_way_the_detector_settles_it(
     populated: Store, tmp_path
 ) -> None:
@@ -1856,13 +1944,14 @@ def _pa_state_run(tmp_path, sources) -> tuple[Path, list[int]]:
     return path, [run]
 
 
-def test_the_dashboard_withholds_positions_with_no_state_licensed_leg(tmp_path) -> None:
+def test_the_dashboard_labels_positions_with_no_state_licensed_leg(tmp_path) -> None:
     """The dashboard's half of the exact-state leg rule, which was unpinned.
 
     Setting ``state_scoped = False`` left ``tests/test_report.py`` byte-identical,
     so the surface a reader actually looks at could render every out-of-state-only
-    position on a Pennsylvania board — and report ``non_local_withheld: 0`` while
-    doing it. ``--serve`` rebuilds through this same function.
+    position on a Pennsylvania board with nothing saying so. The position is shown
+    — that is the policy — but flagged, and every foreign leg carries the label.
+    ``--serve`` rebuilds through this same function.
     """
     from src.report import _arb_payload
 
@@ -1877,12 +1966,17 @@ def test_the_dashboard_withholds_positions_with_no_state_licensed_leg(tmp_path) 
     # a leg first, so the locality rule would have nothing left to act on and the
     # assertion would pass without exercising it.
     bundle = payload[str(run_ids[0])]["with_offshore"]
-    assert bundle["opportunities"] == []
-    assert bundle["non_local_withheld"] == 1
+    assert len(bundle["opportunities"]) == 1
+    assert bundle["non_local_flagged"] == 1
+    entry = bundle["opportunities"][0]
+    assert entry["no_local_leg"] is True
+    assert all(
+        leg["non_local_label"] == "not reachable from PA" for leg in entry["legs"]
+    )
 
 
 def test_the_dashboard_keeps_positions_that_do_have_one(tmp_path) -> None:
-    """The other direction: the filter must not empty a legitimate PA board."""
+    """The other direction: a legitimate PA board is neither emptied nor flagged."""
     from src.report import _arb_payload
 
     path, run_ids = _pa_state_run(tmp_path, [
@@ -1894,7 +1988,47 @@ def test_the_dashboard_keeps_positions_that_do_have_one(tmp_path) -> None:
 
     bundle = payload[str(run_ids[0])]["with_offshore"]
     assert len(bundle["opportunities"]) == 1
-    assert bundle["non_local_withheld"] == 0
+    assert bundle["non_local_flagged"] == 0
+    entry = bundle["opportunities"][0]
+    assert entry["no_local_leg"] is False
+    labels = {leg["source"]: leg["non_local_label"] for leg in entry["legs"]}
+    assert labels["fanduel"] == ""
+    assert labels["pinnacle"] == "not reachable from PA"
+
+
+def test_the_us_only_bundle_answers_from_the_same_marking(tmp_path) -> None:
+    """Both views of one run are built over one marking, and each stays honest.
+
+    A labelled leg cannot actually appear in the US-only view of a PA run: the
+    global and offshore venues are excluded as legs before locality is asked,
+    and every US-bettable book PA does not license (``hardrock``) is in the
+    run's view-only set — asserted here so the claim stops being true loudly
+    rather than silently.  What the US-only view must still get right is the
+    *absence*: the position the offshore view shows flagged simply is not in
+    this view, so its count says 0 rather than inheriting the sibling's 1.
+    """
+    from src.report import _arb_payload
+    from src.sources import registry
+
+    assert "hardrock" in registry.view_only_for_run("PA"), (
+        "a US-bettable book PA does not license can now be a leg; give the "
+        "US-only view a real labelled case instead of pinning the absence"
+    )
+
+    path, run_ids = _pa_state_run(tmp_path, [
+        ("pinnacle", Selection.HOME, 2.20),
+        ("bovada", Selection.AWAY, 2.20),
+    ])
+    with Store(path) as opened:
+        payload = _arb_payload(opened, run_ids, as_of=datetime.now(UTC))
+
+    entry = payload[str(run_ids[0])]
+    # US-only view: the position's legs are excluded, so nothing is shown and
+    # nothing is flagged — 0/0, not a stale copy of the offshore view's 1/1.
+    assert entry["opportunities"] == []
+    assert entry["non_local_flagged"] == 0
+    assert len(entry["with_offshore"]["opportunities"]) == 1
+    assert entry["with_offshore"]["non_local_flagged"] == 1
 
 
 def test_a_state_licensed_republisher_is_not_badged_global() -> None:
@@ -1939,8 +2073,8 @@ def test_a_legacy_scope_run_is_treated_the_same_way_arb_treats_it(tmp_path) -> N
     forgotten scope is not.
 
     The legs here are ``pinnacle``/``bovada`` — nothing reachable from
-    Pennsylvania — so the position is withheld and *counted*, never silently
-    dropped.
+    Pennsylvania — so the position is flagged and *counted*, its labels shown,
+    never silently unmarked.
     """
     from src.report import _arb_payload
     from src.validation import ValidationReport
@@ -1968,11 +2102,12 @@ def test_a_legacy_scope_run_is_treated_the_same_way_arb_treats_it(tmp_path) -> N
         payload = _arb_payload(store, [run], as_of=datetime.now(UTC))
 
     bundle = payload[str(run)]["with_offshore"]
-    assert bundle["opportunities"] == []
-    assert bundle["non_local_withheld"] == 1
+    assert len(bundle["opportunities"]) == 1
+    assert bundle["non_local_flagged"] == 1
+    assert bundle["opportunities"][0]["no_local_leg"] is True
 
 
-def test_a_global_run_is_not_filtered_by_jurisdiction(tmp_path) -> None:
+def test_a_global_run_is_not_marked_by_jurisdiction(tmp_path) -> None:
     """"GLOBAL" is not a jurisdiction, so nothing about it is out of state."""
     from src.report import _arb_payload
     from src.validation import ValidationReport
@@ -2001,23 +2136,27 @@ def test_a_global_run_is_not_filtered_by_jurisdiction(tmp_path) -> None:
 
     bundle = payload[str(run)]["with_offshore"]
     assert len(bundle["opportunities"]) == 1
-    assert bundle["non_local_withheld"] == 0
+    assert bundle["non_local_flagged"] == 0
+    entry = bundle["opportunities"][0]
+    assert entry["no_local_leg"] is False
+    assert all(leg["non_local_label"] == "" for leg in entry["legs"])
 
 
 def test_every_key_the_arb_payload_ships_is_read_by_the_page() -> None:
     """A payload key with no renderer is a fix that stopped halfway.
 
-    ``non_local_withheld`` shipped for a round with nothing reading it, so the
-    dashboard showed an empty Pennsylvania board while ``collector arb`` printed
-    "withheld 4 position(s)" for the same run — the exact two-counts-no-explanation
-    failure the key was added to prevent. Asserted over every key rather than that
-    one, so the next key added to this payload cannot repeat it.
+    ``non_local_withheld`` (this key's predecessor) shipped for a round with
+    nothing reading it, so the dashboard showed an empty Pennsylvania board while
+    ``collector arb`` printed "withheld 4 position(s)" for the same run — the
+    exact two-counts-no-explanation failure the key was added to prevent.
+    Asserted over every key rather than that one, so the next key added to this
+    payload cannot repeat it.
     """
     from src.report_assets import JS
     from src.report import _blank_arb_bundle
 
     shipped = set(_blank_arb_bundle(100.0)) - {"with_offshore"}
-    assert "non_local_withheld" in shipped, "the payload key vanished; update this test"
+    assert "non_local_flagged" in shipped, "the payload key vanished; update this test"
     unread = sorted(key for key in shipped if key not in JS)
     assert not unread, (
         f"the arb payload ships {unread} and no dashboard code reads it — either "
@@ -2025,23 +2164,37 @@ def test_every_key_the_arb_payload_ships_is_read_by_the_page() -> None:
     )
 
 
-def test_the_page_tells_the_reader_when_positions_were_withheld() -> None:
-    """Reading the number is not the same as accounting for it.
+def test_the_page_reads_the_per_position_locality_keys() -> None:
+    """The per-opportunity keys are below the every-key test's reach.
 
-    The distinction has to reach words: "none" and "none you can take from here"
-    are different boards, and only one of them is a clean one.
+    ``_blank_arb_bundle`` has no opportunities, so ``no_local_leg`` and
+    ``non_local_label`` are not in the set that test sweeps — a renderer could
+    drop the per-leg labels and it would stay green. Pinned by name instead.
     """
     from src.report_assets import JS
 
-    branch = JS[JS.index("non_local_withheld"):]
+    assert "no_local_leg" in JS
+    assert "non_local_label" in JS
+
+
+def test_the_page_tells_the_reader_when_positions_are_flagged() -> None:
+    """Reading the number is not the same as accounting for it.
+
+    The distinction has to reach words: "an edge" and "somewhere else's prices"
+    are different boards, and the labels below the note only explain themselves
+    to a reader who already knows the phrase.
+    """
+    from src.report_assets import JS
+
+    branch = JS[JS.index("non_local_flagged"):]
     branch = branch[:branch.index("if (!opps.length)")]
-    assert "withheld" in branch
-    # And it has to be the *right* words. The filter is
-    # ``registry.takeable_from_state``, which keeps Kalshi and Polymarket — venues
-    # no state licenses as sportsbooks — so a note saying "this jurisdiction does
-    # not license" told the reader their prediction-market edge had been dropped for
-    # licensing. Reachability is the claim the code makes.
-    note = branch[branch.index("withheldNote"):]
+    assert "flagged" in branch
+    # And it has to be the *right* words. The marking is
+    # ``registry.takeable_from_state``, which leaves Kalshi and Polymarket — venues
+    # no state licenses as sportsbooks — unlabelled, so a note saying "this
+    # jurisdiction does not license" told the reader their prediction-market edge
+    # had been flagged for licensing. Reachability is the claim the code makes.
+    note = branch[branch.index("flaggedNote"):]
     assert "reach from this jurisdiction" in note
     assert "does not license" not in note
 
@@ -2057,10 +2210,11 @@ def test_a_run_predating_the_scope_column_is_not_migrated_into_state_scope(tmp_p
     the column has no scope, which is what ``legacy`` means.
 
     The stamp is honest; the *consequence* is that rule (a) still governs the row.
-    This test asserted the opposite for a round — 1 opportunity, 0 withheld — which
-    is how ``arb --run <old>`` came to print and text a "PA" arbitrage between an
-    offshore book and one that geoblocks the US. What the run recorded about its
-    slate does not change whether a Pennsylvania operator can reach Bovada.
+    This test asserted the opposite for a round — 1 opportunity, 0 flagged — which
+    is how ``arb --run <old>`` came to print and text an unmarked "PA" arbitrage
+    between an offshore book and one that geoblocks the US. What the run recorded
+    about its slate does not change whether a Pennsylvania operator can reach
+    Bovada.
     """
     import sqlite3
 
@@ -2099,8 +2253,9 @@ def test_a_run_predating_the_scope_column_is_not_migrated_into_state_scope(tmp_p
         "did not collect exact-state routes and must not be claimed to have"
     )
     bundle = payload[str(run)]["with_offshore"]
-    assert bundle["opportunities"] == []
-    assert bundle["non_local_withheld"] == 1
+    assert len(bundle["opportunities"]) == 1
+    assert bundle["non_local_flagged"] == 1
+    assert bundle["opportunities"][0]["no_local_leg"] is True
 
 
 def test_the_comparable_sport_count_does_not_depend_on_the_reading_process(tmp_path) -> None:

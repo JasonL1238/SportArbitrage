@@ -44,7 +44,7 @@ from src.betlinks import link_payload
 from src.betlog import BetLog, BetLogError, empty_payload as empty_bet_payload
 from src.betlog import slip_from_payload
 from src.commission import commission_for, net_decimal_odds
-from src.coverage import withhold_non_local
+from src.coverage import LocalityMarking, locality_marking
 from src.egress import is_recent, load_detection
 from src.events import reconcile_event_keys
 from src.jurisdictions import JURISDICTIONS, route_warnings, source_host
@@ -1615,10 +1615,13 @@ def _arb_payload(
         # wrong question twice over: it made this surface disagree with ``arb`` about
         # a run recorded ``jurisdiction="PA", route_scope="legacy"``, and then, once
         # they agreed, it made them agree on *admitting* one — so a historical row,
-        # which is what ``legacy`` marks, offered a position with no reachable leg.
-        # Both the predicate and the decision now live in ``coverage``
-        # (``withhold_non_local`` / ``locality_applies``), so there is no condition
-        # here for the four surfaces to spell differently.
+        # which is what ``legacy`` marks, offered a position with no reachable leg
+        # and nothing saying so.  Both the predicate and the decision now live in
+        # ``coverage`` (``locality_marking`` / ``locality_applies``), so there is no
+        # condition here for the four surfaces to spell differently.
+        marking = locality_marking(
+            state, route_scope=(run["route_scope"] if run is not None else "") or ""
+        )
 
         def bundle(excluded: frozenset[str] | None) -> dict[str, Any]:
             report = find_opportunities(
@@ -1637,16 +1640,13 @@ def _arb_payload(
                     | excluded
                 ),
             )
-            opportunities, withheld = withhold_non_local(
-                report.opportunities,
-                state,
-                route_scope=(run["route_scope"] if run is not None else "") or "",
-            )
             rejected: dict[str, int] = {}
             for diagnostic in report.diagnostics:
                 rejected[diagnostic.code] = rejected.get(diagnostic.code, 0) + 1
             return {
-                "opportunities": [_opportunity_entry(opp) for opp in opportunities],
+                "opportunities": [
+                    _opportunity_entry(opp, marking) for opp in report.opportunities
+                ],
                 "diagnostics": [
                     {"code": code, "count": count}
                     for code, count in sorted(rejected.items(), key=lambda item: -item[1])
@@ -1658,8 +1658,10 @@ def _arb_payload(
                 # the whole point: a reader comparing this against ``arb`` on the
                 # same run must not find two position counts and no explanation.
                 # Shipped without being rendered for one round, which bought the
-                # empty board and none of the account of it.
-                "non_local_withheld": withheld,
+                # labels and none of the account of them.
+                "non_local_flagged": marking.count_without_local_leg(
+                    report.opportunities
+                ),
             }
 
         entry = bundle(US_UNAVAILABLE_SOURCE_KEYS)
@@ -1678,15 +1680,22 @@ def _blank_arb_bundle(total_stake: float) -> dict[str, Any]:
         "stake": total_stake,
         # Same keys as a real bundle: a consumer that reads this one must not have
         # to branch on which shape it got.
-        "non_local_withheld": 0,
+        "non_local_flagged": 0,
     }
     return {**empty, "with_offshore": dict(empty)}
 
 
-def _opportunity_entry(opportunity: Opportunity) -> dict[str, Any]:
-    """JSON shape for one takeable position on the dashboard."""
+def _opportunity_entry(
+    opportunity: Opportunity, marking: LocalityMarking
+) -> dict[str, Any]:
+    """JSON shape for one position on the dashboard, locality labels included.
+
+    The label text is composed here rather than in the JS so the phrase is the
+    same one ``arb``, ``lines`` and the SMS print — one vocabulary per fact.
+    """
     league = opportunity.legs[0].quote.league if opportunity.legs else ""
     return {
+        "no_local_leg": not marking.has_local_leg(opportunity),
         "event_key": opportunity.event_key,
         "sport": opportunity.sport.value,
         "league": league,
@@ -1715,6 +1724,9 @@ def _opportunity_entry(opportunity: Opportunity) -> dict[str, Any]:
         "legs": [
             {
                 "source": leg.source,
+                "non_local_label": (
+                    "" if marking.leg_is_local(leg.source) else marking.label()
+                ),
                 "selection": leg.selection.value,
                 "line": leg.quote.line,
                 "american_odds": leg.quote.american_odds,

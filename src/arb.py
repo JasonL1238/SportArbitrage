@@ -774,7 +774,7 @@ class Opportunity:
         """Oldest leg — the position is only as fresh as its stalest price."""
         return min(leg.quote.observed_at for leg in self.legs)
 
-    def describe(self) -> str:
+    def describe(self, *, leg_note: Callable[[str], str] | None = None) -> str:
         line = "" if self.line is None else f" @ {self.line:+g}"
         side = f" ({self.side.value})" if self.side else ""
         head = (
@@ -783,7 +783,13 @@ class Opportunity:
             f"margin {self.margin * 100:.2f}%, guaranteed "
             f"{self.guaranteed_profit:+.2f} on {self.total_stake:.0f}"
         )
-        rows = [f"    {leg.describe()}" for leg in self.legs]
+        # ``leg_note`` keeps jurisdiction vocabulary out of this module: the
+        # caller knows which state's marking applies, this class only knows how
+        # a position prints.
+        rows = [
+            f"    {leg.describe()}{leg_note(leg.source) if leg_note else ''}"
+            for leg in self.legs
+        ]
         rows += [
             "    outcomes: "
             + ", ".join(f"{label} {profit:+.2f}" for label, profit in self.outcome_profits)

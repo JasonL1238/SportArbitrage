@@ -17,6 +17,7 @@ import httpx
 
 from src import settings
 from src.arb import Opportunity
+from src.coverage import LocalityMarking
 from src.betlinks import Precision, bet_link
 from src.vocab import Market, Selection
 
@@ -130,17 +131,39 @@ def _selection_label(opportunity: Opportunity, leg) -> str:
     return sel.value
 
 
-def format_alert(opportunity: Opportunity) -> str:
-    """Compact SMS body with enough to place both legs by hand."""
+def format_alert(
+    opportunity: Opportunity, *, marking: LocalityMarking | None = None
+) -> str:
+    """Compact SMS body with enough to place both legs by hand.
+
+    With a governing *marking*, any leg unreachable from the run's state carries
+    the same ``[not reachable from ST]`` tag the CLI prints, and a disclaimer
+    line sits in the head — the head rather than the tail, because the body is
+    truncated from the end and a warning that can be cut off is not a warning.
+    """
     roi_pct = opportunity.roi * 100.0
     line = "" if opportunity.line is None else f" @ {opportunity.line:g}"
     side = f" ({opportunity.side.value})" if opportunity.side else ""
     kickoff = opportunity.commence_time.strftime("%Y-%m-%d %H:%M %Z").strip() or (
         opportunity.commence_time.strftime("%Y-%m-%d %H:%M UTC")
     )
+    disclaimer = ""
+    if marking is not None and marking.marking:
+        foreign = marking.non_local_sources(opportunity)
+        if foreign and not marking.has_local_leg(opportunity):
+            disclaimer = (
+                f"\nNO LEG reachable from {marking.state} — informational, "
+                f"not {marking.state} prices"
+            )
+        elif foreign:
+            disclaimer = (
+                f"\nNON-LOCAL: {', '.join(foreign)} not reachable from "
+                f"{marking.state} — not {marking.state} prices"
+            )
     head = (
         f"ARB {roi_pct:.1f}% | "
-        f"+${opportunity.guaranteed_profit:.2f} on ${opportunity.total_stake:.0f}\n"
+        f"+${opportunity.guaranteed_profit:.2f} on ${opportunity.total_stake:.0f}"
+        f"{disclaimer}\n"
         f"{opportunity.away_team} @ {opportunity.home_team}\n"
         f"{opportunity.sport.value} {opportunity.market.value}/"
         f"{opportunity.period.value}{side}{line}"
@@ -148,10 +171,15 @@ def format_alert(opportunity: Opportunity) -> str:
     legs = []
     for i, leg in enumerate(opportunity.legs, start=1):
         label = _selection_label(opportunity, leg)
+        tag = (
+            ""
+            if marking is None or marking.leg_is_local(leg.source)
+            else f" [{marking.label()}]"
+        )
         line = (
             f"{i}) {leg.source} {label} "
             f"{leg.quote.american_odds:+d} (${leg.decimal_odds:.3f}) "
-            f"stake ${leg.stake:.2f}"
+            f"stake ${leg.stake:.2f}{tag}"
         )
         # The link is the point of the text: a 3% edge is only takeable if both
         # slips are one tap away.  An event link goes bare; a league page says so,
@@ -170,13 +198,22 @@ def format_alert(opportunity: Opportunity) -> str:
     if opportunity.max_total_stake is not None:
         cap = f"\nMax stake ~${opportunity.max_total_stake:.0f}"
     notes = "".join(f"\nNote: {n}" for n in opportunity.notes[:2])
+    # The call to action must not contradict the disclaimer: a message whose
+    # head says "informational, not PA prices" cannot end by instructing the
+    # reader to place both legs now.
+    takeable = marking is None or marking.has_local_leg(opportunity)
+    action = (
+        "\nPLACE BOTH NOW — prices move"
+        if takeable
+        else f"\nINFO ONLY — not takeable from {marking.state}"
+    )
     body = (
         f"{head}\n"
         + "\n".join(legs)
         + f"\nKickoff {kickoff}"
         + cap
         + notes
-        + "\nPLACE BOTH NOW — prices move"
+        + action
     )
     if len(body) > _MAX_SMS_CHARS:
         body = body[: _MAX_SMS_CHARS - 1] + "…"
@@ -325,6 +362,7 @@ class AlertBook:
         opportunities: Sequence[Opportunity],
         *,
         min_roi: float | None = None,
+        marking: LocalityMarking | None = None,
     ) -> list[Opportunity]:
         """Text each new qualifying opportunity.  Returns those that were sent."""
         if not alert_ready():
@@ -338,13 +376,15 @@ class AlertBook:
             key = opportunity_alert_key(opportunity)
             if key in self.sent_keys:
                 continue
-            body = format_alert(opportunity)
+            body = format_alert(opportunity, marking=marking)
             # Claimed *before* the send, so a delivery that reports failure
             # cannot be retried into a second text.  ``collect_batch_once`` is
-            # why this matters rather than being theoretical: it runs a GLOBAL
-            # pass and then one pass per state over the *same cached* global
-            # payloads, so an arb between two global books is offered to this
-            # book once per pass with a byte-identical key.  Recording only on
+            # why this matters rather than being theoretical: its per-state
+            # passes re-analyze the *same cached* global payloads, so an arb
+            # between two global books is offered to this book once per state
+            # with a byte-identical key (the GLOBAL pass itself no longer
+            # alerts when state passes follow — its ungoverned marking would
+            # claim the key with an unlabelled body).  Recording only on
             # success meant an ambiguous first send left the key unclaimed and
             # the next pass sent it again.
             #
@@ -382,6 +422,9 @@ def notify_opportunities(
     *,
     min_roi: float | None = None,
     book: AlertBook | None = None,
+    marking: LocalityMarking | None = None,
 ) -> list[Opportunity]:
     """Entry point used by the collector and ``arb`` command."""
-    return (book or DEFAULT_BOOK).notify(opportunities, min_roi=min_roi)
+    return (book or DEFAULT_BOOK).notify(
+        opportunities, min_roi=min_roi, marking=marking
+    )

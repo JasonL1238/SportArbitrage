@@ -690,11 +690,12 @@ class TestThePipelineCanActuallySurfaceAnOpportunity:
     than a stale fixture.
 
     ``jurisdiction="GLOBAL"`` for the same reason: ``collect_once`` defaults to
-    :data:`settings.STATE` and ``withhold_non_local`` runs unconditionally, so
+    :data:`settings.STATE` and ``locality_marking`` runs unconditionally, so
     ``book_a``/``book_b`` — invented keys with no entry in the registry at
     all — read as unreachable from whatever state the fallback picked, and the
-    one opportunity these tests inject was silently withheld. These tests are
-    about the detector, not about any state's retail licensing.
+    one opportunity these tests inject was flagged (and, before the marking
+    replaced withholding, silently withheld). These tests are about the
+    detector, not about any state's retail licensing.
     """
 
     @pytest.fixture()

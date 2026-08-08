@@ -122,27 +122,31 @@ server exposes the same-origin endpoints used to log, edit, settle, and delete.
   distinctness module's shared-selection floor the comparison is undecided, which
   is not agreement, so the book is `AGREEMENT_UNPROVEN` at `WARNING` rather than
   ticked as cross-checked.
-- Whether a position is takeable from a state is one predicate,
-  `coverage.withhold_non_local`, used by the collector, `collector arb`, `collector
-  lines` and the dashboard alike — and *whether it applies to a given run* is one
-  more, `coverage.locality_applies`, for the same reason. It reads
-  `registry.takeable_from_state`: the state's retail licences **plus** the
-  nationwide first-party venues that hold no state sportsbook licence to begin
-  with. Not `state_licensed_keys` — building it on the licences alone called Kalshi
-  and Polymarket out-of-state in every jurisdiction and withheld a legal position
-  from the report, the dashboard and the SMS. Not the keys a run happened to build,
-  and not the jurisdiction's whole route table, which still lists books the
-  operator holds no licence for. Say "reachable", not "licensed", on every surface
-  that reports it. The count withheld is reported everywhere it is applied; a
-  silently shorter list reads as a quiet market and disagrees with every other
-  surface describing the same run.
+- Whether a leg is takeable from a state is one classifier,
+  `coverage.locality_marking`, used by the collector, `collector arb`, `collector
+  lines`, the dashboard and the SMS alike — and *whether it applies to a given
+  run* is one more, `coverage.locality_applies`, for the same reason. Positions
+  are shown, never withheld: a leg the operator cannot reach is labelled "not
+  reachable from {ST}" on every surface, and a position with no reachable leg at
+  all is additionally marked informational — somewhere else's prices, not the
+  state's. The classifier reads `registry.takeable_from_state`: the state's
+  retail licences **plus** the nationwide first-party venues that hold no state
+  sportsbook licence to begin with. Not `state_licensed_keys` — building it on
+  the licences alone called Kalshi and Polymarket out-of-state in every
+  jurisdiction and withheld a legal position from the report, the dashboard and
+  the SMS. Not the keys a run happened to build, and not the jurisdiction's whole
+  route table, which still lists books the operator holds no licence for. Say
+  "reachable", not "licensed", on every surface that reports it. The count of
+  positions with no local leg is reported everywhere the marking is applied;
+  labels alone do not tell a reader skimming for a count how much of the board is
+  wholly foreign.
 - Only a scope the operator widened on purpose (`global`, `all`) is exempt.
   `legacy` — what the store backfills onto rows predating the `route_scope` column
   — is governed, because whether a leg is reachable from a state is a fact about
   the book and the state, not about what the run claimed to collect. The deny-list
-  direction is deliberate: an unrecognised scope gets the filter, so the cost of
-  being wrong is a withheld position with its count printed rather than an SMS
-  naming a book nobody can reach.
+  direction is deliberate: an unrecognised scope gets the marking, so the cost of
+  being wrong is a labelled position with its count reported rather than an
+  unlabelled SMS naming a book nobody can reach.
 - Promotions may reuse settings, raw storage, and transport guards, but its schema, registry, and database remain separate.
 - The bet ledger has a separate schema and lifecycle from both collected odds and promotions; collection never writes or deletes it.
 - The report layer may read and combine all three domains. Only its localhost control plane writes the bet ledger; collection/domain modules must not depend on report rendering.

@@ -20,26 +20,32 @@ from src.schema import Market, Period, Selection, Sport
 from tests.conftest import make_quote
 
 
-def _opportunity(*, roi_prices=(2.2, 2.2), stake=100.0) -> Opportunity:
+def _opportunity(
+    *,
+    roi_prices=(2.2, 2.2),
+    stake=100.0,
+    sources=("fanduel", "pinnacle"),
+    teams=("Miami Marlins", "Philadelphia Phillies"),
+) -> Opportunity:
     """Synthetic two-way MLB moneyline sized so arithmetic is obvious.
 
     Equal prices of 2.2 → sum implied 1/2.2 * 2 ≈ 0.909 → ROI ≈ 10%.
     """
     home = make_quote(
-        source="fanduel",
+        source=sources[0],
         selection=Selection.HOME,
         decimal_odds=roi_prices[0],
-        home_team="Miami Marlins",
-        away_team="Philadelphia Phillies",
+        home_team=teams[0],
+        away_team=teams[1],
     )
     away = make_quote(
-        source="pinnacle",
+        source=sources[1],
         selection=Selection.AWAY,
         decimal_odds=roi_prices[1],
         source_event_id="evt-2",
         source_market_id="mkt-2",
-        home_team="Miami Marlins",
-        away_team="Philadelphia Phillies",
+        home_team=teams[0],
+        away_team=teams[1],
     )
     stakes = [stake / 2, stake / 2]
     legs = (
@@ -51,8 +57,8 @@ def _opportunity(*, roi_prices=(2.2, 2.2), stake=100.0) -> Opportunity:
     return Opportunity(
         event_key=home.event_key,
         sport=Sport.BASEBALL,
-        home_team="Miami Marlins",
-        away_team="Philadelphia Phillies",
+        home_team=teams[0],
+        away_team=teams[1],
         commence_time=datetime(2026, 7, 28, 22, 41, tzinfo=UTC),
         market=Market.MONEYLINE,
         period=Period.FULL_GAME,
@@ -113,6 +119,95 @@ class TestFormat:
         assert "Miami Marlins" in text
         assert "PLACE BOTH NOW" in text
         assert "moneyline" in text
+
+
+class TestLocalityDisclaimer:
+    """A text naming a book the reader cannot reach must say so itself.
+
+    The dashboard and the CLI carry per-leg labels; the SMS is the surface with
+    no second look, so the disclaimer rides in the message — and in the *head*,
+    because the body truncates from the end and a warning that can be cut off
+    is not a warning.
+    """
+
+    def _pa_marking(self):
+        from src.coverage import locality_marking
+
+        return locality_marking("PA", route_scope="state")
+
+    def test_a_mixed_position_names_its_foreign_leg(self) -> None:
+        text = format_alert(_opportunity(), marking=self._pa_marking())
+        assert "NON-LOCAL: pinnacle not reachable from PA — not PA prices" in text
+        legs = [line for line in text.splitlines() if line.startswith(("1)", "2)"))]
+        fanduel_line = next(line for line in legs if "fanduel" in line)
+        pinnacle_line = next(line for line in legs if "pinnacle" in line)
+        assert "[not reachable from PA]" in pinnacle_line
+        assert "not reachable" not in fanduel_line
+
+    def test_a_wholly_foreign_position_says_no_leg(self) -> None:
+        text = format_alert(
+            _opportunity(sources=("pinnacle", "bovada")), marking=self._pa_marking()
+        )
+        assert "NO LEG reachable from PA — informational, not PA prices" in text
+        assert "NON-LOCAL:" not in text
+        assert text.count("[not reachable from PA]") == 2
+        # The call to action must not contradict the head: a message that says
+        # "informational" cannot end by instructing the reader to place legs.
+        assert "PLACE BOTH NOW" not in text
+        assert "INFO ONLY — not takeable from PA" in text
+
+    def test_a_mixed_position_keeps_the_call_to_action(self) -> None:
+        """One reachable leg is a takeable position; the tag does the warning."""
+        text = format_alert(_opportunity(), marking=self._pa_marking())
+        assert "PLACE BOTH NOW" in text
+        assert "INFO ONLY" not in text
+
+    def test_a_fully_local_position_carries_no_disclaimer(self) -> None:
+        """A governed marking must stay silent when there is nothing to mark.
+
+        Every other test in this class has at least one foreign leg, so without
+        this one the disclaimer branch could fire unconditionally — an empty
+        "NON-LOCAL:" line on every clean PA text — and stay green.
+        """
+        text = format_alert(
+            _opportunity(sources=("fanduel", "draftkings")),
+            marking=self._pa_marking(),
+        )
+        assert "NON-LOCAL" not in text
+        assert "NO LEG" not in text
+        assert "not reachable" not in text
+        assert "PLACE BOTH NOW" in text
+
+    def test_the_marking_normalizes_its_state_itself(self) -> None:
+        """A lowercase or padded jurisdiction string must not defeat the rule."""
+        from src.coverage import locality_marking
+
+        marking = locality_marking(" pa ", route_scope="state")
+        assert marking.marking
+        assert marking.label() == "not reachable from PA"
+        assert not marking.leg_is_local("pinnacle")
+        assert marking.leg_is_local("fanduel")
+
+    def test_no_marking_and_an_ungoverned_marking_change_nothing(self) -> None:
+        from src.coverage import locality_marking
+
+        bare = format_alert(_opportunity())
+        assert format_alert(_opportunity(), marking=None) == bare
+        widened = locality_marking("PA", route_scope="global")
+        assert format_alert(_opportunity(), marking=widened) == bare
+        assert "not reachable" not in bare
+
+    def test_truncation_cannot_cut_the_disclaimer(self) -> None:
+        from src.alerts import _MAX_SMS_CHARS
+
+        long = "Somerset Patriots of Greater Bridgewater Township " * 20
+        text = format_alert(
+            _opportunity(sources=("pinnacle", "bovada"), teams=(long, long)),
+            marking=self._pa_marking(),
+        )
+        assert len(text) <= _MAX_SMS_CHARS
+        assert text.endswith("…")
+        assert "NO LEG reachable from PA — informational, not PA prices" in text
 
 
 class TestDedupeAndSend:
@@ -422,6 +517,56 @@ class TestOneArbIsOneText:
         book.notify([opp])
         book.notify([opp])
         assert len(calls) == 1
+
+    def test_the_batch_lets_the_state_pass_send_the_text(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        """The one text a batch sends must be the labelled one.
+
+        The dedupe above and the locality disclaimer compose badly: the GLOBAL
+        pass sees a cross-global arb minutes before the state passes do, its
+        marking is ungoverned by design, and the alert key holds no
+        jurisdiction — so letting it text first sends the bare body and the
+        state pass's disclaimed text is then swallowed as a duplicate.  The
+        batch therefore alerts from the state passes, and from the GLOBAL pass
+        only when there is no state pass at all.
+        """
+        from src import collector
+        from src.raw_store import RawStore
+
+        alerts_seen: list[tuple[str, bool]] = []
+
+        class _Result:
+            ok = True
+            quotes: list = []
+
+        def collect(sources, **kwargs):
+            alerts_seen.append((kwargs["jurisdiction"], kwargs["alert"]))
+            return _Result()
+
+        def build(keys=None, *, state=None, route_scope="all", **kwargs):
+            class _Fake:
+                def __init__(self, key): self.source_key = key; self.leagues = ("MLB",)
+                def close(self): pass
+            return [_Fake("pinnacle" if route_scope == "global" else f"retail-{state}")]
+
+        monkeypatch.setattr(collector, "build_sources", build)
+        monkeypatch.setattr(collector, "collect_once", collect)
+        collector.collect_batch_once(
+            ("IL", "PA"), detected_state="IL",
+            raw_store=RawStore(tmp_path / "raw"), store=None,
+        )
+        assert alerts_seen == [("GLOBAL", False), ("IL", True), ("PA", True)]
+
+        alerts_seen.clear()
+        collector.collect_batch_once(
+            (), detected_state="IL",
+            raw_store=RawStore(tmp_path / "raw"), store=None,
+        )
+        assert alerts_seen == [("GLOBAL", True)], (
+            "with no state pass the GLOBAL pass is the only alerting surface "
+            "left, and silencing it too would drop the alert entirely"
+        )
 
     def test_the_applescript_sends_exactly_once(self) -> None:
         """Structural pin: the retry loop that double-delivered cannot return.
