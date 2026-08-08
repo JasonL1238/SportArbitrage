@@ -30,7 +30,7 @@ from src.events import reconcile_event_keys
 from src.raw_store import RawStore
 from src.schema import Market, Selection
 from src.sources.betrivers_kambi import BetRiversKambiAdapter
-from tests.conftest import FIXTURE_RAW_DIR, make_quote
+from tests.conftest import FIXTURE_DATE, FIXTURE_RAW_DIR, make_quote
 
 MIRROR_DIR = Path(__file__).parent / "fixtures" / "mirrors"
 
@@ -193,3 +193,75 @@ def test_every_registered_source_is_compared_against_every_other(tenant_quotes) 
     pairs = compare_all(tenant_quotes)
     assert len(pairs) == 3  # three tenants -> three unordered pairs
     assert len({tuple(sorted((p.source_a, p.source_b))) for p in pairs}) == 3
+
+
+class TestFrontEndsOfARegisteredBook:
+    """Venues that resell an order book already collected here.
+
+    Named as Pennsylvania sources to acquire, and rejected — not because they are
+    unreachable, but because each one is a second window onto a book this
+    repository already has.  Two windows are not two counterparties.
+
+    The exclusion is pinned by name rather than measured, because **the
+    measurement points the wrong way**.  ``compare_sources`` tests exact
+    ``decimal_odds`` equality, so a front-end that adds its own fee to the
+    displayed price makes every price differ: agreement 0%, verdict
+    ``DISTINCT``, ``blocks_registration`` False.  The gate that exists to catch
+    mirrors would wave these through with its strongest possible endorsement.
+    """
+
+    #: Each candidate with the registered source it fronts.
+    FRONT_ENDS = {
+        "robinhood": "kalshi",
+        "coinbase_predictions": "kalshi",
+        "playsugarhouse": "betrivers_kambi",
+    }
+
+    def test_none_of_them_is_registered(self) -> None:
+        from src.sources import registry
+
+        keys = set(registry.keys())
+        for candidate, fronts in sorted(self.FRONT_ENDS.items()):
+            assert candidate not in keys, (
+                f"{candidate} resells {fronts}'s order book; registering it lets "
+                "the engine report an arbitrage between two front-ends of one book"
+            )
+            assert fronts in keys, (
+                f"{fronts} is the book {candidate} is excluded in favour of; if it "
+                "ever leaves the registry this exclusion needs revisiting, not "
+                "silently outliving its reason"
+            )
+
+    def test_a_marked_up_front_end_would_pass_the_mirror_gate(self) -> None:
+        """The reason this class exists, stated in executable form.
+
+        Same book underneath, two cents per contract on top.  Every price
+        differs, so the gate reports two distinct venues.
+        """
+        underlying = {Selection.HOME: 1.90, Selection.AWAY: 2.10}
+
+        def slate(source: str, markup: float) -> list:
+            # A distinct event per row: the comparison keys on the event, so one
+            # fixture repeated would collapse to two shared selections and the
+            # verdict would be UNDECIDED for the wrong reason.
+            return [
+                make_quote(
+                    source=source,
+                    selection=selection,
+                    decimal_odds=round(odds - markup, 2),
+                    event_key=f"MLB-PHI@MLB-MIA-{index}:{FIXTURE_DATE}",
+                    source_event_id=f"evt-{index}",
+                    source_market_id=f"m{index}",
+                )
+                for index in range(MIN_SHARED_SELECTIONS)
+                for selection, odds in underlying.items()
+            ]
+
+        book = slate("kalshi", 0.0)
+        resold = slate("a_front_end", 0.02)
+
+        measured = compare_sources([*book, *resold], "kalshi", "a_front_end")
+        assert measured.compared >= MIN_SHARED_SELECTIONS
+        assert measured.rate == 0.0
+        assert measured.verdict is Verdict.DISTINCT
+        assert not measured.verdict.blocks_registration

@@ -19,14 +19,38 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 MAX_BODY_CHARS = 2_000_000
 _REDACTED = "[redacted]"
+#: Field names whose value never reaches a manifest.
+#:
+#: ``access_key``, ``secret_key`` and ``client_id`` are here because the suffix
+#: rules below miss them by one character: ``"secret_key".endswith("_secret")``
+#: is ``False``, and ``access_key`` matches neither ``_api_key`` nor
+#: ``_access_token``.  Those three are the exact field names the credentialed
+#: exchanges use — ProphetX issues an ``access_key`` / ``secret_key`` pair,
+#: OAuth venues a ``client_id`` / ``client_secret`` one — so a recon session
+#: against them would have written live keys to ``data/research/`` in cleartext.
+#: Add the literal name whenever a venue coins one; a near-miss on a suffix rule
+#: fails open, and failing open here means a secret on disk.
 _SENSITIVE_KEYS = frozenset(
     {
+        "access_key",
         "access_token",
         "atsgeotoken",
         "api_key",
         "apikey",
         "auth",
         "authorization",
+        "api_secret",
+        "bearer",
+        "consumer_key",
+        "hmac",
+        "jsessionid",
+        "jwt",
+        "phpsessid",
+        "set_cookie",
+        "sid",
+        "signature",
+        "client_id",
+        "client_secret",
         "cookie",
         "credential",
         "deviceid",
@@ -34,19 +58,51 @@ _SENSITIVE_KEYS = frozenset(
         "ip",
         "license_key",
         "password",
+        "private_key",
         "proxy",
         "refresh_token",
+        "secret",
+        "secret_key",
         "session",
         "session_id",
         "sessionid",
         "sessiontoken",
+        "session_key",
         "sf_token",
+        "signing_key",
         "sst",
+        "subscription_key",
         "token",
         "trader_session_token",
         "uid",
     }
 )
+#: Every sensitive name with its separators removed, so ``secret_key``,
+#: ``secretKey``, ``SECRET-KEY`` and ``secretkey`` are one rule rather than four.
+#:
+#: A four-character floor, because ``_h`` squashes to ``h`` and ``h`` is how
+#: compact odds JSON spells *home* — deriving this set without one redacted every
+#: ``h`` in ten captured payloads.
+_MIN_SQUASHED = 4
+_SQUASHED_SENSITIVE_KEYS = frozenset(
+    squashed
+    for squashed in (key.replace("_", "") for key in _SENSITIVE_KEYS)
+    if len(squashed) >= _MIN_SQUASHED
+)
+
+#: Separators a field name can wear, for splitting one into words.
+_KEY_SEPARATORS = re.compile(r"[^A-Za-z0-9]+|(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
+
+
+def _key_words(key: str) -> list[str]:
+    """Split a field name into words, whatever convention it is written in.
+
+    ``secret_key``, ``secretKey``, ``SECRET-KEY`` and ``X-Session-Id`` all reduce
+    to the same word list, which is what lets one rule cover every spelling.
+    """
+    return [word.casefold() for word in _KEY_SEPARATORS.split(key) if word]
+
+
 _SAFE_REQUEST_HEADERS = frozenset(
     {
         "accept",
@@ -59,24 +115,74 @@ _SAFE_REQUEST_HEADERS = frozenset(
     }
 )
 _SECRET_TEXT = re.compile(
-    r'(?i)("?(?:_h|access_token|api_key|apikey|atsgeotoken|authorization|cookie|'
-    r'deviceid|password|refresh_token|session_id|sessionid|sessiontoken|sst|token|'
+    r'(?i)("?(?:_h|access_key|access_token|api_key|apikey|atsgeotoken|'
+    r'authorization|client_id|client_secret|cookie|deviceid|password|private_key|'
+    # Longest alternative first, for readability rather than correctness: the
+    # engine backtracks when the following ``\s*[:=]`` fails, so ``secret`` before
+    # ``secret_key`` produces identical output.  Ordering them anyway keeps the
+    # next reader from having to work that out.
+    r'refresh_token|secret_key|secret|session_id|sessionid|sessiontoken|sst|token|'
     r'uid)"?\s*[:=]\s*)' r'("[^"\r\n]*"|[^&\s,}]+)'
 )
-_SECRET_QUERY_TEXT = re.compile(r"(?i)([?&](?:_h|token|uid)=)[^&\"'\s]+")
+_SECRET_QUERY_TEXT = re.compile(
+    r"(?i)([?&](?:_h|access_key|api_key|apikey|client_id|client_secret|"
+    r"secret_key|token|uid)=)[^&\"'\s]+"
+)
 _FRAME_TOPIC_TOKEN = re.compile(r"(?<![A-Za-z0-9])(?:A_|S_)[A-Za-z0-9+/=_-]{16,}")
 _LONG_BASE64 = re.compile(r"(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{96,}={0,2}")
+
+#: A bearer credential and the token after it, as a *scheme plus value* pair.
+#:
+#: ``_SECRET_TEXT`` cannot reach this one: its value group stops at whitespace, so
+#: on ``Authorization: Bearer eyJ…`` it matches the word ``Bearer`` and leaves the
+#: token — redacting the scheme and stamping ``[redacted]`` beside the secret,
+#: which reads as sanitized and is worse than leaving it plainly alone.
+_BEARER_TOKEN = re.compile(r"(?i)\b((?:bearer|basic|token)\s+)[A-Za-z0-9._~+/=-]{8,}")
+
+#: A JSON Web Token in any of its three encodings.
+#:
+#: ``_LONG_BASE64`` misses every real one: it requires 96 unbroken characters of
+#: standard base64, and a JWT is three shorter segments joined by dots — in
+#: base64**url**, where ``-`` and ``_`` replace ``+`` and ``/`` and break the run.
+_JWT = re.compile(r"\beyJ[A-Za-z0-9._~+/=-]{16,}")
 _IPV4 = re.compile(r"(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?![\w.])")
 
 
 def _is_sensitive_key(key: str) -> bool:
+    """Would this field's value be a credential?
+
+    The name is split into words first, so one rule covers every convention:
+    ``secret_key``, ``secretKey``, ``SECRET-KEY`` and ``X-Session-Id`` all reduce
+    to the same word list.  A name is sensitive when its **trailing words** spell
+    a sensitive name — which catches a venue-prefixed field, since a client that
+    stores ProphetX's ``access_key`` as ``prophetx_secret_key`` must not fail
+    open.
+
+    **The word split is what keeps this from eating ordinary vocabulary, and it
+    was learned the hard way.**  Matching the squashed name's *characters* rather
+    than its words made every field ending in the letters of a sensitive name
+    sensitive: ``possession`` ends in ``session`` and was redacted in 576 places
+    across the captured Action Network and Pinnacle boards, and a Pinnacle
+    participant key for a player named Schrauth ends in ``auth``.  A word
+    boundary is the difference between a namespace and a coincidence.
+
+    Two things deliberately not covered.  A sensitive name used as a *prefix* —
+    ``secret_key_prophetx`` — passes, because a leading-word rule would swallow
+    ``token_count`` and friends.  And there is no bare ``key`` or ``id`` word:
+    ``source_key``, ``book_key``, ``market_key`` and ``event_id`` are this
+    repository's own vocabulary.  Add the literal when a venue coins a name; both
+    sides of the boundary are pinned in ``tests/test_source_research.py``.
+    """
     normalized = key.casefold().replace("-", "_")
-    return (
-        normalized in _SENSITIVE_KEYS
-        or normalized.endswith(("_api_key", "_access_token", "_license_key"))
-        or normalized.endswith(("_password", "_secret", "_token"))
-        or normalized.startswith(("authorization_", "credential_"))
-    )
+    if normalized in _SENSITIVE_KEYS:
+        return True
+    words = _key_words(key)
+    # Every trailing run of words, longest first: ``x_session_id`` offers
+    # ``sessionid`` and ``id``, and only the first is a credential.
+    for start in range(len(words)):
+        if "".join(words[start:]) in _SQUASHED_SENSITIVE_KEYS:
+            return True
+    return normalized.startswith(("authorization", "authorisation", "credential"))
 
 
 @dataclass(frozen=True)
@@ -214,8 +320,34 @@ def _sanitize_json(value: Any) -> Any:
     if isinstance(value, list):
         return [_sanitize_json(child) for child in value]
     if isinstance(value, str):
-        return _IPV4.sub(_REDACTED, value)
+        # The shape-based rules, applied to the string *value* rather than to the
+        # serialized document.  They must run here and not over the finished JSON:
+        # ``_SECRET_TEXT`` matches up to a delimiter and is not quote-aware, so run
+        # over ``{"wsUrl":"…?token=X","book_id":74}`` it eats the closing quote and
+        # leaves a manifest that no longer parses.  Inside one value the boundaries
+        # are the value's own.
+        #
+        # Without this the structured path was strictly weaker than the free-text
+        # one: a secret reachable by shape rather than by key — a JWT under
+        # ``"jwt"``, a socket URL carrying ``?token=…`` under ``"wsUrl"`` —
+        # survived parsing and would not have survived being unparseable.
+        return _redact_value(value)
     return value
+
+
+def _redact_value(text: str) -> str:
+    """Shape-based redaction of one JSON string value.
+
+    Bearer and JWT run **before** the delimiter-terminated rules, which would
+    otherwise consume the scheme word and leave the token beside a ``[redacted]``
+    that makes the line look handled.
+    """
+    redacted = _IPV4.sub(_REDACTED, text)
+    redacted = _BEARER_TOKEN.sub(rf"\1{_REDACTED}", redacted)
+    redacted = _JWT.sub(_REDACTED, redacted)
+    redacted = _SECRET_QUERY_TEXT.sub(rf"\1{_REDACTED}", redacted)
+    redacted = _SECRET_TEXT.sub(rf"\1{_REDACTED}", redacted)
+    return _LONG_BASE64.sub(_REDACTED, redacted)
 
 
 def sanitize_body(body: str | None) -> str | None:
@@ -234,9 +366,10 @@ def sanitize_body(body: str | None) -> str | None:
                     for key, value in pairs
                 ]
             )
-        redacted = _SECRET_TEXT.sub(rf"\1{_REDACTED}", limited)
-        redacted = _IPV4.sub(_REDACTED, redacted)
-        return _SECRET_QUERY_TEXT.sub(rf"\1{_REDACTED}", redacted)
+        # One redactor for free text and for JSON string values, so the two paths
+        # cannot drift apart again — the structured one was weaker for a while,
+        # and the structured one is what every venue answers with.
+        return _redact_value(limited)
     return json.dumps(_sanitize_json(payload), separators=(",", ":"), ensure_ascii=False)
 
 

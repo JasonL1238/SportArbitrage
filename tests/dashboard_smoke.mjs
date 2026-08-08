@@ -2039,6 +2039,144 @@ if (process.argv[3]) {
   if (problems.length) process.exit(1);
 }
 
+// ── THE BOOK PANEL'S EMPTY TABLE NAMES THE FILTER THAT EMPTIED IT ────────────
+//
+// `currentRows` applies two filters, and the empty state has to say which one
+// left the table blank — "this book stored no prices" beside a tile reading
+// "prices published 33" is a contradiction the reader cannot resolve.
+//
+// Driven through the renderer rather than pinned as a substring: a reversed
+// predicate reads identically in the source and produces the opposite sentence.
+// Placed here, where the book panel's regions are known live.
+{
+  const problems = [];
+  const sportNode = nodes.get('sport-pick');
+  const bySport = globalThis.__booksBySport();
+  // `table()` replaces the region node with an `.empty` box carrying the same
+  // id when there are no rows, so the node captured at load time goes stale
+  // exactly in the case this check is about. Re-resolve by id, and read
+  // textContent — the empty box is text, not markup.
+  const mix = () => {
+    const node = (typeof document.getElementById === 'function'
+      && document.getElementById('book-mix')) || nodes.get('book-mix');
+    return (node && (node.textContent || node.innerHTML)) || '';
+  };
+
+  // A book that prices one sport and not another is the only shape that can
+  // tell "the sport filter hid them" from "there were none".
+  const sports = Object.keys(bySport);
+  const candidates = [];
+  for (const sport of sports) {
+    const here = new Set(bySport[sport].books);
+    for (const other of sports) {
+      if (other === sport) continue;
+      for (const book of bySport[other].books) {
+        if (!here.has(book)) candidates.push({ key: book, absentFrom: sport });
+      }
+    }
+  }
+  // Prefer a book you can't bet from the US: for that one the sport branch and
+  // the offshore branch are both live, so the check can tell them apart. With a
+  // purely domestic book only one branch can fire and a predicate keyed on the
+  // wrong row set — `health.quote_count` is all-sports — passes unnoticed.
+  const pick = candidates.find((c) => globalThis.__isUsUnavailable(c.key))
+    || candidates[0] || null;
+  if (pick && !globalThis.__isUsUnavailable(pick.key)) {
+    console.log('  (offshore-vs-sport branch not separated; no unbettable book on this page misses a sport)');
+  }
+
+  if (!sportNode || !pick) {
+    console.log('  (book empty-state check skipped; every book prices every sport here)');
+  } else {
+    sportNode.value = pick.absentFrom;
+    sportNode.dispatch('change');
+    globalThis.__renderBook(pick.key);
+    const filtered = mix();
+    if (!filtered) {
+      problems.push(`the book panel rendered nothing for ${pick.key}; this check would be vacuous`);
+    } else {
+      if (filtered.includes('stored no prices in this collection')) {
+        problems.push(`${pick.key} prices other sports, but filtered to ${pick.absentFrom} the panel says it stored no prices`);
+      }
+      if (!filtered.includes('none of them')) {
+        problems.push(`filtered to ${pick.absentFrom}, ${pick.key}'s empty table does not name the sport filter: ${filtered.slice(0, 140)}`);
+      }
+    }
+    // The remedy the sentence offers has to be the one that works.
+    sportNode.value = '';
+    sportNode.dispatch('change');
+    globalThis.__renderBook(pick.key);
+    if (mix().includes('none of them')) {
+      problems.push(`${pick.key} still blames the sport filter after it was cleared`);
+    }
+
+    // Now make the two branches compete. When a book is BOTH unbettable and
+    // absent from the chosen sport, the sport is the cause and the offshore
+    // switch is not the remedy — a predicate keyed on the all-sports
+    // `health.quote_count` instead of the rows actually filtered gets this
+    // backwards and offers a switch that reveals nothing.
+    const entry = (globalThis.__DATA.sources || []).find((s) => s.key === pick.key);
+    if (!entry) {
+      console.log('  (offshore-vs-sport separation skipped; no catalog entry to flag)');
+    } else {
+      const was = entry.us_unavailable;
+      entry.us_unavailable = true;
+      sportNode.value = pick.absentFrom;
+      sportNode.dispatch('change');
+      globalThis.__renderBook(pick.key);
+      const both = mix();
+      if (both.includes("can't bet at it from the US")) {
+        problems.push(`${pick.key} is absent from ${pick.absentFrom} entirely, but the panel blames the offshore switch — turning it on would reveal nothing`);
+      }
+      if (!both.includes('none of them')) {
+        problems.push(`${pick.key} unbettable and absent from ${pick.absentFrom}: the panel names neither cause (${both.slice(0, 120)})`);
+      }
+      entry.us_unavailable = was;
+      sportNode.value = '';
+      sportNode.dispatch('change');
+    }
+  }
+
+  // And the branch must fire when it *should*. Everything above tests it staying
+  // quiet; with only that, inverting its polarity or deleting it outright leaves
+  // the suite green and puts "This book stored no prices" back under a tile
+  // reading "prices published 22".
+  {
+    // `bySport` was computed with the switch off, and `runRows` drops exactly
+    // these books when it is — so an unbettable book can never appear in it, and
+    // looking for one there is how this check first reported "not exercised"
+    // while two mutations walked past it. Ask again with the switch on.
+    globalThis.__setShowOffshore(true);
+    const withOffshore = globalThis.__booksBySport();
+    globalThis.__setShowOffshore(false);
+    const priced = new Set(Object.values(withOffshore).flatMap((v) => v.books));
+    const offshore = (globalThis.__DATA.sources || [])
+      .find((s) => s.us_unavailable && priced.has(s.key));
+    if (!offshore) {
+      console.log('  (offshore-hidden branch not exercised; no unbettable book priced anything here)');
+    } else {
+      globalThis.__setShowOffshore(false);
+      globalThis.__renderBook(offshore.key);
+      const hidden = mix();
+      if (!hidden.includes("can't bet at it from the US")) {
+        problems.push(`${offshore.key} is unbettable and priced markets in this run, but its empty table does not say the switch hid them: ${hidden.slice(0, 140)}`);
+      }
+      // The remedy has to work: with the switch on, the rows come back.
+      globalThis.__setShowOffshore(true);
+      globalThis.__renderBook(offshore.key);
+      if (mix().includes("can't bet at it from the US")) {
+        problems.push(`${offshore.key} still blames the offshore switch after it was turned on`);
+      }
+      globalThis.__setShowOffshore(false);
+    }
+  }
+  if (problems.length) {
+    console.error('BOOK EMPTY STATE BLAMES THE WRONG FILTER:', problems.join('; '));
+    process.exit(1);
+  }
+  console.log('the book panel names the filter that emptied its table');
+}
+
 // Overview source cards must use the same distinct-count / truncation rules as
 // the drill-down. Counting ``scopes_refused.length`` printed "refused 2 of 1",
 // and a cap-only source stayed green as "responded normally".
@@ -3427,4 +3565,54 @@ function onAnEmbeddedRun() {   // a declaration, so block order cannot matter
     console.log(`locality labels render (${labelled.length} labelled, ${flagged.length} wholly foreign)`);
   }
   globalThis.__setShowOffshore(false);
+}
+
+// ── THE ARB PANEL DOES NOT CALL A BOARD CLEAN THAT NOBODY MEASURED ───────────
+//
+// "That is a clean board" is a claim about prices. It needs something to have
+// been compared, and under a sport filter the count it quotes is the whole
+// scrape's — so it cannot speak for the sport on screen either.
+{
+  const problems = [];
+  const sportNode = nodes.get('sport-pick');
+  const arbList = () => (nodes.get('arb-list')?.innerHTML) || '';
+  const arbNote = () => (nodes.get('arb-note')?.textContent) || '';
+  const bag = globalThis.__arbBundle ? globalThis.__arbBundle() : null;
+
+  if (!bag || (bag.opportunities || []).length) {
+    console.log('  (arb empty-state check skipped; this page has positions)');
+  } else {
+    const checked = bag.comparable_group_count || 0;
+    globalThis.__visitPanel('arb');
+    if (checked === 0) {
+      if (arbList().includes('clean board')) {
+        problems.push('nothing was compared, yet the panel calls the board clean');
+      }
+      if (arbNote().includes('no edge today')) {
+        problems.push('nothing was compared, yet the eyebrow reports no edge today');
+      }
+      console.log('  (arb sport-filter branch not exercised; nothing was comparable on this page)');
+    } else if (sportNode) {
+      const sports = Object.keys(globalThis.__booksBySport());
+      if (sports.length) {
+        sportNode.value = sports[0];
+        sportNode.dispatch('change');
+        globalThis.__visitPanel('arb');
+        if (arbList().includes('clean board')) {
+          problems.push(`filtered to ${sports[0]}, the panel calls that sport's board clean off the whole scrape's count`);
+        }
+        sportNode.value = '';
+        sportNode.dispatch('change');
+        globalThis.__visitPanel('arb');
+        if (!arbList().includes('clean board')) {
+          problems.push('unfiltered, the panel no longer states the clean-board case at all');
+        }
+      }
+    }
+  }
+  if (problems.length) {
+    console.error('ARB EMPTY STATE OVERCLAIMS:', problems.join('; '));
+    process.exit(1);
+  }
+  console.log('the arb panel only calls a board clean when one was measured');
 }

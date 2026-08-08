@@ -2732,7 +2732,7 @@ function renderChrome() {
     // Loud on purpose. The default view is the one whose prices can all be
     // acted on, so the exception is what needs saying on every panel.
     showOffshore
-      ? `<span class="pill warn" title="Pinnacle, Bovada, Cloudbet, 1xBet, LeoVegas and the offshore exchanges are included. Some positions shown cannot be placed from the US."><i></i>including books you can't bet</span>`
+      ? `<span class="pill warn" title="Pinnacle, Bovada, Cloudbet, 1xBet, LeoVegas, the offshore exchanges and the offshore Polymarket are included. Some positions shown cannot be placed from the US."><i></i>including books you can't bet</span>`
       : '',
     `<span class="pill flat">${runs.length} scrape${runs.length === 1 ? '' : 's'} saved</span>`,
     ...(DATA.meta.jurisdiction_warnings || []).map((warning) =>
@@ -3742,7 +3742,14 @@ function renderArb() {
       ? `stakes sized to $${Number(bag.stake || 100).toFixed(0)} total · sport filter applies`
       : (opps.length
         ? "nothing takeable from this jurisdiction — the positions below are somewhere else's prices"
-        : 'same detector as collector arb — empty usually means no edge today');
+        // "no edge today" is a claim about prices and needs something to have
+        // been priced. With nothing compared it says the market was tight when
+        // the truth is that nothing was measured — but the count alone does not
+        // say *why* not, so this reports the fact and leaves the cause to the
+        // reasons listed below.
+        : ((bag.comparable_group_count || 0) === 0
+          ? 'nothing was compared in this scrape — not evidence about prices either way'
+          : 'same detector as collector arb — empty usually means no edge today'));
     note.textContent = delta ? `${base} · ${delta}` : base;
   }
 
@@ -3766,11 +3773,13 @@ function renderArb() {
   // in the payload and rendered nowhere is the gap this note exists to close.
   //
   // "Reachable", not "licensed", and the difference is not pedantry: the marking is
-  // `registry.takeable_from_state`, which admits Kalshi and Polymarket — federally
-  // regulated venues no state licenses as sportsbooks — so a Kalshi/Polymarket
-  // position is unlabelled. Under the word "license" this note invited the reader to
-  // conclude their prediction-market edge had been flagged for licensing, which is
-  // both false and the exact inversion an earlier round of this rule shipped.
+  // `registry.takeable_from_state`, which admits Kalshi — a federally regulated
+  // venue no state licenses as a sportsbook — so a Kalshi position is unlabelled.
+  // Under the word "license" this note invited the reader to conclude their
+  // prediction-market edge had been flagged for licensing, which is both false and
+  // the exact inversion an earlier round of this rule shipped. Polymarket is the
+  // other way round and is labelled: the registered adapter reads the offshore
+  // book, a different legal entity from the CFTC-designated Polymarket US.
   // Counted from the cards actually rendered below, not from the bundle total:
   // with a sport filter active the two differ, and "shown below with labels"
   // must be true of what is below. The bundle's own count still matters — any
@@ -3790,10 +3799,38 @@ function renderArb() {
       : '');
 
   if (!opps.length) {
-    list.innerHTML = flaggedNote + `<div class="arb-empty">No takeable arbitrage in this scrape
-      ${currentSport ? `for ${escapeHtml(sportLabel(currentSport))}` : ''}.
-      The detector looked at ${bag.comparable_group_count || 0} cross-book markets and refused the
-      rest for the reasons below — that is a clean board, not a missing feature.</div>`;
+    // "A clean board" is a claim about prices, and it is only honest when
+    // something was actually compared. Two ways it was not, and the panel used
+    // to assert it in both:
+    //
+    //  - nothing was comparable at all. A global run whose only US-reachable
+    //    venues were two prediction markets drops to one when the offshore half
+    //    is set aside, and one venue compares against nothing. `arb.py` also
+    //    returns before counting when every fixture has already started, so the
+    //    count reaching zero does not say *which* — hence "nothing was
+    //    compared" and not a diagnosis.
+    //  - a sport filter is on. `comparable_group_count` is the whole bag's while
+    //    `opps` is filtered, so the count describes a board the reader is not
+    //    looking at, and it cannot speak for this sport at all.
+    const checked = bag.comparable_group_count || 0;
+    const offshoreWouldHelp =
+      !showOffshore && ((bag.with_offshore || {}).comparable_group_count || 0) > checked;
+    const sportName = currentSport ? escapeHtml(sportLabel(currentSport)) : '';
+    list.innerHTML = flaggedNote + (checked === 0
+      ? `<div class="arb-empty">Nothing was compared in this scrape.
+        Arbitrage needs one market priced at two venues you can bet at, at the same
+        time — no pair here reached that, for the reasons below. An empty result is
+        not evidence that the board is tight.${
+          offshoreWouldHelp ? ` Books you can't bet from the US are excluded; turn them on to
+          see the comparison as context.` : ''}</div>`
+      : currentSport
+        ? `<div class="arb-empty">No takeable arbitrage in ${sportName}.
+          The detector looked at ${checked} cross-book markets across the whole scrape;
+          how many of those were ${sportName} is not broken out, so this says nothing
+          about how tight that board is. The refusals below cover every sport.</div>`
+        : `<div class="arb-empty">No takeable arbitrage in this scrape.
+          The detector looked at ${checked} cross-book markets and refused the
+          rest for the reasons below — that is a clean board, not a missing feature.</div>`);
   } else {
     list.innerHTML = flaggedNote + opps.map((o, i) => arbCard(o, i)).join('');
   }
@@ -5336,6 +5373,27 @@ function renderBook(key) {
     + (routeBadges ? ' ' + routeBadges : '');
 
   const mine = currentRows().filter((r) => str(r[COL.source]) === key);
+  // `mine` is empty; this works out which of `currentRows`' two filters emptied
+  // it, by asking the unfiltered rows the same question. Counting rows rather
+  // than reading `health.quote_count` is the point: the health figure is
+  // all-sports and all-books, so a book whose baseball rows exist but whose
+  // hockey rows do not would otherwise be reported as hidden by the offshore
+  // switch — and flipping that switch would then change nothing, which is a
+  // worse answer than saying nothing.
+  const unfiltered = rawRunRows().filter((r) => str(r[COL.source]) === key);
+  const inSport = currentSport
+    ? unfiltered.filter((r) => str(r[COL.sport]) === currentSport)
+    : unfiltered;
+  const hiddenByOffshore = inSport.length > 0 && isUsUnavailable(key) && !showOffshore;
+  const hiddenBySport = !hiddenByOffshore && unfiltered.length > 0 && inSport.length === 0;
+  const published = health ? health.quote_count : 0;
+  const mixEmpty = hiddenByOffshore
+    ? `${inSport.length.toLocaleString()} price${inSport.length === 1 ? '' : 's'} from this book are hidden here because you can't bet at it from the US. Turn on "Include books you can't bet from the US" to see them.`
+    : hiddenBySport
+      ? `This book priced ${unfiltered.length.toLocaleString()} market${unfiltered.length === 1 ? '' : 's'} in this collection, none of them ${escapeHtml(sportLabel(currentSport))}. Clear the sport filter to see them.`
+      : !detailLoaded(currentRunId)
+        ? `This book's ${published.toLocaleString()} prices are not in this page — only the newest few collections carry them. Rebuild with more --quote-runs to include it.`
+        : 'This book stored no prices in this collection.';
   const stats = health ? [
     // "published", not "stored": these are two numbers whenever an insert
     // fails, and the row below says so rather than letting one stand for both.
@@ -5393,9 +5451,13 @@ function renderBook(key) {
     { label: 'Prices', num: true, cell: (c) => cell(c.count.toLocaleString()) },
     { label: 'Fixtures', num: true, cell: (c) => cell(c.events.size) },
   ], [...combos.values()].sort((a, b) => b.count - a.count),
-     { empty: detailLoaded(currentRunId)
-        ? 'This book stored no prices in this collection.'
-        : `This book's ${(health ? health.quote_count : 0).toLocaleString()} prices are not in this page — only the newest few collections carry them. Rebuild with more --quote-runs to include it.` });
+     // Three reasons this table can be empty and only one of them is "no prices".
+     // `currentRows` drops books you can't bet from the US when the switch is off,
+     // so a venue that published thousands of rows renders an empty table two
+     // inches under its own "prices published 894" tile. Saying "stored no prices"
+     // there contradicts the number beside it, and the reader cannot tell which
+     // one is lying.
+     { empty: mixEmpty });
 
   const skips = DATA.skipped.filter((s) => s.run_id === currentRunId && s.source === key)
     .sort((a, b) => b.count - a.count);

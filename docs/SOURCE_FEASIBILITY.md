@@ -11,6 +11,172 @@ python scripts/detect_state.py
 python scripts/probe_sources.py --state IL
 ```
 
+## Action Network: the two endpoint versions are different catalogues — 2026-08-08
+
+Egress: PA (`data/egress_state.json`, detected 2026-08-07T02:24Z). Both versions
+asked the same book ids in the same minute, MLB / NFL / NHL / WNBA / soccer.
+
+**Provenance, per row.** The Pennsylvania row is re-derivable from `data/raw` —
+it is the 2026-08-07T02:36Z run, and both halves of it are on disk. The other
+rows come from live probes run on 2026-08-08 whose **envelopes were not stored**,
+so they can be re-checked only by re-running the requests. That includes the
+offshore comparison, which is the sole justification for `LEGACY_V1_BASE_URL`,
+and the `periods` behaviour below. Treat those as measured-but-unaudited.
+
+| Asked | `web/v1/scoreboard` | `web/v2/scoreboard` |
+|---|---|---|
+| PA set `74,122,246,255,280,1534,1906,2791,3547,4623` | MLB: **none of the ten**, answered `{15, 30, 68, 69, 1270, 2668}`. WNBA and NFL: `74` and `122` only | MLB: **all ten**, plus defaults 15 and 30. Other leagues: whichever of the ten priced that league |
+| offshore `21,35,2495` | Bovada on NFL; Bovada and 1xBet on soccer | **none, on any league** |
+| Fliff / Circa / SuperBook `2292,78,14` | absent | absent |
+| SugarHouse `708` | absent | absent |
+| each id alone — `79`, `123`, `74`, `4623`, `246` | not retested | **each came back on its own** |
+
+Four things follow, and they are why `DEFAULT_BASE_URL` moved:
+
+1. **A wrong base URL here is silent.** v1 answered a Pennsylvania MLB request
+   with HTTP 200, eleven games and plausible prices belonging to books nobody
+   asked for — the exact failure mode the Scrape rules exist to prevent. Nine of
+   PA's ten fetchable republished feeds were on v1; seven of them got nothing of
+   their own on any league, and the other two (`an_parx`, `an_betrivers`) got
+   their book on WNBA and NFL only. A partial answer is worse than none: it looks
+   like it worked.
+2. **v2 is not a superset.** The offshore shelf exists only on v1, so
+   `an_bovada` and `an_onexbet` pin `LEGACY_V1_BASE_URL` deliberately. They are
+   the only two *Action Network* sources permitted to set `base_url` — several
+   first-party adapters set their own, which is a different thing — pinned in
+   `tests/test_actionnetwork_v2.py`.
+3. **v2 needs its settlement windows asked for.** See the next section — this
+   was nearly shipped as a silent two-thirds cut to baseball coverage.
+4. **The three empty tenants are not an endpoint problem.** Fliff, Circa and
+   SuperBook return nothing on either version, so the v2 switch does not clear
+   the fixture-contract baseline in `docs/testing.md`, and nothing about the
+   request shape will.
+
+On v2, naming an id alone is enough, so the v1-era workaround where bet365 only
+appeared when Caesars was named is unnecessary. It is **not** true that every
+named id always comes back — a book not pricing that league is simply absent,
+which is why `parse` filters by id rather than trusting the request. The
+whole-state `fetch_book_ids` set is kept only so every source in a state issues
+one identical URL.
+
+**Still unproven: whether any of it parses in Pennsylvania**, for two reasons
+that are easy to run together and should not be.
+
+*The endpoint.* On 2026-08-07T02:36Z every Pennsylvania tenant asked for the whole
+PA set, but only **`an_fanatics`** was configured for v2 — `an_hardrock` and
+`an_bally` hold no PA licence and are not built there at all. Per league, from
+`data/raw`:
+
+| | MLB | WNBA | NFL | soccer | NHL |
+|---|---|---|---|---|---|
+| the one v2 tenant | **all ten** | 9 (2791 absent) | 7 | 5 | no games |
+| the nine v1 tenants | none | `74`, `122` | `74`, `122` | none | no games |
+
+So v1 is not blind to every modern id.
+
+Mohegan's 246 and theScore's 4623 **are** on disk with real prices — in that v2
+payload, which is stored under `an_fanatics`. `parse_actionnetwork` selects on the
+book id in the envelope's own label, so a capture filed under one tenant can never
+produce another's rows. The ids have been observed; these two sources have not.
+That is exactly the payload-contains versus parse-produces distinction, and it is
+why the committed fixtures under those keys are worthless and why a capture under
+the *right* key is the only thing that counts.
+
+*The clock.* Every game in that run was `complete` or `inprogress`, so even the
+rows that did come back — betPARX's 74 on WNBA and NFL — produce nothing after
+the pregame filter. A capture at a dead hour is an empty fixture however healthy
+the run looked.
+
+Both faults are fixed by the same recapture: v2, at a pregame hour.
+
+## Action Network v2 returns full-game only unless asked — 2026-08-08
+
+Caught by an adversarial review of the change above, which had asserted the
+opposite on the strength of a bad measurement: the reading that "v2 keeps F5/F1"
+came from counting the payload's `market_rules` block — a schema listing, not
+odds.
+
+Parsed rows from every committed Action Network fixture, whole parse, which is
+the measurement that counts:
+
+| Fixture | Endpoint | Periods parsed | Period share, all rows / baseball rows |
+|---|---|---|---|
+| `an_caesars` | v1 | `full_game 30, first_5_innings 30, first_1_inning 10` | 57.1% / 57.1% |
+| `an_betrivers` | v1 | `full_game 54, first_5_innings 30, first_1_inning 25` | 50.5% / 64.7% |
+| `an_open`, `an_fanduel`, `an_betmgm` | v1 | `full_game 54, first_5_innings 30, first_1_inning 10` | 42.6% / 57.1% |
+| `an_bovada` | v1 | `full_game 18, first_5_innings 18` — no F1 | 50.0% / 50.0% |
+| `an_bet365` | v1 | `full_game 30, first_5_innings 20` — no F1 | 40.0% / 40.0% |
+| `an_draftkings` | v1 | `full_game 54, first_5_innings 20, first_1_inning 10` | 35.7% / 50.0% |
+| `an_onexbet` | v1 | `full_game 12` — carries no period rows at all | 0% |
+| `an_hardrock`, `an_fanatics`, `an_bally` | v2 | `full_game 48` — nothing else | 0% |
+| `an_parx`, `an_unibet`, `an_thescore` | v1 | parse to **zero rows** — see above | n/a |
+
+So period rows are between a third and two-thirds of the board of any Action
+Network tenant that produces one. Moving every republisher to v2 as-is would
+have deleted all of them — 40 of `an_open`'s 70 pregame MLB rows — while every
+source still reported healthy.
+
+**The recovery is a request parameter, and its near misses are all quiet:**
+
+| Sent with `bookIds` | v2 answer |
+|---|---|
+| nothing | `{event: 154}` |
+| `period=firstfiveinnings` (singular) | `{event: 154}` — ignored |
+| `periods=firstfiveinnings` | `{firstfiveinnings: 126}` |
+| `periods=event,firstfiveinnings,firstinning` | `{event: 154, firstfiveinnings: 126, firstinning: 96}`, all ten PA books |
+| `periods=event, firstfiveinnings, firstinning` (spaces) | `{event: 154}` — accepted and wrong |
+| `marketTypes=…` | HTTP 400 |
+
+`REQUESTED_PERIODS` is now sent on every request from every tenant. It is a no-op
+on v1 — measured identical market types with and without — so there is no
+conditional on the base URL to rot. The literal is pinned, spaces and all, in
+`tests/test_actionnetwork_v2.py`.
+
+Every committed v2 fixture predates this and is full-game only;
+`test_the_committed_v2_captures_are_full_game_only_because_none_asked` states
+that gap and is written to fail when they are recaptured.
+
+### Two things to fix *before* the Pennsylvania recapture — 2026-08-08
+
+Found by adversarial review of the change above. Both are quiet, and both bite
+exactly when the next phase runs.
+
+**1. `parse_actionnetwork` de-duplicates on `f"{path}:{event_id}"`, with no book
+id in the key.** Envelopes are labelled `scoreboard:{book_id}:{path}` and
+`latest_per_endpoint` returns them sorted by that label, so when a new PA capture
+lands beside a surviving NJ one for the same source and league, the **lexically
+smaller** endpoint label wins regardless of `fetched_at`. Demonstrated with a
+synthetic PA Caesars envelope dated seven days after the committed NJ one: alone
+it parsed 70 rows; together the parse emitted 70 rows all from
+`scoreboard-123-mlb`, with `duplicate_event: 9`. String-comparing the ids, stale
+NJ wins for `an_caesars` (123 < 1906), `an_parx` (1929 < 74) and `an_thescore`
+(4620 < 4623) — two of which are the books this work exists to unblock. Put the
+book id in the fixture key, or assert one book id per source's fixture set.
+
+**2. `takeable_from_state`'s nationwide half is default-open.** It admits every
+base descriptor that is not retail, not a republisher and not US-unavailable — so
+a newly registered source that is none of those is reachable from *all four*
+states the moment it is added, without appearing in any table. A first-party
+`thescore` registered outside `RETAIL_SOURCE_KEYS` would be takeable in DC, where
+theScore Bet is not listed at all; `coverage._check_direct_route` would then
+accept it as PA's direct route and `coverage_for_state` would grade the book
+`DIRECT` on `direct_rows > 0` alone. Register first-party books in
+`RETAIL_SOURCE_KEYS` with real per-state routes, which fails loudly when a route
+is missing, rather than letting them inherit nationwide reachability. The same
+applies to ProphetX and Novig, which are *stakeable* — there the wrong answer is
+a leg sized into an alerted position.
+
+## Polymarket: two venues share the brand — 2026-08-08
+
+`src/sources/polymarket.py` reads `gamma-api.polymarket.com`, the offshore
+platform. The US venue is a different legal entity: QCX LLC, doing business as
+Polymarket US, a CFTC-designated contract market Polymarket acquired in July
+2025, with its own order book, fee schedule and settlement rules. The offshore
+key is therefore in `US_UNAVAILABLE_SOURCE_KEYS` and its legs are labelled "not
+reachable from {ST}" like any other unreachable venue. Polymarket US belongs
+here as its own source key — `COMMISSIONS` and `SETTLEMENT` are keyed by source
+key, so a config variant would read a fee schedule off the wrong venue's bytes.
+
 ## Multi-state routing update — 2026-08-03
 
 Live collection now supports IL, PA, NJ, and DC batches. The detected current
@@ -331,6 +497,36 @@ does not.
 
 Candidate tenants rejected as mirrors are listed above **with the source they
 mirror**, which is the part that stops them being rediscovered and re-added.
+
+### Front-ends of an order book already registered — 2026-08-08
+
+The same trap outside Kambi. Each of these was named as a Pennsylvania venue to
+acquire and each was rejected, because it resells an order book this repository
+already collects. Registering one would not add a counterparty; it would add a
+second key in front of an existing one.
+
+| Venue | Mirrors | Mechanism |
+|---|---|---|
+| Robinhood Predictions | `kalshi` | Trades Kalshi's event contracts on Kalshi's order book, with its own per-contract fee added on top |
+| Coinbase Predictions | `kalshi` | Kalshi-powered; the contracts are Kalshi's |
+| PlaySugarHouse | `betrivers_kambi` | Same Rush Street parent, same Kambi platform. `rsiuspa` and `rsiusil` are already recorded above as byte-identical, 30 of 30 shared moneylines equal |
+
+**`src/distinctness.py` cannot catch these, and that is why they are excluded by
+name rather than by measurement.** It compares exact `decimal_odds` equality. A
+front-end that adds a fee to the displayed price makes *every* price differ, so
+the agreement rate is 0%, the verdict is `DISTINCT` — the strongest possible
+"these are two different books" — and the engine publishes an arbitrage between
+two windows onto one order book. The measurement is not merely absent here; it
+points the wrong way, which is worse than nothing.
+
+So the exclusion is pinned in `tests/test_distinctness.py`
+(`TestFrontEndsOfARegisteredBook`) instead: these keys must stay out of
+`registry.keys()`, and the class carries the markup case in executable form so
+the reason cannot be mistaken for an oversight. If one is ever registered
+deliberately,
+the way to do it is the existing `tests/fixtures/mirrors/` precedent — captures
+under *non-registered* keys, compared in a test — plus every combination
+declared in `src/redundancy.py`.
 
 ---
 

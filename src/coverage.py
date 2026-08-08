@@ -213,14 +213,22 @@ def _required(
 #:   book (id 246).  Mohegan Sun Pocono's online skin ran on Unibet's
 #:   Pennsylvania licence, so this is the right feed if that arrangement still
 #:   stands and the wrong one if the brand has since moved.  Unverified.
-#: * ``theScore Bet`` resolves to id 4623, which returns live prices under that
-#:   label even though theScore Bet withdrew from the United States.  Whether
-#:   Action Network is republishing a successor brand under the old id is
-#:   unverified, so this book is deliberately left on one feed rather than being
-#:   declared corroborated.
+#: * ``theScore Bet`` resolves to id 4623.  Both ids answer: asked alone on
+#:   ``web/v2`` on 2026-08-08, 246 and 4623 each came back with prices.  **That
+#:   is a fact about the ids and not about the brands.**  An earlier note here
+#:   asserted that theScore Bet had withdrawn from the United States; nothing in
+#:   this repository establishes that, and a feed answering under the label is
+#:   weak evidence either way, since Action Network can republish a successor
+#:   brand under an old id without renaming it.  The payload carries no book
+#:   catalogue — only numeric ids — so the mapping cannot be settled from the
+#:   bytes we collect.  Both books therefore stay on one feed and are reported as
+#:   ``SINGLE_SOURCE`` rather than corroborated: a second feed watching the same
+#:   unverified id would corroborate the id, not the brand.
 #: * ``PlaySugarHouse`` has **no** feed.  Action Network's only SugarHouse book
-#:   (id 708) returns nothing even when named explicitly, and VegasInsider has no
-#:   such column.  The entry exists to fail loudly instead of being forgotten.
+#:   (id 708) returns nothing even when named explicitly — re-measured
+#:   2026-08-08 on both endpoint versions, MLB and soccer, absent from all four —
+#:   and VegasInsider has no such column.  The entry exists to fail loudly
+#:   instead of being forgotten.
 #:
 #: A first-party Kambi route would satisfy the rule outright for the first three,
 #: since Rush Street's own books are Kambi tenants.  It does not exist under the
@@ -291,10 +299,14 @@ class BookCoverage:
 def _agreement(quotes: Sequence[Quote], keys: Sequence[str]) -> tuple[bool, str]:
     """Do same-licence republishers of one book agree where they overlap?
 
-    :mod:`src.distinctness` is imported inside the call to keep this module cheap
-    to import — it pulls :mod:`src.sources.registry`, and with it every adapter —
-    not because of a cycle.  Nothing in the ``distinctness``/``validation`` chain
-    imports this module.
+    :mod:`src.distinctness` is imported inside the call, not because of a cycle:
+    nothing in the ``distinctness``/``validation`` chain imports this module.  It
+    used to buy a cheap import as well, and no longer does —
+    :func:`_check_direct_route` pulls :mod:`src.sources.registry` at module scope
+    to validate the declared routes, so importing this module already costs every
+    adapter (about 15 ms to 180 ms).  That is the price of checking the table at
+    import rather than at first use, which is where it has to be checked: the
+    failure it catches is silent and the table is read once, at start-up.
 
     Too little overlap to judge is reported as agreement *with the reason
     attached* rather than as a pass or a failure: refusing the book would fault a
@@ -680,6 +692,7 @@ def _check_locality_declarations(
             )
             continue
         for entry in required:
+            _check_direct_route(state, entry, errors)
             for source_key, corroboration in entry.republishers.items():
                 carries_this_state = republishes_state_licence(state, source_key)
                 if corroboration.is_local and not files_per_state_book_id(source_key):
@@ -705,6 +718,74 @@ def _check_locality_declarations(
         raise RuntimeError(
             "required-book locality declarations are inconsistent with the "
             "jurisdiction table:\n- " + "\n- ".join(errors)
+        )
+
+
+def _check_direct_route(state: str, entry: RequiredBook, errors: list[str]) -> None:
+    """Is ``entry.direct`` a first-party route into this state's own book?
+
+    ``direct`` is the **stronger** claim in a :class:`RequiredBook` and for a long
+    time it was the unchecked one.  :func:`coverage_for_state` awards
+    :attr:`Access.DIRECT` — which satisfies the rule outright — on ``direct_rows >
+    0`` alone: no corroboration, no second feed, no locality test.  So whatever key
+    is written here is believed.
+
+    An adversarial review demonstrated the cost with two one-word edits that the
+    surrounding invariant accepted: naming ``vi_fanatics`` as Fanatics' direct
+    route turned ``single_source`` into ``direct``, and naming ``vi_bet365`` as
+    theScore Bet's turned ``missing`` into ``direct`` — grading Pennsylvania
+    coverage of one brand off a *different brand's* Las Vegas column, with zero
+    findings emitted.  That is precisely the cross-licence substitution the module
+    exists to refuse, entering through the one field it did not read.
+
+    Three ways the claim can be false, all silent:
+
+    * the key is not registered at all — nothing will ever store a row under it,
+      so the book is permanently ``MISSING`` for a reason no message explains;
+    * the key is a republisher — a republished board is somebody else watching the
+      book, which is the definition of *not* first-party;
+    * the key is not reachable from this state — offshore venues and operators
+      holding no licence in this jurisdiction are the same error, and
+      :func:`registry.takeable_from_state` is the one classifier that answers it.
+      Without this clause the invariant accepted ``pinnacle`` as theScore Bet's
+      Pennsylvania route and graded the book ``DIRECT``.  Note that reachability
+      is built from licences, not from ``Jurisdiction.view_only_sources``: today
+      every view-only retail book also has an ``UNAVAILABLE`` route, so the two
+      agree, but a state that ever declares a live route for a book it also lists
+      view-only would slip past this.
+
+    **What it still cannot check: whether the key is the book's own venue.**
+    ``entry.book`` is a display name and ``direct`` is a source key; nothing maps
+    one to the other, so declaring ``kalshi`` as theScore Bet's route passes every
+    clause here.  This narrows the hole to reachable first-party venues rather
+    than closing it, and the remaining check is a human reading the table.
+    """
+    key = entry.direct
+    if key is None:
+        return
+
+    from src.sources import registry
+
+    if key not in registry.keys():
+        errors.append(
+            f"{state}/{entry.book}: direct route {key!r} is not a registered "
+            "source, so no row can ever be stored under it and the book reports "
+            "MISSING with no explanation"
+        )
+        return
+    if key in registry.REPUBLISHED_SOURCE_KEYS:
+        errors.append(
+            f"{state}/{entry.book}: {key} is a republisher, which is somebody "
+            "else watching this book rather than the book itself — Access.DIRECT "
+            "would satisfy the rule on one republished feed, the exact thing the "
+            "two-feed requirement exists to prevent"
+        )
+        return
+    if key not in registry.takeable_from_state(state):
+        errors.append(
+            f"{state}/{entry.book}: {key} is not reachable from {state}, so it "
+            f"cannot be a {state} leg — declaring it the direct route grades this "
+            f"book DIRECT off a venue the operator cannot use from {state}"
         )
 
 
@@ -771,11 +852,16 @@ class LocalityMarking:
     all.
 
     "Reachable" is :func:`registry.takeable_from_state`, **not** the state's retail
-    licences.  Built on the licences alone this rule called Kalshi and Polymarket
-    out-of-state in every jurisdiction and withheld a legal, takeable position from
-    the report, the dashboard and the SMS — inverting the rule it serves.  Rule (a)
-    stops an unreachable price being shown as the state's own; it is not a reason
-    to hide, or mark, a reachable one.
+    licences.  Built on the licences alone this rule called Kalshi out-of-state in
+    every jurisdiction and withheld a legal, takeable position from the report, the
+    dashboard and the SMS — inverting the rule it serves.  Rule (a) stops an
+    unreachable price being shown as the state's own; it is not a reason to hide,
+    or mark, a reachable one.
+
+    The inverse error is just as live, which is why reachability is a set and not a
+    kind: ``polymarket`` reads the *offshore* book, a different legal entity from
+    the CFTC-designated Polymarket US, so it is unreachable and is marked.  Two
+    prediction markets, opposite answers.
 
     One implementation, because there were three call sites with three different
     answers and the most permissive one was the live path that sends the text.

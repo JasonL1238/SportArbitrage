@@ -485,6 +485,104 @@ def test_a_table_keyed_in_the_wrong_case_is_refused():
         _check_locality_declarations({"pa": (entry,)})
 
 
+class TestTheDirectRouteIsCheckedToo:
+    """``direct`` is the stronger claim, and it used to be the unchecked one.
+
+    ``coverage_for_state`` awards ``Access.DIRECT`` — which satisfies the rule
+    outright — on ``direct_rows > 0`` alone: no second feed, no locality test.
+    So whatever key sits in this field is believed, while the invariant read only
+    the republishers beside it.
+
+    Two adversarial reviews demonstrated the cost. The first: naming
+    ``vi_fanatics`` as Fanatics' direct route turned ``single_source`` into
+    ``direct``, and ``vi_bet365`` as theScore Bet's turned ``missing`` into
+    ``direct`` — grading Pennsylvania coverage of one brand off a different
+    brand's Las Vegas column. The second, after only republishers were refused:
+    ``pinnacle`` as theScore Bet's route was accepted and graded ``DIRECT`` off
+    an offshore book. The cases below cover both shapes, plus the boundary that
+    a real route must still pass.
+    """
+
+    def _entry(self, key: str) -> RequiredBook:
+        return RequiredBook(book="theScore Bet", direct=key, republishers={})
+
+    def test_a_republisher_cannot_be_a_direct_route(self) -> None:
+        """The demonstrated one. A republished board is somebody else watching."""
+        with pytest.raises(RuntimeError, match="is a republisher"):
+            _check_locality_declarations({"PA": (self._entry("vi_bet365"),)})
+        with pytest.raises(RuntimeError, match="is a republisher"):
+            _check_locality_declarations({"PA": (self._entry("an_thescore"),)})
+
+    def test_an_unregistered_key_cannot_be_a_direct_route(self) -> None:
+        """Nothing will ever store a row under it, so the book reports MISSING
+        forever with no message saying why."""
+        with pytest.raises(RuntimeError, match="not a registered source"):
+            _check_locality_declarations({"PA": (self._entry("thescore"),)})
+
+    def test_a_venue_unreachable_from_this_state_cannot_be_a_direct_route(self) -> None:
+        """The clause a first pass at this invariant missed entirely.
+
+        Rejecting republishers left every *first-party* wrong answer open, and a
+        review demonstrated the consequence: ``direct="pinnacle"`` for theScore
+        Bet in PA was accepted, and ``coverage_for_state`` then reported
+        ``access=direct satisfied=True`` off an offshore book with no findings.
+
+        Three different reasons, one classifier — offshore (``pinnacle``), a real
+        first-party book holding no PA licence (``hardrock``), and the offshore
+        Polymarket that this same change marked unreachable.
+        """
+        from src.sources import registry
+
+        for key in ("pinnacle", "hardrock", "polymarket", "bovada"):
+            assert key not in registry.takeable_from_state("PA")
+            with pytest.raises(RuntimeError, match="not reachable from PA"):
+                _check_locality_declarations({"PA": (self._entry(key),)})
+
+    def test_a_reachable_venue_from_another_state_is_still_refused(self) -> None:
+        """``hardrock`` is licensed in Illinois and not in Pennsylvania.
+
+        The check has to be per state rather than "is this a real book", or it
+        answers the question the locality rule exists to ask with a global yes.
+        """
+        from src.sources import registry
+
+        assert "hardrock" in registry.takeable_from_state("IL")
+        with pytest.raises(RuntimeError, match="not reachable from PA"):
+            _check_locality_declarations({"PA": (self._entry("hardrock"),)})
+
+    def test_the_real_direct_routes_still_pass(self) -> None:
+        """The check must not be so strict that the shipped table cannot express
+        a first-party route — five of PA's eleven books have one."""
+        declared = {
+            entry.direct for entry in REQUIRED_BOOKS["PA"] if entry.direct is not None
+        }
+        assert declared == {
+            "fanduel", "betrivers_kambi", "draftkings", "betmgm", "caesars",
+        }
+        for key in sorted(declared):
+            _check_locality_declarations(
+                {"PA": (RequiredBook(book="x", direct=key, republishers={}),)}
+            )
+
+    def test_a_first_party_route_the_operator_plans_to_add_would_pass(self) -> None:
+        """Guarding against the opposite failure: an invariant so strict that the
+        next real adapter cannot be declared.
+
+        theScore Bet and betPARX are both due a first-party Pennsylvania route.
+        Neither is registered yet, so the shape is checked with the registered
+        Kambi book that stands in for both — same platform, same PA licence.
+        """
+        _check_locality_declarations(
+            {
+                "PA": (
+                    RequiredBook(
+                        book="BetRivers", direct="betrivers_kambi", republishers={}
+                    ),
+                )
+            }
+        )
+
+
 def test_the_shipped_table_satisfies_the_invariant():
     """Import already ran this; pin it so a later edit cannot pass silently."""
     _check_locality_declarations(REQUIRED_BOOKS)
@@ -635,7 +733,7 @@ def test_unlicensed_republisher_explains_itself_rather_than_reading_as_a_gap():
     """
     configured = jurisdiction("IL")
     assert configured.republished["an_parx"].status is RouteStatus.UNAVAILABLE
-    assert jurisdiction("PA").republished["an_parx"].status is RouteStatus.VALIDATED
+    assert jurisdiction("PA").republished["an_parx"].status is not RouteStatus.UNAVAILABLE
 
 
 def test_a_narrowed_run_does_not_fault_books_it_never_asked_for():
@@ -820,13 +918,13 @@ def test_a_state_with_no_licence_at_all_flags_rather_than_skipping(monkeypatch):
 
 
 def test_a_us_regulated_venue_is_reachable_from_every_state():
-    """The rule was inverted for Kalshi and Polymarket, and it cost real positions.
+    """The rule was inverted for Kalshi, and it cost real positions.
 
-    Both are federally regulated US venues with no per-state sportsbook licence to
-    hold — this registry says so itself, in the note explaining why they are absent
+    Kalshi is a federally regulated US venue with no per-state sportsbook licence
+    to hold — this registry says so itself, in the note explaining why it is absent
     from ``US_UNAVAILABLE_SOURCE_KEYS``. Built on ``state_licensed_keys`` alone, the
-    locality rule called them out-of-state in *every* jurisdiction, so a legal
-    Kalshi/Polymarket arbitrage on a Pennsylvania run was withheld from the report,
+    locality rule called it out-of-state in *every* jurisdiction, so a legal
+    Kalshi arbitrage on a Pennsylvania run was withheld from the report,
     the dashboard and the SMS — under a warning saying "every leg was a global or
     offshore venue".
 
@@ -834,10 +932,34 @@ def test_a_us_regulated_venue_is_reachable_from_every_state():
     never a reason to hide — or label — a reachable one.
     """
     marking = locality_marking("PA", route_scope="state")
-    position = _Position("kalshi", "polymarket")
+    position = _Position("kalshi", "fanduel")
     assert marking.has_local_leg(position), "a legal US position flagged on a PA run"
     assert marking.non_local_sources(position) == ()
     assert marking.count_without_local_leg([position]) == 0
+
+
+def test_the_offshore_polymarket_is_not_the_us_one():
+    """One brand, two order books, and only the other one is takeable.
+
+    ``src.sources.polymarket`` reads ``gamma-api.polymarket.com``. The US venue is
+    QCX LLC trading as Polymarket US — a separate CFTC-designated contract market
+    with its own book, fees and settlement. Treating the offshore price as
+    reachable is how a hedge that cannot be entered gets reported as risk-free, so
+    its legs are labelled like any other unreachable venue.
+
+    The inverse mistake is the one the test above guards, and both are live: this
+    must not sweep up Kalshi.
+    """
+    from src.sources import registry
+
+    marking = locality_marking("PA", route_scope="state")
+    offshore_only = _Position("polymarket", "pinnacle")
+    assert not marking.has_local_leg(offshore_only)
+    assert marking.non_local_sources(offshore_only) == ("pinnacle", "polymarket")
+
+    for state in JURISDICTIONS:
+        assert "polymarket" not in registry.takeable_from_state(state), state
+        assert "kalshi" in registry.takeable_from_state(state), state
 
 
 def test_reachability_is_not_the_same_question_as_a_retail_licence():
@@ -853,7 +975,6 @@ def test_reachability_is_not_the_same_question_as_a_retail_licence():
     assert "hardrock" not in registry.takeable_from_state("PA")
     for state in JURISDICTIONS:
         assert "kalshi" in registry.takeable_from_state(state), state
-        assert "polymarket" in registry.takeable_from_state(state), state
         assert "pinnacle" not in registry.takeable_from_state(state), state
         # A republished mirror is never somewhere you can place a bet.
         assert not registry.takeable_from_state(state) & REPUBLISHED_SOURCE_KEYS

@@ -126,13 +126,18 @@ def _route(
 #: id 14) is absent: it is a Nevada book that has never appeared in this payload,
 #: and registering it unverified is what bought three permanently empty sources.
 #:
-#: **Do not read that as a check against ``web/v2``.**  An earlier note here said
-#: the request was a ``web/v2/scoreboard`` one; the adapter's
-#: ``DEFAULT_BASE_URL`` is ``web/v1/scoreboard`` and every source above except
-#: ``an_bally`` uses it, so v2 is not the endpoint these ids are asked through.
-#: 36 of the 39 captured Action Network envelopes record v1.  Which version the
-#: 2026-08-06 check actually used is not recorded anywhere, so it is not claimed
-#: here.
+#: **Which endpoint version these ids answer on is now settled: ``web/v2``.**  An
+#: earlier note here could not say, because the adapter defaulted to ``web/v1``
+#: while the 2026-08-06 check was recorded against v2.  Both were asked the same
+#: question on 2026-08-07: naming Pennsylvania's whole set,
+#: ``bookIds=74,122,246,255,280,1534,1906,2791,3547,4623``, v2 answered keyed by
+#: all ten on MLB, while v1's MLB board carried none of them and answered with an
+#: unrelated set — 200, eleven games, plausible prices, and not one of the
+#: licences asked for.  v1 is not uniformly blind to them (the same request
+#: returned 74 and 122 on WNBA and NFL), which makes it worse rather than better:
+#: a partial answer is one that looks like it worked.
+#: :data:`ActionNetworkAdapter.DEFAULT_BASE_URL` is v2 for this reason, and only
+#: the two offshore sources may leave it.
 _AN_BOOK_IDS: Mapping[str, Mapping[str, int]] = MappingProxyType(
     {
         "an_fanduel": {"IL": 270, "PA": 255, "NJ": 69},
@@ -149,18 +154,42 @@ _AN_BOOK_IDS: Mapping[str, Mapping[str, int]] = MappingProxyType(
         # have no Illinois licence to republish; theScore Bet has one in all
         # three.
         #
-        # **These ids are unproven and the captures contradict the NJ ones.**  An
-        # earlier note here claimed each was confirmed to return moneyline rows on
-        # 2026-08-06; nothing in the repository supports that.  The three captures
-        # under ``tests/fixtures/raw/an_{parx,unibet,thescore}__*`` asked for
-        # 1929 / 247 / 4620 and came back carrying odds for *other* books on the
-        # same games — ``{15, 30, 123}``, ``{15, 30, 68, 69, 71, 75}`` and
-        # ``{15, 30, 69, 75}`` — so the requested book was absent rather than the
-        # slate being dead.  The PA ids (74 / 246 / 4623) have never been asked
-        # for at all.  Until a live capture shows otherwise, treat betPARX,
-        # Mohegan Pennsylvania and theScore Bet as declared-but-unobserved in
-        # ``src.coverage``: the table says a feed watches them, and no evidence
-        # here says that feed answers.  Recorded in
+        # **The Pennsylvania ids answer; no capture has parsed one into a row
+        # yet.**  Keep those two facts apart — the first is about the endpoint,
+        # the second about the clock.
+        #
+        # Answering: on 2026-08-08 each PA id was asked alone on ``web/v2`` and
+        # each came back — 74, 246 and 4623, alongside the defaults 15 and 30.
+        # The NJ-era doubt this note used to record was a version artefact: the
+        # committed captures under
+        # ``tests/fixtures/raw/an_{parx,unibet,thescore}__*`` asked 1929 / 247 /
+        # 4620 through ``web/v1`` and came back carrying *other* books, which is
+        # what v1 does with an id it does not know.
+        #
+        # Not parsed, and for two reasons that must not be run together.
+        #
+        # The endpoint.  On 2026-08-07T02:36Z every Pennsylvania tenant asked for
+        # the whole PA set, but only ``an_fanatics`` was configured for v2 —
+        # ``an_hardrock`` and ``an_bally`` hold no PA licence and are not built
+        # here.  Its payload returned all ten ids on MLB, nine on WNBA, seven on
+        # NFL and five on soccer.  The nine v1 tenants got none of the ten on
+        # MLB, NHL and soccer, and exactly two on WNBA and NFL: 74 (betPARX) and
+        # 122 (BetRivers).  So v1 is not blind to every modern id.
+        #
+        # Mohegan's 246 and theScore's 4623 *are* on disk with real prices — in
+        # that v2 payload, which is stored under ``an_fanatics``.  ``parse``
+        # selects on the book id in the envelope's own label, so a capture filed
+        # under one tenant can never produce another's rows: the ids have been
+        # observed and these two sources have not.  That is the distinction the
+        # recapture has to close, and it is why a fixture under the *right* key
+        # is the only thing that counts.
+        #
+        # The clock.  Every game in that run was ``complete`` or ``inprogress``,
+        # so the rows that *were* returned produce nothing after the pregame
+        # filter — including betPARX's.  A fixture taken then is an empty fixture
+        # however healthy the run looked.  Until a pregame capture on v2 exists,
+        # betPARX, Mohegan Pennsylvania and theScore Bet stay
+        # declared-but-unobserved in ``src.coverage``.  Recorded in
         # ``docs/SOURCE_FEASIBILITY.md``.
         "an_parx": {"PA": 74, "NJ": 1929},
         "an_unibet": {"PA": 246, "NJ": 247},
@@ -215,13 +244,24 @@ def _republished_for(state: str) -> Mapping[str, RepublishedRoute]:
     """Every Action Network republisher route for one state.
 
     ``fetch_book_ids`` names the state's **whole** set on every request rather
-    than each source naming only itself.  Action Network omits a book from the
-    payload unless it is asked for, which the registry used to work around per
-    source with hand-tuned expand sets — including ``an_bet365`` asking for
-    Caesars because bet365 only rode along on that request.  Naming the set
-    makes each source's own book unconditionally present, and makes every
-    source in a state issue the identical URL, so the raw store sees one
-    payload shape instead of fifteen.
+    than each source naming only itself.  On ``web/v2`` an id named alone does
+    come back alone, so this is no longer needed to make a book present; it is
+    kept because it makes every source in a state issue the identical URL, so
+    the raw store sees one payload shape instead of fifteen.
+
+    **Every route here is ``TEMPLATE`` or ``UNAVAILABLE``, never ``VALIDATED``.**
+    This function knows one thing — whether the operator holds a licence in this
+    state to republish — and that is what the status may say.  It used to stamp
+    ``VALIDATED`` on everything it built, which is a status no code path here can
+    earn: nothing is probed, no capture is consulted, and the word was assigned
+    by the act of construction.  Pennsylvania's ``an_parx``, ``an_unibet`` and
+    ``an_thescore`` read "validated" while returning zero rows.
+
+    Whether a book was actually *observed* is a different question with a
+    different owner: :mod:`src.coverage` answers it per book from the run's own
+    quotes, and says ``SINGLE_SOURCE`` or ``MISSING`` when the answer is no.  One
+    claim, one owner — a status that guesses at the other one can only disagree
+    with it.
     """
     ids = {
         key: books[state] for key, books in _AN_BOOK_IDS.items() if state in books
@@ -238,7 +278,7 @@ def _republished_for(state: str) -> Mapping[str, RepublishedRoute]:
             continue
         routes[key] = RepublishedRoute(
             config={"book_id": book_id, "fetch_book_ids": fetch},
-            status=RouteStatus.VALIDATED,
+            status=RouteStatus.TEMPLATE,
         )
     return routes
 

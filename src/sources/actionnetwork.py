@@ -1,22 +1,48 @@
 """Action Network multi-book scoreboard, from the public web JSON.
 
-The current site uses ``api.actionnetwork.com/web/v2/scoreboard/{sport}``; v1
-captures remain supported for deterministic replay. No authentication is
-involved. One response carries several books Action Network aggregates; this
-adapter is parameterized by ``book_id`` so many registered sources share one
-parser and filter to one counterparty.
+The current site uses ``api.actionnetwork.com/web/v2/scoreboard/{sport}``, which
+is the default here; v1 captures remain supported for deterministic replay. No
+authentication is involved. One response carries several books Action Network
+aggregates; this adapter is parameterized by ``book_id`` so many registered
+sources share one parser and filter to one counterparty.
 
-Some books only appear when their id is named on the request.  Caesars
-(``book_id=123``) is the live case: without ``?bookIds=123`` the scoreboard
-omits it.  Bet365 (``79``) is worse — requesting ``79`` alone still omits it,
-and requesting ``123`` is what surfaces both.  Offshore ids (Bovada ``21``,
-1xBet ``2495``) likewise need an explicit ask.  Asking for BetRivers/BetMGM
-ids (``71``, ``75``) can *remove* them from the payload.  ``fetch_book_ids``
-names the expand set while parse still filters to this tenant's ``book_id``.
+**The two versions publish different book catalogues, and neither is a superset
+of the other.**  Measured on 2026-08-08 by asking both the same ids in the same
+minute:
 
-Do **not** send ``period=game`` on every request: that matches the site's
-moneyline view but strips baseball ``firstfiveinnings`` / ``firstinning``
-rows from the JSON, silently deleting F5/F1 coverage for every AN tenant.
+* Modern per-state ids answer on **v2**.  ``bookIds=74,122,246,255,280,1534,
+  1906,2791,3547,4623`` — Pennsylvania's whole set — comes back keyed by all ten
+  on the v2 MLB board.  On v1 that board carried *none* of them and answered with
+  an unrelated set instead of an error, which is what a wrong base URL looks
+  like: a 200 and plausible numbers for somebody else's licence.  Neither
+  endpoint is uniform across leagues — v1 returned 74 and 122 on WNBA and NFL,
+  and v2 returned nine of ten on WNBA and seven on NFL — but a catalogue that
+  honours two of ten ids on two leagues is not one you can collect a state from.
+* The offshore shelf answers on **v1 only**.  Asking ``21,35,2495`` in the same
+  minute, v1 carried Bovada on NFL and Bovada with 1xBet on soccer; v2 carried
+  neither on any of five leagues.  :data:`LEGACY_V1_BASE_URL` exists for exactly
+  those two sources and for no other reason.
+* Fliff (``2292``), Circa (``78``), SuperBook (``14``) and SugarHouse (``708``)
+  answer on **neither**.
+
+On v2 ``bookIds`` selects rather than expands: naming an id alone is enough — 79,
+123, 74, 4623 and 246 each came back when asked for by themselves — and naming
+ids that do not exist narrows the payload to the defaults (15 consensus, 30
+opener) rather than adding to them.  So the v1-era workaround where bet365 only
+appeared if Caesars was named is not needed on v2.  It is **not** true that every
+named id always comes back: a book that is not pricing that league is simply
+absent, which is why ``parse`` filters by id rather than trusting the request.
+``fetch_book_ids`` still names the set while parse filters to this tenant's
+``book_id``.
+
+**Both endpoints need their settlement windows asked for, in different ways, and
+getting it wrong is silent.**  On v1, sending ``period=game`` matches the site's
+moneyline view and strips baseball ``firstfiveinnings`` / ``firstinning`` rows,
+so it is never sent.  On v2 the default is the opposite: full-game only, unless
+:data:`REQUESTED_PERIODS` names the windows.  Measured on one MLB slate, v2 went
+from ``{event: 154}`` to ``{event: 154, firstfiveinnings: 126, firstinning: 96}``
+when asked.  Every committed v2 fixture predates that discovery and carries
+full-game rows only.
 
 Field traps this parser exists to get right
 -------------------------------------------
@@ -86,7 +112,41 @@ from src.sources.guards import FormatChangeError, SourceError
 log = logging.getLogger(__name__)
 
 SOURCE_KEY = "an_draftkings"
-DEFAULT_BASE_URL = "https://api.actionnetwork.com/web/v1/scoreboard"
+
+#: The endpoint every state-licensed republisher must use, and therefore the
+#: default: a descriptor that forgets to choose gets the one that knows modern
+#: per-state book ids.  It used to be the other way round, and the cost was that
+#: nine of Pennsylvania's ten republished feeds returned somebody else's books
+#: while reporting healthy.
+DEFAULT_BASE_URL = "https://api.actionnetwork.com/web/v2/scoreboard"
+
+#: The older endpoint, kept because it is the **only** one carrying the offshore
+#: shelf (see the module docstring).  Two descriptors set it deliberately; it is
+#: not a fallback, and nothing else may adopt it without a measurement showing
+#: its books are absent from v2.
+LEGACY_V1_BASE_URL = "https://api.actionnetwork.com/web/v1/scoreboard"
+
+#: The settlement windows to ask for, on every request.
+#:
+#: **v2 answers with full-game markets only unless this is sent.**  On one MLB
+#: slate the market groups went from ``{event: 154}`` to ``{event: 154,
+#: firstfiveinnings: 126, firstinning: 96}`` when asked.  Measured across the
+#: committed v1 fixtures, period rows are 35-57% of the parsed rows of every
+#: tenant that produces any, and 40-65% of its baseball rows (``an_onexbet`` is
+#: the one live tenant carrying none), so a v2 request without this drops between
+#: a third and two-thirds of the board while every source still reports healthy —
+#: the same shape of loss as asking the wrong book id, and just as quiet.
+#:
+#: Sent on v1 too, where it changes nothing: v1 returns every window by default
+#: and ignores the parameter (measured 2026-08-08 — identical market types with
+#: and without).  One request shape for both endpoints, because a conditional on
+#: the base URL is a second place for this to rot.
+#:
+#: The spelling is exact.  ``periods`` plural is the parameter; singular
+#: ``period`` is silently ignored, ``marketTypes`` is a 400, and a list with
+#: spaces after the commas is accepted and answered with full-game only — the
+#: worst of the four, since it looks like it worked.
+REQUESTED_PERIODS = "event,firstfiveinnings,firstinning"
 
 #: Action Network answers freely but a burst of many tenants × six sports is
 #: enough to look rude; half a second keeps a full pass under a minute.
@@ -284,9 +344,9 @@ class ActionNetworkAdapter:
         del tier
         raws: list[RawResponse] = []
         tally = self.last_fetch = ScopeTally(self._source_key)
-        # ``None`` omits the query string entirely so baseball period markets
-        # stay in the default payload.  Expand tenants pass bookIds only.
-        params = {"bookIds": self.fetch_book_ids} if self.fetch_book_ids else None
+        params: dict[str, str] = {"periods": REQUESTED_PERIODS}
+        if self.fetch_book_ids:
+            params["bookIds"] = self.fetch_book_ids
         for path in self._paths:
             tally.requested(path)
             try:

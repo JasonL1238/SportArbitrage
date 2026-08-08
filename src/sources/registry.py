@@ -53,7 +53,7 @@ from src.jurisdictions import (
 )
 from src.settlement import SETTLEMENT
 from src.sources.base import OddsSource
-from src.sources.actionnetwork import ActionNetworkAdapter
+from src.sources.actionnetwork import LEGACY_V1_BASE_URL, ActionNetworkAdapter
 from src.sources.betrivers_kambi import BetRiversKambiAdapter
 from src.sources.betmgm import BetMgmAdapter
 from src.sources.bovada import BovadaAdapter
@@ -141,9 +141,22 @@ REPUBLISHED_SOURCE_KEYS: frozenset[str] = frozenset(
 #   an_bovada       Action Network mirrors of two of the above.  Already
 #   an_onexbet      view-only, but they have to disappear *with* their book, or
 #                   the US-only view still shows its price as context.
+#   polymarket      **Two venues share this brand and only one is US-executable.**
+#                   ``src.sources.polymarket`` reads ``gamma-api.polymarket.com``,
+#                   the offshore platform.  The US venue is a different legal
+#                   entity — QCX LLC, doing business as Polymarket US, a
+#                   CFTC-designated contract market Polymarket acquired in July
+#                   2025 — with its own order book, its own fee schedule and its
+#                   own settlement rules.  A price quoted by the offshore book is
+#                   not one a US customer can take, and pricing a hedge off it
+#                   reports a position as risk-free that cannot be entered.  The
+#                   US venue belongs here as its own source key, not as a config
+#                   variant of this one: ``COMMISSIONS`` and ``SETTLEMENT`` are
+#                   keyed by source key, so sharing one would read a fee schedule
+#                   and a rain-out rule off the wrong venue's bytes.
 #
-# Kalshi and Polymarket are deliberately absent: both operate under US regulation
-# and are executable from the US.
+# Kalshi is deliberately absent: it operates its own CFTC-regulated exchange and
+# is executable from the US.
 US_UNAVAILABLE_SOURCE_KEYS: frozenset[str] = frozenset(
     {
         "pinnacle",
@@ -156,6 +169,7 @@ US_UNAVAILABLE_SOURCE_KEYS: frozenset[str] = frozenset(
         "sxbet",
         "an_bovada",
         "an_onexbet",
+        "polymarket",
     }
 )
 
@@ -462,10 +476,26 @@ _BASE_SOURCES: tuple[SourceDescriptor, ...] = (
         kind=SourceKind.SPORTSBOOK,
     ),
     # Hard Rock / Fanatics / Fliff / Circa / Westgate(SuperBook) / Bally —
-    # Action Network catalog ids.  From CA the scoreboard often omits prices
-    # even when bookIds are named; first-party adapters are the real path once
+    # Action Network catalog ids.  First-party adapters are the real path once
     # ODDS_HTTP_PROXY is set.  Fliff is sweepstakes-style in many states —
     # treat legs with extra caution (still a sportsbook kind for schema).
+    #
+    # Fliff (2292), Circa (78) and SuperBook (14) are absent from **both**
+    # endpoint versions: asked alone on 2026-08-08, no response on either
+    # carried the id requested, and none of the three appears in any capture in
+    # this repository.  (The reply carried the defaults and nothing else on that
+    # thin board; stored v1 captures show v1 answering an unknown id with an
+    # assortment of other books instead, so "the defaults" is what happened that
+    # minute rather than what v1 does in general.)  So the v2
+    # switch is not the fix for them and no request shape here is.
+    #
+    # They are not "failing loudly": having no fixture, they take the
+    # session-scoped ``registered_raws`` down with them, and roughly 1600
+    # unrelated assertions — the whole shared source contract included — error at
+    # setup instead of running.  One of those unrun assertions is
+    # ``test_the_adapter_produced_rows_at_all``, which is precisely the check
+    # that would have caught the Pennsylvania feeds returning nothing.  The
+    # blast radius is the problem, not the redness; see docs/testing.md.
     SourceDescriptor(
         key="an_hardrock",
         adapter=ActionNetworkAdapter,
@@ -473,7 +503,6 @@ _BASE_SOURCES: tuple[SourceDescriptor, ...] = (
         config={
             "book_id": 2724,
             "fetch_book_ids": "2724,79,2988,4727,69,68,123,75,71",
-            "base_url": "https://api.actionnetwork.com/web/v2/scoreboard",
         },
     ),
     SourceDescriptor(
@@ -483,7 +512,6 @@ _BASE_SOURCES: tuple[SourceDescriptor, ...] = (
         config={
             "book_id": 2988,
             "fetch_book_ids": "2988,2990,79,4727,69,68,123,75,71",
-            "base_url": "https://api.actionnetwork.com/web/v2/scoreboard",
         },
     ),
     SourceDescriptor(
@@ -511,16 +539,20 @@ _BASE_SOURCES: tuple[SourceDescriptor, ...] = (
         config={
             "book_id": 4693,
             "fetch_book_ids": "4693,79,2988,4727,69,68,123,75,71",
-            "base_url": "https://api.actionnetwork.com/web/v2/scoreboard",
         },
     ),
-    # Bet365 only appears when Caesars is named on the request; parse still
-    # filters to book_id 79.
+    # On v2 an id named alone comes back alone (measured 2026-08-08 for 79, 123,
+    # 74, 4623 and 246), so bet365 no longer has to ride along on a Caesars
+    # request — and asking for 123 alone while parsing 79 would now return
+    # nothing, because v2's bookIds *selects* rather than expands.  This base
+    # config is overwritten per state from ``Jurisdiction.republished`` on every
+    # path that opens a socket, so it was never live; it is corrected rather than
+    # left as a trap for the first caller who builds the base registry.
     SourceDescriptor(
         key="an_bet365",
         adapter=ActionNetworkAdapter,
         kind=SourceKind.SPORTSBOOK,
-        config={"book_id": 79, "fetch_book_ids": "123"},
+        config={"book_id": 79, "fetch_book_ids": "79"},
     ),
     # State-licensed books with no first-party adapter here.  The ids below are
     # New Jersey's, which is what a GLOBAL run republishes: Action Network files
@@ -573,20 +605,37 @@ _BASE_SOURCES: tuple[SourceDescriptor, ...] = (
         kind=SourceKind.SPORTSBOOK,
         config={"book_id": 75},
     ),
-    # Offshore shelf: these book ids are absent from the default US payload and
-    # only appear when named.  Asking for BetRivers/BetMGM ids here would strip
-    # those books, so the expand set stays offshore-only.
+    # Offshore shelf.  These two are the **only** sources that may set
+    # ``base_url``, and they must: the offshore books exist on v1 and not on v2.
+    # Measured 2026-08-08, both versions asked ``21,35,2495`` in the same
+    # minute — v1 answered with Bovada on NFL and with Bovada and 1xBet on
+    # soccer, v2 answered with neither on any of the five leagues.  Removing
+    # these overrides silently empties two working sources, which is why the
+    # reason is recorded here rather than in a commit message.
+    #
+    # The expand set stays offshore-only.  These are now the only descriptors
+    # still on v1, and v1 is where the old trap was measured: asking for
+    # BetRivers/BetMGM ids (71, 75) there could *remove* those books from the
+    # payload.  That does not reproduce on v2, but nothing here runs on v2.
     SourceDescriptor(
         key="an_bovada",
         adapter=ActionNetworkAdapter,
         kind=SourceKind.SPORTSBOOK,
-        config={"book_id": 21, "fetch_book_ids": "21,35,2495"},
+        config={
+            "book_id": 21,
+            "fetch_book_ids": "21,35,2495",
+            "base_url": LEGACY_V1_BASE_URL,
+        },
     ),
     SourceDescriptor(
         key="an_onexbet",
         adapter=ActionNetworkAdapter,
         kind=SourceKind.SPORTSBOOK,
-        config={"book_id": 2495, "fetch_book_ids": "21,35,2495"},
+        config={
+            "book_id": 2495,
+            "fetch_book_ids": "21,35,2495",
+            "base_url": LEGACY_V1_BASE_URL,
+        },
     ),
     SourceDescriptor(
         key="sxbet",
@@ -698,16 +747,16 @@ def state_licensed_keys(state: str) -> frozenset[str]:
 def takeable_from_state(state: str) -> frozenset[str]:
     """Every venue the operator can actually place a bet at from *state*.
 
-    A retail licence is one way to be reachable, not the only one.  Kalshi and
-    Polymarket are federally regulated US venues with no per-state sportsbook
-    licence to hold — this registry says so itself, in the note explaining why they
-    are absent from :data:`US_UNAVAILABLE_SOURCE_KEYS` — so a filter built on
-    :func:`state_licensed_keys` alone called them out-of-state everywhere.
+    A retail licence is one way to be reachable, not the only one.  Kalshi is a
+    federally regulated US venue with no per-state sportsbook licence to hold —
+    this registry says so itself, in the note explaining why it is absent from
+    :data:`US_UNAVAILABLE_SOURCE_KEYS` — so a filter built on
+    :func:`state_licensed_keys` alone called it out-of-state everywhere.
 
-    That inverted the rule it was written to serve: a Kalshi/Polymarket position on
+    That inverted the rule it was written to serve: a Kalshi position on
     a Pennsylvania run was **withheld from the report, the dashboard and the SMS**,
-    under a warning saying "every leg was a global or offshore venue", about two
-    venues legal in Pennsylvania.  Rule (a) exists to stop an unreachable price
+    under a warning saying "every leg was a global or offshore venue", about a
+    venue legal in Pennsylvania.  Rule (a) exists to stop an unreachable price
     being presented as the state's own; it was never a reason to hide a reachable
     one.
 
@@ -718,13 +767,18 @@ def takeable_from_state(state: str) -> frozenset[str]:
 
     **The nationwide half is state-invariant, and that is a real limit of this
     function rather than a claim about the world.**  The comprehension below never
-    reads *state*: the non-retail contribution is ``{kalshi, polymarket}``
-    identically in IL, PA, NJ and DC, because the only lever is the all-or-nothing
-    :data:`US_UNAVAILABLE_SOURCE_KEYS` and no per-state table mentions either venue.
+    reads *state*: the non-retail contribution is ``{kalshi}`` identically in IL,
+    PA, NJ and DC, because the only lever is the all-or-nothing
+    :data:`US_UNAVAILABLE_SOURCE_KEYS` and no per-state table mentions it.
     Kalshi's sports contracts are the one venue where per-state availability is
     genuinely contested, so if that ever has to be answered per state it needs a
     table in :mod:`src.jurisdictions` first — do not read a per-state answer out of
     this name until one exists.
+
+    ``polymarket`` used to be the second name in that set and is not any more: the
+    registered adapter reads the offshore platform, which is a different legal
+    entity from the CFTC-designated Polymarket US.  Its legs are now labelled
+    "not reachable from {ST}" everywhere rather than counted as a local hedge.
     """
     nationwide = frozenset(
         entry.key

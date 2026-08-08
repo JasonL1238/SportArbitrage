@@ -1859,11 +1859,19 @@ def test_every_venue_says_whether_it_can_be_bet_from_the_us() -> None:
 
 
 def test_a_us_regulated_venue_is_not_marked_unbettable() -> None:
-    """Kalshi and Polymarket are the two that must not be swept up by the set."""
+    """Kalshi is the one that must not be swept up by the set.
+
+    ``polymarket`` deliberately is: the registered adapter reads the offshore
+    platform, and the CFTC-designated Polymarket US is a different legal entity
+    with a different order book.  Both directions are pinned here because the
+    page uses this flag to decide what the US-only view shows, so an error either
+    way is a wrong answer to "can I actually take this price".
+    """
     from src.report import _source_entry
 
-    for key in ("kalshi", "polymarket", "fanduel", "draftkings"):
+    for key in ("kalshi", "fanduel", "draftkings"):
         assert _source_entry(key)["us_unavailable"] is False, key
+    assert _source_entry("polymarket")["us_unavailable"] is True
 
 
 def test_the_arb_payload_carries_both_the_us_only_and_the_offshore_view(
@@ -2190,10 +2198,12 @@ def test_the_page_tells_the_reader_when_positions_are_flagged() -> None:
     branch = branch[:branch.index("if (!opps.length)")]
     assert "flagged" in branch
     # And it has to be the *right* words. The marking is
-    # ``registry.takeable_from_state``, which leaves Kalshi and Polymarket — venues
-    # no state licenses as sportsbooks — unlabelled, so a note saying "this
-    # jurisdiction does not license" told the reader their prediction-market edge
-    # had been flagged for licensing. Reachability is the claim the code makes.
+    # ``registry.takeable_from_state``, which leaves Kalshi — a venue no state
+    # licenses as a sportsbook — unlabelled, so a note saying "this jurisdiction
+    # does not license" told the reader their prediction-market edge had been
+    # flagged for licensing. Reachability is the claim the code makes, and it cuts
+    # both ways: the offshore Polymarket *is* labelled, being a different entity
+    # from the CFTC-designated Polymarket US.
     note = branch[branch.index("flaggedNote"):]
     assert "reach from this jurisdiction" in note
     assert "does not license" not in note

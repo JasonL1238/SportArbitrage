@@ -1,22 +1,79 @@
+"""Which Action Network endpoint each republisher asks, and why it matters.
+
+The two versions publish different book catalogues.  Pennsylvania's whole set —
+74, 122, 246, 255, 280, 1534, 1906, 2791, 3547, 4623 — comes back on ``web/v2``;
+on ``web/v1`` the MLB board carries none of it, and only 74 and 122 appear at all,
+on two leagues.  The offshore shelf (21, 35, 2495) is the other way round:
+``web/v1`` only.  Both were measured in the same minute on 2026-08-08.
+
+That makes the base URL a correctness property rather than a preference, and a
+silent one: v1 answers a Pennsylvania MLB request with HTTP 200, a full slate and
+prices belonging to books nobody asked for.  Nine of Pennsylvania's ten fetchable
+republished feeds were on v1 that way while reporting healthy — seven returning
+nothing of their own on any league — because the *default* was v1 and only three
+descriptors had thought to override it.
+
+So the rule these tests hold is directional: **the default is the endpoint that
+knows state licences**, and leaving it is the thing that has to be spelled out.
+A descriptor that forgets to choose gets the working one.
+"""
 from __future__ import annotations
 
+import dataclasses
 from pathlib import Path
 
+import httpx
 import pytest
 
+from src.jurisdictions import JURISDICTIONS, RouteStatus
 from src.raw_store import RawStore
-from src.sources.registry import descriptor
+from src.schema import Period
+from src.sources import registry
+from src.sources.actionnetwork import (
+    DEFAULT_BASE_URL,
+    LEGACY_V1_BASE_URL,
+    REQUESTED_PERIODS,
+    ActionNetworkAdapter,
+    parse_actionnetwork,
+)
+from src.sources.guards import SourceError
+
+FIXTURE_RAW_DIR = Path(__file__).parent / "fixtures" / "raw"
+
+#: Spelled out rather than imported.  Asserting a descriptor equals
+#: ``DEFAULT_BASE_URL`` is a tautology — move the constant to v1 and every such
+#: comparison stays true while every live request goes to the wrong catalogue.
+#: Measured, so it is a literal.
+V2_URL = "https://api.actionnetwork.com/web/v2/scoreboard"
+V1_URL = "https://api.actionnetwork.com/web/v1/scoreboard"
+
+#: The two sources whose books exist on v1 and not on v2.  Any other key here
+#: would be a source silently reading last-generation ids.
+OFFSHORE_KEYS = frozenset({"an_bovada", "an_onexbet"})
 
 
-FIXTURE_DIR = Path(__file__).parent / "fixtures" / "raw"
+def _an_descriptors(state: str | None) -> dict[str, registry.SourceDescriptor]:
+    entries = (
+        registry.sources_for_state(state) if state else registry.SOURCES
+    )
+    return {
+        entry.key: entry
+        for entry in entries
+        if entry.adapter is ActionNetworkAdapter
+    }
+
+
+def test_the_default_endpoint_is_the_one_that_knows_state_licences() -> None:
+    assert DEFAULT_BASE_URL == V2_URL
+    assert LEGACY_V1_BASE_URL == V1_URL
 
 
 @pytest.mark.parametrize("source", ("an_hardrock", "an_fanatics", "an_bally"))
 def test_current_v2_capture_produces_real_quotes_without_rejections(source: str) -> None:
-    paths = sorted(FIXTURE_DIR.glob(f"{source}__*.json"))
+    paths = sorted(FIXTURE_RAW_DIR.glob(f"{source}__*.json"))
     assert paths
-    raws = [RawStore(FIXTURE_DIR).read(path) for path in paths]
-    adapter = descriptor(source).replay_instance()
+    raws = [RawStore(FIXTURE_RAW_DIR).read(path) for path in paths]
+    adapter = registry.descriptor(source).replay_instance()
     try:
         outcome = adapter.parse(raws)
     finally:
@@ -24,3 +81,225 @@ def test_current_v2_capture_produces_real_quotes_without_rejections(source: str)
     assert outcome.quotes
     assert not outcome.rejections
     assert {quote.source for quote in outcome.quotes} == {source}
+
+
+@pytest.mark.parametrize("source", ("an_hardrock", "an_fanatics", "an_bally"))
+def test_the_committed_v2_captures_are_full_game_only_because_none_asked(
+    source: str,
+) -> None:
+    """The coverage this endpoint drops when the period set is not named.
+
+    v2 answers with ``event`` alone unless ``periods`` names the windows, and
+    every committed v2 capture predates that discovery — so all three parse to
+    full game only, while every v1 capture beside them that parses to rows at all
+    carries period rows for 35-57% of its total (40-65% of its baseball rows).
+    ``an_open`` is 40 of 70 pregame MLB rows.
+
+    This test states the gap rather than hiding it.  It is expected to be
+    rewritten — not deleted — when these fixtures are recaptured with
+    :data:`REQUESTED_PERIODS`, and it will fail loudly at that point, which is
+    the only reliable reminder that the recapture actually changed something.
+    """
+    paths = sorted(FIXTURE_RAW_DIR.glob(f"{source}__*.json"))
+    raws = [RawStore(FIXTURE_RAW_DIR).read(path) for path in paths]
+    assert all("periods=" not in raw.url for raw in raws), (
+        "a capture asked for periods; rewrite this test to assert they arrived"
+    )
+    adapter = registry.descriptor(source).replay_instance()
+    try:
+        outcome = adapter.parse(raws)
+    finally:
+        adapter.close()
+    assert {quote.period for quote in outcome.quotes} == {Period.FULL_GAME}
+
+
+def test_every_request_asks_for_the_period_windows() -> None:
+    """The parameter without which v2 silently returns a third of the rows.
+
+    Named ``periods``, plural, and the near misses are all quiet: singular
+    ``period`` is ignored, and a comma-space list is accepted and answered with
+    full game only.  So this pins the literal, not just its presence.
+    """
+    assert REQUESTED_PERIODS == "event,firstfiveinnings,firstinning"
+    assert " " not in REQUESTED_PERIODS
+
+    sent: list[dict[str, str] | None] = []
+
+    def record(request: httpx.Request) -> httpx.Response:
+        sent.append(dict(request.url.params))
+        return httpx.Response(200, json={"games": []})
+
+    for key in ("an_parx", "an_open", "an_bovada"):
+        entry = registry.descriptor(key)
+        adapter = entry.factory()(
+            leagues=["MLB"],
+            client=httpx.Client(transport=httpx.MockTransport(record)),
+        )
+        try:
+            with pytest.raises(SourceError):
+                adapter.fetch_raw()  # an empty board is a refusal, not a result
+        finally:
+            adapter.close()
+
+    assert sent, "no request was issued"
+    for params in sent:
+        assert params is not None
+        assert params.get("periods") == REQUESTED_PERIODS
+
+
+@pytest.mark.parametrize("state", [None, *sorted(JURISDICTIONS)])
+def test_every_republisher_asks_v2_except_the_offshore_two(state: str | None) -> None:
+    """The check that makes descriptor #19 impossible.
+
+    A new Action Network source is added by copying a neighbour and changing the
+    book id.  Nothing in ``_check_registry`` can catch a *missing* config key, so
+    the only thing that keeps the next one off the wrong endpoint is that
+    omitting the key now means v2.  This asserts that across every jurisdiction,
+    not just the base registry, because a state run rebuilds these descriptors
+    from ``Jurisdiction.republished`` and could reintroduce one there.
+    """
+    descriptors = _an_descriptors(state)
+    assert descriptors, "no Action Network sources built"
+    if state:
+        # The lookup a live state run actually fetches through, which rebuilds
+        # these descriptors from the jurisdiction rather than reading them off
+        # the base registry.  Sweeping only the enumeration lookup would miss a
+        # v1 URL reintroduced there.
+        descriptors |= {
+            entry.key: entry
+            for entry in registry.republished_sources_for_state(state)
+            if entry.adapter is ActionNetworkAdapter
+        }
+
+    for key, entry in sorted(descriptors.items()):
+        base = entry.config.get("base_url", DEFAULT_BASE_URL)
+        if key in OFFSHORE_KEYS:
+            assert base == V1_URL, (
+                f"{key} carries the offshore shelf, which v2 does not publish"
+            )
+            continue
+        assert base == V2_URL, (
+            f"{key} would ask web/v1, which answers a state request with a full "
+            "slate of books nobody asked for rather than with an error"
+        )
+
+
+def test_the_offshore_exception_is_two_sources_and_stays_that_way() -> None:
+    """A widening exception should cost somebody a deliberate edit.
+
+    ``base_url`` is the one config key that can quietly point a source at last
+    generation's catalogue, so the set allowed to set it is pinned rather than
+    merely conventional.
+    """
+    setters = {
+        entry.key
+        for entry in registry.SOURCES
+        if entry.adapter is ActionNetworkAdapter and "base_url" in entry.config
+    }
+    assert setters == OFFSHORE_KEYS
+
+
+def test_the_endpoint_is_a_fetch_concern_and_never_reaches_parse() -> None:
+    """The claim the v2 switch rests on, in executable form.
+
+    Committed captures are v1 bytes.  They must keep parsing identically after
+    the default moves, which holds only because ``base_url`` is read in
+    ``fetch_raw`` while ``parse`` is a module-level function reading the schema
+    off the payload and the book id off the envelope label.  If that ever stops
+    being true, every stored fixture starts disagreeing with the live run and
+    this is the test that says so.
+    """
+    store = RawStore(FIXTURE_RAW_DIR)
+    paths = sorted(FIXTURE_RAW_DIR.glob("an_bovada__*.json"))
+    assert paths, "an_bovada is the committed v1 capture this test reads"
+    raws = [store.read(path) for path in paths]
+    assert any("/web/v1/" in raw.url for raw in raws), (
+        "this fixture is meant to be v1 bytes; the test is vacuous otherwise"
+    )
+
+    on_v2 = ActionNetworkAdapter(
+        source_key="an_bovada", book_id=21, base_url=DEFAULT_BASE_URL
+    )
+    on_v1 = ActionNetworkAdapter(
+        source_key="an_bovada", book_id=21, base_url=LEGACY_V1_BASE_URL
+    )
+    try:
+        assert on_v2.parse(raws).quotes == on_v1.parse(raws).quotes
+        assert on_v2.parse(raws).quotes == parse_actionnetwork(raws).quotes
+    finally:
+        on_v2.close()
+        on_v1.close()
+
+
+def test_parse_reads_the_book_from_the_envelope_not_the_instance() -> None:
+    """Why relabelling a capture is enough to test another tenant's id.
+
+    Also the reason the endpoint cannot leak into parse: the tenant is carried by
+    the stored envelope, so replay does not need to know how the adapter was
+    configured.  ``replay_run`` calls ``descriptor.factory()`` with no arguments —
+    the descriptor's own config is bound into the partial, so what replay omits is
+    the *caller's* configuration, not the registry's.
+    """
+    store = RawStore(FIXTURE_RAW_DIR)
+    paths = sorted(FIXTURE_RAW_DIR.glob("an_bovada__*.json"))
+    raws = [store.read(path) for path in paths]
+    assert parse_actionnetwork(raws).quotes, "fixture parses to rows as book 21"
+
+    relabelled = [
+        dataclasses.replace(raw, endpoint=raw.endpoint.replace(":21:", ":2495:"))
+        for raw in raws
+    ]
+    as_other_book = parse_actionnetwork(relabelled)
+    assert all(quote.source == "an_bovada" for quote in as_other_book.quotes)
+    assert as_other_book.quotes != parse_actionnetwork(raws).quotes
+
+
+@pytest.mark.parametrize("state", sorted(JURISDICTIONS))
+def test_no_republished_route_claims_to_have_been_validated(state: str) -> None:
+    """A status nothing can earn is worse than no status.
+
+    ``_republished_for`` builds these routes from a table of book ids.  It runs
+    no probe, reads no capture, and cannot know whether a feed answers — so
+    ``VALIDATED``, which it used to stamp on every route it built, was assigned
+    by the act of construction.  Pennsylvania's betPARX, Mohegan and theScore
+    routes read "validated" while returning zero rows.
+
+    ``TEMPLATE`` is the honest word here and ``UNAVAILABLE`` is the licensing
+    fact.  Whether the book was seen is ``src.coverage``'s claim, not this one.
+
+    **No output surface reads this difference today** — every consumer tests
+    only ``is UNAVAILABLE``, and ``RetailRoute.warning`` is a different class.
+    That is the argument for pinning it rather than against: a field nothing
+    validates is exactly the one that drifts, and the next reader to reach for
+    a route status will find a word that means what it says.
+    """
+    for key, route in sorted(JURISDICTIONS[state].republished.items()):
+        assert route.status is not RouteStatus.VALIDATED, (
+            f"{state}/{key}: nothing in this construction path can validate a "
+            "route; src.coverage owns the observed-or-not claim"
+        )
+        assert route.status in (RouteStatus.TEMPLATE, RouteStatus.UNAVAILABLE)
+
+
+def test_the_state_layer_names_pennsylvanias_own_ids() -> None:
+    """The ids v1 could not answer for, resolved per state rather than inherited.
+
+    Pinned alongside the endpoint because the two together are what makes a PA
+    run a PA run: v2 supplies the catalogue and ``Jurisdiction.republished``
+    supplies the licence.  Either one wrong and the run reports another state's
+    prices under Pennsylvania's name.
+    """
+    built = _an_descriptors("PA")
+    assert built["an_parx"].config["book_id"] == 74
+    assert built["an_unibet"].config["book_id"] == 246
+    assert built["an_thescore"].config["book_id"] == 4623
+    assert built["an_betrivers"].config["book_id"] == 122
+
+    # The fetch-path lookup refuses the two books with no PA licence.  The
+    # enumeration lookup above deliberately keeps them registered on their own
+    # New Jersey ids so replay and coverage still see a stable key set — which
+    # is exactly why the endpoint sweep has to run over *both*.
+    fetched = {entry.key for entry in registry.republished_sources_for_state("PA")}
+    for key in ("an_hardrock", "an_bally"):
+        assert key in built
+        assert key not in fetched, f"{key} holds no PA licence and must not be fetched"
