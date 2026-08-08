@@ -153,6 +153,24 @@ NJ wins for `an_caesars` (123 < 1906), `an_parx` (1929 < 74) and `an_thescore`
 (4620 < 4623) — two of which are the books this work exists to unblock. Put the
 book id in the fixture key, or assert one book id per source's fixture set.
 
+**Fixed 2026-08-08 by asserting one book id, not by keying per book.** Keying the
+de-duplication per book only moves the collision downstream: both licences' rows
+then carry the same `dedup_key`, and `drop_duplicate_selections` rejects whichever
+half parses second to satisfy storage's UNIQUE constraint. Neither half is the
+state's price, so there is nothing to choose between and no merge worth writing.
+`_require_one_book` now raises `FormatChangeError` naming both ids, because one
+pass writes exactly one `book_id` and two can only mean a stale out-of-state
+capture. No committed fixture set carries two ids today, so it fires only on the
+hazard.
+
+Re-measured on the real bytes rather than the synthetic Caesars envelope: the
+committed `an_bovada` capture as a week-old survivor (book 21) beside a relabelled
+copy as today's (2495) parsed to **36 rows, every one of them from
+`scoreboard-21-mlb`**, `duplicate_event: 5` — the newer capture's 12 rows gone in
+silence. Pinned by
+`test_a_second_licences_capture_is_refused_not_quietly_preferred`; deleting the
+guard restores the silent merge and the test fails.
+
 **2. `takeable_from_state`'s nationwide half is default-open.** It admits every
 base descriptor that is not retail, not a republisher and not US-unavailable — so
 a newly registered source that is none of those is reachable from *all four*
@@ -165,6 +183,27 @@ accept it as PA's direct route and `coverage_for_state` would grade the book
 is missing, rather than letting them inherit nationwide reachability. The same
 applies to ProphetX and Novig, which are *stakeable* — there the wrong answer is
 a leg sized into an alerted position.
+
+**Fixed 2026-08-08 by closing the world.** `NATIONWIDE_SOURCE_KEYS` is now an
+enumerated set — `{kalshi}` — and `_check_reachability_is_declared` requires the
+four sets to partition `_BASE_SOURCES`, so registering a source without deciding
+how it is reachable fails at import with the four choices spelled out. It also
+refuses a key that is nationwide *and* retail/view-only/US-unavailable (the union
+would then contradict the per-state table) and a set naming a source that no
+longer exists.
+
+Takeable sets are unchanged by the fix — PA/IL/NJ/DC return exactly what they
+returned before — because the old comprehension and the named set are provably
+equal *while* the four sets partition the registry. That equivalence is the
+reason a mutation reverting `takeable_from_state` to the comprehension still
+passes: the invariant is what fixed this, not the expression. The direction is
+pinned separately by
+`test_the_nationwide_half_of_takeable_is_exactly_the_named_set`.
+
+The advice above still stands for the sources ahead: theScore Bet belongs in
+`RETAIL_SOURCE_KEYS` with per-state routes, and ProphetX and Novig must be
+classified explicitly before they can be registered — that is now enforced rather
+than remembered.
 
 ## Polymarket: two venues share the brand — 2026-08-08
 

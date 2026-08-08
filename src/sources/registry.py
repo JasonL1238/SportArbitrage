@@ -173,6 +173,31 @@ US_UNAVAILABLE_SOURCE_KEYS: frozenset[str] = frozenset(
     }
 )
 
+#: Venues reachable from every state in :data:`~src.jurisdictions.JURISDICTIONS`
+#: without holding a per-state sportsbook licence — the second half of
+#: :func:`takeable_from_state`.
+#:
+#: **Enumerated, not derived.**  This used to be "every base source that is not
+#: retail, not republished and not US-unavailable", which admitted each newly
+#: registered source to all four states the moment it appeared, without it being
+#: named in any table.  A first-party ``thescore`` added outside
+#: :data:`RETAIL_SOURCE_KEYS` would have been takeable in DC, where theScore Bet
+#: is not listed at all, and :func:`src.coverage._check_direct_route` would then
+#: accept it as Pennsylvania's direct route.  Silence is the wrong default for a
+#: question whose wrong answer is a leg sized into a position.
+#:
+#: :func:`_check_registry` requires every base source to be classified by exactly
+#: one of the four sets, so *adding* a source without deciding this now fails at
+#: import instead of granting nationwide reach by omission.
+#:
+#: Kalshi qualifies on the merits: a CFTC-regulated exchange with no state
+#: sportsbook licence to hold, which is why it is also absent from
+#: :data:`US_UNAVAILABLE_SOURCE_KEYS`.  A first-party sportsbook never belongs
+#: here — it holds licences state by state, so it goes in
+#: :data:`RETAIL_SOURCE_KEYS` with real per-state routes, where a missing route
+#: fails loudly.
+NATIONWIDE_SOURCE_KEYS: frozenset[str] = frozenset({"kalshi"})
+
 VIEW_ONLY_SOURCES: frozenset[str] = REPUBLISHED_SOURCE_KEYS | jurisdiction(
     settings.STATE
 ).view_only_sources
@@ -762,32 +787,26 @@ def takeable_from_state(state: str) -> frozenset[str]:
 
     Retail keys still have to earn their place per state — ``hardrock`` is
     US-executable in general and ``UNAVAILABLE`` in Pennsylvania, so it is takeable
-    in IL and NJ and not here.  Only the non-retail first-party venues are admitted
-    by nationwide reachability, and only when they are not offshore.
+    in IL and NJ and not here.  The other half is
+    :data:`NATIONWIDE_SOURCE_KEYS`, which is **named rather than inferred**: a
+    venue reaches every state by being written down as doing so, not by failing to
+    match three exclusions.
 
     **The nationwide half is state-invariant, and that is a real limit of this
-    function rather than a claim about the world.**  The comprehension below never
-    reads *state*: the non-retail contribution is ``{kalshi}`` identically in IL,
-    PA, NJ and DC, because the only lever is the all-or-nothing
-    :data:`US_UNAVAILABLE_SOURCE_KEYS` and no per-state table mentions it.
-    Kalshi's sports contracts are the one venue where per-state availability is
-    genuinely contested, so if that ever has to be answered per state it needs a
-    table in :mod:`src.jurisdictions` first — do not read a per-state answer out of
-    this name until one exists.
+    function rather than a claim about the world.**  The union below never reads
+    *state* on that side: the contribution is ``{kalshi}`` identically in IL, PA,
+    NJ and DC, because no per-state table mentions it.  Kalshi's sports contracts
+    are the one venue where per-state availability is genuinely contested, so if
+    that ever has to be answered per state it needs a table in
+    :mod:`src.jurisdictions` first — do not read a per-state answer out of this
+    name until one exists.
 
     ``polymarket`` used to be the second name in that set and is not any more: the
     registered adapter reads the offshore platform, which is a different legal
     entity from the CFTC-designated Polymarket US.  Its legs are now labelled
     "not reachable from {ST}" everywhere rather than counted as a local hedge.
     """
-    nationwide = frozenset(
-        entry.key
-        for entry in _BASE_SOURCES
-        if entry.key not in RETAIL_SOURCE_KEYS
-        and entry.key not in REPUBLISHED_SOURCE_KEYS
-        and entry.key not in US_UNAVAILABLE_SOURCE_KEYS
-    )
-    return state_licensed_keys(state) | nationwide
+    return state_licensed_keys(state) | NATIONWIDE_SOURCE_KEYS
 
 
 #: Republishers whose book is a **state licence**, so which book they publish
@@ -1019,6 +1038,66 @@ def _check_registry() -> None:
                     f"source {entry.key!r} configures {unknown}, which "
                     f"{entry.adapter.__name__} does not accept"
                 )
+    _check_reachability_is_declared()
+
+
+def _check_reachability_is_declared() -> None:
+    """Every base source says how it is reachable, or the import fails.
+
+    :func:`takeable_from_state` answers "can the operator place this bet from
+    here", and its nationwide half used to be whatever was left after three
+    exclusions.  Left-over is not a decision: a source registered without a
+    thought about licensing became takeable in all four states, and nothing named
+    it anywhere for a reviewer to check.  Coverage grades a book ``DIRECT`` off
+    such a key, so the failure surfaces as a state's board looking complete.
+
+    So the four sets partition :data:`_BASE_SOURCES`.  Unclassified is an error
+    rather than a default, and the two overlaps that are real are spelled out:
+    a republished mirror of an offshore book is both view-only and unstakeable.
+
+    ``_BASE_SOURCES`` and not :data:`SOURCES`, because the state-scoped
+    republisher variants are generated from the base list and inherit its
+    classification.
+    """
+    buckets = {
+        "RETAIL_SOURCE_KEYS": RETAIL_SOURCE_KEYS,
+        "REPUBLISHED_SOURCE_KEYS": REPUBLISHED_SOURCE_KEYS,
+        "US_UNAVAILABLE_SOURCE_KEYS": US_UNAVAILABLE_SOURCE_KEYS,
+        "NATIONWIDE_SOURCE_KEYS": NATIONWIDE_SOURCE_KEYS,
+    }
+    base_keys = {entry.key for entry in _BASE_SOURCES}
+
+    unclassified = sorted(base_keys - set().union(*buckets.values()))
+    if unclassified:
+        raise RuntimeError(
+            f"source(s) {unclassified} are in no reachability set. Add each to "
+            "RETAIL_SOURCE_KEYS (a state-licensed book, with per-state routes in "
+            "src.jurisdictions), REPUBLISHED_SOURCE_KEYS (somebody else's board), "
+            "US_UNAVAILABLE_SOURCE_KEYS (no US access), or NATIONWIDE_SOURCE_KEYS "
+            "(reachable from every state without a state licence). Leaving one out "
+            "used to mean nationwide reach by omission, which is how an "
+            "unreachable venue becomes a state's 'direct' route"
+        )
+
+    for name, keys in buckets.items():
+        stray = sorted(keys - base_keys)
+        if stray:
+            raise RuntimeError(
+                f"{name} names {stray}, which no source registers; a set that can "
+                "drift from the registry stops being a statement about it"
+            )
+
+    nationwide_conflict = sorted(
+        NATIONWIDE_SOURCE_KEYS
+        & (RETAIL_SOURCE_KEYS | REPUBLISHED_SOURCE_KEYS | US_UNAVAILABLE_SOURCE_KEYS)
+    )
+    if nationwide_conflict:
+        raise RuntimeError(
+            f"{nationwide_conflict} are declared reachable from every state and "
+            "also state-licensed, view-only or US-unavailable. Nationwide reach "
+            "means no per-state licence is needed; the other three each mean the "
+            "opposite, so takeable_from_state would contradict itself"
+        )
 
 
 _check_registry()
@@ -1032,6 +1111,7 @@ __all__ = [
     "BY_KEY",
     "SOURCES",
     "SLOW_SOURCES",
+    "NATIONWIDE_SOURCE_KEYS",
     "REPUBLISHED_SOURCE_KEYS",
     "RETAIL_SOURCE_KEYS",
     "STATE_LICENSED_REPUBLISHER_KEYS",

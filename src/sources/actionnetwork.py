@@ -404,9 +404,12 @@ def parse_actionnetwork(raws: Sequence[RawResponse]) -> ParseOutcome:
     outcome = ParseOutcome()
     source = envelope_source(raws, fallback=SOURCE_KEY)
 
+    ordered = latest_per_endpoint(raws)
+    _require_one_book(ordered, source)
+
     fixtures: dict[str, _Fixture] = {}
     work: list[tuple[RawResponse, Mapping[str, Any], _Fixture, int, str]] = []
-    for raw in latest_per_endpoint(raws):
+    for raw in ordered:
         book_id, path = _book_and_path(raw.endpoint)
         entry = PATHS.get(path)
         if entry is None or book_id is None:
@@ -651,6 +654,47 @@ def _emit_v2_market(
         _emit(
             raw, source, fixture, event_key, outcome,
             Market.TOTAL, period, market_id, tuple(sides), status,
+        )
+
+
+def _require_one_book(raws: Sequence[RawResponse], source: str) -> None:
+    """Refuse a store that mixes two states' book ids under one source key.
+
+    One adapter instance carries one :attr:`~ActionNetworkAdapter.book_id`, and
+    every envelope a pass writes is labelled with it, so two ids under one
+    source key can only mean an **out-of-state capture surviving beside the
+    current one**.  The same brand is a different id per licence —
+    ``an_caesars`` is 123 in New Jersey and 1906 in Pennsylvania — and the two
+    labels differ, so :func:`latest_per_endpoint` keeps both however old one is.
+
+    Parsing them together has no good outcome.  De-duplication below is per
+    ``path:event_id``, so for a game both captures list the **lexically smaller
+    endpoint label** wins irrespective of ``fetched_at``: 123 beats 1906, and a
+    Pennsylvania run publishes New Jersey's prices as Pennsylvania's, which is
+    the one thing state-locality exists to prevent.  Putting the book id in that
+    key instead only moves the collision downstream to ``dedup_key``, where
+    storage's UNIQUE constraint makes
+    :func:`~src.sources._common.drop_duplicate_selections` reject whichever half
+    of the board came second.
+
+    Neither half is this state's price, so there is nothing to choose between
+    and no merge worth writing.  Fail, naming both ids, so the stale capture is
+    cleared rather than published.  Envelopes whose label does not decode are
+    left to the caller, which raises with the label in hand.
+    """
+    labels: dict[int, str] = {}
+    for raw in raws:
+        book_id, path = _book_and_path(raw.endpoint)
+        if book_id is None or not path:
+            continue
+        labels.setdefault(book_id, raw.endpoint)
+    if len(labels) > 1:
+        named = ", ".join(f"{book} ({labels[book]})" for book in sorted(labels))
+        raise FormatChangeError(
+            f"{source}: stored responses carry {len(labels)} book ids — {named}. "
+            "One pass writes one book id, so these are two licences' captures in "
+            "one store; clear the out-of-state one instead of parsing it as this "
+            "state's price"
         )
 
 

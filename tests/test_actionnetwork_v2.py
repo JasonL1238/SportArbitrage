@@ -20,6 +20,7 @@ A descriptor that forgets to choose gets the working one.
 from __future__ import annotations
 
 import dataclasses
+from datetime import timedelta
 from pathlib import Path
 
 import httpx
@@ -36,7 +37,7 @@ from src.sources.actionnetwork import (
     ActionNetworkAdapter,
     parse_actionnetwork,
 )
-from src.sources.guards import SourceError
+from src.sources.guards import FormatChangeError, SourceError
 
 FIXTURE_RAW_DIR = Path(__file__).parent / "fixtures" / "raw"
 
@@ -252,6 +253,50 @@ def test_parse_reads_the_book_from_the_envelope_not_the_instance() -> None:
     as_other_book = parse_actionnetwork(relabelled)
     assert all(quote.source == "an_bovada" for quote in as_other_book.quotes)
     assert as_other_book.quotes != parse_actionnetwork(raws).quotes
+
+
+def test_a_second_licences_capture_is_refused_not_quietly_preferred() -> None:
+    """The recapture hazard: two states' book ids in one source's store.
+
+    The same brand is a different id per licence, so re-capturing a republisher
+    from Pennsylvania writes a *new* endpoint label beside the surviving
+    out-of-state one — ``latest_per_endpoint`` groups by label, so age never
+    enters into it and both are parsed.  De-duplication is per ``path:event_id``
+    and iteration is over ``sorted(labels)``, so for any game both list, the
+    lexically smaller id wins: ``scoreboard:21:`` sorts before
+    ``scoreboard:2495:`` exactly as 123 sorts before 1906 for ``an_caesars``,
+    and the stale licence's prices go out under the new state's run.
+
+    Rehearsed here with the committed capture as the week-old survivor and a
+    relabelled copy as today's — the newer capture, and the loser.
+    """
+    store = RawStore(FIXTURE_RAW_DIR)
+    paths = sorted(FIXTURE_RAW_DIR.glob("an_bovada__*.json"))
+    assert paths
+    captured = [store.read(path) for path in paths]
+    assert all(":21:" in raw.endpoint for raw in captured)
+
+    stale = [
+        dataclasses.replace(raw, fetched_at=raw.fetched_at - timedelta(days=7))
+        for raw in captured
+    ]
+    fresh = [
+        dataclasses.replace(raw, endpoint=raw.endpoint.replace(":21:", ":2495:"))
+        for raw in captured
+    ]
+    assert "scoreboard:21:mlb" < "scoreboard:2495:mlb", (
+        "the trap is that the older capture sorts first; if that stopped being "
+        "true this test would pass for the wrong reason"
+    )
+    assert parse_actionnetwork(stale).quotes, "each half parses on its own"
+    assert parse_actionnetwork(fresh).quotes
+
+    with pytest.raises(FormatChangeError) as caught:
+        parse_actionnetwork(stale + fresh)
+    message = str(caught.value)
+    assert "21" in message and "2495" in message, (
+        f"the refusal has to name both ids to be actionable: {message}"
+    )
 
 
 @pytest.mark.parametrize("state", sorted(JURISDICTIONS))

@@ -980,6 +980,96 @@ def test_reachability_is_not_the_same_question_as_a_retail_licence():
         assert not registry.takeable_from_state(state) & REPUBLISHED_SOURCE_KEYS
 
 
+def test_a_source_that_declares_no_reachability_fails_the_import():
+    """Nationwide reach has to be claimed, because it used to be inherited.
+
+    The nationwide half of ``takeable_from_state`` was "every base source that is
+    not retail, not republished and not US-unavailable", so a source registered
+    without anyone deciding the question became placeable in all four states
+    while appearing in no table. A first-party ``thescore`` added that way is
+    takeable in DC — where theScore Bet is not listed at all — and
+    ``_check_direct_route`` then accepts it as PA's direct route, which is the
+    whole locality rule failing in the direction that looks like coverage.
+    """
+    import dataclasses
+
+    from src.sources import registry
+    from src.sources.kalshi import KalshiAdapter
+
+    invented = dataclasses.replace(registry.descriptor("kalshi"), key="thescore")
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(
+            registry, "_BASE_SOURCES", registry._BASE_SOURCES + (invented,)
+        )
+        with pytest.raises(RuntimeError) as caught:
+            registry._check_reachability_is_declared()
+    assert "thescore" in str(caught.value)
+    assert invented.adapter is KalshiAdapter, "descriptor copy kept a real adapter"
+
+
+def test_nationwide_reach_and_a_state_licence_cannot_both_be_claimed():
+    """The two halves of ``takeable_from_state`` mean opposite things.
+
+    Nationwide means "no per-state licence is needed"; retail, view-only and
+    US-unavailable each mean a per-state answer exists. A key in both would make
+    the union true everywhere while the per-state table said otherwise — the
+    shape of the bug this set was introduced to close, arriving through the set
+    itself.
+    """
+    from src.sources import registry
+
+    assert registry.NATIONWIDE_SOURCE_KEYS == frozenset({"kalshi"})
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(
+            registry,
+            "NATIONWIDE_SOURCE_KEYS",
+            registry.NATIONWIDE_SOURCE_KEYS | {"fanduel"},
+        )
+        with pytest.raises(RuntimeError) as caught:
+            registry._check_reachability_is_declared()
+    assert "fanduel" in str(caught.value)
+
+
+def test_a_reachability_set_cannot_name_a_source_that_does_not_exist():
+    """A set that drifts from the registry stops describing it.
+
+    The three older sets are hand-written lists of keys, and a key kept after its
+    source was renamed or dropped reads as a deliberate classification while
+    covering nothing — the quiet half of the same problem as a source covered by
+    no set at all.
+    """
+    from src.sources import registry
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(
+            registry,
+            "NATIONWIDE_SOURCE_KEYS",
+            registry.NATIONWIDE_SOURCE_KEYS | {"a_book_that_never_existed"},
+        )
+        with pytest.raises(RuntimeError) as caught:
+            registry._check_reachability_is_declared()
+    assert "a_book_that_never_existed" in str(caught.value)
+
+
+def test_the_nationwide_half_of_takeable_is_exactly_the_named_set():
+    """What ``takeable_from_state`` adds beyond the state's licences.
+
+    Worth stating because the named set and the old derived-by-exclusion
+    comprehension return the *same* answer as long as the four sets partition the
+    registry — the invariant above is what fixed the bug, not the expression. So
+    this pins the direction: the state-invariant half is read from
+    ``NATIONWIDE_SOURCE_KEYS``, and a fifth classification appearing later cannot
+    quietly re-open it.
+    """
+    from src.sources import registry
+
+    for state in JURISDICTIONS:
+        beyond_licences = registry.takeable_from_state(state) - registry.state_licensed_keys(
+            state
+        )
+        assert beyond_licences == registry.NATIONWIDE_SOURCE_KEYS, state
+
+
 # ── which runs the rule governs ──────────────────────────────────────────────
 
 
