@@ -278,6 +278,51 @@ The advice above still stands for the sources ahead: theScore Bet belongs in
 classified explicitly before they can be registered — that is now enforced rather
 than remembered.
 
+## Pennsylvania first-party routes promoted — 2026-08-08
+
+`configured=PA detected_egress=PA fingerprint=78e5c3810511` throughout. Three
+routes moved TEMPLATE → VALIDATED on the bar `MULTI_STATE.md` sets — parser-clean
+quotes through matching egress, twice, each run replaying PASS offline:
+
+| book | runs | quotes | rejections | replay |
+|---|---|---|---|---|
+| FanDuel (`sbapi.pa.sportsbook.fanduel.com`, `state=pa`) | 29, 30 | 1579 / 1967 | 0 / 0 | PASS / PASS |
+| BetRivers (`rsiuspa`, `market=US-PA`) | 28, 29 | 3699 / 3698 | 0 / 0 | PASS / PASS |
+| DraftKings (`US-PA-SB`) | 29, 31 | 130 / 130 | 0 / 0 | PASS / PASS |
+
+Two defects had to fall first, both caught by this validation pass:
+
+- **DraftKings recorded the page's rounding, not the price.** The
+  `sportscontent` payload carries `trueOdds: 1.46948357` beside
+  `displayOdds.decimal: "1.46"`, and the converter preferred the printed string.
+  Measured on this capture, `trueOdds` agrees with the published American price
+  on **122 of 122** selections, the display value on 67, drifting to 2.06%.
+  Fourteen `odds_format_mismatch` errors failed the run; the parser now prefers
+  `trueOdds`. Run 28's stored DraftKings rows predate the fix and its replay now
+  FAILs with exactly that drift — the replay checker refusing pre-fix evidence,
+  which is why DraftKings' second clean run is 31, not 28.
+- **FanDuel's `TO_RECORD_*` player-threshold props were neither collected nor
+  declared**, so `TO_RECORD_6+_REBOUNDS_WNBA` and the 8+ sibling rejected run
+  28. Declared out of scope as a family (`TO_RECORD`), not as the two instances,
+  because the threshold and statistic both vary.
+
+What a PA run says after promotion (run 32, core tier, 4627 quotes):
+`state_native_sources_below_two` is gone, three books cross-compare, 2
+opportunities from 172 cross-book markets, and the sole remaining ERROR is
+`required_book_missing: PlaySugarHouse` — the deliberate sentinel.
+
+Still TEMPLATE, with the day's measurements on the route:
+
+- **BetMGM** — HTTP 400 `Access id not allowed for application`: the configured
+  access id is another state's. The PA web app has to yield its own id
+  (recon, not guessing).
+- **Caesars** — blocked at the CDN edge (`request blocked` marker) from PA
+  egress, so egress alone did not clear the refusal seen from IL.
+- **DraftKings caveat**: eventgroups 94682, 42133 and 40253 answer `access
+  denied` from this egress, so MLB and tennis produce while WNBA/NFL/NHL do
+  not. `scopes_refused` keeps that failing loudly; the VALIDATED status claims
+  the route is real, not that the shelf is whole.
+
 ## The Pennsylvania recapture — 2026-08-08T16:38Z
 
 `configured=PA detected_egress=PA fingerprint=78e5c3810511`, 12:38 ET on a

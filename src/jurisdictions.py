@@ -344,21 +344,33 @@ IL = Jurisdiction(
 PA = Jurisdiction(
     state="PA",
     label="Pennsylvania",
-    live_validated=False,
+    # Same standard IL met: routes promoted on live matching-egress evidence.
+    # Not a claim about every route — betmgm and caesars are still TEMPLATE,
+    # exactly as IL's caesars is.
+    live_validated=True,
     routes={
+        # The three VALIDATED routes below earned it the same way on 2026-08-08:
+        # two parser-clean runs each from a detected-PA egress (fingerprint
+        # 78e5c3810511), every run replaying PASS offline.  FanDuel runs 29/30
+        # (1579 and 1967 quotes, 0 rejections), BetRivers runs 28/29 (3699 and
+        # 3698, 0 rejections), DraftKings runs 29/31 (130 each, 0 rejections —
+        # both after the trueOdds fix; run 28's rows predate it and replay as
+        # drift, which is the replay checker refusing pre-fix evidence).
         "fanduel": _route(
             "fanduel",
             "https://sbapi.pa.sportsbook.fanduel.com",
             {"state": "pa"},
-            RouteStatus.TEMPLATE,
+            RouteStatus.VALIDATED,
             "PA",
+            "validated from matching Pennsylvania egress on 2026-08-08",
         ),
         "betrivers_kambi": _route(
             "betrivers_kambi",
             "https://eu-offering-api.kambicdn.com",
             {"operator": "rsiuspa", "market": "US-PA", "lang": "en_US"},
-            RouteStatus.TEMPLATE,
+            RouteStatus.VALIDATED,
             "PA",
+            "validated from matching Pennsylvania egress on 2026-08-08",
         ),
         "betmgm": _route(
             "betmgm",
@@ -370,6 +382,10 @@ PA = Jurisdiction(
             },
             RouteStatus.TEMPLATE,
             "PA",
+            # 2026-08-08, PA egress: HTTP 400 "Access id not allowed for
+            # application" — the id above is another state's.  The PA web app
+            # has to supply its own before this route can be exercised.
+            "PA access_id unknown; the configured id is refused with HTTP 400",
         ),
         "draftkings": _route(
             "draftkings",
@@ -381,8 +397,15 @@ PA = Jurisdiction(
                     "sportscontent/controldata/league/leagueSubcategory/v1"
                 ),
             },
-            RouteStatus.TEMPLATE,
+            RouteStatus.VALIDATED,
             "PA",
+            # Validated for what it answers, which is less than it is asked:
+            # eventgroups 94682, 42133 and 40253 return "access denied" from
+            # this egress, so MLB and tennis produce and WNBA/NFL/NHL do not.
+            # scopes_refused keeps that failing loudly per run; a status can
+            # say the route is real, not that the shelf is whole.
+            "validated from matching Pennsylvania egress on 2026-08-08; "
+            "3 of 5 eventgroups access-denied",
         ),
         "caesars": _route(
             "caesars",
@@ -395,6 +418,10 @@ PA = Jurisdiction(
             },
             RouteStatus.TEMPLATE,
             "PA",
+            # 2026-08-08, PA egress: still blocked at the edge ("request
+            # blocked" marker) before any competition id is reached, so the PA
+            # egress alone did not clear the CloudFront refusal seen earlier.
+            "blocked at the CDN edge from PA egress on 2026-08-08",
         ),
         # PGCB's current authorized-online list has no Hard Rock book.  Retain
         # the adapter and secondary observations globally, but never invent a

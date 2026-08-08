@@ -392,11 +392,31 @@ def _eventgroup_from_sportscontent(
         for selection in by_market.get(str(market.get("id") or ""), []):
             display = selection.get("displayOdds") or {}
             american = str(display.get("american") or "").replace("−", "-")
+            # ``trueOdds`` is the price; ``displayOdds.decimal`` is what the web
+            # page prints, rounded to two places.  Taking the printed one first
+            # recorded a different number from the one the same row's American
+            # value encodes: measured on the 2026-08-08 Pennsylvania capture,
+            # ``trueOdds`` agrees with the published American price on **122 of
+            # 122** selections and ``displayOdds.decimal`` on 67, drifting up to
+            # 2.06% — ``-213`` printed as ``1.46`` against a true 1.46948357.
+            #
+            # Validation caught it as ``odds_format_mismatch`` on 14 markets and
+            # failed the run, which is the only reason this was ever visible: the
+            # rounding is always *downward*, so it understates the payout, and an
+            # understated payout is an arbitrage that quietly does not get
+            # reported rather than one that wrongly does.
+            #
+            # ``is not None`` rather than ``or``, because ``trueOdds`` is a float
+            # and 0.0 would fall through to the display string instead of being
+            # refused by the plausibility check below.
+            true_odds = selection.get("trueOdds")
             converted_outcomes.append(
                 {
                     "id": selection.get("id"),
                     "label": selection.get("label"),
-                    "oddsDecimal": display.get("decimal") or selection.get("trueOdds"),
+                    "oddsDecimal": (
+                        true_odds if true_odds is not None else display.get("decimal")
+                    ),
                     "oddsAmerican": american,
                     "line": selection.get("points"),
                     "hidden": False,

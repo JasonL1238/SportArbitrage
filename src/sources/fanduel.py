@@ -308,9 +308,16 @@ OUT_OF_SCOPE_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"EXTRA_TIME|PENALT"), "different_settlement_window"),
     (
         re.compile(
-            r"GOAL_?SCORER|TO_SCORE|HAT-TRICK|CORRECT_SCORE|MULTIGOL|RACE_TO"
-            r"|CORNER|CARD|BOOKING|PLAYER|ASSIST|SHOT|POINTS_SGP|TOUCHDOWN"
-            r"|ODD_OR_EVEN|CLEAN_SHEET|BOTH_TO_SCORE"
+            # ``TO_RECORD`` is FanDuel's prefix for a player statistical
+            # threshold — ``TO_RECORD_6+_REBOUNDS_WNBA`` and its 8+ sibling
+            # rejected the 2026-08-08 Pennsylvania run, which is what a market
+            # type neither collected nor declared is supposed to do.  Named as a
+            # family rather than as the two seen, because the threshold and the
+            # statistic both vary and listing instances invites the same run
+            # failing next week on ``TO_RECORD_10+_POINTS``.
+            r"GOAL_?SCORER|TO_SCORE|TO_RECORD|HAT-TRICK|CORRECT_SCORE|MULTIGOL"
+            r"|RACE_TO|CORNER|CARD|BOOKING|PLAYER|ASSIST|SHOT|POINTS_SGP"
+            r"|TOUCHDOWN|ODD_OR_EVEN|CLEAN_SHEET|BOTH_TO_SCORE"
         ),
         "prop",
     ),

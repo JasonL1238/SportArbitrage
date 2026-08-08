@@ -99,6 +99,65 @@ def test_draftkings_parses_current_sportscontent_shape() -> None:
     assert by_market_selection[Market.TOTAL, Selection.UNDER].line == 9.5
 
 
+def test_draftkings_takes_true_odds_over_the_printed_decimal() -> None:
+    """``trueOdds`` is the price; ``displayOdds.decimal`` is its 2dp rendering.
+
+    The two disagree in the payload itself, and the American value is the
+    referee: on the 2026-08-08 Pennsylvania capture ``trueOdds`` agreed with the
+    published American price on 122 of 122 selections and the printed decimal on
+    67, drifting up to 2.06% — ``−213`` printed as ``1.46`` against a true
+    1.46948357.  Preferring the printed one failed the live run with fourteen
+    ``odds_format_mismatch`` errors; before validation caught it, the rounding
+    — always downward — quietly understated every payout.
+    """
+    payload = {
+        "events": [{
+            "id": "1", "name": "WAS Nationals @ PHI Phillies",
+            "startEventDate": "2026-08-03T22:40:00Z", "status": "NOT_STARTED",
+            "participants": [
+                {"name": "PHI Phillies", "venueRole": "Home"},
+                {"name": "WAS Nationals", "venueRole": "Away"},
+            ],
+        }],
+        "markets": [
+            {"id": "ml", "eventId": "1", "name": "Moneyline", "tags": ["PrimaryMarket"]},
+        ],
+        "selections": [
+            # The live disagreement, verbatim: −213 encodes 1.46948357, printed 1.46.
+            {"id": "h", "marketId": "ml", "label": "PHI Phillies", "trueOdds": 1.46948357,
+             "displayOdds": {"american": "−213", "decimal": "1.46"}},
+            {"id": "a", "marketId": "ml", "label": "WAS Nationals", "trueOdds": 2.31,
+             "displayOdds": {"american": "+131", "decimal": "2.31"}},
+        ],
+    }
+    raw = RawResponse(
+        source="draftkings", endpoint="sportscontent-84240",
+        url="https://sportsbook-nash.draftkings.com/example", status_code=200,
+        body=json.dumps(payload), fetched_at=datetime(2026, 8, 3, 12, tzinfo=timezone.utc),
+        content_type="application/json",
+    )
+    outcome = parse_draftkings([raw])
+    assert not outcome.rejections
+    by_sel = {q.selection: q for q in outcome.quotes}
+    assert abs(by_sel[Selection.HOME].decimal_odds - 1.46948357) < 1e-9, (
+        "the row must carry the price, not the page's rounding of it"
+    )
+    assert by_sel[Selection.HOME].american_odds == -213
+    # And a payload with no trueOdds still parses off the printed value — the
+    # older shape this converter was written for.
+    for sel in payload["selections"]:
+        del sel["trueOdds"]
+    raw2 = RawResponse(
+        source="draftkings", endpoint="sportscontent-84240",
+        url="https://sportsbook-nash.draftkings.com/example", status_code=200,
+        body=json.dumps(payload), fetched_at=datetime(2026, 8, 3, 12, tzinfo=timezone.utc),
+        content_type="application/json",
+    )
+    fallback = parse_draftkings([raw2])
+    assert not fallback.rejections
+    assert {q.decimal_odds for q in fallback.quotes} == {1.46, 2.31}
+
+
 def test_hardrock_joins_root_idx_to_ladder() -> None:
     ladder = _load("hardrock__*_ladder_*.json")
     events = _load("hardrock__*_events-BASEBALL_*.json")

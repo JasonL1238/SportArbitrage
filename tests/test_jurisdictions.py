@@ -67,6 +67,28 @@ def test_republished_routes_use_the_requested_states_book_ids() -> None:
     assert len(pa_fetch_sets) == 1
 
 
+def test_pa_route_statuses_match_what_the_egress_actually_proved() -> None:
+    """Each Pennsylvania route holds the status its evidence earned, exactly.
+
+    VALIDATED was earned on 2026-08-08 by two parser-clean runs per book from a
+    detected-PA egress, each replaying PASS offline: FanDuel runs 29/30,
+    BetRivers runs 28/29, DraftKings runs 29/31.  The two still-TEMPLATE routes
+    failed on the same day from the same egress — BetMGM with HTTP 400 on the
+    access id, Caesars blocked at the CDN edge — so promoting them would assert
+    evidence that does not exist, and demoting the three would discard evidence
+    that does.  Both directions are pinned: this table is read by
+    ``_state_retail_descriptor`` and graded by ``src.coverage``, and a status
+    drifting in either direction misstates what a PA run can be trusted to be.
+    """
+    routes = jurisdiction("PA").routes
+    assert routes["fanduel"].status is RouteStatus.VALIDATED
+    assert routes["betrivers_kambi"].status is RouteStatus.VALIDATED
+    assert routes["draftkings"].status is RouteStatus.VALIDATED
+    assert routes["betmgm"].status is RouteStatus.TEMPLATE
+    assert routes["caesars"].status is RouteStatus.TEMPLATE
+    assert routes["hardrock"].status is RouteStatus.UNAVAILABLE
+
+
 def test_pa_hardrock_is_unavailable_not_an_invented_pa_segment() -> None:
     route = jurisdiction("PA").routes["hardrock"]
     assert route.status is RouteStatus.UNAVAILABLE

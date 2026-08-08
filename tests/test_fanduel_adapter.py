@@ -440,6 +440,16 @@ def test_out_of_scope_classification_never_shadows_a_collected_market() -> None:
     assert classify_out_of_scope("1ST_HALF_OVER/UNDER_2.5_GOALS") == "period_out_of_scope"
     assert classify_out_of_scope("ANYTIME_GOALSCORER_INCLUDING_EXTRA_TIME") is not None
     assert classify_out_of_scope("MONEY_LINE") is None
+    # ``TO_RECORD_*`` is FanDuel's family of player statistical thresholds.  Two
+    # instances rejected the 2026-08-08 Pennsylvania run as
+    # ``unmapped_market_type`` — declared as a family, because the threshold and
+    # the statistic both vary and pinning instances re-fails the run on the next
+    # sibling.
+    assert classify_out_of_scope("TO_RECORD_6+_REBOUNDS_WNBA") == "prop"
+    assert classify_out_of_scope("TO_RECORD_8+_REBOUNDS_WNBA") == "prop"
+    assert classify_out_of_scope("TO_RECORD_10+_POINTS_NBA") == "prop"
+    # ...and the family prefix must not swallow a real game market.
+    assert classify_out_of_scope("TOTAL_RUNS") is None
 
 
 # ── ALTERNATE_ markets ───────────────────────────────────────────────────────
