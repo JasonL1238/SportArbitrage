@@ -912,3 +912,141 @@ class TestAnAllMirrorRunIsDescribedHonestly:
         out = capsys.readouterr().out
         assert "view-only" in out
         assert "never surface as a best price" in out
+
+    def test_runs_names_the_all_mirror_sport_rather_than_no_overlap(
+        self, all_mirror_run, capsys
+    ) -> None:
+        """"NO OVERLAP … 3 book(s)" asserts three counterparties had no fixture
+        in common; here all three priced the *same* fixture and none is a
+        counterparty.  The replay surface must draw the same distinction the
+        collect-time verdict draws."""
+        collector, run = all_mirror_run
+        assert collector.main(["runs"]) == 0
+        out = capsys.readouterr().out
+        assert "VIEW-ONLY" in out
+        assert "3 book(s) (3 view-only)" in out
+        assert "NO OVERLAP" not in out
+
+    def test_health_grades_the_all_mirror_sport_the_same_way(
+        self, all_mirror_run, capsys
+    ) -> None:
+        collector, run = all_mirror_run
+        collector.main(["health"])
+        out = capsys.readouterr().out
+        assert "VIEW-ONLY" in out
+        assert "NO OVERLAP" not in out
+        assert "not comparable across books: baseball" in out
+
+
+class TestReaderCommandsUseTheRunsOwnViewOnlySet:
+    """A stored run's verdict must not flip with the reader's ODDS_STATE.
+
+    ``hardrock`` is the key the sets disagree on: a counterparty in IL,
+    view-only in PA and DC.  ``compare_all``'s ambient default is frozen from
+    this process's configured state, so a stored IL run read from a PA box
+    formed no hardrock pair — and the empty-result branch, resolving from the
+    run's own jurisdiction, then re-printed the pre-fix false sentence
+    "fewer than two sources stored".  Same bytes, two verdicts, decided by the
+    reader's environment — the defect class ``view_only_for_run`` exists to
+    kill, one surface over from where it was last fixed.
+    """
+
+    def test_mirrors_on_an_il_run_survives_a_pa_configured_reader(
+        self, tmp_path: Path, monkeypatch, capsys
+    ) -> None:
+        from datetime import timedelta
+
+        import src.settings
+        from src.sources import registry
+        from src.validation import ValidationReport
+        from tests.conftest import make_quote
+
+        monkeypatch.setattr(src.settings, "DATA_DIR", tmp_path)
+        monkeypatch.setattr(src.settings, "RAW_DIR", tmp_path / "raw")
+        monkeypatch.setattr(src.settings, "DB_PATH", tmp_path / "db.sqlite3")
+
+        kickoff = datetime.now(UTC) + timedelta(hours=6)
+        rows = [
+            make_quote(
+                source=source, source_market_id=f"{source}-m",
+                commence_time=kickoff, observed_at=datetime.now(UTC),
+                raw_ref=f"{source}/20260808T160000Z/x/abc",
+            )
+            for source in ("hardrock", "fanduel")
+        ]
+        with Store(tmp_path / "db.sqlite3") as store:
+            run = store.start_run(
+                datetime.now(UTC), jurisdiction="IL", route_scope="state",
+            )
+            store.save_quotes_by_source(run, rows)
+            store.finish_run(
+                run, finished_at=datetime.now(UTC),
+                report=ValidationReport(quote_count=len(rows), event_count=1),
+                counterparties={},
+            )
+
+        # Simulate a PA-configured reader: the ambient set, which is what
+        # ``compare_all`` falls back to when no run set is passed, treats
+        # hardrock as view-only.
+        monkeypatch.setattr(
+            registry, "VIEW_ONLY_SOURCES", registry.view_only_for_run("PA")
+        )
+        assert "hardrock" in registry.VIEW_ONLY_SOURCES
+
+        import src.collector
+
+        exit_code = src.collector.main(["mirrors", "--run", str(run)])
+        out = capsys.readouterr().out
+        assert "fanduel vs hardrock" in out, (
+            "the IL run's own set makes hardrock a counterparty; the reader's "
+            "PA configuration must not unmake it"
+        )
+        assert "fewer than two sources stored" not in out
+        assert exit_code == 0
+
+    def test_lines_says_not_active_when_that_is_the_reason(
+        self, tmp_path: Path, monkeypatch, capsys
+    ) -> None:
+        """The first cut claimed "all from 0 view-only feed(s)" over a run
+        whose rows were all suspended counterparties — a wrong explanation in
+        the exact spot wrong explanations were being removed."""
+        from datetime import timedelta
+
+        import src.settings
+        from src.schema import QuoteStatus
+        from src.validation import ValidationReport
+        from tests.conftest import make_quote
+
+        monkeypatch.setattr(src.settings, "DATA_DIR", tmp_path)
+        monkeypatch.setattr(src.settings, "RAW_DIR", tmp_path / "raw")
+        monkeypatch.setattr(src.settings, "DB_PATH", tmp_path / "db.sqlite3")
+
+        kickoff = datetime.now(UTC) + timedelta(hours=6)
+        rows = [
+            make_quote(
+                source=source, source_market_id=f"{source}-m",
+                commence_time=kickoff, observed_at=datetime.now(UTC),
+                raw_ref=f"{source}/20260808T160000Z/x/abc",
+                status=QuoteStatus.SUSPENDED,
+            )
+            for source in ("fanduel", "draftkings")
+        ]
+        with Store(tmp_path / "db.sqlite3") as store:
+            run = store.start_run(
+                datetime.now(UTC), jurisdiction="PA", route_scope="state",
+            )
+            store.save_quotes_by_source(run, rows)
+            store.finish_run(
+                run, finished_at=datetime.now(UTC),
+                report=ValidationReport(quote_count=len(rows), event_count=1),
+                counterparties={},
+            )
+
+        import src.collector
+
+        assert src.collector.main(["lines", "--run", str(run)]) == 0
+        out = capsys.readouterr().out
+        assert "2 not ACTIVE" in out
+        assert "view-only" not in out, (
+            "zero view-only rows are involved; the message must not blame them"
+        )

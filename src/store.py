@@ -1387,6 +1387,22 @@ class Store:
             (run_id,),
         ).fetchall()
 
+    def sport_sources(self, run_id: int) -> dict[str, frozenset[str]]:
+        """Distinct sources per sport, so a reader can partition them itself.
+
+        ``sport_coverage`` aggregates to a bare ``source_count``, which cannot
+        say *which* sources — and the reader-side commands need to subtract the
+        run's view-only set before judging comparability, or an all-mirror
+        sport prints "NO OVERLAP … 3 book(s)" as though three counterparties
+        had no fixture in common.
+        """
+        grouped: dict[str, set[str]] = defaultdict(set)
+        for row in self._conn.execute(
+            "SELECT DISTINCT sport, source FROM quote WHERE run_id = ?", (run_id,)
+        ):
+            grouped[row["sport"]].add(row["source"])
+        return {sport: frozenset(sources) for sport, sources in grouped.items()}
+
     def cross_book_event_counts(
         self,
         run_id: int,

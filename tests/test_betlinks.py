@@ -211,23 +211,33 @@ class TestAStatePartitionedBookLinksItsOwnState:
         """Better a brand chooser than a confident wrong state — for every
         state-partitioned book, not only the one the defect was found on.
 
-        ``unibet`` is the deliberate exception: Unibet has no US brand chooser
-        (``unibet.com`` is the global gambling site), its only feed exists for
-        PA and NJ — both resolved by STATE_SITE before the fallback — and it is
-        view-only everywhere, so no money surface reaches the fallback at all.
-        Asserted as PA's door on purpose, so a change to either fact shows up
-        here.
+        Two deliberate exceptions, both protected by inventory rather than the
+        resolver, and both asserted on purpose so a change to either fact
+        shows up here:
+
+        * ``unibet`` — no US brand chooser exists (``unibet.com`` is the
+          global gambling site); its only feed is built for PA/NJ runs alone
+          and is view-only everywhere.
+        * ``superbook`` — Colorado's own door, behind ``an_superbook``
+          (Westgate, id 14), a feed that has never produced a row on either
+          endpoint version; there is no row to link from.
         """
-        for book, quote_source in (
-            ("betrivers_kambi", "betrivers_kambi"),
-            ("caesars", "caesars"),
-            ("unibet", "an_unibet"),
+        from src.sources.registry import REPUBLISHED_SOURCE_KEYS
+
+        for book, quote_source, pinned in (
+            ("betrivers_kambi", "betrivers_kambi", None),
+            ("caesars", "caesars", None),
+            ("unibet", "an_unibet", "https://pa.unibet.com"),
+            ("superbook", "an_superbook", "https://co.superbook.com"),
         ):
             quote = make_quote(source=quote_source, source_event_id="1", league="ATP")
             link = bet_link(quote)
             assert link is not None, book
-            if book == "unibet":
-                assert link.url == "https://pa.unibet.com"
+            if pinned is not None:
+                assert link.url == pinned
+                # The inventory protection the pin relies on: the feed is
+                # view-only, so no money surface builds this link.
+                assert quote_source in REPUBLISHED_SOURCE_KEYS
                 continue
             assert link.url not in STATE_SITE[book].values(), (
                 f"{book}'s ungoverned fallback is one state's own door: {link.url}"

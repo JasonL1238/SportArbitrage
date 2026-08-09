@@ -361,14 +361,30 @@ def find_mirrors(quotes: Sequence[Quote]) -> list[Agreement]:
     return [pair for pair in compare_all(quotes) if pair.verdict is Verdict.MIRROR]
 
 
-def compare_all(quotes: Sequence[Quote]) -> list[Agreement]:
-    """Every source pair's agreement, ordered most-agreeing first."""
+def compare_all(
+    quotes: Sequence[Quote], *, view_only: frozenset[str] | None = None
+) -> list[Agreement]:
+    """Every source pair's agreement, ordered most-agreeing first.
+
+    *view_only* is which sources are not counterparties and so form no pair.
+    Pass the **run's** set (:func:`src.sources.registry.view_only_for_run`)
+    when explaining a stored run: the ``None`` default falls back to the
+    ambient import-frozen set, which is resolved from this *process's*
+    ``ODDS_STATE`` — and ``hardrock`` differs between them (counterparty in
+    IL, view-only in PA/DC), so a stored IL run read from a PA box formed no
+    ``hardrock`` pair while the message layer, resolving from the run, said
+    two counterparties were present.  Same stored bytes, two verdicts,
+    decided by the reader's environment.
+    """
     # View-only feeds (AN Open) are not counterparties.  A consensus column that
     # agrees with A and with B would otherwise union-find A with B.
-    from src.sources.registry import VIEW_ONLY_SOURCES
+    if view_only is None:
+        from src.sources.registry import VIEW_ONLY_SOURCES
+
+        view_only = VIEW_ONLY_SOURCES
 
     sources = sorted(
-        {quote.source for quote in quotes if quote.source not in VIEW_ONLY_SOURCES}
+        {quote.source for quote in quotes if quote.source not in view_only}
     )
     # Derived once and shared: the pair loop is quadratic in sources, and a
     # rescan of every row inside it makes the whole thing quadratic in rows too.

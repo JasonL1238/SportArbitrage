@@ -176,10 +176,14 @@ SITE: Mapping[str, str] = {
     "thescore": "https://www.thescore.bet",
     # Deliberately Pennsylvania's door, in knowing tension with the "stateless
     # fallbacks" rule above: Unibet has no US brand chooser — ``unibet.com`` is
-    # the global gambling site, worse than any US state's page — and the only
-    # feed that produces a unibet leg (``an_unibet``) exists for PA and NJ
-    # alone, both resolved by STATE_SITE before this entry is ever consulted.
-    # It is also view-only everywhere, so no money surface reaches here.
+    # the global gambling site, worse than any US state's page.  The protection
+    # is the *inventory*, not this resolver: ``an_unibet``, the only feed that
+    # produces a unibet leg, is built for PA and NJ runs alone (both resolved
+    # by STATE_SITE) and is view-only everywhere, so no money surface reaches
+    # this entry.  A governed IL or DC run asking would receive PA's door — it
+    # cannot ask, because no such run can hold the feed.  ``superbook`` two
+    # entries up is the same shape: Colorado's own door, behind a feed
+    # (``an_superbook``, Westgate id 14) that has never produced a row.
     "unibet": "https://pa.unibet.com",
     "sxbet": "https://sx.bet",
 }

@@ -71,7 +71,7 @@ from src.leagues import LEAGUES, LEAGUES_BY_SPORT, is_known
 from src.leagues import league as get_league
 from src.normalize import decimal_to_american
 from src.raw_store import RawResponse, RawStore
-from src.schema import Market, Quote, Sport
+from src.schema import Market, Quote, QuoteStatus, Sport
 from src.sources import registry
 from src.sources._common import Tier
 from src.sources.base import OddsSource, ParseOutcome, SourceHealth
@@ -269,7 +269,7 @@ class SportCoverage:
             if view_only_count:
                 line += f" ({view_only_count} of the feeds are view-only)"
         elif not self.cross_book_events:
-            line += " — no fixture priced by two of them"
+            line += " — no fixture priced by two counterparties"
         if self.missing_leagues:
             line += f"\n            no data for configured league(s): {', '.join(self.missing_leagues)}"
         return line
@@ -424,7 +424,12 @@ class RunResult:
 
     @property
     def sports_meeting_book_bar(self) -> list[str]:
-        """Sports two or more books contributed to, whatever the overlap."""
+        """Sports two or more *counterparty* books contributed to.
+
+        Counterparties, not feeds, since the two-book bar became
+        counterparty-aware — a 10-mirror sport is not two books anyone can
+        bet both sides at, and the label printing this list says the same.
+        """
         return [c.sport for c in self.coverage if c.meets_two_book_bar]
 
     def print_summary(self) -> None:
@@ -432,13 +437,19 @@ class RunResult:
         for health in sorted(self.health, key=lambda h: h.source_key):
             print(f"  {health.summary()}")
 
-        print("\n  per-sport coverage (two or more books is the bar for a sport being usable):")
+        print(
+            "\n  per-sport coverage (two or more counterparty books is the bar "
+            "for a sport being usable):"
+        )
         if not self.coverage:
             print("    nothing collected")
         for entry in self.coverage:
             print(f"    {entry.summary()}")
         if self.coverage:
-            print(f"    two or more books contributed: {', '.join(self.sports_meeting_book_bar) or 'none'}")
+            print(
+                "    two or more counterparty books: "
+                f"{', '.join(self.sports_meeting_book_bar) or 'none'}"
+            )
             print(f"    usable (and a fixture in common): {', '.join(self.usable_sports) or 'none'}")
             print(f"    NOT comparable: {', '.join(self.unusable_sports) or 'none'}")
 
@@ -2594,20 +2605,35 @@ def _cmd_runs(args: argparse.Namespace) -> int:
                 # The run's own jurisdiction, not this process's.
                 view_only=registry.view_only_for_run(row["jurisdiction"]),
             )
+            # The run's own partition, so an all-mirror sport is named as such
+            # rather than printed as "NO OVERLAP … 3 book(s)" — which asserts
+            # three counterparties had no fixture in common when the truth is
+            # zero counterparties priced it at all.  Same two-verdicts family
+            # as the collect-time note, surviving on the replay surface.
+            per_sport_sources = store.sport_sources(row["id"])
+            runs_view_only = registry.view_only_for_run(row["jurisdiction"])
             for entry in store.sport_coverage(row["id"]):
                 if sports and entry["sport"] not in sports:
                     continue
                 shared = cross.get(entry["sport"], 0)
-                if entry["source_count"] < MIN_HEALTHY_SOURCES:
+                sport_sources = per_sport_sources.get(entry["sport"], frozenset())
+                counterparty_count = len(sport_sources - runs_view_only)
+                view_only_count = entry["source_count"] - counterparty_count
+                if entry["source_count"] and not counterparty_count:
+                    bar = "VIEW-ONLY"
+                elif counterparty_count < MIN_HEALTHY_SOURCES:
                     bar = "1 BOOK ONLY"
                 elif not shared:
                     bar = "NO OVERLAP"
                 else:
                     bar = "usable"
+                books = f"{entry['source_count']} book(s)"
+                if view_only_count:
+                    books += f" ({view_only_count} view-only)"
                 print(
                     f"          {entry['sport']:<12} {bar:<12}"
                     f"{entry['quote_count']:>7} quotes {entry['event_count']:>4} fixtures "
-                    f"({shared} cross-book) {entry['source_count']} book(s), "
+                    f"({shared} cross-book) {books}, "
                     f"{entry['league_count']} league(s)"
                 )
             gaps = [g for g in store.league_coverage(row["id"]) if g["quote_count"] == 0]
@@ -2951,20 +2977,38 @@ def _cmd_lines(args: argparse.Namespace) -> int:
         )
         if not surface and quotes:
             # "0 of 0" beside a run holding thousands of rows reads as an empty
-            # collection.  On an all-republisher run every stored row is
-            # view-only and ``best_prices`` rightly surfaces none of them —
-            # say that, because the difference between "nothing collected" and
-            # "nothing stakeable" is the difference between debugging the
-            # collector and reading the mirrors as intended.
-            excluded = {
-                quote.source
+            # collection.  Account for every stored row **by the reason the
+            # surface excluded it**, in ``best_prices``' own evaluation order
+            # (status first, then view-only).  The first cut of this message
+            # said "all from N view-only feed(s)" unconditionally, which was
+            # false the moment a run's rows were all *suspended* instead —
+            # "all from 0 view-only feeds" over two suspended counterparty
+            # rows, a wrong explanation in the exact spot wrong explanations
+            # were being removed.
+            run_view_only = registry.view_only_for_run(lines_state)
+            inactive = sum(
+                1 for quote in quotes if quote.status is not QuoteStatus.ACTIVE
+            )
+            view_only_active = sum(
+                1
                 for quote in quotes
-                if quote.source in registry.view_only_for_run(lines_state)
-            }
+                if quote.status is QuoteStatus.ACTIVE
+                and quote.source in run_view_only
+            )
+            remainder = len(quotes) - inactive - view_only_active
+            reasons = []
+            if inactive:
+                reasons.append(f"{inactive} not ACTIVE")
+            if view_only_active:
+                reasons.append(
+                    f"{view_only_active} from view-only feeds, which never "
+                    "surface as a best price"
+                )
+            if remainder:
+                reasons.append(f"{remainder} excluded by other surface rules")
             closing += (
-                f" — {len(quotes)} stored row(s) are all from "
-                f"{len(excluded)} view-only feed(s), which never surface as a "
-                "best price"
+                f" — none of the {len(quotes)} stored row(s) can surface: "
+                + "; ".join(reasons)
             )
         print(closing)
         return 0
@@ -3046,7 +3090,20 @@ def _cmd_mirrors(args: argparse.Namespace) -> int:
         # verdict", exit 0.  The exit code is a gate a person screens a candidate
         # source with, so the narrowed answer is the dangerous one.
         everything, _ = reconcile_event_keys(store.load_quotes(run_id))
-        pairs = compare_all(everything)
+        # The **run's** view-only set, resolved once and used for both the pair
+        # formation and the explanation of an empty result.  ``compare_all``'s
+        # ambient default is frozen from this process's ODDS_STATE, and
+        # ``hardrock`` differs between IL and PA/DC — so a stored IL run read
+        # from a PA box formed no hardrock pair while the message layer,
+        # resolving from the run, denied that anything was missing.  Same
+        # bytes, two verdicts, decided by the reader's environment: the exact
+        # defect class ``view_only_for_run`` exists to kill.
+        mirror_run_row = store.run_row(run_id)
+        mirror_run_state = (
+            (mirror_run_row["jurisdiction"] if mirror_run_row else "") or ""
+        )
+        run_view_only = registry.view_only_for_run(mirror_run_state)
+        pairs = compare_all(everything, view_only=run_view_only)
         if not pairs:
             # Say which of two very different situations this is.  On the first
             # all-republisher run this line claimed "fewer than two sources
@@ -3056,12 +3113,7 @@ def _cmd_mirrors(args: argparse.Namespace) -> int:
             # points the operator at the collector when the real answer is
             # "these feeds are mirrors by design".
             stored = {quote.source for quote in everything}
-            mirror_run_row = store.run_row(run_id)
-            mirror_run_state = (
-                (mirror_run_row["jurisdiction"] if mirror_run_row else "") or ""
-            )
-            view_only = registry.view_only_for_run(mirror_run_state)
-            counterparty = sorted(stored - view_only)
+            counterparty = sorted(stored - run_view_only)
             if len(stored) >= 2 and len(counterparty) < 2:
                 print(
                     f"run {run_id}: {len(stored)} source(s) stored, but "
@@ -3077,8 +3129,7 @@ def _cmd_mirrors(args: argparse.Namespace) -> int:
             " — measured on the whole run, because narrowing the evidence can "
             "only weaken it" if sports or leagues else ""
         )
-        mirror_row = store.run_row(run_id)
-        mirror_state = (mirror_row["jurisdiction"] if mirror_row else "") or "UNKNOWN"
+        mirror_state = mirror_run_state or "UNKNOWN"
         print(
             f"run {run_id} [{mirror_state}]{_scope_label(sports, leagues)}: "
             f"{len(pairs)} source pair(s){scope_note}"
@@ -3194,16 +3245,34 @@ def _cmd_health(args: argparse.Namespace) -> int:
         )
         if not coverage:
             print("  no rows stored for this scope")
+        # Counterparty partition, same as ``runs``: an all-mirror sport must
+        # not be graded as counterparties without a shared fixture.
+        health_sport_sources = store.sport_sources(latest["id"])
+        health_view_only = registry.view_only_for_run(latest["jurisdiction"])
+        counterparty_counts = {
+            entry["sport"]: len(
+                health_sport_sources.get(entry["sport"], frozenset())
+                - health_view_only
+            )
+            for entry in coverage
+        }
         for entry in coverage:
             shared = cross.get(entry["sport"], 0)
-            if entry["source_count"] < MIN_HEALTHY_SOURCES:
+            counterparty_count = counterparty_counts[entry["sport"]]
+            view_only_count = entry["source_count"] - counterparty_count
+            if entry["source_count"] and not counterparty_count:
+                bar = "VIEW-ONLY"
+            elif counterparty_count < MIN_HEALTHY_SOURCES:
                 bar = "1 BOOK ONLY"
             elif not shared:
                 bar = "NO OVERLAP"
             else:
                 bar = "usable"
+            books = f"{entry['source_count']} book(s)"
+            if view_only_count:
+                books += f" ({view_only_count} view-only)"
             print(
-                f"  {entry['sport']:<12} {bar:<12} {entry['source_count']} book(s), "
+                f"  {entry['sport']:<12} {bar:<12} {books}, "
                 f"{entry['quote_count']:>6} quotes, {entry['event_count']:>4} fixtures, "
                 f"{shared} priced by two or more books"
             )
@@ -3223,7 +3292,7 @@ def _cmd_health(args: argparse.Namespace) -> int:
         unusable = [
             entry["sport"]
             for entry in coverage
-            if entry["source_count"] < MIN_HEALTHY_SOURCES
+            if counterparty_counts[entry["sport"]] < MIN_HEALTHY_SOURCES
             or not cross.get(entry["sport"], 0)
         ]
         if unusable:
