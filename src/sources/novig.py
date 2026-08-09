@@ -78,11 +78,14 @@ from src.sources._common import (
     Tier,
     capabilities_from,
     drop_duplicate_selections,
+    drop_same_side_pairs,
     envelope_source,
     latest_capture,
     latest_per_endpoint,
     market_label_text,
     mentions_a_sub_period,
+    resolve_over_under,
+    signed_handicap,
     parse_iso_time,
     within_schedule_horizon,
 )
@@ -133,6 +136,25 @@ MAX_BOOKS_PER_LEAGUE = 60
 
 #: Politeness floor.  The venue permits far more; there is no reason to use it.
 HOST_INTERVAL = 0.25
+
+
+def _outcome_labels(outcomes: Any) -> list[str]:
+    """Each outcome's description, from a field that may be any shape at all.
+
+    The ``isinstance`` checks are the point: the parse path already had them
+    and the fetch-time screen was written without, so a payload whose
+    ``outcomes`` was a scalar raised ``TypeError`` out of ``fetch_raw`` — past
+    the ``SourceError`` handler, into the collector's unexpected-error path,
+    discarding every raw already collected across every league.  One malformed
+    row must not cost the source.
+    """
+    if not isinstance(outcomes, (list, tuple)):
+        return []
+    return [
+        row.get("description") or ""
+        for row in outcomes
+        if isinstance(row, Mapping)
+    ]
 
 
 def _credentials() -> tuple[str, str]:
@@ -315,11 +337,7 @@ class NovigAdapter:
                 # the screen reads are already on this entry.
                 and not mentions_a_sub_period(
                     market_label_text(entry),
-                    *(
-                        row.get("description")
-                        for row in (entry.get("outcomes") or [])
-                        if isinstance(row, dict)
-                    ),
+                    *_outcome_labels(entry.get("outcomes")),
                 )
             ):
                 in_scope.setdefault(entry["id"], entry)
@@ -591,7 +609,8 @@ def parse_novig(raws: Sequence[RawResponse]) -> ParseOutcome:
             our_market = _MARKET_TYPES.get(str(entry.get("type") or ""))
             if our_market is None:
                 outcome.skipped[
-                    f"market_type_{str(entry.get('type') or 'missing')}"
+                    "market_type_out_of_scope:"
+                    f"{str(entry.get('type') or 'missing')}"
                 ] += 1
                 continue
             market_id = entry.get("id")
@@ -629,7 +648,11 @@ def parse_novig(raws: Sequence[RawResponse]) -> ParseOutcome:
         market_id = raw.endpoint.split(":", 2)[2]
         market = markets.get(market_id)
         if market is None:
-            outcome.skipped["market_on_out_of_scope_event"] += 1
+            # Distinct from the fixture case below: here the *market* row is
+            # missing, and the fixture may have parsed perfectly.  Filing both
+            # under one reason made the page say "belongs to a fixture that
+            # was not collected", which is false for this half.
+            outcome.skipped["market_in_scope_but_not_fetched"] += 1
             continue
         fixture = fixtures.get(market.event_id)
         if fixture is None:
@@ -641,46 +664,11 @@ def parse_novig(raws: Sequence[RawResponse]) -> ParseOutcome:
             outcome.skipped["event_already_started"] += 1
             continue
         _parse_book(raw, market, fixture, source=source, outcome=outcome)
-    _drop_same_side_pairs(source, outcome)
+    drop_same_side_pairs(source, outcome)
     # Storage enforces dedup_key with a UNIQUE constraint whose failure aborts
     # the whole insert; every peer parser guards it here and so does this one.
     drop_duplicate_selections(source, outcome)
     return outcome
-
-
-def _drop_same_side_pairs(source: str, outcome: ParseOutcome) -> None:
-    """Refuse a market whose two published legs land on the same side.
-
-    A two-outcome market prices opposite sides by construction, so two rows
-    from one market agreeing on ``selection`` means the payload named one club
-    (or one ``competitor_id``) on both outcomes.  ``drop_duplicate_selections``
-    cannot see it — sign-opposed handicaps give the two rows different lines
-    and therefore different dedup keys — and published, they are two bets on
-    the same team presented as a hedge.
-    """
-    by_market: dict[tuple[str, str], list[Any]] = {}
-    for quote in outcome.quotes:
-        by_market.setdefault(
-            (quote.source_market_id or "", quote.source_event_id), []
-        ).append(quote)
-    doomed = set()
-    for (market_id, event_id), quotes in by_market.items():
-        if len(quotes) < 2 or len({quote.selection for quote in quotes}) > 1:
-            continue
-        outcome.reject(
-            source,
-            "market_prices_one_side_twice",
-            f"{event_id}: market {market_id} published "
-            f"{len(quotes)} legs all on {quotes[0].selection.value}",
-            event_id=event_id,
-        )
-        doomed.add((market_id, event_id))
-    if doomed:
-        outcome.quotes = [
-            quote
-            for quote in outcome.quotes
-            if (quote.source_market_id or "", quote.source_event_id) not in doomed
-        ]
 
 
 def _accept_event(
@@ -869,7 +857,7 @@ def _parse_book(
         # home +1.5 elsewhere into a phantom guaranteed profit.  A real
         # handicap pair sums to zero; a pick'em (0/0) is such a pair.
         resolved = [
-            _signed_line(str(entry.get("description") or ""))
+            signed_handicap(str(entry.get("description") or ""))
             for entry in market.outcomes
         ]
         if (
@@ -1046,12 +1034,8 @@ def _resolve_selection(
     favourite flips the sign of every wrong guess.
     """
     if market.our_market is Market.TOTAL:
-        lowered = description.lower()
-        if "over" in lowered:
-            selection: Selection | None = Selection.OVER
-        elif "under" in lowered:
-            selection = Selection.UNDER
-        else:
+        selection = resolve_over_under(description)
+        if selection is None:
             outcome.reject(
                 source,
                 "unrecognised_total_selection",
@@ -1140,35 +1124,3 @@ def _stated_total(description: str) -> float | None:
     return found[0] if len(found) == 1 else None
 
 
-#: A signed token this large is an American price, not a handicap.  ±100 is
-#: the boundary of the American scale and no team handicap in the leagues this
-#: adapter serves approaches it (NFL blowout lines top out near 27).  Exchange
-#: rows do display prices — "Phillies -110" — and reading one as a handicap
-#: publishes a −110 line, which validation then either faults as
-#: ``line_out_of_range`` or, in the high-total leagues, accepts as junk.
-_PRICE_SHAPED = 100.0
-
-
-def _signed_line(description: str) -> float | None:
-    """The one explicitly signed handicap in the text, e.g. ``"KC -3.5"``.
-
-    Exactly one handicap-shaped token, or nothing.  Two handicap-shaped ones
-    ("Phils -1.5 -2.5") do not say which is the line — taking the first, or
-    the last, is a coin flip wearing a rule's clothes — and a lone
-    price-shaped token ("Phillies -110") is a price, not a line.  Both
-    resolve to ``None``, which :func:`_parse_book` rejects as
-    ``spread_sign_unresolved``: the honest reading until a genuine capture
-    shows the venue's format.  A price *beside* a handicap ("Phils -110
-    -1.5") is unambiguous once the price is discounted, and resolves.
-    """
-    found: list[float] = []
-    for token in description.replace("(", " ").replace(")", " ").split():
-        if token[:1] in "+-" and len(token) > 1:
-            try:
-                value = float(token)
-            except ValueError:
-                continue
-            if abs(value) >= _PRICE_SHAPED:
-                continue
-            found.append(value)
-    return found[0] if len(found) == 1 else None

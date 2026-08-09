@@ -79,14 +79,19 @@ the bearer token travels in a request header, which envelopes do not persist.
   **unknown**. Two defences, in order: the `_MARKET_TYPES` allowlist is the
   primary one (the enum's other documented members — `TEAM_TOTAL`,
   `PLAYER_GOALS` — are their own types, so a half plausibly is too), and a
-  text screen is the secondary one. Both adapters screen every string field
-  the market payload carries *and* each outcome's own label against one
-  shared vocabulary (`_common.PERIOD_MARKERS`, compact spellings in both
-  orders included); `OT` is deliberately excluded, since it marks whether
-  extra time counts toward a whole-game price rather than naming a narrower
-  window. Novig screens at fetch as well as at parse, so a sub-period market
-  does not spend one of the 60 per-league book requests before being
-  discarded.
+  text screen is the secondary one. Both adapters screen the market's
+  **label-bearing** fields (`_common.MARKET_LABEL_KEYS` — `name`, `label`,
+  `description`, `group_name`, `sub_type`, …) *and* each outcome's own label
+  against one shared vocabulary (`_common.PERIOD_MARKERS`, compact spellings
+  in both orders). Not every string field: settlement prose is prose, and a
+  `rules` note reading "void if the game is suspended before the end of the
+  regulation **period**" tokenises into a marker and silently deletes a live
+  full-game market — invisibly at fetch time, where a screened-out market has
+  no counter at all. `OT` is excluded from the vocabulary since it marks
+  whether extra time counts toward a whole-game price rather than naming a
+  narrower window, and `ALL_PERIODS`-style phrases are read as whole-game.
+  Novig screens at fetch as well as at parse, so a sub-period market does not
+  spend one of the 60 per-league book requests before being discarded.
 - **The residual is real and unresolved**: a sub-period market spelled with a
   game type and carrying no period word anywhere in its payload is
   indistinguishable from a full-game one, and would publish as full-game. The

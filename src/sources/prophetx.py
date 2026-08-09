@@ -77,11 +77,15 @@ from src.sources._common import (
     Tier,
     capabilities_from,
     drop_duplicate_selections,
+    drop_same_side_pairs,
     envelope_source,
     latest_capture,
     latest_per_endpoint,
+    market_label_text,
     mentions_a_sub_period,
     parse_iso_time,
+    resolve_over_under,
+    signed_handicap,
     within_schedule_horizon,
 )
 from src.sources.base import ParseOutcome
@@ -474,13 +478,31 @@ def _spread_lines_are_sign_opposed(
     if abs(lines[0] + lines[1]) > 1e-9:
         return False
     stated = market.get("line")
-    if isinstance(stated, (int, float)) and not isinstance(stated, bool):
+    if isinstance(stated, (int, float)) and not isinstance(stated, bool) and stated:
+        # ``and stated``: a market-level zero is the same defaulted field this
+        # guard exists to distrust, so treating it as an authoritative claim of
+        # "pick'em" would reject every genuine handicap the venue sends —
+        # every spread market lost, and the source graded unhealthy on every
+        # pass, which is the regression round 3 fixed arriving from the other
+        # side.  A stated *non-zero* line is a real claim and must agree.
         return abs(abs(lines[0]) - abs(float(stated))) < 1e-9
+    if not any(lines):
+        # Two zeroed selections under a market that states nothing.  If the
+        # selections' own names spell a handicap, the payload is telling us
+        # the line in the only place it does and the zeros are defaults, not
+        # a pick'em: publishing them prices a handicap bet as a coin flip.
+        named = [signed_handicap(_selection_label(entry)) for entry in flat]
+        if any(value for value in named):
+            return False
     return True
 
 
+def _selection_label(entry: Mapping[str, Any]) -> str:
+    return f"{entry.get('display_name') or ''} {entry.get('name') or ''}".strip()
+
+
 def _looks_full_game(market: Mapping[str, Any]) -> bool:
-    return not mentions_a_sub_period(market.get("name"), market.get("group_name"))
+    return not mentions_a_sub_period(market_label_text(market))
 
 
 class _Fixture:
@@ -579,6 +601,7 @@ def parse_prophetx(raws: Sequence[RawResponse]) -> ParseOutcome:
             for market in markets:
                 if isinstance(market, dict):
                     _parse_market(market, fixture, raw, source=source, outcome=outcome)
+    drop_same_side_pairs(source, outcome)
     # Storage enforces dedup_key with a UNIQUE constraint whose failure aborts
     # the whole insert; every peer parser guards it here and so does this one.
     drop_duplicate_selections(source, outcome)
@@ -808,11 +831,9 @@ def _parse_selection(
 
     name = str(selection.get("display_name") or selection.get("name") or "")
     if our_market is Market.TOTAL:
-        lowered = name.lower()
-        if "over" in lowered:
-            our_selection = Selection.OVER
-        elif "under" in lowered:
-            our_selection = Selection.UNDER
+        resolved_side = resolve_over_under(name)
+        if resolved_side is not None:
+            our_selection = resolved_side
         else:
             outcome.reject(
                 source,

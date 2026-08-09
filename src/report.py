@@ -558,6 +558,17 @@ SKIP_NOTES: list[tuple[str, str]] = [
      "in games, for instance."),
     ("not_a_full_period_result",
      "Settles on something other than the result of a whole scoring window."),
+    ("price_outside_the_plausible_band",
+     "A price so far outside the normal range that publishing it would be a units "
+     "error waiting to happen. On an order-driven venue it is usually a real resting "
+     "order at an extreme — somebody offering a hundred to one — which is genuine and "
+     "still not a comparable price. Counted rather than faulted, because the venue is "
+     "working normally."),
+    ("market_prices_one_side_twice",
+     "One market published two prices for the same side of the fixture, which a "
+     "two-outcome market cannot do. The payload named one competitor on both "
+     "outcomes, and the pair would otherwise read as a hedge while both bets sat on "
+     "the same team."),
     ("event_not_open_pregame",
      "The venue no longer lists this fixture as open for pre-match trading — it has "
      "started, been settled, or been pulled — so its prices are not the pre-match "

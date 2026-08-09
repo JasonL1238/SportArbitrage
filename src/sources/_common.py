@@ -28,7 +28,7 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 from urllib.parse import urlsplit
 
 from src.raw_store import RawResponse
-from src.schema import Market
+from src.schema import Market, Selection
 from src.sources.guards import (
     EmptyResponseError,
     RateLimitedError,
@@ -644,33 +644,151 @@ PERIOD_MARKERS: frozenset[str] = frozenset(
 _LABEL_SEPARATORS = ("-", "–", "—", "/", "|", "(", ")", ",", ":", "_")
 
 
+#: Phrases that name the **whole** game while containing a period word.  A
+#: venue spelling full-game as ``ALL_PERIODS`` is saying the opposite of what
+#: the marker ``periods`` alone would imply, and dropping that market loses the
+#: class silently.
+_WHOLE_GAME_PHRASES = ("all periods", "all quarters", "all halves", "all innings")
+
+
+def _screening_text(labels: Sequence[Any]) -> str:
+    text = " ".join(str(label or "") for label in labels).lower()
+    for separator in _LABEL_SEPARATORS:
+        text = text.replace(separator, " ")
+    return " ".join(text.split())
+
+
 def mentions_a_sub_period(*labels: Any) -> bool:
     """Does any of *labels* name a window narrower than the whole game?
 
     Tokenised rather than substring-matched: ``"Setanta"`` contains ``"set"``
     and names no period, and a substring rule would skip it.
     """
-    text = " ".join(str(label or "") for label in labels).lower()
-    for separator in _LABEL_SEPARATORS:
-        text = text.replace(separator, " ")
+    text = _screening_text(labels)
+    for phrase in _WHOLE_GAME_PHRASES:
+        text = text.replace(phrase, " ")
     return bool({token.strip(".") for token in text.split()} & PERIOD_MARKERS)
 
 
-def market_label_text(entry: Any) -> str:
-    """Every top-level string value on a market payload, joined.
+def resolve_over_under(description: str) -> Selection | None:
+    """``OVER``/``UNDER`` from a total's label, or ``None`` if it says neither.
 
-    A venue's period signal lives in whatever field that venue happens to
-    name — ``name``, ``description``, ``group_name``, ``label``, ``subType``.
-    Reading one chosen field means the screen is only as good as the guess:
-    Novig's period guard read ``description``, a field absent from the shape
-    its own module docstring documents, so on the documented payload it was
-    inert.  Reading them all costs nothing and cannot be wrong about which
-    name the venue picked.
+    Whole tokens, and both checked before either is believed.  A substring
+    test in the obvious order — ``"over" in text`` first — reads the ordinary
+    total label ``"Under 220.5 (Incl. Overtime)"`` as an **Over**, because
+    "overtime" contains "over": the Under's price is then published under the
+    Over's identity, and the genuine Over row collides with it.  That is a
+    wrong number published from a payload that is not malformed at all.
+    """
+    tokens = {token.strip(".") for token in _screening_text((description,)).split()}
+    over, under = "over" in tokens, "under" in tokens
+    if over is under:  # neither, or a label claiming both
+        return None
+    return Selection.OVER if over else Selection.UNDER
+
+
+def signed_handicap(description: str, *, price_shaped: float = 100.0) -> float | None:
+    """The one explicitly signed handicap in *description*, or ``None``.
+
+    Exactly one handicap-shaped token, or nothing.  Two of them ("Phils -1.5
+    -2.5") do not say which is the line — taking the first, or the last, is a
+    coin flip wearing a rule's clothes — and a token of ``±price_shaped`` or
+    more is an American price, not a handicap: exchange rows display prices
+    ("Phillies -110"), and reading one as a line publishes a -110 handicap
+    that validation faults on MLB and accepts as junk in the high-total
+    leagues.  A price *beside* a handicap is unambiguous once discounted.
+    """
+    found: list[float] = []
+    for token in description.replace("(", " ").replace(")", " ").split():
+        if token[:1] in "+-" and len(token) > 1:
+            try:
+                value = float(token)
+            except ValueError:
+                continue
+            if abs(value) >= price_shaped:
+                continue
+            found.append(value)
+    return found[0] if len(found) == 1 else None
+
+
+def drop_same_side_pairs(source: str, outcome: Any) -> None:
+    """Refuse a market whose published legs all land on the same side.
+
+    A two-outcome market prices opposite sides by construction, so two rows
+    from one market agreeing on ``selection`` means the payload named one club
+    (or one competitor id) on both outcomes.  :func:`drop_duplicate_selections`
+    cannot see it — sign-opposed handicaps give the rows different lines and
+    therefore different dedup keys — and published, they are two bets on the
+    same team presented as a hedge: paired against another book's genuine
+    other side they read as an arbitrage while both legs lose together.
+    """
+    by_market: dict[tuple[str, str], list[Any]] = {}
+    for quote in outcome.quotes:
+        by_market.setdefault(
+            (quote.source_market_id or "", quote.source_event_id), []
+        ).append(quote)
+    doomed = set()
+    for (market_id, event_id), quotes in by_market.items():
+        if len(quotes) < 2 or len({quote.selection for quote in quotes}) > 1:
+            continue
+        outcome.reject(
+            source,
+            "market_prices_one_side_twice",
+            f"{event_id}: market {market_id} published {len(quotes)} legs all "
+            f"on {quotes[0].selection.value}",
+            event_id=event_id,
+        )
+        doomed.add((market_id, event_id))
+    if doomed:
+        outcome.quotes = [
+            quote
+            for quote in outcome.quotes
+            if (quote.source_market_id or "", quote.source_event_id) not in doomed
+        ]
+
+
+#: Field names that carry a market's **label** — the human-readable name of
+#: what is being priced.  Curated, and deliberately not "every string field".
+#:
+#: Reading one chosen field is too narrow: Novig's first period guard read
+#: ``description``, a field absent from the shape its own docs document, so on
+#: the documented payload it was inert.  But reading *everything* is worse in
+#: the other direction, because settlement prose is prose: a ``rules`` field
+#: saying "void if the game is suspended before the end of the regulation
+#: **period**", or a note reading "the **first** listed team is the away team",
+#: tokenises straight into a period marker and deletes an ordinary full-game
+#: market.  At fetch time that loss is invisible — no counter, no rejection,
+#: just a book never requested — and one such field on every market emptied a
+#: whole league and failed the pass.
+#:
+#: So: the fields a venue puts a *label* in, and no others.  A venue naming its
+#: window somewhere else entirely is a gap the first genuine capture closes by
+#: adding the key here, which is a smaller and louder failure than silently
+#: dropping live markets.
+MARKET_LABEL_KEYS: frozenset[str] = frozenset(
+    {
+        "name", "label", "title", "caption", "heading",
+        "description", "short_description", "shortdescription",
+        "group_name", "groupname", "group",
+        "market_name", "marketname", "market_label",
+        "display_name", "displayname",
+        "sub_type", "subtype", "category", "period_name", "periodname",
+    }
+)
+
+
+def market_label_text(entry: Any) -> str:
+    """The label-bearing string fields of a market payload, joined.
+
+    See :data:`MARKET_LABEL_KEYS` for why this is a curated set rather than
+    every string on the record.
     """
     if not isinstance(entry, Mapping):
         return ""
     return " ".join(
-        value for value in entry.values() if isinstance(value, str)
+        value
+        for key, value in entry.items()
+        if isinstance(value, str) and str(key).strip().lower() in MARKET_LABEL_KEYS
     )
 
 
