@@ -332,6 +332,35 @@ Still TEMPLATE, with the day's measurements on the route:
   not. `scopes_refused` keeps that failing loudly; the VALIDATED status claims
   the route is real, not that the shelf is whole.
 
+### The links the promotion made wrong, and the suite that texted — 2026-08-08
+
+Second adversarial round over this work, two findings that matter beyond prose:
+
+**The arb-link layer was state-blind while the promo layer was not.**
+`betlinks.SITE` pinned `betrivers_kambi` to `il.betrivers.com` and `caesars` to
+`/us/il/bet`; `jurisdictions.PromoRoute` had carried the correct per-state
+BetRivers doors all along. Promoting PA made it operative: run 32's two real
+opportunities each carried `il.betrivers.com` on a leg priced from
+`rsiuspa`/`US-PA`, under "PLACE BOTH NOW" — another licence's site, which does
+not show this state's slip. `bet_link` now takes the governed state and a
+`STATE_SITE` table resolves BetRivers/Caesars/Unibet per jurisdiction (agreement
+with the promo layer pinned by test); the SMS, the dashboard payload and the
+promo planner all thread it through. Ungoverned runs get a stateless brand door,
+never a confidently wrong state's.
+
+**The test suite was texting the operator.** Five CLI tests drive
+`main(["arb"])` over a genuine 4.76% synthetic arb; `alert_ready()` is true by
+default on a signed-in Mac, so every full-suite run reached osascript with the
+real number — unnoticed because `notify` is fail-soft and the tests pass either
+way. The hermetic conftest fixture now replaces `DEFAULT_BOOK.send` with a
+refusal, pinned by a test whose identity check fires before anything could
+deliver.
+
+Also from the round: `an_open` was the one Action Network descriptor issuing a
+`bookIds`-less v2 request — a shape no capture has ever measured — on every
+batch's global pass. It now names id 30, and a test keeps every live AN request
+on the named-ids shape across the global list and all four states.
+
 ## The Pennsylvania recapture — 2026-08-08T16:38Z
 
 `configured=PA detected_egress=PA` (fingerprint `78e5c3810511` as printed by

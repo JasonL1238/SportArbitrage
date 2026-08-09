@@ -107,15 +107,53 @@ MIRROR_BOOK: Mapping[str, str] = {
 #: Mirror feeds that do not name a single venue, so no bet slip exists.
 CONSENSUS_FEEDS: frozenset[str] = frozenset({"an_open"})
 
+#: Book → jurisdiction → that state's own front door, for the books whose site
+#: is partitioned by licence rather than geolocated.  Consulted before
+#: :data:`SITE`, and only when the caller states the run's jurisdiction.
+#:
+#: This table exists because the state-blind one below sent a Pennsylvania
+#: bettor to Illinois: run 32 — the run PA's routes were promoted on — produced
+#: two real opportunities whose ``betrivers_kambi`` legs each carried
+#: ``il.betrivers.com`` under a "PLACE BOTH NOW", while the prices had come
+#: from ``rsiuspa``/``market=US-PA``.  A link to another licence's site does
+#: not show this state's slip, which is rule (a)'s exact failure worn by a URL;
+#: the seconds it wastes are the seconds the edge is made of.  The BetRivers
+#: doors agree with :attr:`src.jurisdictions.PromoRoute.betrivers_url` per
+#: state — pinned by test, because two spellings of one door will drift.
+STATE_SITE: Mapping[str, Mapping[str, str]] = {
+    "betrivers_kambi": {
+        "IL": "https://il.betrivers.com/?page=sportsbook",
+        "PA": "https://pa.betrivers.com/?page=sportsbook",
+        "NJ": "https://nj.betrivers.com/?page=sportsbook",
+        # No DC entry: BetRivers holds no DC licence, and no DC run can carry
+        # a takeable betrivers_kambi leg to link.
+    },
+    "caesars": {
+        "IL": "https://sportsbook.caesars.com/us/il/bet",
+        "PA": "https://sportsbook.caesars.com/us/pa/bet",
+        "NJ": "https://sportsbook.caesars.com/us/nj/bet",
+        "DC": "https://sportsbook.caesars.com/us/dc/bet",
+    },
+    "unibet": {
+        "PA": "https://pa.unibet.com",
+        "NJ": "https://nj.unibet.com",
+        # The only feed that produces a unibet leg is ``an_unibet``, whose book
+        # ids exist for PA (246) and NJ (247) alone.
+    },
+}
+
 #: Book → front door.  Every key reachable from :data:`MIRROR_BOOK` or the
 #: registry has an entry, because :func:`bet_link` must always return something.
+#: For the books in :data:`STATE_SITE` these are the *stateless* fallbacks — a
+#: brand chooser or geolocating landing — used only when no jurisdiction
+#: governs the run.
 SITE: Mapping[str, str] = {
     "bally": "https://play.ballybet.com/sports",
     "bet365": "https://www.bet365.com",
     "betmgm": "https://sports.betmgm.com/en/sports",
-    "betrivers_kambi": "https://il.betrivers.com/?page=sportsbook",
+    "betrivers_kambi": "https://www.betrivers.com",
     "bovada": "https://www.bovada.lv/sports",
-    "caesars": "https://sportsbook.caesars.com/us/il/bet",
+    "caesars": "https://sportsbook.caesars.com",
     "circa": "https://www.circasports.com",
     "cloudbet": "https://www.cloudbet.com/en/sports",
     "draftkings": "https://sportsbook.draftkings.com",
@@ -311,10 +349,15 @@ def book_for(source: str) -> str | None:
     return MIRROR_BOOK.get(source, source)
 
 
-def bet_link(priced: _Priced) -> BetLink | None:
+def bet_link(priced: _Priced, *, state: str | None = None) -> BetLink | None:
     """The closest link to this row's bet slip that is a true statement.
 
     Returns None only for a consensus feed, where no single venue takes the bet.
+    *state* is the run's governed jurisdiction, when one governs: for the books
+    in :data:`STATE_SITE` it selects that licence's own front door, because a
+    state-partitioned book's Illinois site does not show Pennsylvania's slip.
+    Left ``None`` — a legacy or global run — those books degrade to their
+    stateless landing rather than to some other state's.
     """
     source = priced.source
     book = book_for(source)
@@ -336,15 +379,19 @@ def bet_link(priced: _Priced) -> BetLink | None:
     if league_url:
         return BetLink(league_url, Precision.LEAGUE, book, mirrored=mirrored)
 
+    if state:
+        state_site = STATE_SITE.get(book, {}).get(state.strip().upper())
+        if state_site:
+            return BetLink(state_site, Precision.SITE, book, mirrored=mirrored)
     site = SITE.get(book)
     if site:
         return BetLink(site, Precision.SITE, book, mirrored=mirrored)
     return None
 
 
-def link_payload(priced: _Priced) -> dict[str, object] | None:
+def link_payload(priced: _Priced, *, state: str | None = None) -> dict[str, object] | None:
     """JSON shape for the dashboard and the SMS formatter."""
-    link = bet_link(priced)
+    link = bet_link(priced, state=state)
     if link is None:
         return None
     return {
@@ -361,6 +408,7 @@ __all__ = [
     "LEAGUE_PAGE",
     "MIRROR_BOOK",
     "SITE",
+    "STATE_SITE",
     "BetLink",
     "Precision",
     "bet_link",

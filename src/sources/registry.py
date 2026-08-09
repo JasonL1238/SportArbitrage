@@ -606,11 +606,18 @@ _BASE_SOURCES: tuple[SourceDescriptor, ...] = (
     ),
     # Consensus / opening lines on the AN scoreboard — view-only; see
     # :data:`VIEW_ONLY_SOURCES`.  Not a book you can stake at.
+    #
+    # ``fetch_book_ids`` is set even though 30 is one of v2's defaults, because
+    # naming an id is the *measured* request shape: every capture on disk that
+    # produced rows named its ids, and after the v2 flip this was the only
+    # descriptor issuing a bookIds-less v2 request — a shape nothing had ever
+    # exercised.  What an unnamed v2 request returns is still unmeasured; this
+    # stops relying on it rather than settles it.
     SourceDescriptor(
         key="an_open",
         adapter=ActionNetworkAdapter,
         kind=SourceKind.SPORTSBOOK,
-        config={"book_id": 30},
+        config={"book_id": 30, "fetch_book_ids": "30"},
     ),
     SourceDescriptor(
         key="an_fanduel",

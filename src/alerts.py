@@ -11,6 +11,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+from contextlib import closing
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -187,8 +188,12 @@ def format_alert(
         # The link is the point of the text: a 3% edge is only takeable if both
         # slips are one tap away.  An event link goes bare; a league page says so,
         # because sending someone to an index and calling it the bet wastes the
-        # seconds the edge is made of.
-        link = bet_link(leg.quote)
+        # seconds the edge is made of.  The governed state rides along so a
+        # state-partitioned book links its *own* door — a PA text carried
+        # il.betrivers.com until it did.
+        link = bet_link(
+            leg.quote, state=(marking.state or None) if marking is not None else None
+        )
         if link is not None:
             if link.precision is Precision.EVENT:
                 line += f"\n   {link.url}"
@@ -377,6 +382,12 @@ class AlertBook:
         be opened or written falls back to the in-process set with one log
         line: the failure mode of a broken disk should be at worst the old
         behaviour, never a crashed watch loop and never a silent no-alert.
+
+        The in-memory half is check-then-add and is **not** thread-safe: two
+        threads sharing one path-less book can both claim a key.  No caller
+        threads today — the collector is single-threaded around ``notify`` and
+        the default book is path-backed, where sqlite arbitrates — so this is
+        a documented boundary, not a latent race in shipping code.
         """
         if key in self.sent_keys:
             return False
@@ -385,15 +396,18 @@ class AlertBook:
             return True
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            with sqlite3.connect(self.path, timeout=10.0) as connection:
-                connection.execute(
-                    "CREATE TABLE IF NOT EXISTS sent_alert ("
-                    "key TEXT PRIMARY KEY, sent_at TEXT NOT NULL)"
-                )
-                inserted = connection.execute(
-                    "INSERT OR IGNORE INTO sent_alert (key, sent_at) VALUES (?, ?)",
-                    (key, datetime.now(timezone.utc).isoformat()),
-                ).rowcount
+            # ``connect`` as a context manager only ends the transaction;
+            # ``closing`` is what actually closes the handle.
+            with closing(sqlite3.connect(self.path, timeout=10.0)) as connection:
+                with connection:
+                    connection.execute(
+                        "CREATE TABLE IF NOT EXISTS sent_alert ("
+                        "key TEXT PRIMARY KEY, sent_at TEXT NOT NULL)"
+                    )
+                    inserted = connection.execute(
+                        "INSERT OR IGNORE INTO sent_alert (key, sent_at) VALUES (?, ?)",
+                        (key, datetime.now(timezone.utc).isoformat()),
+                    ).rowcount
             return inserted == 1
         except (OSError, sqlite3.Error):
             log.exception(

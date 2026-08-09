@@ -582,6 +582,9 @@ class _PlanContext:
     as_of: datetime
     commissions: Mapping[str, Commission] | None
     one_counterparty: Mapping[str, Sequence[frozenset[str]]]
+    #: The run's jurisdiction, for leg links: a state-partitioned book's front
+    #: door is that state's own.  ``None`` for an ungoverned run.
+    state: str | None = None
     groups: dict[MarketGroup, _GroupView] = field(default_factory=dict)
     groups_by_source: dict[str, list[MarketGroup]] = field(default_factory=dict)
     #: Groups dropped before any book was indexed, per source that had rows in
@@ -612,11 +615,13 @@ def _build_context(
     as_of: datetime,
     commissions: Mapping[str, Commission] | None,
     one_counterparty: Mapping[str, Sequence[frozenset[str]]] | None,
+    state: str | None = None,
 ) -> _PlanContext:
     usable = [quote for quote in quotes if quote.source not in VIEW_ONLY_SOURCES]
     context = _PlanContext(
         as_of=as_of,
         commissions=commissions,
+        state=state,
         one_counterparty=(
             counterparty_groups(usable) if one_counterparty is None else one_counterparty
         ),
@@ -1325,7 +1330,9 @@ def _solve(
 # ── plan payloads ────────────────────────────────────────────────────────────
 
 
-def _candidate_payload(candidate: _Candidate, *, as_of: datetime) -> dict[str, Any]:
+def _candidate_payload(
+    candidate: _Candidate, *, as_of: datetime, state: str | None = None
+) -> dict[str, Any]:
     view = candidate.view
     event_key, market, period, side, line = view.key
     reference = candidate.promo_leg.quote
@@ -1359,8 +1366,9 @@ def _candidate_payload(candidate: _Candidate, *, as_of: datetime) -> dict[str, A
                 "observed_at": leg.quote.observed_at.isoformat(),
                 # Where this leg gets placed.  A plan that names a promo, a book
                 # and a stake but leaves the reader to find the game is a
-                # calculation, not an instruction.
-                "link": link_payload(leg.quote),
+                # calculation, not an instruction.  The plan's state picks a
+                # state-partitioned book's own front door.
+                "link": link_payload(leg.quote, state=state),
             }
             for leg in candidate.legs
         ],
@@ -1696,7 +1704,7 @@ def _plan_conversion(
     scale = amount / PLAN_UNIT
     survivors = _rescale_survivors(candidates, scale, skipped)
     for candidate, scaled in survivors[:MAX_PLANS_PER_OFFER]:
-        payload = _candidate_payload(scaled, as_of=context.as_of)
+        payload = _candidate_payload(scaled, as_of=context.as_of, state=context.state)
         payload["conversion_pct"] = round(candidate.settled_floor / PLAN_UNIT * 100.0, 2)
         out["plans"].append(payload)
     out["caveats"].append(
@@ -1731,7 +1739,7 @@ def _plan_qualify_then_convert(
     conversion = [c for c in priced if c.settled_floor > _EPSILON]
     _note_unprofitable(out, priced, conversion)
     if qualify:
-        payload = _candidate_payload(qualify[0], as_of=context.as_of)
+        payload = _candidate_payload(qualify[0], as_of=context.as_of, state=context.state)
         payload["step"] = "qualify"
         # The qualifying round-trip usually costs the vig; its settled floor is
         # that cost, signed.
@@ -1742,7 +1750,7 @@ def _plan_qualify_then_convert(
     convert_survivors = _rescale_survivors(conversion, scale, skipped)
     room = max(0, MAX_PLANS_PER_OFFER - len(out["plans"]))
     for candidate, scaled in convert_survivors[:room]:
-        payload = _candidate_payload(scaled, as_of=context.as_of)
+        payload = _candidate_payload(scaled, as_of=context.as_of, state=context.state)
         payload["step"] = "convert"
         payload["conversion_pct"] = round(candidate.settled_floor / PLAN_UNIT * 100.0, 2)
         out["plans"].append(payload)
@@ -1828,7 +1836,7 @@ def _plan_no_sweat(
         if candidate.settled_floor > _EPSILON
     ]
     for candidate in candidates[:MAX_PLANS_PER_OFFER]:
-        out["plans"].append(_candidate_payload(candidate, as_of=context.as_of))
+        out["plans"].append(_candidate_payload(candidate, as_of=context.as_of, state=context.state))
     if not candidates:
         out["caveats"].append(
             "no market on this book turns the insurance into a locked profit "
@@ -1860,7 +1868,7 @@ def _plan_boost(
             if c.settled_floor > _EPSILON
         ]
         for candidate in candidates[:MAX_PLANS_PER_OFFER]:
-            out["plans"].append(_candidate_payload(candidate, as_of=context.as_of))
+            out["plans"].append(_candidate_payload(candidate, as_of=context.as_of, state=context.state))
         if not candidates:
             out["caveats"].append(
                 f"no market on this book locks a profit at a {boost_pct:g}% boost "
@@ -1940,7 +1948,7 @@ def _plan_boost(
         resolve_refusals.clear()
         boosted_rows.append((needed, boosted))
     for needed, boosted in boosted_rows[:MAX_PLANS_PER_OFFER]:
-        payload = _candidate_payload(boosted, as_of=context.as_of)
+        payload = _candidate_payload(boosted, as_of=context.as_of, state=context.state)
         payload["breakeven_boost_pct"] = round(needed, 2)
         out["plans"].append(payload)
 
@@ -1961,7 +1969,7 @@ def _plan_rollover(
         mode=MODE_CASH, stake=PLAN_UNIT, min_promo_decimal=min_dec,
     )
     for candidate in candidates[:MAX_PLANS_PER_OFFER]:
-        payload = _candidate_payload(candidate, as_of=context.as_of)
+        payload = _candidate_payload(candidate, as_of=context.as_of, state=context.state)
         payload["cost_per_100_wagered"] = round(-min(candidate.settled_floor, 0.0) or 0.0, 2)
         out["plans"].append(payload)
     if candidates and bonus_amount and wagering:
@@ -2088,6 +2096,7 @@ def build_promo_plans(
     as_of: datetime,
     commissions: Mapping[str, Commission] | None = None,
     one_counterparty: Mapping[str, Sequence[frozenset[str]]] | None = None,
+    state: str | None = None,
 ) -> dict[str, Any]:
     """Concrete usage plans for every offer, keyed ``"source|offer_id"``.
 
@@ -2096,10 +2105,16 @@ def build_promo_plans(
     event-reconciled the way :func:`src.report._arb_payload` reconciles them.
     *one_counterparty* is the measured/recorded counterparty gate; left
     ``None`` it is measured from the quotes, the same default the arb detector
-    applies.
+    applies.  *state* is the run's jurisdiction, threaded to every leg link so
+    a state-partitioned book links its own front door — offers are already
+    state-matched, so their links must not point at another licence's site.
     """
     context = _build_context(
-        quotes, as_of=as_of, commissions=commissions, one_counterparty=one_counterparty
+        quotes,
+        as_of=as_of,
+        commissions=commissions,
+        one_counterparty=one_counterparty,
+        state=state,
     )
     conversion_cache: dict[tuple[tuple[str, ...], float | None], tuple[list[_Candidate], Counter]] = {}
     plans: dict[str, Any] = {}

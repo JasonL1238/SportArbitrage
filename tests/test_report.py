@@ -1983,6 +1983,34 @@ def test_the_dashboard_labels_positions_with_no_state_licensed_leg(tmp_path) -> 
     )
 
 
+def test_the_dashboard_links_a_state_partitioned_book_to_its_own_state(tmp_path) -> None:
+    """The payload's leg links carry the run's jurisdiction into ``bet_link``.
+
+    Run 32's two real opportunities each shipped ``il.betrivers.com`` on a
+    ``betrivers_kambi`` leg whose prices came from ``rsiuspa``/``US-PA`` — the
+    dashboard's copy of the same wrong door the SMS carried.  The SMS side is
+    pinned in ``tests/test_alerts.py``; this is the page a reader clicks.
+    """
+    from src.report import _arb_payload
+
+    path, run_ids = _pa_state_run(tmp_path, [
+        ("fanduel", Selection.HOME, 2.20),
+        ("betrivers_kambi", Selection.AWAY, 2.20),
+    ])
+    with Store(path) as opened:
+        payload = _arb_payload(opened, run_ids, as_of=datetime.now(UTC))
+
+    bundle = payload[str(run_ids[0])]
+    assert bundle["opportunities"], "the two-book PA position must survive"
+    links = {
+        leg["source"]: (leg["link"] or {}).get("url", "")
+        for opp in bundle["opportunities"]
+        for leg in opp["legs"]
+    }
+    assert links["betrivers_kambi"] == "https://pa.betrivers.com/?page=sportsbook"
+    assert "il.betrivers.com" not in " ".join(links.values())
+
+
 def test_the_dashboard_keeps_positions_that_do_have_one(tmp_path) -> None:
     """The other direction: a legitimate PA board is neither emptied nor flagged."""
     from src.report import _arb_payload

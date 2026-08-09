@@ -1435,7 +1435,7 @@ def _promo_payload(
             if latest_matching is not None:
                 matching_quote_runs = (latest_matching,)
         plans, plan_meta = _promo_plans(
-            odds_store, offers, matching_quote_runs, as_of
+            odds_store, offers, matching_quote_runs, as_of, state=promo_state or None
         )
         return {
             "run": run,
@@ -1507,6 +1507,8 @@ def _promo_plans(
     offers: Sequence[Mapping[str, Any]],
     quote_run_ids: Sequence[int],
     as_of: datetime | None,
+    *,
+    state: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     """Concrete usage plans for the promo panel, or an empty map with a reason.
 
@@ -1537,6 +1539,7 @@ def _promo_plans(
                 {} if recorded else counterparty_groups(everything),
                 recorded,
             ),
+            state=state,
         )
         meta = dict(built["meta"])
         meta["odds_run_id"] = run_id
@@ -1735,8 +1738,12 @@ def _opportunity_entry(
                 "stake": round(leg.stake, 2),
                 "payout": round(leg.payout, 2),
                 # Where to actually place it.  None only for a consensus feed,
-                # which names no venue that would take the bet.
-                "link": link_payload(leg.quote),
+                # which names no venue that would take the bet.  The governed
+                # state selects a state-partitioned book's own front door.
+                "link": link_payload(
+                    leg.quote,
+                    state=(marking.state or None) if marking is not None else None,
+                ),
             }
             for leg in opportunity.legs
         ],

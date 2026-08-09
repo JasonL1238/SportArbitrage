@@ -162,6 +162,28 @@ class TestLocalityDisclaimer:
         assert "PLACE BOTH NOW" in text
         assert "INFO ONLY" not in text
 
+    def test_a_pa_text_links_pennsylvanias_own_betrivers(self) -> None:
+        """The link is the point of the text, so it must be this state's.
+
+        Run 32's two real opportunities each texted ``il.betrivers.com`` under
+        "PLACE BOTH NOW" while their prices came from ``rsiuspa``/``US-PA`` —
+        another licence's site, which does not show this state's slip.  The
+        governed marking now rides into ``bet_link``, and this pins the whole
+        path: marking → link → the SMS body a reader actually taps.
+        """
+        text = format_alert(
+            _opportunity(sources=("fanduel", "betrivers_kambi")),
+            marking=self._pa_marking(),
+        )
+        assert "https://pa.betrivers.com" in text
+        assert "il.betrivers.com" not in text
+
+    def test_an_ungoverned_text_names_no_state_it_cannot_know(self) -> None:
+        text = format_alert(_opportunity(sources=("fanduel", "betrivers_kambi")))
+        assert "https://www.betrivers.com" in text
+        assert "il.betrivers.com" not in text
+        assert "pa.betrivers.com" not in text
+
     def test_a_fully_local_position_carries_no_disclaimer(self) -> None:
         """A governed marking must stay silent when there is nothing to mark.
 
@@ -240,6 +262,28 @@ class TestDedupeAndSend:
         monkeypatch.setattr(settings_mod, "TWILIO_FROM_NUMBER", "+15551234567")
         monkeypatch.setattr(settings_mod, "ALERT_TO", "+18479070871")
         assert alert_ready()
+
+    def test_the_suite_never_holds_a_live_transport(self) -> None:
+        """The suite was texting the operator on every full run.
+
+        Five CLI tests drive ``main(["arb"])`` over a genuine 4.76% synthetic
+        arb; ``alert_ready()`` is True by default on a signed-in Mac, so
+        ``DEFAULT_BOOK.send`` reached osascript with the operator's real
+        number — unnoticed because ``notify`` is fail-soft and the tests pass
+        either way.  The hermetic conftest fixture must therefore replace the
+        send callable with a refusal, and this test is what makes removing
+        that patch a test failure rather than a text message.
+
+        The identity check comes first so that, if the patch is ever gone,
+        this test fails *before* calling anything that could deliver.
+        """
+        import src.alerts as alerts_mod
+
+        assert alerts_mod.DEFAULT_BOOK.send is not alerts_mod.send_alert, (
+            "conftest must replace DEFAULT_BOOK.send for the whole suite"
+        )
+        with pytest.raises(AssertionError):
+            alerts_mod.DEFAULT_BOOK.send("probe body — must never deliver")
 
     def test_once_means_once_across_processes(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path

@@ -15,6 +15,7 @@ from src.betlinks import (
     LEAGUE_PAGE,
     MIRROR_BOOK,
     SITE,
+    STATE_SITE,
     Precision,
     bet_link,
     book_for,
@@ -172,6 +173,94 @@ class TestPrecisionIsReported:
         quote = make_quote(source="an_open", source_event_id="1", league="MLB")
         assert link_payload(quote) is None
         assert book_for("an_open") is None
+
+
+class TestAStatePartitionedBookLinksItsOwnState:
+    """A licence's front door, not some other licence's.
+
+    Run 32 — the run Pennsylvania's routes were promoted on — produced two real
+    opportunities whose ``betrivers_kambi`` legs each carried
+    ``il.betrivers.com`` under a "PLACE BOTH NOW", while the prices had come
+    from ``rsiuspa``/``market=US-PA``.  The Illinois site does not show
+    Pennsylvania's slip; a link that looks right and lands wrong wastes the
+    seconds the edge is made of, and presents another state's venue as this
+    state's — rule (a)'s failure worn by a URL.
+    """
+
+    @pytest.mark.parametrize(
+        "source,state,expected",
+        (
+            ("betrivers_kambi", "PA", "https://pa.betrivers.com/?page=sportsbook"),
+            ("betrivers_kambi", "IL", "https://il.betrivers.com/?page=sportsbook"),
+            ("betrivers_kambi", "NJ", "https://nj.betrivers.com/?page=sportsbook"),
+            ("caesars", "PA", "https://sportsbook.caesars.com/us/pa/bet"),
+            ("caesars", "IL", "https://sportsbook.caesars.com/us/il/bet"),
+            ("an_unibet", "PA", "https://pa.unibet.com"),
+            ("an_unibet", "NJ", "https://nj.unibet.com"),
+        ),
+    )
+    def test_the_governed_state_selects_the_door(
+        self, source: str, state: str, expected: str
+    ) -> None:
+        quote = make_quote(source=source, source_event_id="1", league="ATP")
+        link = bet_link(quote, state=state)
+        assert link is not None
+        assert link.url == expected
+
+    def test_an_ungoverned_run_names_no_state_at_all(self) -> None:
+        """Better a brand chooser than a confident wrong state."""
+        quote = make_quote(source="betrivers_kambi", source_event_id="1", league="ATP")
+        link = bet_link(quote)
+        assert link is not None
+        assert link.url == "https://www.betrivers.com"
+        for state_doors in STATE_SITE.values():
+            assert link.url not in state_doors.values()
+
+    def test_the_betrivers_doors_agree_with_the_promo_layer(self) -> None:
+        """Two spellings of one door will drift; this is the pin that says so.
+
+        ``jurisdictions.PromoRoute`` already carried the right per-state
+        BetRivers URL while the arb-link layer pinned Illinois — the repo knew
+        the answer and the two layers disagreed.  Each state's arb door must
+        live on the host the promo layer names.
+        """
+        from urllib.parse import urlsplit
+
+        from src.jurisdictions import JURISDICTIONS
+
+        for state, jurisdiction in JURISDICTIONS.items():
+            promo_url = jurisdiction.promos.betrivers_url
+            arb_url = STATE_SITE["betrivers_kambi"].get(state)
+            if promo_url is None:
+                assert arb_url is None, (
+                    f"{state}: no BetRivers licence, so no arb door either"
+                )
+                continue
+            assert arb_url is not None, f"{state}: promo layer has a door, arb has none"
+            assert urlsplit(arb_url).netloc == urlsplit(promo_url).netloc, (
+                f"{state}: arb door {arb_url} and promo door {promo_url} disagree"
+            )
+
+    def test_no_state_partitioned_book_hides_behind_a_league_page(self) -> None:
+        """The league-page lookup outranks the state door in ``bet_link``.
+
+        Today none of the state-partitioned books has a league grammar, so the
+        state door is always reached.  A future league entry for one of them,
+        pinned to a single state's domain, would silently reintroduce the
+        Illinois-link defect one precision level up — this makes that addition
+        a loud decision instead.
+        """
+        for book in STATE_SITE:
+            assert book not in LEAGUE_PAGE, (
+                f"{book} gained a league page; make it state-aware before "
+                "letting it outrank STATE_SITE"
+            )
+
+    def test_the_payload_carries_the_state_resolved_door(self) -> None:
+        quote = make_quote(source="betrivers_kambi", source_event_id="1", league="ATP")
+        payload = link_payload(quote, state="PA")
+        assert payload is not None
+        assert payload["url"] == "https://pa.betrivers.com/?page=sportsbook"
 
 
 class TestSlug:

@@ -344,6 +344,37 @@ def test_pennsylvanias_own_books_are_captured_and_parse_with_periods(
     )
 
 
+def test_every_live_action_network_request_names_its_book_ids() -> None:
+    """No request relies on v2's *unnamed* default, which nobody has measured.
+
+    Every capture on disk that produced rows named its ids; asking for ids v2
+    does not carry narrows the answer to the defaults 15/30, and what a request
+    with **no** ``bookIds`` returns has never been observed on v2 at all.
+    After the endpoint flip ``an_open`` was the one descriptor issuing that
+    shape — on every batch's global pass — so a change in the unnamed default
+    would have landed as a silent board change on a source with no evidence
+    trail.  Named ids are the measured shape; this keeps every live request on
+    it, across the global list and all four states' live builders.
+    """
+    live: dict[str, registry.SourceDescriptor] = {}
+    for entry in registry.global_sources():
+        live.setdefault(entry.key, entry)
+    for state in sorted(JURISDICTIONS):
+        for entry in registry.republished_sources_for_state(state):
+            live.setdefault(f"{state}:{entry.key}", entry)
+
+    an_live = {
+        label: entry
+        for label, entry in live.items()
+        if entry.adapter is ActionNetworkAdapter
+    }
+    assert an_live, "the sweep found no Action Network descriptors — vacuous"
+    for label, entry in sorted(an_live.items()):
+        assert entry.config.get("fetch_book_ids"), (
+            f"{label} would issue a bookIds-less request — an unmeasured shape"
+        )
+
+
 def test_asking_for_baseball_windows_does_not_empty_another_sports_board() -> None:
     """``periods=`` names baseball windows and is sent on *every* path.
 
@@ -359,7 +390,12 @@ def test_asking_for_baseball_windows_does_not_empty_another_sports_board() -> No
     paths = sorted(FIXTURE_RAW_DIR.glob("an_parx__*-nfl_*.json"))
     assert paths, "the NFL capture is this test's entire evidence"
     raws = [store.read(path) for path in paths]
-    assert all("periods=" in raw.url for raw in raws)
+    # The full encoded window list, not the bare parameter name: a recapture
+    # that asked ``periods=event`` alone would prove nothing about unknown
+    # window names and still contain the substring.
+    assert all(
+        "periods=event%2Cfirstfiveinnings%2Cfirstinning" in raw.url for raw in raws
+    )
 
     outcome = parse_actionnetwork(raws)
     assert not outcome.rejections

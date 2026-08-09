@@ -91,14 +91,32 @@ def _hermetic_promo_db(tmp_path, monkeypatch):
     # exercise the send path.  ``DEFAULT_BOOK`` bound the real path at import,
     # so the instance is repointed too, and its in-memory half cleared so one
     # test's sends cannot dedupe another's.
+    #
+    # And the send callable itself is replaced with a refusal, because the
+    # suite was *delivering*.  Five CLI tests run ``main(["arb"])`` over a
+    # genuine 4.76% synthetic arb; ``alert_ready()`` is True by default on any
+    # signed-in Mac (transport ``messages``, the operator's real number), so
+    # every full-suite run drove osascript with "ARB 5.0% | Philadelphia
+    # Phillies @ Miami Marlins" texts — unnoticed precisely because ``notify``
+    # is fail-soft.  The refusal raises; ``notify`` logs and returns the
+    # opportunity as unsent, which is the path those tests exercise anyway.
+    # ``test_the_suite_never_holds_a_live_transport`` pins this patch's
+    # existence, so removing it is a test failure rather than a text message.
     monkeypatch.setattr(settings_mod, "ALERT_BOOK_PATH", tmp_path / "alerts-hermetic.sqlite3")
     try:
         import src.alerts as alerts_mod
     except Exception:  # noqa: BLE001 — tests that never import alerts
         pass
     else:
+        def _refuse_real_send(body: str) -> str:
+            raise AssertionError(
+                "a test reached DEFAULT_BOOK.send — the real alert transport. "
+                "Construct an AlertBook with a fake send callable instead."
+            )
+
         monkeypatch.setattr(alerts_mod.DEFAULT_BOOK, "path", settings_mod.ALERT_BOOK_PATH)
         monkeypatch.setattr(alerts_mod.DEFAULT_BOOK, "sent_keys", set())
+        monkeypatch.setattr(alerts_mod.DEFAULT_BOOK, "send", _refuse_real_send)
     # ``src.report`` does ``from src import settings``, so it holds the same
     # module object patched above — no second patch is needed, and asserting
     # that keeps a future split of the two from passing silently.
