@@ -1194,7 +1194,7 @@ def _check_price_agreement(
     from it, so one flipped book would indict the honest one just as hard.
     """
     # Which sources price a draw on each moneyline, so a two-way contract is
-    # never compared against a three-way one.
+    # never compared against a three-way one *whose draw row parsed*.
     #
     # They are different bets and their prices are not commensurable: on the
     # 2026-08-08 Pennsylvania board, Caesars posted a **two-way** first-inning
@@ -1213,17 +1213,28 @@ def _check_price_agreement(
     # bad in its own way: an ERROR that fires every run on a known-benign cause
     # is how a report stops being read.
     #
-    # Keyed per ``side`` as well, because a source can price the main line
-    # three-way and an alternate two-way.
+    # ``side`` rides along to keep the tuple congruent with the grouping key
+    # below, and today it is constant: the schema forbids ``side`` on anything
+    # but TEAM_TOTAL, so on a moneyline it is always ``None``.  It starts
+    # mattering only if a sided market ever prices a draw.
     #
     # The ``is MONEYLINE`` guard below states the intent and cannot currently
     # change an answer: ``prices_draw`` is built from ``DRAW`` rows, which are
     # moneyline rows, so the market is already in the tuple and a spread never
     # matches.  Removing it is a no-op today and a defect the moment anything
     # else carries a ``DRAW``.
+    # Judged from *all* rows including suspended ones, same as
+    # ``arb.contract_shape``: suspending a price does not change which outcomes
+    # the market settles on.  Requiring ACTIVE here made a three-way book whose
+    # draw was momentarily suspended grade as two-way, which pooled its
+    # home/away prices with the genuine two-way book and indicted *that* book —
+    # the exact false ERROR this key exists to remove, resurrected through the
+    # status filter.  A draw row that never parses at all still misgrades this
+    # way; validation cannot see rows that do not exist, so that residue is a
+    # stated limit, not a keying bug.
     prices_draw: set[tuple[str, str, Market, Period, Any]] = set()
     for quote in quotes:
-        if quote.selection is Selection.DRAW and quote.status is QuoteStatus.ACTIVE:
+        if quote.selection is Selection.DRAW:
             prices_draw.add(
                 (quote.source, quote.event_key, quote.market, quote.period, quote.side)
             )

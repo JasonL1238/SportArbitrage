@@ -8,9 +8,12 @@ from __future__ import annotations
 
 import logging
 import shutil
+import sqlite3
 import subprocess
 import sys
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Callable, Sequence
 
 import httpx
@@ -352,10 +355,53 @@ def send_alert(body: str, *, to: str | None = None) -> str:
 
 @dataclass
 class AlertBook:
-    """Tracks which opportunities already texted in this process."""
+    """Tracks which opportunities already texted, in this process and before it.
+
+    ``sent_keys`` is the fast in-process half.  ``path`` is the durable half: a
+    one-table sqlite ledger shared by every process, because "text once" with a
+    per-process memory was a hazard, not a policy — every fresh ``arb --run N``
+    invocation re-texted a stored run's stale opportunities, demonstrated when
+    an offline review probe of run 32 delivered a real SMS.  ``None`` keeps the
+    book purely in-memory, which is what tests construct.
+    """
 
     sent_keys: set[str] = field(default_factory=set)
     send: Callable[[str], str] = field(default=send_alert)
+    path: Path | None = None
+
+    def _claim(self, key: str) -> bool:
+        """Record *key* as texted; ``False`` if any process already had.
+
+        ``INSERT OR IGNORE`` under sqlite's own locking, so two processes
+        racing on one key resolve to exactly one sender.  A ledger that cannot
+        be opened or written falls back to the in-process set with one log
+        line: the failure mode of a broken disk should be at worst the old
+        behaviour, never a crashed watch loop and never a silent no-alert.
+        """
+        if key in self.sent_keys:
+            return False
+        self.sent_keys.add(key)
+        if self.path is None:
+            return True
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            with sqlite3.connect(self.path, timeout=10.0) as connection:
+                connection.execute(
+                    "CREATE TABLE IF NOT EXISTS sent_alert ("
+                    "key TEXT PRIMARY KEY, sent_at TEXT NOT NULL)"
+                )
+                inserted = connection.execute(
+                    "INSERT OR IGNORE INTO sent_alert (key, sent_at) VALUES (?, ?)",
+                    (key, datetime.now(timezone.utc).isoformat()),
+                ).rowcount
+            return inserted == 1
+        except (OSError, sqlite3.Error):
+            log.exception(
+                "alert ledger %s unavailable; dedupe is in-process only for %s",
+                self.path,
+                key,
+            )
+            return True
 
     def notify(
         self,
@@ -374,8 +420,6 @@ class AlertBook:
             if not qualifies(opportunity, min_roi=min_roi):
                 continue
             key = opportunity_alert_key(opportunity)
-            if key in self.sent_keys:
-                continue
             body = format_alert(opportunity, marking=marking)
             # Claimed *before* the send, so a delivery that reports failure
             # cannot be retried into a second text.  ``collect_batch_once`` is
@@ -388,11 +432,12 @@ class AlertBook:
             # success meant an ambiguous first send left the key unclaimed and
             # the next pass sent it again.
             #
-            # The trade is deliberate: at most one text per arb per process,
-            # even when that means a genuinely failed send is not retried.  A
-            # missed alert is visible in the log; a duplicate at 3am is not
+            # The trade is deliberate: at most one text per arb ever, even when
+            # that means a genuinely failed send is not retried.  A missed
+            # alert is visible in the log; a duplicate at 3am is not
             # recoverable and is what the dedupe book exists to prevent.
-            self.sent_keys.add(key)
+            if not self._claim(key):
+                continue
             try:
                 sid = self.send(body)
             except Exception:  # noqa: BLE001 — watch loop must not die on SMS
@@ -413,8 +458,9 @@ class AlertBook:
         return sent
 
 
-#: Process-wide book so ``--watch`` does not re-text the same arb every pass.
-DEFAULT_BOOK = AlertBook()
+#: Process-wide book, backed by the on-disk ledger so ``--watch`` does not
+#: re-text the same arb every pass and a *second process* does not either.
+DEFAULT_BOOK = AlertBook(path=settings.ALERT_BOOK_PATH)
 
 
 def notify_opportunities(

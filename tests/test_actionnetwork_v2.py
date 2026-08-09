@@ -344,6 +344,32 @@ def test_pennsylvanias_own_books_are_captured_and_parse_with_periods(
     )
 
 
+def test_asking_for_baseball_windows_does_not_empty_another_sports_board() -> None:
+    """``periods=`` names baseball windows and is sent on *every* path.
+
+    The quiet failure would be v2 treating unknown window names on a
+    non-baseball board as "match nothing" — every Action Network tenant's
+    NBA/NFL/NHL board emptying the day the parameter shipped, with each request
+    still answering 200.  The committed betPARX NFL capture is the evidence it
+    does not: same request shape, ``periods=`` in the URL, and the board parses
+    to full-game rows (the baseball windows are simply absent, as they should
+    be for a sport that has no innings).
+    """
+    store = RawStore(FIXTURE_RAW_DIR)
+    paths = sorted(FIXTURE_RAW_DIR.glob("an_parx__*-nfl_*.json"))
+    assert paths, "the NFL capture is this test's entire evidence"
+    raws = [store.read(path) for path in paths]
+    assert all("periods=" in raw.url for raw in raws)
+
+    outcome = parse_actionnetwork(raws)
+    assert not outcome.rejections
+    assert len(outcome.quotes) >= 50, (
+        f"an NFL board answering {len(outcome.quotes)} rows is the emptying "
+        "this test exists to catch"
+    )
+    assert {quote.period for quote in outcome.quotes} == {Period.FULL_GAME}
+
+
 @pytest.mark.parametrize("state", sorted(JURISDICTIONS))
 def test_no_republished_route_claims_to_have_been_validated(state: str) -> None:
     """A status nothing can earn is worse than no status.

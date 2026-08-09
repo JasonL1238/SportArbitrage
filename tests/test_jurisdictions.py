@@ -71,8 +71,9 @@ def test_pa_route_statuses_match_what_the_egress_actually_proved() -> None:
     """Each Pennsylvania route holds the status its evidence earned, exactly.
 
     VALIDATED was earned on 2026-08-08 by two parser-clean runs per book from a
-    detected-PA egress, each replaying PASS offline: FanDuel runs 29/30,
-    BetRivers runs 28/29, DraftKings runs 29/31.  The two still-TEMPLATE routes
+    detected-PA egress: FanDuel runs 29/30, BetRivers runs 28/29, DraftKings
+    runs 29/31, with runs 29/30/31 replaying PASS offline (28 replays FAIL on
+    another book's since-fixed rows; BetRivers' own rows in it are drift-free).  The two still-TEMPLATE routes
     failed on the same day from the same egress — BetMGM with HTTP 400 on the
     access id, Caesars blocked at the CDN edge — so promoting them would assert
     evidence that does not exist, and demoting the three would discard evidence

@@ -1051,9 +1051,17 @@ def _check_reachability_is_declared() -> None:
     it anywhere for a reviewer to check.  Coverage grades a book ``DIRECT`` off
     such a key, so the failure surfaces as a state's board looking complete.
 
-    So the four sets partition :data:`_BASE_SOURCES`.  Unclassified is an error
-    rather than a default, and the two overlaps that are real are spelled out:
-    a republished mirror of an offshore book is both view-only and unstakeable.
+    So the four sets **cover** :data:`_BASE_SOURCES` — not partition it, because
+    one overlap is real: a republished mirror of an offshore book is both
+    view-only and unstakeable (``an_bovada``, ``an_onexbet`` today, pinned in
+    ``tests/test_coverage.py``).  Every other overlap is a contradiction and is
+    refused below: retail means "you can bet here, per state licence", which no
+    other classification can simultaneously be true of, and nationwide means "no
+    per-state licence needed", which none of the rest can.  The first cut
+    checked only the nationwide conflicts; adding ``hardrock`` to
+    US_UNAVAILABLE passed while ``takeable_from_state("IL")`` still served it —
+    the exact self-contradiction the check's own message describes, arriving
+    through an overlap it never looked at.
 
     ``_BASE_SOURCES`` and not :data:`SOURCES`, because the state-scoped
     republisher variants are generated from the base list and inherit its
@@ -1097,6 +1105,20 @@ def _check_reachability_is_declared() -> None:
             "also state-licensed, view-only or US-unavailable. Nationwide reach "
             "means no per-state licence is needed; the other three each mean the "
             "opposite, so takeable_from_state would contradict itself"
+        )
+
+    retail_conflict = sorted(
+        RETAIL_SOURCE_KEYS & (REPUBLISHED_SOURCE_KEYS | US_UNAVAILABLE_SOURCE_KEYS)
+    )
+    if retail_conflict:
+        raise RuntimeError(
+            f"{retail_conflict} are declared retail and also view-only or "
+            "US-unavailable. Retail means a first-party book the operator can "
+            "bet at, per state routes; a copy of somebody else's board or a "
+            "venue no US customer can reach cannot be that. With both set, "
+            "takeable_from_state would serve the key while is_us_unavailable "
+            "or view-only filtering disowned it, and which one a surface "
+            "believed would depend on which it asked first"
         )
 
 

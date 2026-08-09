@@ -1938,6 +1938,30 @@ class TestOneSourceCannotDisagreeWithEverybodyAboutAPrice:
             if f.code == "prices_disagree_with_every_other_source"
         ], "a two-way book must not be indicted for not being a three-way one"
 
+    def test_a_suspended_draw_does_not_turn_a_three_way_book_two_way(self) -> None:
+        """The shape is what the market settles on, not what is buyable now.
+
+        ``arb.contract_shape`` already judges from all rows including suspended
+        ones — suspending a price does not change which outcomes the market
+        settles on.  The first cut of this check's ``prices_draw`` required the
+        draw row to be ACTIVE, so a three-way book whose draw was momentarily
+        suspended pooled with the genuine two-way book and the check indicted
+        the two-way book — the same false ERROR, resurrected through a status
+        filter.  Found by adversarial review before it shipped a full day.
+        """
+        from src.validation import validate
+
+        slate = [
+            q.model_copy(update={"status": QuoteStatus.SUSPENDED})
+            if q.selection is Selection.DRAW
+            else q
+            for q in self._first_inning_slate()
+        ]
+        assert not [
+            f for f in validate(slate).findings
+            if f.code == "prices_disagree_with_every_other_source"
+        ], "a suspended draw must not change which contract the book offers"
+
     def test_a_swapped_three_way_book_is_still_caught_beside_a_two_way_one(self) -> None:
         """The fix above must not become a way to hide a real fault.
 

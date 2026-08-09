@@ -1030,6 +1030,55 @@ def test_nationwide_reach_and_a_state_licence_cannot_both_be_claimed():
     assert "fanduel" in str(caught.value)
 
 
+def test_retail_cannot_also_be_view_only_or_unreachable():
+    """The overlap the first cut of the guard never looked at.
+
+    Adding ``hardrock`` to US_UNAVAILABLE passed the invariant while
+    ``takeable_from_state("IL")`` still served it and ``is_us_unavailable``
+    disowned it — a self-contradiction the guard's own error message describes,
+    arriving through a RETAIL overlap rather than a NATIONWIDE one.
+    """
+    from src.sources import registry
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(
+            registry,
+            "US_UNAVAILABLE_SOURCE_KEYS",
+            registry.US_UNAVAILABLE_SOURCE_KEYS | {"hardrock"},
+        )
+        with pytest.raises(RuntimeError) as caught:
+            registry._check_reachability_is_declared()
+    assert "hardrock" in str(caught.value)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(
+            registry,
+            "REPUBLISHED_SOURCE_KEYS",
+            registry.REPUBLISHED_SOURCE_KEYS | {"fanduel"},
+        )
+        with pytest.raises(RuntimeError) as caught:
+            registry._check_reachability_is_declared()
+    assert "fanduel" in str(caught.value)
+
+
+def test_the_one_legitimate_overlap_is_exactly_the_offshore_mirrors():
+    """The four sets are a cover, not a partition, and this is the whole gap.
+
+    A republished mirror of an offshore book is honestly both view-only and
+    unstakeable, so the import-time guard permits REPUBLISHED ∩ US_UNAVAILABLE.
+    Pinned to its exact membership here so a key drifting into both sets is a
+    loud test failure demanding a decision, rather than a quiet third state.
+    """
+    from src.sources import registry
+
+    assert registry.REPUBLISHED_SOURCE_KEYS & registry.US_UNAVAILABLE_SOURCE_KEYS == {
+        "an_bovada",
+        "an_onexbet",
+    }
+    assert not registry.RETAIL_SOURCE_KEYS & registry.REPUBLISHED_SOURCE_KEYS
+    assert not registry.RETAIL_SOURCE_KEYS & registry.US_UNAVAILABLE_SOURCE_KEYS
+
+
 def test_a_reachability_set_cannot_name_a_source_that_does_not_exist():
     """A set that drifts from the registry stops describing it.
 

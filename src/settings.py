@@ -190,6 +190,13 @@ ALERT_MIN_ROI = _number("ALERT_MIN_ROI", "0.03", whole=False, minimum=0.0)
 #: Destination mobile for arb SMS (E.164).  Override with ``ODDS_ALERT_TO``.
 ALERT_TO = _lookup("ALERT_TO", "+18479070871")
 
+#: Ledger of arb alerts already texted, so "text once" survives the process.
+#: The in-memory dedupe alone let every fresh ``arb --run N`` invocation
+#: re-text a stored run's stale opportunities.
+ALERT_BOOK_PATH = Path(
+    _lookup("ALERT_BOOK_PATH", str(DATA_DIR / "alerts.sqlite3"))
+).expanduser()
+
 #: How a text is delivered.  ``messages`` drives the local Messages app over
 #: AppleScript — free, no account, but only while this Mac is awake and signed
 #: in.  ``twilio`` uses the HTTP API and works from anywhere the credentials do.

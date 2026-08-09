@@ -280,15 +280,22 @@ than remembered.
 
 ## Pennsylvania first-party routes promoted — 2026-08-08
 
-`configured=PA detected_egress=PA fingerprint=78e5c3810511` throughout. Three
-routes moved TEMPLATE → VALIDATED on the bar `MULTI_STATE.md` sets — parser-clean
-quotes through matching egress, twice, each run replaying PASS offline:
+`configured=PA detected_egress=PA` throughout (each run's collect printed the
+match; the egress *fingerprint* is not persisted per run, and the stored
+`egress_state.json` was re-detected — with a rotated IP, hence a new
+fingerprint — 3 ms before run 32, so no per-run fingerprint claim is made
+here). Three routes moved TEMPLATE → VALIDATED on the bar `MULTI_STATE.md`
+sets — parser-clean quotes through matching egress, twice each:
 
 | book | runs | quotes | rejections | replay |
 |---|---|---|---|---|
 | FanDuel (`sbapi.pa.sportsbook.fanduel.com`, `state=pa`) | 29, 30 | 1579 / 1967 | 0 / 0 | PASS / PASS |
-| BetRivers (`rsiuspa`, `market=US-PA`) | 28, 29 | 3699 / 3698 | 0 / 0 | PASS / PASS |
+| BetRivers (`rsiuspa`, `market=US-PA`) | 28, 29 | 3699 / 3698 | 0 / 0 | FAIL* / PASS |
 | DraftKings (`US-PA-SB`) | 29, 31 | 130 / 130 | 0 / 0 | PASS / PASS |
+
+\* Replay has no per-source filter. Run 28's FAIL is entirely DraftKings'
+pre-trueOdds-fix rows drifting against the fixed parser; BetRivers' own run-28
+rows replay without drift. Its second fully-PASS run is 29.
 
 Two defects had to fall first, both caught by this validation pass:
 
@@ -308,8 +315,10 @@ Two defects had to fall first, both caught by this validation pass:
 
 What a PA run says after promotion (run 32, core tier, 4627 quotes):
 `state_native_sources_below_two` is gone, three books cross-compare, 2
-opportunities from 172 cross-book markets, and the sole remaining ERROR is
-`required_book_missing: PlaySugarHouse` — the deliberate sentinel.
+opportunities from 172 cross-book markets, and the remaining ERRORs are two:
+`required_book_missing: PlaySugarHouse` — the deliberate sentinel — and
+DraftKings' `scopes_refused` (the eventgroup denials below, equally deliberate
+in staying loud).
 
 Still TEMPLATE, with the day's measurements on the route:
 
@@ -325,9 +334,11 @@ Still TEMPLATE, with the day's measurements on the route:
 
 ## The Pennsylvania recapture — 2026-08-08T16:38Z
 
-`configured=PA detected_egress=PA fingerprint=78e5c3810511`, 12:38 ET on a
-Saturday, so the whole slate was pregame — the condition the 2026-08-07 attempts
-lacked. Run 27, thirteen sources asked, alerts off.
+`configured=PA detected_egress=PA` (fingerprint `78e5c3810511` as printed by
+`detect_state.py` two minutes before the run; fingerprints are not persisted
+per run, and the connection's IP had rotated by the day's later runs), 12:38 ET
+on a Saturday, so the whole slate was pregame — the condition the 2026-08-07
+attempts lacked. Run 27, thirteen sources asked, alerts off.
 
 | source | id | brand | quotes | events |
 |---|---|---|---|---|
@@ -353,9 +364,11 @@ above.
 MLB captures for `an_parx`, `an_thescore` and `an_unibet` replaced the committed
 fixtures, which asked New Jersey ids (1929 / 247 / 4620) through v1 and parsed to
 nothing. Offline, those three now parse to 255 / 225 / 195 rows with **no
-rejections** and all three period windows — `full_game`, `first_5_innings`,
-`first_1_inning` — which is the `periods=` fix demonstrated end to end rather
-than argued.
+rejections** — the `periods=` fix demonstrated end to end rather than argued.
+Windows per book, measured on the committed bytes: 74 and 4623 carry
+`full_game` + `first_5_innings` + `first_1_inning`; **246 has no `firstinning`
+key on any of its 15 games** (full-game and first-five only), so a missing F1
+row for Unibet PA is that book's shelf, not a defect.
 
 The run raised `prices_disagree_with_every_other_source` against `an_caesars` —
 30 of 312 shared markets more than 0.15 of implied probability from the rest,

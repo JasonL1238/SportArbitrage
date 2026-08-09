@@ -231,6 +231,83 @@ class TestDedupeAndSend:
         assert len(sent) == 1
         assert opportunity_alert_key(opp) in book.sent_keys
 
+    def _ready(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import src.settings as settings_mod
+
+        monkeypatch.setattr(settings_mod, "ALERT_TRANSPORT", "twilio")
+        monkeypatch.setattr(settings_mod, "TWILIO_ACCOUNT_SID", "ACxxxx")
+        monkeypatch.setattr(settings_mod, "TWILIO_AUTH_TOKEN", "token")
+        monkeypatch.setattr(settings_mod, "TWILIO_FROM_NUMBER", "+15551234567")
+        monkeypatch.setattr(settings_mod, "ALERT_TO", "+18479070871")
+        assert alert_ready()
+
+    def test_once_means_once_across_processes(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        """The ledger is the fix for a text that actually reached a phone.
+
+        The in-memory book starts empty in every process, so ``arb --run N``
+        re-texted a stored run's stale opportunities on each invocation — an
+        offline review probe of run 32 delivered a real 3.3% tennis arb SMS
+        that the collect pass had already had the chance to send.  Two books
+        sharing one ledger path stand in for two processes here.
+        """
+        self._ready(monkeypatch)
+        ledger = tmp_path / "alerts.sqlite3"
+        first_sent: list[str] = []
+        second_sent: list[str] = []
+        first = AlertBook(send=lambda body: first_sent.append(body) or "S1", path=ledger)
+        second = AlertBook(send=lambda body: second_sent.append(body) or "S2", path=ledger)
+
+        opp = _opportunity()
+        assert first.notify([opp]) == [opp]
+        assert second.notify([opp]) == [], (
+            "a fresh process must see the ledger, not start from nothing"
+        )
+        assert first_sent and not second_sent
+
+    def test_a_failed_send_stays_claimed_for_the_next_process_too(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        """Claim-before-send holds at the ledger, not only in memory.
+
+        The trade the in-memory book already made — a genuinely failed send is
+        not retried, because a send that fails after delivering would
+        double-text — must survive the process boundary, or the failure mode
+        returns through a restart.
+        """
+        self._ready(monkeypatch)
+        ledger = tmp_path / "alerts.sqlite3"
+
+        def _explode(body: str) -> str:
+            raise RuntimeError("carrier down")
+
+        crashed = AlertBook(send=_explode, path=ledger)
+        opp = _opportunity()
+        assert crashed.notify([opp]) == []
+
+        revived_sent: list[str] = []
+        revived = AlertBook(send=lambda body: revived_sent.append(body) or "S", path=ledger)
+        assert revived.notify([opp]) == []
+        assert not revived_sent
+
+    def test_an_unwritable_ledger_degrades_to_in_process_dedupe(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        """A broken disk must cost durability, never the alert or the loop."""
+        self._ready(monkeypatch)
+        blocked = tmp_path / "not-a-dir-parent"
+        blocked.write_text("a file where the ledger's parent dir should be")
+        sent: list[str] = []
+        book = AlertBook(
+            send=lambda body: sent.append(body) or "S",
+            path=blocked / "alerts.sqlite3",
+        )
+        opp = _opportunity()
+        assert book.notify([opp]) == [opp], "the text still goes out"
+        assert book.notify([opp]) == [], "and the in-process half still dedupes"
+        assert len(sent) == 1
+
     def test_send_sms_posts_twilio_form(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import src.settings as settings_mod
 

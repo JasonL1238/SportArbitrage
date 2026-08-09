@@ -238,11 +238,14 @@ Use this when Step 2 fails for a venue.
   odds/promo registries, global-fetch reuse, strict promo eligibility, batch/run
   persistence, state-matched promo planning, cache TTL/force behavior, and
   template-only probes.
-- Still required: a legitimate PA egress run producing parser-clean quotes
-  before PA route statuses are promoted from `template` to `validated`.
-- Existing independent blocker: three retained Action Network source keys need
-  real non-empty committed captures before the full offline contract suite can
-  be green.
+- Done 2026-08-08: PA egress runs produced parser-clean quotes and FanDuel,
+  BetRivers and DraftKings were promoted to `validated` (evidence in
+  `SOURCE_FEASIBILITY.md` § "Pennsylvania first-party routes promoted").
+  BetMGM and Caesars remain `template` — access id and CDN block respectively.
+- Existing independent blocker: three retained Action Network source keys
+  (`an_fliff`, `an_circa`, `an_superbook`) carry ids with no odds on either
+  endpoint version, so no genuine capture can exist and the full offline
+  contract suite stays dark until they are re-decided.
 
 ---
 

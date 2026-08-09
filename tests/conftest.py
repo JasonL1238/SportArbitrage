@@ -85,6 +85,20 @@ def _hermetic_promo_db(tmp_path, monkeypatch):
     bet_db = tmp_path / "bets-hermetic.sqlite3"
     monkeypatch.setattr(settings_mod, "PROMO_DB_PATH", promo_db)
     monkeypatch.setattr(settings_mod, "BET_DB_PATH", bet_db)
+    # The alert ledger is the same leak with a worse blast radius: a test that
+    # reaches ``notify_opportunities`` without its own book would write the
+    # developer's real sent-alert ledger — or read it, and silently *not*
+    # exercise the send path.  ``DEFAULT_BOOK`` bound the real path at import,
+    # so the instance is repointed too, and its in-memory half cleared so one
+    # test's sends cannot dedupe another's.
+    monkeypatch.setattr(settings_mod, "ALERT_BOOK_PATH", tmp_path / "alerts-hermetic.sqlite3")
+    try:
+        import src.alerts as alerts_mod
+    except Exception:  # noqa: BLE001 — tests that never import alerts
+        pass
+    else:
+        monkeypatch.setattr(alerts_mod.DEFAULT_BOOK, "path", settings_mod.ALERT_BOOK_PATH)
+        monkeypatch.setattr(alerts_mod.DEFAULT_BOOK, "sent_keys", set())
     # ``src.report`` does ``from src import settings``, so it holds the same
     # module object patched above — no second patch is needed, and asserting
     # that keeps a future split of the two from passing silently.

@@ -156,8 +156,10 @@ _AN_BOOK_IDS: Mapping[str, Mapping[str, int]] = MappingProxyType(
         #
         # **All three now parse.**  Captured 2026-08-08T16:38Z from a Pennsylvania
         # egress against a live pregame slate: 74 → 255 rows, 4623 → 225, 246 →
-        # 195, no rejections, and all three period windows present.  Those
-        # captures are the committed fixtures.
+        # 195, no rejections.  74 and 4623 carry all three period windows; **246
+        # publishes no first-inning market** — its board is full-game and
+        # first-five only, so a missing F1 row for Unibet PA is that book's
+        # shelf, not a fetch defect.  Those captures are the committed fixtures.
         #
         # Two things had to be true at once and neither was, which is why this
         # note used to be long.  The endpoint: the ids are on ``web/v2`` and the
@@ -350,12 +352,14 @@ PA = Jurisdiction(
     live_validated=True,
     routes={
         # The three VALIDATED routes below earned it the same way on 2026-08-08:
-        # two parser-clean runs each from a detected-PA egress (fingerprint
-        # 78e5c3810511), every run replaying PASS offline.  FanDuel runs 29/30
-        # (1579 and 1967 quotes, 0 rejections), BetRivers runs 28/29 (3699 and
-        # 3698, 0 rejections), DraftKings runs 29/31 (130 each, 0 rejections —
-        # both after the trueOdds fix; run 28's rows predate it and replay as
-        # drift, which is the replay checker refusing pre-fix evidence).
+        # two parser-clean runs each from a detected-PA egress, runs 29/30/31
+        # replaying PASS offline.  FanDuel runs 29/30 (1579 and 1967 quotes, 0
+        # rejections), BetRivers runs 28/29 (3699 and 3698, 0 rejections),
+        # DraftKings runs 29/31 (130 each, 0 rejections — both after the
+        # trueOdds fix).  Run 28 as a whole replays FAIL, and only on
+        # DraftKings' pre-fix rows — replay has no per-source filter, so
+        # BetRivers' run-28 evidence is its own drift-free rows inside a run
+        # whose verdict belongs to another book's since-fixed defect.
         "fanduel": _route(
             "fanduel",
             "https://sbapi.pa.sportsbook.fanduel.com",
