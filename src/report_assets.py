@@ -2749,7 +2749,7 @@ function renderChrome() {
 
   el('masthead-pills').innerHTML = [
     `<span class="pill ${run.ok ? 'ok' : 'bad'}"><i></i>${run.ok ? 'looks healthy' : 'something looked wrong'}</span>`,
-    `<span class="pill ${producing.length >= 2 ? 'flat' : 'bad'}">${producing.length} of ${health.length} books answered</span>`,
+    `<span class="pill ${producing.length >= 2 ? 'flat' : 'bad'}">${producing.length} of ${health.length} feeds answered</span>`,
     `<span class="pill ${usableSports.length ? 'ok' : 'bad'}"><i></i>${usableSports.length} sport${
       usableSports.length === 1 ? '' : 's'} you can compare</span>`,
     singleSports.length
@@ -3110,7 +3110,7 @@ function renderOddsScreen() {
   const sources = [...new Set(rows.map((r) => str(r[COL.source])))].sort();
   if (note) {
     note.textContent = `${events.length} game${events.length === 1 ? '' : 's'} · ${
-      sources.length} book${sources.length === 1 ? '' : 's'} · ${
+      sources.length} feed${sources.length === 1 ? '' : 's'} · ${
       currentMarket} · American odds · highlight = best on the same line`;
   }
 
@@ -6624,7 +6624,7 @@ function paintScrapeProgress(progress, busy) {
   }
   msg.textContent = (progress && progress.message) || (busy ? 'Scraping…' : '');
   const bits = [];
-  if (total > 0) bits.push(`${done}/${total} books`);
+  if (total > 0) bits.push(`${done}/${total} feeds`);
   if (progress && progress.quote_count != null) {
     bits.push(`${Number(progress.quote_count).toLocaleString()} prices`);
   }
@@ -6764,7 +6764,7 @@ function paintPromoScrapeProgress(progress, busy) {
   }
   msg.textContent = (progress && progress.message) || (busy ? 'Scraping promos…' : '');
   const bits = [];
-  if (total > 0) bits.push(`${done}/${total} books`);
+  if (total > 0) bits.push(`${done}/${total} feeds`);
   if (progress && progress.offer_count != null) {
     bits.push(`${Number(progress.offer_count).toLocaleString()} offers`);
   }

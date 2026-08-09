@@ -1068,6 +1068,15 @@ class TestThePlanCommand:
         assert pa_set != registry.view_only_for_run(""), (
             "the discriminating premise of this pin"
         )
+        # ...and the ambient set is forced to a sentinel, or the pin goes
+        # blind under ODDS_STATE=PA: with the reader configured for PA the
+        # ambient set *equals* pa_set, and a regression to ambient grading —
+        # the exact class this pin holds — passed unseen.  A set no state
+        # resolver can produce makes ambient grading distinguishable under
+        # every reader configuration.
+        sentinel = frozenset({"__ambient_sentinel__"})
+        monkeypatch.setattr(registry, "VIEW_ONLY_SOURCES", sentinel)
+        assert pa_set != sentinel
 
         captured: list = []
         real = arb_mod.counterparty_groups

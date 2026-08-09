@@ -209,6 +209,8 @@ try {
     globalThis.__currentRows = currentRows;
     globalThis.__arbBundle = arbBundle;
     globalThis.__sportGap = sportGap;
+    globalThis.__buildSportPicker = buildSportPicker;
+    globalThis.__setSport = (s) => { currentSport = s; };
     globalThis.__sourceInfo = sourceInfo;
     globalThis.__SOURCE_INFO_BY_STATE = SOURCE_INFO_BY_STATE;
     globalThis.__runById = runById;
@@ -3654,6 +3656,54 @@ function onAnEmbeddedRun() {   // a declaration, so block order cannot matter
     process.exit(1);
   }
   console.log('a sport priced only by mirrors is named as such, not as one book');
+}
+
+/* ── ALL-MIRROR SPORT WORDING, AS RENDERED ────────────────────────────────────
+   The block above pins sportGap's words; this one pins the WIRE.  A pin-decay
+   sweep proved the call sites could be reverted to the literal "one book only"
+   strings with every test in the repo staying green — the helper stayed
+   correct and unexported words rendered anyway.  So: a synthetic all-mirror
+   run, the real buildSportPicker, and the option/meta text a reader sees. */
+{
+  if (typeof globalThis.__buildSportPicker !== 'function') {
+    console.error('buildSportPicker is not exported — the wiring pin is dead');
+    process.exit(1);
+  }
+  const before = globalThis.__currentRun();
+  globalThis.__runById.set(999998, {
+    id: 999998, jurisdiction: 'PA', sports: [{
+      sport: 'baseball', comparable: false, meets_bar: false,
+      books: [], per_source: { an_fanduel: 90, an_betrivers: 80, an_parx: 70 },
+      quote_count: 240, event_count: 15, cross_book_events: 0, leagues: [],
+    }],
+  });
+  globalThis.__setCurrentRun(999998);
+  globalThis.__setSport('baseball');
+  globalThis.__buildSportPicker();
+  const pickHtml = String((nodes.get('sport-pick') || {}).innerHTML || '');
+  const metaText = String((nodes.get('sport-meta') || {}).textContent || '');
+  globalThis.__runById.delete(999998);
+  globalThis.__setCurrentRun(before);
+  globalThis.__setSport('');
+  globalThis.__buildSportPicker();
+  const problems = [];
+  if (!/view-only feeds only/.test(pickHtml)) {
+    problems.push(`dropdown does not name the mirror-only cause: ${pickHtml}`);
+  }
+  if (/one book only/.test(pickHtml)) {
+    problems.push('dropdown reverted to "one book only" over zero counterparties');
+  }
+  if (!/view-only feed\(s\) priced it/.test(metaText)) {
+    problems.push(`sport meta does not name the mirror-only cause: ${metaText}`);
+  }
+  if (/only one book priced it/.test(metaText)) {
+    problems.push('sport meta reverted to "only one book priced it"');
+  }
+  if (problems.length) {
+    console.error('ALL-MIRROR WIRING:', problems.join('; '));
+    process.exit(1);
+  }
+  console.log('the rendered picker and meta carry the mirror-only wording, not "one book"');
 }
 
 /* ── LEGACY RUN BADGES ────────────────────────────────────────────────────────
