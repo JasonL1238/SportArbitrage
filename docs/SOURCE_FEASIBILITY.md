@@ -11,6 +11,118 @@ python scripts/detect_state.py
 python scripts/probe_sources.py --state IL
 ```
 
+## ProphetX and Novig: credentialed exchanges, adapters ahead of keys — 2026-08-09
+
+Both venues' official documentation was read (not probed — neither has an
+anonymous surface to probe) and both adapters were written against it:
+`src/sources/prophetx.py` and `src/sources/novig.py`, **deliberately
+unregistered** per the operator's decision until keys are supplied and a
+genuine capture exists. The keys are reserved in
+`registry.CREDENTIALED_SOURCE_KEYS`; credentials are environment-only
+(`ODDS_PROPHETX_ACCESS_KEY` / `ODDS_PROPHETX_SECRET_KEY`,
+`ODDS_NOVIG_CLIENT_ID` / `ODDS_NOVIG_CLIENT_SECRET`); construction succeeds
+without them and `fetch_raw` refuses as `login_required` before any socket.
+The login/token responses are never captured — the body is the secret — and
+the bearer token travels in a request header, which envelopes do not persist.
+
+**ProphetX** (docs.prophetx.co, read 2026-08-09):
+
+- Sandbox `https://api.sandbox.prophetx.dev/partner`; production
+  `https://cash.api.prophetx.co/partner` (from the switch-to-production page;
+  credentials are per-environment and must not be reused across them).
+- `POST /auth/login` `{access_key, secret_key}` → `data.access_token`
+  (10-minute lifetime on the reference page, 20 on the integration guide) and
+  `data.refresh_token` (3 days).
+- `GET /mm/get_tournaments` → `GET /mm/get_sport_events?tournament_id=` →
+  `GET /mm/get_multiple_markets?event_ids=` (form-style non-exploded).
+  Selections carry decimal `odds`, `display_odds`, a `stake` liquidity figure,
+  `competitor_id` and `outcome_id`; events carry `competitors[].side`,
+  `scheduled` (ISO 8601) and `status`.
+- **The reference marks `get_markets` and `get_multiple_markets` deprecated
+  without naming a successor.** First credentialed session must re-check; a
+  `/v4/` price-ladder endpoint already exists, so a versioned market surface
+  may too.
+- No self-serve keys: sandbox access is granted by the ProphetX team
+  (api@prophetx.co). No fee schedule is published in the API docs — ask when
+  keys are issued; the `COMMISSIONS` entry cannot be written from marketing
+  copy.
+
+**Novig** (docs.novig.com, read 2026-08-09):
+
+- Production `https://api.novig.us`; QA `https://api-qa.novig.us`.
+- `POST /nbx/v1/auth/emm-token` (`grant_type=client_credentials`, `client_id`,
+  `client_secret`) → 30-minute bearer. The docs show the fields without naming
+  the encoding; the adapter sends RFC 6749 form-encoding — confirm on first
+  session.
+- `GET /nbx/v2/emm/events?league=&status=OPEN_PREGAME&limit=&offset=`
+  (512 req/s), `GET /nbx/v2/emm/markets/open?league=&marketType=` and
+  `GET /nbx/v2/emm/book/{marketId}?currency=CASH` (128 req/s each). League
+  spellings match this repository's canonical keys.
+- **Only bids rest on the book**, in price–time priority, as decimal
+  probabilities to three places. The takeable price of outcome A is therefore
+  derived: `1 − best_bid(B)`. The market payload's `last` is trade history,
+  not a takeable price, and is never published as one.
+- The fees page settles two questions the API reference leaves open:
+  `qty` is defined as **100 qty = 1 contract of $1.00 payout** (so the stake
+  available at the derived price is `(qty/100) × (1 − bid)` dollars), and the
+  straight-contract taker fee (`P × (1−P) × 0.03 × contracts`) is charged
+  **only on fills matched while the event is `OPEN_INGAME`** — a pregame fill
+  carries no fee, so the eventual `COMMISSIONS` entry must encode
+  pregame-zero rather than the live coefficient. Makers pay nothing in both
+  regimes.
+
+Registration checklist when keys arrive, for either venue: descriptor +
+classification in the four reachability sets, `COMMISSIONS` and `SETTLEMENT`
+entries, a genuine capture committed under `tests/fixtures/raw/`, distinctness
+against every registered source, and the full acceptance bar in the plan. If a
+response body carries a partner or account identifier, there is no sanctioned
+path to a committed fixture — that would be the finding.
+
+## Polymarket US and Crypto.com Sports: both walls, measured — 2026-08-09
+
+Anonymous probes from the current (California) egress — both venues are
+CFTC-regulated national markets, so no state egress governs them the way it
+governs a state-licensed book.
+
+**Polymarket US (QCX LLC)** has **no anonymous market-data surface**:
+
+    GET https://api.polymarket.us/v1/markets?limit=2
+    → 401 text/plain  "Missing required API key headers"
+
+That settles a contradiction in the third-party writeups (one guide lists
+"public market endpoints" and in the same breath says "there is no sandbox,
+demo, or unauthenticated access mode" — the wire agrees with the second
+claim). Keys are Ed25519 pairs minted at `polymarket.us/developer` **after
+KYC through the iOS app**, which only the operator can complete. So
+`polymarket_us` is a credentialed venue in exactly the ProphetX/Novig sense
+and follows the same doctrine: no adapter is registered — and none is written
+yet, because the Ed25519 request-signing scheme is documented only behind
+that developer portal, and an auth implementation guessed from blog posts
+would be wrong in the way that matters. When the operator supplies a key
+pair, the adapter joins `CREDENTIALED_SOURCE_KEYS` with its own source key,
+commission schedule and settlement rules — never as a config variant of the
+offshore `polymarket` key (see the 2026-08-08 section below).
+
+**Crypto.com Sports (CDNA)** has **no public sports market-data surface at
+all today**:
+
+- The Exchange v1 public API answers anonymously but carries only crypto
+  instruments — `public/get-instruments` on 2026-08-09: 333 perpetual swaps,
+  582 currency pairs, 10 futures, zero event contracts (the one
+  "sports-flavoured" symbol is `NFLXUSD-PERP`, the Netflix stock perp).
+- The predictions REST/WebSocket API their developer page advertises is
+  marked **"Coming soon"** (only FIX is listed available, an institutional
+  order-flow protocol, not an anonymous data surface), and the documented
+  example path answers 404 on both plausible hosts:
+  `api.crypto.com/api/v1/predictions/events` → 404 `{"code":"10004"}`;
+  `crypto.com/api/v1/predictions/events` → 404 HTML.
+- Sports event contracts trade only in the retail app, behind an account.
+
+The finding is the wall itself: nothing to adapt until the predictions API
+ships, and it is worth re-probing when it does — their own page says
+predictions data will cover "crypto, politics and economics", so whether
+CDNA's *sports* contracts will be in it is itself unanswered.
+
 ## Action Network publishes its book catalogue — 2026-08-08
 
 `https://api.actionnetwork.com/web/v1/books` returns **456 books**, each with an

@@ -198,6 +198,32 @@ US_UNAVAILABLE_SOURCE_KEYS: frozenset[str] = frozenset(
 #: fails loudly.
 NATIONWIDE_SOURCE_KEYS: frozenset[str] = frozenset({"kalshi"})
 
+#: Keys **reserved** for venues whose APIs demand per-account credentials, and
+#: whose adapters therefore ship before their registration.
+#:
+#: A third axis beside view-only and US-unavailable, answering a different
+#: question again: not "can you bet against this price" or "can a US customer
+#: reach the venue" but "does fetching require a secret".  ProphetX and Novig
+#: are both CFTC-regulated peer-to-peer exchanges with no anonymous market-data
+#: surface — access is granted per account, so their adapters
+#: (:mod:`src.sources.prophetx`, :mod:`src.sources.novig`) read
+#: ``ODDS_PROPHETX_*`` / ``ODDS_NOVIG_*`` from the environment at fetch time
+#: and refuse with ``login_required`` when unset.
+#:
+#: **Deliberately not registered in** :data:`_BASE_SOURCES` — which is why this
+#: set is exempt from the stray-key check in
+#: :func:`_check_reachability_is_declared`'s buckets: per the operator's
+#: decision these venues stay out of the registry until credentials are
+#: supplied *and* a genuine capture exists, because ``tests/conftest.py``
+#: demands a committed fixture per registered key and no sanctioned path to
+#: one exists before then (a response body carrying a partner or account id
+#: has no sanctioned path at all, and that would be the finding).
+#: ``tests/test_prophetx_novig.py`` pins both directions: the keys stay out of
+#: :func:`keys` today, and this set names them so registration is a one-step
+#: decision — add the descriptor, classify it in the four reachability sets,
+#: declare COMMISSIONS and SETTLEMENT, and commit the capture.
+CREDENTIALED_SOURCE_KEYS: frozenset[str] = frozenset({"prophetx", "novig"})
+
 VIEW_ONLY_SOURCES: frozenset[str] = REPUBLISHED_SOURCE_KEYS | jurisdiction(
     settings.STATE
 ).view_only_sources
@@ -1140,6 +1166,7 @@ __all__ = [
     "BY_KEY",
     "SOURCES",
     "SLOW_SOURCES",
+    "CREDENTIALED_SOURCE_KEYS",
     "NATIONWIDE_SOURCE_KEYS",
     "REPUBLISHED_SOURCE_KEYS",
     "RETAIL_SOURCE_KEYS",

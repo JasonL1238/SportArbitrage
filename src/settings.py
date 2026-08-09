@@ -223,6 +223,18 @@ TWILIO_ACCOUNT_SID = _lookup("TWILIO_ACCOUNT_SID", "")
 TWILIO_AUTH_TOKEN = _lookup("TWILIO_AUTH_TOKEN", "")
 TWILIO_FROM_NUMBER = _lookup("TWILIO_FROM_NUMBER", "")
 
+#: Credentialed-exchange API keys — empty means the venue's adapter refuses at
+#: fetch time with ``login_required`` rather than probing an API that has
+#: already said access is by arrangement.  Environment-only on purpose: a
+#: credential in ``SourceDescriptor.config`` would be committed, and one in a
+#: query parameter would be stored in every envelope's final URL.  Neither
+#: venue is registered until keys and a genuine capture exist, so an empty
+#: value here is the expected state, not a bad setting.
+PROPHETX_ACCESS_KEY = _lookup("PROPHETX_ACCESS_KEY", "")
+PROPHETX_SECRET_KEY = _lookup("PROPHETX_SECRET_KEY", "")
+NOVIG_CLIENT_ID = _lookup("NOVIG_CLIENT_ID", "")
+NOVIG_CLIENT_SECRET = _lookup("NOVIG_CLIENT_SECRET", "")
+
 
 def refuse_bad_settings() -> int | None:
     """Print every unhonourable ``ODDS_*`` value and return an exit code, or
