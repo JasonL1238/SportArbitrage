@@ -848,3 +848,67 @@ class TestCrossSourceCoverage:
         }
         # Both windows really are collected, so the guard is not vacuous.
         assert {Period.FULL_GAME, Period.REGULATION} <= hockey_periods
+
+
+class TestAnAllMirrorRunIsDescribedHonestly:
+    """The CLI must not assert false facts about the store.
+
+    Run 27 — Pennsylvania's first all-republisher recapture, ten sources and
+    2,871 rows, every one view-only — drew ``mirrors``' "fewer than two sources
+    stored" and ``lines``' bare "0 market(s) shown of 0".  Both statements point
+    the operator at the collector when the honest answer is "these feeds are
+    mirrors by design and never surface as counterparties".
+    """
+
+    @pytest.fixture()
+    def all_mirror_run(self, tmp_path: Path, monkeypatch):
+        from datetime import timedelta
+
+        import src.settings
+
+        from src.validation import ValidationReport
+        from tests.conftest import make_quote
+
+        monkeypatch.setattr(src.settings, "DATA_DIR", tmp_path)
+        monkeypatch.setattr(src.settings, "RAW_DIR", tmp_path / "raw")
+        monkeypatch.setattr(src.settings, "DB_PATH", tmp_path / "db.sqlite3")
+
+        kickoff = datetime.now(UTC) + timedelta(hours=6)
+        rows = [
+            make_quote(
+                source=source, source_market_id=f"{source}-m",
+                commence_time=kickoff, observed_at=datetime.now(UTC),
+                raw_ref=f"{source}/20260808T160000Z/x/abc",
+            )
+            for source in ("an_fanduel", "an_betrivers", "an_parx")
+        ]
+        with Store(tmp_path / "db.sqlite3") as store:
+            run = store.start_run(
+                datetime.now(UTC), jurisdiction="PA", route_scope="state",
+            )
+            store.save_quotes_by_source(run, rows)
+            store.finish_run(
+                run, finished_at=datetime.now(UTC),
+                report=ValidationReport(quote_count=len(rows), event_count=1),
+                counterparties={},
+            )
+        import src.collector
+
+        return src.collector, run
+
+    def test_mirrors_says_view_only_not_understocked(self, all_mirror_run, capsys) -> None:
+        collector, run = all_mirror_run
+        assert collector.main(["mirrors", "--run", str(run)]) == 1
+        out = capsys.readouterr().out
+        assert "view-only" in out
+        assert "a mirror is not a counterparty" in out
+        assert "fewer than two sources stored" not in out, (
+            "three sources are stored; the message must not deny them"
+        )
+
+    def test_lines_accounts_for_its_excluded_rows(self, all_mirror_run, capsys) -> None:
+        collector, run = all_mirror_run
+        assert collector.main(["lines", "--run", str(run)]) == 0
+        out = capsys.readouterr().out
+        assert "view-only" in out
+        assert "never surface as a best price" in out

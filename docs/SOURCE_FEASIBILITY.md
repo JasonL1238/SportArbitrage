@@ -747,6 +747,17 @@ It is not, because most of those tokens are **licences of one book**:
 | `ub`, `ubuk`, `ubse`, `ubdk`, `ubnl`, `ubro`, `pafse`, `atg`, `jvh` | **mirrors of each other** | identical to one another |
 | `leo` (LeoVegas) | **distinct** | same slate, its own prices — Cleveland at 2.28 where BetRivers had 2.38 |
 
+**And betPARX prices like a Kambi tenant too — 2026-08-08.** On run 27's real
+rows, `compare_sources(an_betrivers, an_parx)` returns **MIRROR** ("one feed in
+NFL, 32/32 shared prices equal"). Harmless today, because both feeds are
+view-only and `screen_candidate` skips view-only candidates by design. It stops
+being harmless the day betPARX or theScore gets a **first-party** Kambi route:
+that source would be a distinctness candidate against `betrivers_kambi`, and if
+the PA books genuinely share a Kambi price feed, the pair must land MIRROR or
+UNDECIDED — a DISTINCT verdict on a thin slate would arm the false-arb trap this
+section documents. Run the gate on a full slate before promoting either, and
+treat "failed to prove a mirror" as exactly that.
+
 A mirror is invisible to every other check in this pipeline. It satisfies the
 source contract, emits valid rows, raises the cross-source coverage counts, and
 clears `require_distinct_sources` in `src/arb.py` — because that compares source

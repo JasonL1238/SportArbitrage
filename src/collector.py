@@ -225,21 +225,30 @@ class SportCoverage:
     quote_count: int
     event_count: int
     cross_book_events: int
-    """Fixtures in this sport priced by two or more books.
+    """Fixtures in this sport priced by two or more **counterparty** books.
 
     Reported alongside the book count because the two can disagree, and when they
     do it is the number that matters.  Two books can each produce plenty of hockey
     while having no fixture in common — one has the NHL openers, the other a
     Belarusian friendly — and there is then still nothing to compare.
+
+    View-only feeds do not count toward it, matching
+    :meth:`src.store.Store.cross_book_event_counts` — a mirror is not a
+    counterparty, so a fixture priced by ten mirrors is still uncompared.  The
+    two definitions diverged on the first all-republisher run, whose stored
+    note said "comparable sports: baseball…" two lines below a summary reading
+    "0 cross-book", and whose no-overlap warning stayed silent.
     """
+    counterparty_sources: tuple[str, ...]
+    """The subset of :attr:`sources` a bet could actually be placed against."""
     leagues: tuple[str, ...]
     missing_leagues: tuple[str, ...]
     """Leagues some source was configured to collect that produced nothing."""
 
     @property
     def meets_two_book_bar(self) -> bool:
-        """Two or more books priced this sport."""
-        return len(self.sources) >= MIN_HEALTHY_SOURCES
+        """Two or more counterparty books priced this sport."""
+        return len(self.counterparty_sources) >= MIN_HEALTHY_SOURCES
 
     @property
     def is_comparable(self) -> bool:
@@ -255,7 +264,10 @@ class SportCoverage:
             f"{len(self.sources)} book(s): {books}"
         )
         if not self.meets_two_book_bar:
-            line += f" — needs {MIN_HEALTHY_SOURCES}"
+            view_only_count = len(self.sources) - len(self.counterparty_sources)
+            line += f" — needs {MIN_HEALTHY_SOURCES} counterparties"
+            if view_only_count:
+                line += f" ({view_only_count} of the feeds are view-only)"
         elif not self.cross_book_events:
             line += " — no fixture priced by two of them"
         if self.missing_leagues:
@@ -307,7 +319,10 @@ def league_coverage(
 
 
 def sport_coverage(
-    quotes: Sequence[Quote], coverage: Sequence[LeagueCoverage]
+    quotes: Sequence[Quote],
+    coverage: Sequence[LeagueCoverage],
+    *,
+    view_only: frozenset[str] = frozenset(),
 ) -> list[SportCoverage]:
     """Roll per-source league coverage up into a per-sport verdict.
 
@@ -315,8 +330,16 @@ def sport_coverage(
     asked for.  A sport that was configured and produced nothing at all still
     gets a row, reported as priced by zero books — which is the honest answer,
     and the one an empty section of the report cannot give.
+
+    *view_only* is the run's non-counterparty set
+    (:func:`src.sources.registry.view_only_for_run`): those feeds appear in the
+    inventory but never in the comparability verdict, the same exclusion
+    ``runs`` and ``arb`` apply.  Without it the first all-republisher run
+    recorded "comparable sports (2+ books on one fixture): baseball" about a
+    slate on which ``arb`` correctly found 0 cross-book markets.
     """
     books: dict[str, set[str]] = defaultdict(set)
+    counterparties: dict[str, set[str]] = defaultdict(set)
     seen_leagues: dict[str, set[str]] = defaultdict(set)
     rows: dict[str, list[Quote]] = defaultdict(list)
     books_per_event: dict[tuple[str, str], set[str]] = defaultdict(set)
@@ -325,7 +348,9 @@ def sport_coverage(
         books[sport].add(quote.source)
         seen_leagues[sport].add(quote.league)
         rows[sport].append(quote)
-        books_per_event[(sport, quote.event_key)].add(quote.source)
+        if quote.source not in view_only:
+            counterparties[sport].add(quote.source)
+            books_per_event[(sport, quote.event_key)].add(quote.source)
 
     requested: dict[str, set[str]] = defaultdict(set)
     for entry in coverage:
@@ -348,6 +373,7 @@ def sport_coverage(
                     for (event_sport, _), sources in books_per_event.items()
                     if event_sport == sport and len(sources) >= MIN_HEALTHY_SOURCES
                 ),
+                counterparty_sources=tuple(sorted(counterparties[sport])),
                 leagues=tuple(sorted(seen_leagues[sport])),
                 missing_leagues=tuple(sorted(missing)),
             )
@@ -935,7 +961,9 @@ def collect_once(
             configured=[source.source_key for source in sources],
         )
 
-    sports_seen = sport_coverage(all_quotes, coverage)
+    sports_seen = sport_coverage(
+        all_quotes, coverage, view_only=registry.view_only_for_run(run_state)
+    )
     _report_sport_coverage(sports_seen, report)
     for source_key in undeclared:
         report.add(
@@ -1757,19 +1785,28 @@ def _report_sport_coverage(
     """
     for entry in coverage:
         if not entry.meets_two_book_bar:
+            view_only_count = len(entry.sources) - len(entry.counterparty_sources)
+            also = (
+                f"; {view_only_count} view-only feed(s) priced it too, but a "
+                "mirror is not a counterparty"
+                if view_only_count
+                else ""
+            )
             report.add(
                 Severity.WARNING,
                 "sport_below_two_books",
-                f"{entry.sport}: only {len(entry.sources)} book "
-                f"({', '.join(entry.sources) or 'none'}) priced it, so none of its "
-                f"{entry.quote_count} rows can be compared across books",
+                f"{entry.sport}: only {len(entry.counterparty_sources)} counterparty "
+                f"book(s) ({', '.join(entry.counterparty_sources) or 'none'}) priced "
+                f"it{also}, so none of its {entry.quote_count} rows can be compared "
+                "across books",
             )
         elif not entry.cross_book_events:
             report.add(
                 Severity.WARNING,
                 "sport_without_cross_book_fixtures",
-                f"{entry.sport}: {len(entry.sources)} books priced it but they have no "
-                f"fixture in common across {entry.event_count} fixtures, so none of its "
+                f"{entry.sport}: {len(entry.counterparty_sources)} counterparty books "
+                f"priced it but they have no fixture in common across "
+                f"{entry.event_count} fixtures, so none of its "
                 f"{entry.quote_count} rows can be compared",
             )
         for missing in entry.missing_leagues:
@@ -2908,8 +2945,28 @@ def _cmd_lines(args: argparse.Namespace) -> int:
             shown += 1
             if shown >= args.limit:
                 break  # tested after the increment, so --limit N shows N
-        print(f"\n{shown} market(s) shown of {len(surface)} in {note}"
-              f"{_scope_label(sports, leagues)}")
+        closing = (
+            f"\n{shown} market(s) shown of {len(surface)} in {note}"
+            f"{_scope_label(sports, leagues)}"
+        )
+        if not surface and quotes:
+            # "0 of 0" beside a run holding thousands of rows reads as an empty
+            # collection.  On an all-republisher run every stored row is
+            # view-only and ``best_prices`` rightly surfaces none of them —
+            # say that, because the difference between "nothing collected" and
+            # "nothing stakeable" is the difference between debugging the
+            # collector and reading the mirrors as intended.
+            excluded = {
+                quote.source
+                for quote in quotes
+                if quote.source in registry.view_only_for_run(lines_state)
+            }
+            closing += (
+                f" — {len(quotes)} stored row(s) are all from "
+                f"{len(excluded)} view-only feed(s), which never surface as a "
+                "best price"
+            )
+        print(closing)
         return 0
 
 
@@ -2991,7 +3048,30 @@ def _cmd_mirrors(args: argparse.Namespace) -> int:
         everything, _ = reconcile_event_keys(store.load_quotes(run_id))
         pairs = compare_all(everything)
         if not pairs:
-            print(f"run {run_id}: fewer than two sources stored, so nothing to compare")
+            # Say which of two very different situations this is.  On the first
+            # all-republisher run this line claimed "fewer than two sources
+            # stored" about a run holding ten sources and 2,871 rows — every
+            # one view-only, which is why ``compare_all`` (rightly) had no
+            # counterparty pair to form.  A false statement about the store
+            # points the operator at the collector when the real answer is
+            # "these feeds are mirrors by design".
+            stored = {quote.source for quote in everything}
+            mirror_run_row = store.run_row(run_id)
+            mirror_run_state = (
+                (mirror_run_row["jurisdiction"] if mirror_run_row else "") or ""
+            )
+            view_only = registry.view_only_for_run(mirror_run_state)
+            counterparty = sorted(stored - view_only)
+            if len(stored) >= 2 and len(counterparty) < 2:
+                print(
+                    f"run {run_id}: {len(stored)} source(s) stored, but "
+                    f"{len(stored) - len(counterparty)} are view-only feeds and a "
+                    "mirror is not a counterparty — nothing to compare"
+                )
+            else:
+                print(
+                    f"run {run_id}: fewer than two sources stored, so nothing to compare"
+                )
             return 1
         scope_note = (
             " — measured on the whole run, because narrowing the evidence can "

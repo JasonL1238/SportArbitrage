@@ -16,9 +16,12 @@ book's league page.
 notice, several never accepted a bare event id, and a 404 on a live slate is
 indistinguishable to a reader from "this arb went away".  So every event
 template here carries :attr:`_Event.verified`, and :func:`bet_link` refuses to
-emit an event URL until a live probe has set it.  ``python -m src.betlinks
-verify`` is that probe; it reports what resolved and what did not, and the flags
-below are its output rather than anyone's expectation.
+emit an event URL until a live probe has set it.  ``scripts/verify_betlinks.py``
+is that probe; it reports what resolved and what did not, and the flags below
+are its output rather than anyone's expectation.  A template pinned to one
+state's domain must be made state-aware **before** it may verify — the guard
+test on :data:`STATE_SITE` books refuses the flip — because event precision
+outranks the state door.
 
 **A league page is always a true statement.**  When there is no verified event
 template the link degrades to the book's page for that league, and
@@ -171,6 +174,12 @@ SITE: Mapping[str, str] = {
     "superbook": "https://co.superbook.com",
     "parx": "https://www.betparx.com",
     "thescore": "https://www.thescore.bet",
+    # Deliberately Pennsylvania's door, in knowing tension with the "stateless
+    # fallbacks" rule above: Unibet has no US brand chooser — ``unibet.com`` is
+    # the global gambling site, worse than any US state's page — and the only
+    # feed that produces a unibet leg (``an_unibet``) exists for PA and NJ
+    # alone, both resolved by STATE_SITE before this entry is ever consulted.
+    # It is also view-only everywhere, so no money surface reaches here.
     "unibet": "https://pa.unibet.com",
     "sxbet": "https://sx.bet",
 }

@@ -954,6 +954,79 @@ def test_two_books_without_a_shared_fixture_is_reported_separately(
     assert "sport_without_cross_book_fixtures" in {f.code for f in result.report.warnings}
 
 
+def test_a_sport_priced_only_by_mirrors_is_not_called_comparable(tmp_path: Path) -> None:
+    """The collection-time verdict must apply the exclusion ``arb`` applies.
+
+    Run 27 — ten republished feeds, 2,871 rows, every source view-only — stored
+    the note "comparable sports (2+ books on one fixture): baseball" while
+    ``runs`` printed "0 cross-book" two lines above it and ``arb`` found 0
+    cross-book markets.  ``sport_coverage`` counted every source toward the
+    two-book bar; ``store.cross_book_event_counts`` had excluded view-only
+    feeds all along, with a docstring explaining why a mirror is not a
+    counterparty.  Same slate, two verdicts, and the stored one was the wrong
+    one.
+    """
+    from src.collector import sport_coverage
+
+    quotes = [
+        make_quote(source="an_fanduel", source_market_id="m1"),
+        make_quote(source="an_betrivers", source_market_id="m2"),
+        make_quote(source="an_parx", source_market_id="m3"),
+    ]
+    view_only = frozenset({"an_fanduel", "an_betrivers", "an_parx"})
+
+    entries = {e.sport: e for e in sport_coverage(quotes, [], view_only=view_only)}
+    baseball = entries["baseball"]
+    assert baseball.sources == ("an_betrivers", "an_fanduel", "an_parx")
+    assert baseball.counterparty_sources == ()
+    assert baseball.meets_two_book_bar is False
+    assert baseball.cross_book_events == 0
+    assert baseball.is_comparable is False
+
+    # And one real counterparty beside the mirrors still is not comparable —
+    # a bet needs somebody on the other side.
+    with_one = quotes + [make_quote(source="fanduel", source_market_id="m4")]
+    entries = {e.sport: e for e in sport_coverage(with_one, [], view_only=view_only)}
+    assert entries["baseball"].counterparty_sources == ("fanduel",)
+    assert entries["baseball"].is_comparable is False
+
+    # Two counterparties sharing the fixture: comparable, mirrors or not.
+    with_two = with_one + [make_quote(source="draftkings", source_market_id="m5")]
+    entries = {e.sport: e for e in sport_coverage(with_two, [], view_only=view_only)}
+    assert entries["baseball"].counterparty_sources == ("draftkings", "fanduel")
+    assert entries["baseball"].is_comparable is True
+
+
+def test_collect_once_applies_the_runs_view_only_set_to_the_verdict(
+    tmp_path: Path, collector
+) -> None:
+    """The caller's half of the fix above, which a unit test cannot hold.
+
+    ``sport_coverage`` taking ``view_only=`` fixes nothing unless
+    ``collect_once`` passes the run's actual set — the argument defaults to
+    empty, so dropping it at the call site silently restores the run-27
+    mislabel while every direct-call test stays green.
+    """
+    raw_store = RawStore(tmp_path / "raw")
+    sources = [
+        FakeSource("an_fanduel", [make_quote(source="an_fanduel")], leagues=("MLB",)),
+        FakeSource(
+            "an_betrivers", [make_quote(source="an_betrivers")], leagues=("MLB",)
+        ),
+    ]
+    with Store(tmp_path / "db.sqlite3") as store:
+        result = collector.collect_once(sources, raw_store=raw_store, store=store)
+
+    baseball = next(e for e in result.coverage if e.sport == "baseball")
+    assert baseball.sources == ("an_betrivers", "an_fanduel")
+    assert baseball.counterparty_sources == (), (
+        "both feeds are republished mirrors; the run's view-only set must reach "
+        "the verdict"
+    )
+    assert baseball.is_comparable is False
+    assert "sport_below_two_books" in {f.code for f in result.report.warnings}
+
+
 def test_filtering_a_run_by_sport_keeps_only_that_sport(tmp_path: Path, collector) -> None:
     raw_store = RawStore(tmp_path / "raw")
     sources = [

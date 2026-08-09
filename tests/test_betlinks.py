@@ -208,13 +208,30 @@ class TestAStatePartitionedBookLinksItsOwnState:
         assert link.url == expected
 
     def test_an_ungoverned_run_names_no_state_at_all(self) -> None:
-        """Better a brand chooser than a confident wrong state."""
-        quote = make_quote(source="betrivers_kambi", source_event_id="1", league="ATP")
-        link = bet_link(quote)
-        assert link is not None
-        assert link.url == "https://www.betrivers.com"
-        for state_doors in STATE_SITE.values():
-            assert link.url not in state_doors.values()
+        """Better a brand chooser than a confident wrong state — for every
+        state-partitioned book, not only the one the defect was found on.
+
+        ``unibet`` is the deliberate exception: Unibet has no US brand chooser
+        (``unibet.com`` is the global gambling site), its only feed exists for
+        PA and NJ — both resolved by STATE_SITE before the fallback — and it is
+        view-only everywhere, so no money surface reaches the fallback at all.
+        Asserted as PA's door on purpose, so a change to either fact shows up
+        here.
+        """
+        for book, quote_source in (
+            ("betrivers_kambi", "betrivers_kambi"),
+            ("caesars", "caesars"),
+            ("unibet", "an_unibet"),
+        ):
+            quote = make_quote(source=quote_source, source_event_id="1", league="ATP")
+            link = bet_link(quote)
+            assert link is not None, book
+            if book == "unibet":
+                assert link.url == "https://pa.unibet.com"
+                continue
+            assert link.url not in STATE_SITE[book].values(), (
+                f"{book}'s ungoverned fallback is one state's own door: {link.url}"
+            )
 
     def test_the_betrivers_doors_agree_with_the_promo_layer(self) -> None:
         """Two spellings of one door will drift; this is the pin that says so.
@@ -254,6 +271,29 @@ class TestAStatePartitionedBookLinksItsOwnState:
             assert book not in LEAGUE_PAGE, (
                 f"{book} gained a league page; make it state-aware before "
                 "letting it outrank STATE_SITE"
+            )
+
+    def test_no_state_partitioned_book_can_verify_a_one_state_event_grammar(
+        self,
+    ) -> None:
+        """Event precision outranks everything, so it is the worst hiding place.
+
+        ``EVENT_URL["betrivers_kambi"]`` embeds ``il.betrivers.com`` in a
+        template that today cannot emit because ``verified`` is False — but
+        ``scripts/verify_betlinks.py`` exists precisely to flip that flag, it
+        samples betrivers events from stored runs, and the day it verifies this
+        template a governed PA row links Illinois at *event* precision, above
+        both guards below it.  Demonstrated by two reviewers independently.
+        This makes the flip a test failure that names the required work.
+        """
+        for book in STATE_SITE:
+            candidate = EVENT_URL.get(book)
+            if candidate is None:
+                continue
+            assert not candidate.verified, (
+                f"{book}'s event template is pinned to one state's domain "
+                f"({candidate.template}); make _Event state-aware before "
+                "verifying it, or the state door is silently outranked"
             )
 
     def test_the_payload_carries_the_state_resolved_door(self) -> None:
