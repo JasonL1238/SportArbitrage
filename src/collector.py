@@ -899,7 +899,14 @@ def collect_once(
     # Measured once and shared: ``counterparty_groups`` and the filing check
     # below both need the same mirror list, and each used to call
     # ``find_mirrors`` on its own — a second full pairwise scan of the slate.
-    measured_mirrors = find_mirrors(all_quotes)
+    # ...and measured under the **run's** view-only set, not the process's.
+    # ``collect_batch_once`` collects the detected state and ODDS_STATE's in
+    # one process, so a box detected in IL with ODDS_STATE=PA was measuring
+    # the IL pass's mirrors with PA's ambient set while ``find_opportunities``
+    # admitted legs under the IL set — with alerts on.
+    measured_mirrors = find_mirrors(
+        all_quotes, view_only=registry.view_only_for_run(run_state)
+    )
     measured_counterparties = counterparty_groups(all_quotes, mirrors=measured_mirrors)
     # Kept for the distinctness *filing* below, for the same reason the gate is
     # measured here: the evidence does not stop existing because this command
@@ -2735,12 +2742,6 @@ def _cmd_arb(args: argparse.Namespace) -> int:
         # after the live pass refused it.  When the run already recorded the
         # full-slate measurement, re-scanning the (possibly narrower) rows
         # cannot strengthen the gate and is skipped.
-        recorded = store.recorded_counterparty_groups(run_id)
-        measured_counterparties = merge_counterparty_groups(
-            {} if recorded else counterparty_groups(everything),
-            recorded,
-        )
-        quotes = [q for q in everything if in_scope(q, sports, leagues)]
         # Which jurisdiction's rules apply is a property of the **run**, not of
         # this process.  Omitting ``view_only_sources`` fell back to the
         # module-level ``VIEW_ONLY_SOURCES``, which :mod:`src.sources.registry`
@@ -2749,9 +2750,23 @@ def _cmd_arb(args: argparse.Namespace) -> int:
         # declares view-only but Illinois does not was eligible to be a leg.
         # ``collect_once`` and ``src.report`` both resolve this per run; this
         # command was the one that did not, and it is the one that sends a text.
+        # Resolved *before* the gate below, because the gate re-measures with
+        # the same set: measuring pairs with the reader's set while forming
+        # legs with the run's turned a stored IL run's measured hardrock mirror
+        # into "guaranteed +15.00" on any PA-configured box.
         run_row = store.run_row(run_id)
         run_state = (run_row["jurisdiction"] if run_row is not None else "") or ""
         run_state = run_state.strip().upper()
+        recorded = store.recorded_counterparty_groups(run_id)
+        measured_counterparties = merge_counterparty_groups(
+            {}
+            if recorded
+            else counterparty_groups(
+                everything, view_only=registry.view_only_for_run(run_state)
+            ),
+            recorded,
+        )
+        quotes = [q for q in everything if in_scope(q, sports, leagues)]
         report = find_opportunities(
             quotes,
             total_stake=args.stake,
@@ -2887,11 +2902,16 @@ def _cmd_lines(args: argparse.Namespace) -> int:
         surface = best_prices(quotes, view_only=registry.view_only_for_run(lines_state))
         sport_of = {quote.event_key: (quote.sport.value, quote.league) for quote in quotes}
         # Measured on the whole run and unioned with the collection-time
-        # record, for the same reason ``arb`` does it.  Reuse the already-
+        # record, for the same reason ``arb`` does it — and under the run's
+        # view-only set, for the same reason again.  Reuse the already-
         # reconciled rows — a second load+reconcile was pure duplicate work.
         recorded = store.recorded_counterparty_groups(run_id)
         one_counterparty = merge_counterparty_groups(
-            {} if recorded else counterparty_groups(everything),
+            {}
+            if recorded
+            else counterparty_groups(
+                everything, view_only=registry.view_only_for_run(lines_state)
+            ),
             recorded,
         )
 

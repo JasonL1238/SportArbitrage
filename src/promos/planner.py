@@ -617,13 +617,24 @@ def _build_context(
     one_counterparty: Mapping[str, Sequence[frozenset[str]]] | None,
     state: str | None = None,
 ) -> _PlanContext:
-    usable = [quote for quote in quotes if quote.source not in VIEW_ONLY_SOURCES]
+    # The plan's own state decides which feeds are view-only — the ambient
+    # constant is frozen from this process's ODDS_STATE and disagrees on
+    # ``hardrock`` between IL and PA/DC, so a stored PA run planned from an IL
+    # box would have staked promo legs at a book Pennsylvania declares
+    # view-only.  ``state=None`` (an ungoverned run) resolves to the
+    # republished-only set, the same generous fallback every other reader uses.
+    from src.sources.registry import view_only_for_run
+
+    plan_view_only = view_only_for_run((state or "").strip().upper())
+    usable = [quote for quote in quotes if quote.source not in plan_view_only]
     context = _PlanContext(
         as_of=as_of,
         commissions=commissions,
         state=state,
         one_counterparty=(
-            counterparty_groups(usable) if one_counterparty is None else one_counterparty
+            counterparty_groups(usable, view_only=plan_view_only)
+            if one_counterparty is None
+            else one_counterparty
         ),
     )
 

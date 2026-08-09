@@ -245,7 +245,7 @@ class TestDedupeAndSend:
         monkeypatch.setattr(settings_mod, "TWILIO_ACCOUNT_SID", "ACxxxx")
         monkeypatch.setattr(settings_mod, "TWILIO_AUTH_TOKEN", "token")
         monkeypatch.setattr(settings_mod, "TWILIO_FROM_NUMBER", "+15551234567")
-        monkeypatch.setattr(settings_mod, "ALERT_TO", "+18479070871")
+        monkeypatch.setattr(settings_mod, "ALERT_TO", "+15550000000")
         assert alert_ready()
         opp = _opportunity()
         assert book.notify([opp]) == [opp]
@@ -260,8 +260,23 @@ class TestDedupeAndSend:
         monkeypatch.setattr(settings_mod, "TWILIO_ACCOUNT_SID", "ACxxxx")
         monkeypatch.setattr(settings_mod, "TWILIO_AUTH_TOKEN", "token")
         monkeypatch.setattr(settings_mod, "TWILIO_FROM_NUMBER", "+15551234567")
-        monkeypatch.setattr(settings_mod, "ALERT_TO", "+18479070871")
+        monkeypatch.setattr(settings_mod, "ALERT_TO", "+15550000000")
         assert alert_ready()
+
+    def test_pollute_the_default_book_for_the_pin_below(self) -> None:
+        """Deliberate contamination, undone only by the fixture's reset.
+
+        With the conftest ``sent_keys`` reset in place, this key lives in a
+        per-test temporary set the fixture swaps out at teardown; with the
+        reset deleted, it lands in the import-time set and *persists* into the
+        next test — where the pin below reads a non-empty book and fails.
+        Without this probe the pin's empty-set assertion passed vacuously
+        inside this file, because every other test here builds its own book.
+        """
+        import src.alerts as alerts_mod
+
+        alerts_mod.DEFAULT_BOOK.sent_keys.add("pollution-probe")
+        assert "pollution-probe" in alerts_mod.DEFAULT_BOOK.sent_keys
 
     def test_the_suite_never_holds_a_live_transport(self) -> None:
         """The suite was texting the operator on every full run.
@@ -276,9 +291,26 @@ class TestDedupeAndSend:
 
         The identity check comes first so that, if the patch is ever gone,
         this test fails *before* calling anything that could deliver.
+
+        All three of the fixture's patch lines are held, not only the send
+        callable: with the ``path`` repoint deleted the suite stayed green
+        while claiming keys in ``data/alerts.sqlite3`` — the operator's *real*
+        dedupe ledger, where a claimed key is a permanently suppressed future
+        alert — because ``DEFAULT_BOOK`` binds the real path at import, before
+        any fixture runs, and ``notify`` is fail-soft.
         """
         import src.alerts as alerts_mod
+        import src.settings as settings_mod
 
+        assert alerts_mod.DEFAULT_BOOK.path == settings_mod.ALERT_BOOK_PATH, (
+            "conftest must repoint DEFAULT_BOOK.path at the hermetic ledger"
+        )
+        assert "alerts-hermetic" in str(alerts_mod.DEFAULT_BOOK.path), (
+            "the patched path must be the fixture's tmp ledger, not the real one"
+        )
+        assert alerts_mod.DEFAULT_BOOK.sent_keys == set(), (
+            "conftest must clear the in-memory half per test"
+        )
         assert alerts_mod.DEFAULT_BOOK.send is not alerts_mod.send_alert, (
             "conftest must replace DEFAULT_BOOK.send for the whole suite"
         )
@@ -358,7 +390,7 @@ class TestDedupeAndSend:
         monkeypatch.setattr(settings_mod, "TWILIO_ACCOUNT_SID", "ACtest")
         monkeypatch.setattr(settings_mod, "TWILIO_AUTH_TOKEN", "secret")
         monkeypatch.setattr(settings_mod, "TWILIO_FROM_NUMBER", "+15550001111")
-        monkeypatch.setattr(settings_mod, "ALERT_TO", "+18479070871")
+        monkeypatch.setattr(settings_mod, "ALERT_TO", "+15550000000")
 
         captured: dict = {}
 
@@ -373,7 +405,7 @@ class TestDedupeAndSend:
             sid = send_sms("hello arb", client=client)
         assert sid == "SMabc"
         assert "ACtest" in captured["url"]
-        assert "To=%2B18479070871" in captured["body"] or "To=+18479070871" in captured["body"]
+        assert "To=%2B15550000000" in captured["body"] or "To=+15550000000" in captured["body"]
         assert "Body=hello+arb" in captured["body"] or "Body=hello%20arb" in captured["body"]
 
     def test_missing_credentials_skips_without_raising(self, monkeypatch: pytest.MonkeyPatch) -> None:

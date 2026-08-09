@@ -13302,7 +13302,7 @@ class TestTheLiveRunFlagsTheSamePositionsReAnalysisDoes:
         monkeypatch.setattr(settings_mod, "TWILIO_ACCOUNT_SID", "ACxxxx")
         monkeypatch.setattr(settings_mod, "TWILIO_AUTH_TOKEN", "token")
         monkeypatch.setattr(settings_mod, "TWILIO_FROM_NUMBER", "+15551234567")
-        monkeypatch.setattr(settings_mod, "ALERT_TO", "+18479070871")
+        monkeypatch.setattr(settings_mod, "ALERT_TO", "+15550000000")
         monkeypatch.setattr(
             alerts_mod,
             "DEFAULT_BOOK",

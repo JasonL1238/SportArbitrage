@@ -877,6 +877,7 @@ def counterparty_groups(
     quotes: Sequence[Quote],
     *,
     mirrors: Sequence[Agreement] | None = None,
+    view_only: frozenset[str] | None = None,
 ) -> dict[str, list[frozenset[str]]]:
     """``league -> source groups that are one book``, measured from the rows.
 
@@ -924,10 +925,15 @@ def counterparty_groups(
     as non-transitive "cannot trade against" edges in
     :func:`_independent_source_count` instead.
     """
+    # *view_only* forwards to the measurement when this function measures for
+    # itself — pass the **run's** set for stored rows, or the gate is formed
+    # with whatever this process's ODDS_STATE happens to be.  Ignored when
+    # *mirrors* is supplied, because a supplied measurement was already made
+    # under some set and re-litigating it here would hide which one.
     if mirrors is None:
         from src.distinctness import find_mirrors
 
-        pairs: Sequence[Agreement] = find_mirrors(quotes)
+        pairs: Sequence[Agreement] = find_mirrors(quotes, view_only=view_only)
     else:
         pairs = mirrors
     groups: dict[str, list[frozenset[str]]] = defaultdict(list)

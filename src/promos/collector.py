@@ -678,14 +678,25 @@ def _cmd_plan(args: argparse.Namespace) -> int:
         quotes = odds_store.load_quotes(odds_run)
         everything, _ = reconcile_event_keys(quotes)
         recorded = odds_store.recorded_counterparty_groups(odds_run)
+        # The odds run's own jurisdiction governs both the gate measurement
+        # and the plan links — never this process's ODDS_STATE.
+        from src.sources.registry import view_only_for_run
+
+        odds_row = odds_store.run_row(odds_run)
+        odds_state = ((odds_row["jurisdiction"] if odds_row else "") or "").strip().upper()
         built = build_promo_plans(
             offers,
             everything,
             as_of=datetime.now(UTC),
             one_counterparty=merge_counterparty_groups(
-                {} if recorded else counterparty_groups(everything),
+                {}
+                if recorded
+                else counterparty_groups(
+                    everything, view_only=view_only_for_run(odds_state)
+                ),
                 recorded,
             ),
+            state=odds_state or None,
         )
         print(
             f"promo run #{promo_run} × odds run #{odds_run}: "

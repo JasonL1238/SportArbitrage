@@ -356,9 +356,24 @@ def _agreement(
     )
 
 
-def find_mirrors(quotes: Sequence[Quote]) -> list[Agreement]:
-    """Every pair of sources in *quotes* that looks like one counterparty."""
-    return [pair for pair in compare_all(quotes) if pair.verdict is Verdict.MIRROR]
+def find_mirrors(
+    quotes: Sequence[Quote], *, view_only: frozenset[str] | None = None
+) -> list[Agreement]:
+    """Every pair of sources in *quotes* that looks like one counterparty.
+
+    *view_only* forwards to :func:`compare_all` — pass the **run's** set when
+    the rows are a stored run's.  This passthrough exists because its absence
+    was a money-path defect: every stored-run reader that re-measured the
+    counterparty gate did so with the reader's ambient set while forming legs
+    with the run's set, and a stored IL run whose ``hardrock``/``fanduel``
+    pair was a measured MIRROR reported "guaranteed +15.00 on 100" with both
+    legs at one counterparty the moment a PA-configured box re-read it.
+    """
+    return [
+        pair
+        for pair in compare_all(quotes, view_only=view_only)
+        if pair.verdict is Verdict.MIRROR
+    ]
 
 
 def compare_all(

@@ -1523,6 +1523,7 @@ def _promo_plans(
         return {}, {"reason": "no_odds_run"}
     try:
         from src.promos.planner import build_promo_plans
+        from src.sources.registry import view_only_for_run
 
         # The newest embedded run — the same slate the arb panel prices.
         run_id = max(quote_run_ids)
@@ -1536,7 +1537,11 @@ def _promo_plans(
             everything,
             as_of=as_of,
             one_counterparty=merge_counterparty_groups(
-                {} if recorded else counterparty_groups(everything),
+                {}
+                if recorded
+                else counterparty_groups(
+                    everything, view_only=view_only_for_run(state or "")
+                ),
                 recorded,
             ),
             state=state,
@@ -1605,8 +1610,11 @@ def _arb_payload(
         # helper closes.  ``view_only_for_run`` returns the same fallback set
         # explicitly for a run with no recognisable jurisdiction.
         view_only = view_only_for_run(state)
+        # The gate re-measures with the same set the legs are formed under —
+        # the comment above closes the leak for legs, and closing it there
+        # while measuring pairs with the ambient set reopened it one line down.
         one_counterparty = merge_counterparty_groups(
-            {} if recorded else counterparty_groups(everything),
+            {} if recorded else counterparty_groups(everything, view_only=view_only),
             recorded,
         )
         # ``JURISDICTIONS[state].routes`` was the wrong table: it holds every
@@ -1838,15 +1846,17 @@ def _coverage_for_run(
                 {"source": row["source_key"], "league": row["league"], "sport": row["sport"]}
             )
 
-    from src.sources.registry import VIEW_ONLY_SOURCES, view_only_for_state
+    from src.sources.registry import view_only_for_run
 
     run = store.run_row(run_id)
     state = run["jurisdiction"] if run is not None else ""
-    view_only = (
-        view_only_for_state(state)
-        if state in JURISDICTIONS
-        else VIEW_ONLY_SOURCES
-    )
+    # ``view_only_for_run`` and never the ambient constant: for a legacy or
+    # GLOBAL run the old ``else VIEW_ONLY_SOURCES`` arm graded ``books`` /
+    # ``meets_bar`` / ``comparable`` by the *reader's* ODDS_STATE — a legacy
+    # run holding hardrock+fanduel read ``comparable: True`` from an IL box
+    # and ``comparable: False`` from a PA box, beside a ``cross_book_events``
+    # ten lines up that this same function already resolved from the run.
+    view_only = view_only_for_run(state)
 
     result: list[dict[str, Any]] = []
     for sport in sorted(per_sport):

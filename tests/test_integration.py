@@ -931,7 +931,7 @@ class TestAnAllMirrorRunIsDescribedHonestly:
         self, all_mirror_run, capsys
     ) -> None:
         collector, run = all_mirror_run
-        collector.main(["health"])
+        assert collector.main(["health"]) == 0
         out = capsys.readouterr().out
         assert "VIEW-ONLY" in out
         assert "NO OVERLAP" not in out
@@ -1003,6 +1003,156 @@ class TestReaderCommandsUseTheRunsOwnViewOnlySet:
         )
         assert "fewer than two sources stored" not in out
         assert exit_code == 0
+
+    def test_the_counterparty_gate_is_measured_with_the_runs_set(
+        self, tmp_path: Path, monkeypatch, capsys
+    ) -> None:
+        """The deepest cut of the class: the *gate*, not the message.
+
+        A stored IL run where hardrock and fanduel are a measured MIRROR
+        (20/20 identical shared selections) plus one divergent fixture priced
+        2.30/2.30 at both.  Read from a PA-configured box, ``compare_all``'s
+        ambient fallback excluded hardrock from pair formation, no mirror was
+        found, the gate re-measured empty — and ``arb`` reported "guaranteed
+        +15.00 on 100" with both legs at one counterparty.  Without
+        ``--no-alert`` it would have texted it.  The gate must re-measure
+        under the run's own set, whoever reads the bytes.
+        """
+        from datetime import timedelta
+
+        import src.settings
+        from src.sources import registry
+        from src.validation import ValidationReport
+        from tests.conftest import make_quote
+
+        monkeypatch.setattr(src.settings, "DATA_DIR", tmp_path)
+        monkeypatch.setattr(src.settings, "RAW_DIR", tmp_path / "raw")
+        monkeypatch.setattr(src.settings, "DB_PATH", tmp_path / "db.sqlite3")
+
+        kickoff = datetime.now(UTC) + timedelta(hours=6)
+        rows = []
+        # Participants, keys and start times all consistent per fixture, or
+        # reconciliation splits the pair and no cross-book market ever forms —
+        # which made an earlier draft of this pin pass under mutation.
+        for index in range(20):
+            day = kickoff + timedelta(days=index)
+            key = f"MLB-CIN@MLB-PHI:{day.date().isoformat()}"
+            for source in ("hardrock", "fanduel"):
+                rows.append(make_quote(
+                    source=source, source_market_id=f"{source}-m{index}",
+                    event_key=key, source_event_id=f"e{index}",
+                    home_participant="MLB-PHI", away_participant="MLB-CIN",
+                    home_team="Philadelphia Phillies", away_team="Cincinnati Reds",
+                    decimal_odds=2.10,
+                    commence_time=day, observed_at=datetime.now(UTC),
+                    raw_ref=f"{source}/20260808T160000Z/x/abc",
+                ))
+        from src.schema import Selection
+
+        for source, selection in (("hardrock", Selection.HOME), ("fanduel", Selection.AWAY)):
+            rows.append(make_quote(
+                source=source, source_market_id=f"{source}-div",
+                event_key=f"MLB-ATH@MLB-BOS:{kickoff.date().isoformat()}",
+                source_event_id="ediv",
+                home_participant="MLB-BOS", away_participant="MLB-ATH",
+                home_team="Boston Red Sox", away_team="Athletics",
+                selection=selection, decimal_odds=2.30,
+                commence_time=kickoff, observed_at=datetime.now(UTC),
+                raw_ref=f"{source}/20260808T160000Z/x/abc",
+            ))
+        with Store(tmp_path / "db.sqlite3") as store:
+            run = store.start_run(
+                datetime.now(UTC), jurisdiction="IL", route_scope="state",
+            )
+            store.save_quotes_by_source(run, rows)
+            store.finish_run(
+                run, finished_at=datetime.now(UTC),
+                report=ValidationReport(quote_count=len(rows), event_count=21),
+                counterparties={},
+            )
+
+        # A PA-configured reader: ambient set treats hardrock as view-only.
+        monkeypatch.setattr(
+            registry, "VIEW_ONLY_SOURCES", registry.view_only_for_run("PA")
+        )
+        import src.collector
+
+        # Non-vacuity, asserted on the data rather than the CLI text: with the
+        # gate forced open, these rows DO produce the +15.00 "opportunity", so
+        # the refusal below can only come from the gate itself.
+        from src.arb import find_opportunities
+
+        ungated = find_opportunities(
+            rows,
+            one_counterparty={},
+            view_only_sources=registry.view_only_for_run("IL"),
+        )
+        assert ungated.opportunities, (
+            "the divergent fixture must support the arb, or refusing it proves "
+            "nothing"
+        )
+
+        assert src.collector.main(["arb", "--run", str(run), "--no-alert"]) == 0
+        out = capsys.readouterr().out
+        assert "0 opportunities" in out, (
+            "a measured one-counterparty pair must stay refused whoever reads "
+            f"the run:\n{out}"
+        )
+
+    def test_the_report_grades_a_legacy_run_by_the_runs_own_set(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """``_coverage_for_run`` graded a legacy run by the reader's set.
+
+        A legacy (jurisdiction ``''``) run holding hardrock+fanduel on one
+        fixture read ``comparable: True`` from an IL box and ``comparable:
+        False`` from a PA box — beside a ``cross_book_events`` the same
+        function already resolved from the run.  ``view_only_for_run("")``
+        is the one deterministic answer.
+        """
+        from datetime import timedelta
+
+        import src.settings
+        from src.report import _coverage_for_run
+        from src.sources import registry
+        from src.validation import ValidationReport
+        from tests.conftest import make_quote
+
+        monkeypatch.setattr(src.settings, "DB_PATH", tmp_path / "db.sqlite3")
+        kickoff = datetime.now(UTC) + timedelta(hours=6)
+        rows = [
+            make_quote(
+                source=source, source_market_id=f"{source}-m",
+                commence_time=kickoff, observed_at=datetime.now(UTC),
+                raw_ref=f"{source}/20260808T160000Z/x/abc",
+            )
+            for source in ("hardrock", "fanduel")
+        ]
+        with Store(tmp_path / "db.sqlite3") as store:
+            run = store.start_run(datetime.now(UTC), jurisdiction="", route_scope="")
+            store.save_quotes_by_source(run, rows)
+            store.finish_run(
+                run, finished_at=datetime.now(UTC),
+                report=ValidationReport(quote_count=len(rows), event_count=1),
+                counterparties={},
+            )
+
+        def graded() -> dict:
+            with Store(tmp_path / "db.sqlite3") as store:
+                per_sport, _ = _coverage_for_run(store, run)
+                return {e["sport"]: e for e in per_sport}["baseball"]
+
+        monkeypatch.setattr(
+            registry, "VIEW_ONLY_SOURCES", registry.view_only_for_run("IL")
+        )
+        as_il_reader = graded()
+        monkeypatch.setattr(
+            registry, "VIEW_ONLY_SOURCES", registry.view_only_for_run("PA")
+        )
+        as_pa_reader = graded()
+        assert as_il_reader["comparable"] == as_pa_reader["comparable"], (
+            "a stored run's verdict flipped with the reader's ODDS_STATE"
+        )
 
     def test_lines_says_not_active_when_that_is_the_reason(
         self, tmp_path: Path, monkeypatch, capsys
