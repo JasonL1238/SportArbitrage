@@ -633,6 +633,13 @@ PERIOD_MARKERS: frozenset[str] = frozenset(
         "1q", "2q", "3q", "4q", "q1", "q2", "q3", "q4",
         "1p", "2p", "3p", "p1", "p2", "p3",
         "f5", "1i", "i1",
+        # Regulation is *not* the whole game wherever overtime exists, and the
+        # schema has a separate ``Period.REGULATION`` saying so.  A hockey
+        # "Moneyline (Regulation Time)" or "60 Minute Line" filed as full-game
+        # is a systematically longer price — three-way legs always are —
+        # so it pairs with a genuine full-game price at another book into an
+        # apparent arbitrage that a single overtime winner loses on both legs.
+        "regulation", "regulationtime", "minute", "minutes", "reg",
     }
 )
 
@@ -648,7 +655,14 @@ _LABEL_SEPARATORS = ("-", "–", "—", "/", "|", "(", ")", ",", ":", "_")
 #: venue spelling full-game as ``ALL_PERIODS`` is saying the opposite of what
 #: the marker ``periods`` alone would imply, and dropping that market loses the
 #: class silently.
-_WHOLE_GAME_PHRASES = ("all periods", "all quarters", "all halves", "all innings")
+_WHOLE_GAME_PHRASES = (
+    "all periods", "all quarters", "all halves", "all innings",
+    # Extra innings are to baseball what overtime is to hockey: they are
+    # *included in* a whole-game price, so saying so does not name a narrower
+    # window.  Without this an ordinary MLB total reading "Total Runs (Incl.
+    # Extra Innings)" screened out as a sub-period market.
+    "extra innings", "extra inning", "extra time",
+)
 
 
 def _screening_text(labels: Sequence[Any]) -> str:
@@ -698,7 +712,7 @@ def signed_handicap(description: str, *, price_shaped: float = 100.0) -> float |
     that validation faults on MLB and accepts as junk in the high-total
     leagues.  A price *beside* a handicap is unambiguous once discounted.
     """
-    found: list[float] = []
+    found: set[float] = set()
     for token in description.replace("(", " ").replace(")", " ").split():
         if token[:1] in "+-" and len(token) > 1:
             try:
@@ -707,8 +721,14 @@ def signed_handicap(description: str, *, price_shaped: float = 100.0) -> float |
                 continue
             if abs(value) >= price_shaped:
                 continue
-            found.append(value)
-    return found[0] if len(found) == 1 else None
+            found.add(value)
+    # A *set*: two tokens saying the same number agree about the line, and
+    # counting them as a disagreement is how a corroboration check defeats
+    # itself.  ProphetX joins ``display_name`` and ``name`` before asking, and
+    # a venue that fills both fields identically — an ordinary API shape —
+    # produced "+1.5 +1.5", two tokens, and the guard read that as ambiguous
+    # and published the market as a pick'em.
+    return found.pop() if len(found) == 1 else None
 
 
 def drop_same_side_pairs(source: str, outcome: Any) -> None:
@@ -722,14 +742,31 @@ def drop_same_side_pairs(source: str, outcome: Any) -> None:
     same team presented as a hedge: paired against another book's genuine
     other side they read as an arbitrage while both legs lose together.
     """
-    by_market: dict[tuple[str, str], list[Any]] = {}
+    def key(quote: Any) -> tuple[str, str, bool]:
+        # ``is_alternate`` is part of the identity: a main ladder and an
+        # alternate ladder are different markets even when a venue gives them
+        # one id, and judging their rows together rejected legitimate
+        # alternate rungs wholesale.
+        return (
+            quote.source_market_id or "",
+            quote.source_event_id,
+            bool(getattr(quote, "is_alternate", False)),
+        )
+
+    by_market: dict[tuple[str, str, bool], list[Any]] = {}
     for quote in outcome.quotes:
-        by_market.setdefault(
-            (quote.source_market_id or "", quote.source_event_id), []
-        ).append(quote)
+        by_market.setdefault(key(quote), []).append(quote)
     doomed = set()
-    for (market_id, event_id), quotes in by_market.items():
-        if len(quotes) < 2 or len({quote.selection for quote in quotes}) > 1:
+    for group, quotes in by_market.items():
+        market_id, event_id, _ = group
+        # Judged only where the premise holds: **exactly two** rows from one
+        # identified market.  A market with no id at all would put every
+        # id-less row in the event into one bucket and judge unrelated markets
+        # as one, and a bucket of three or more is a ladder rather than the
+        # two sides of a contract — neither is the shape this refuses.
+        if not market_id or len(quotes) != 2:
+            continue
+        if len({quote.selection for quote in quotes}) > 1:
             continue
         outcome.reject(
             source,
@@ -738,12 +775,10 @@ def drop_same_side_pairs(source: str, outcome: Any) -> None:
             f"on {quotes[0].selection.value}",
             event_id=event_id,
         )
-        doomed.add((market_id, event_id))
+        doomed.add(group)
     if doomed:
         outcome.quotes = [
-            quote
-            for quote in outcome.quotes
-            if (quote.source_market_id or "", quote.source_event_id) not in doomed
+            quote for quote in outcome.quotes if key(quote) not in doomed
         ]
 
 
@@ -769,10 +804,16 @@ MARKET_LABEL_KEYS: frozenset[str] = frozenset(
     {
         "name", "label", "title", "caption", "heading",
         "description", "short_description", "shortdescription",
-        "group_name", "groupname", "group",
+        "group_name", "groupname", "group", "market_group", "marketgroup",
         "market_name", "marketname", "market_label",
         "display_name", "displayname",
-        "sub_type", "subtype", "category", "period_name", "periodname",
+        "sub_type", "subtype", "sub_market", "submarket",
+        "category", "segment", "scope",
+        # ``period`` and not only ``period_name``: a venue naming its window in
+        # the bare field and nowhere in prose slipped both screens, and
+        # including one spelling while excluding the other is not a line
+        # anybody could defend.
+        "period", "period_name", "periodname",
     }
 )
 

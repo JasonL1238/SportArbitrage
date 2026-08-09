@@ -763,6 +763,18 @@ def _parse_market(
         outcome.skipped["period_out_of_scope"] += 1
         return
 
+    # Exactly two sides, whatever the market type.  A three-way moneyline —
+    # the standard exchange spelling in hockey, where the draw is a real
+    # outcome — otherwise published its two team rows as full-game prices,
+    # rejecting only the ``Draw`` row as an unknown team.  Three-way legs are
+    # systematically longer than two-way ones, so every such market pairs with
+    # a genuine full-game price elsewhere into an apparent arbitrage that one
+    # overtime winner loses on both legs.  The sibling adapter refuses the
+    # same shape; this is the guard it did not get.
+    if len(flat) != 2:
+        outcome.skipped["not_a_two_outcome_market"] += 1
+        return
+
     if our_market is Market.SPREAD and not _spread_lines_are_sign_opposed(flat, market):
         # The whole-market invariant, not a per-selection one: a numeric line
         # is not evidence of a *signed* line.  Two selections both carrying

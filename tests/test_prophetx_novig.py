@@ -935,6 +935,85 @@ class TestProphetXParserEdges:
             "spread_sign_unresolved"
         ]
 
+    def test_a_three_way_moneyline_never_publishes_as_full_game(self):
+        """The standard exchange spelling in hockey, where the draw is a real
+        outcome.  Publishing the two team rows files three-way prices — which
+        are systematically longer — as full-game ones, so every such market
+        pairs with a genuine full-game price elsewhere into an apparent
+        arbitrage that a single overtime winner loses on both legs."""
+        raws = self._fixture_raws(
+            market={
+                "id": 55,
+                "type": "moneyline",
+                "name": "Moneyline",
+                "selections": [
+                    [
+                        {"name": "Cincinnati Reds", "odds": 2.9,
+                         "competitor_id": 1, "outcome_id": 1},
+                        {"name": "Draw", "odds": 4.2, "outcome_id": 2},
+                        {"name": "Philadelphia Phillies", "odds": 2.6,
+                         "competitor_id": 2, "outcome_id": 3},
+                    ]
+                ],
+            }
+        )
+        outcome = parse_prophetx(raws)
+        assert not outcome.quotes
+        assert not outcome.rejections
+        assert outcome.skipped["not_a_two_outcome_market"] == 1
+
+    def test_a_regulation_market_is_not_a_full_game_market(self):
+        """Regulation is not the whole game wherever overtime exists — the
+        schema has a separate period for it — and a two-way "60 Minute Line"
+        is the same trap without a draw row to give it away."""
+        for label in ("Moneyline (Regulation Time)", "60 Minute Line"):
+            raws = self._fixture_raws(
+                market={
+                    "id": 55,
+                    "type": "moneyline",
+                    "name": label,
+                    "selections": [
+                        [
+                            {"name": "Cincinnati Reds", "odds": 2.9,
+                             "competitor_id": 1, "outcome_id": 1},
+                            {"name": "Philadelphia Phillies", "odds": 2.6,
+                             "competitor_id": 2, "outcome_id": 2},
+                        ]
+                    ],
+                }
+            )
+            outcome = parse_prophetx(raws)
+            assert not outcome.quotes, label
+            assert outcome.skipped["period_out_of_scope"] == 1, label
+
+    def test_a_handicap_spelled_in_both_name_fields_still_corroborates(self):
+        """``name`` and ``display_name`` filled identically is an ordinary API
+        shape.  Joined, they yield "+1.5 +1.5" — two tokens saying the same
+        number — and counting that as a disagreement let the market publish as
+        a pick'em, which is the corroboration check defeating itself."""
+        raws = self._fixture_raws(
+            market={
+                "id": 55,
+                "type": "spread",
+                "name": "Run Line",
+                "selections": [
+                    [
+                        {"name": "Cincinnati Reds +1.5",
+                         "display_name": "Cincinnati Reds +1.5",
+                         "odds": 3.1, "line": 0,
+                         "competitor_id": 1, "outcome_id": 1},
+                        {"name": "Philadelphia Phillies -1.5",
+                         "display_name": "Philadelphia Phillies -1.5",
+                         "odds": 1.35, "line": 0,
+                         "competitor_id": 2, "outcome_id": 2},
+                    ]
+                ],
+            }
+        )
+        outcome = parse_prophetx(raws)
+        assert not outcome.quotes
+        assert [r.reason for r in outcome.rejections] == ["spread_sign_unresolved"]
+
     def test_two_legs_on_one_side_are_refused(self):
         """On a P2P exchange "Reds +1.5" / "Reds -1.5" is a natural spelling
         for the two sides of one contract, and competitor-id-first resolution
@@ -964,6 +1043,126 @@ class TestProphetXParserEdges:
         assert [r.reason for r in outcome.rejections] == [
             "market_prices_one_side_twice"
         ]
+
+    def test_the_same_side_guard_does_not_eat_legitimate_alternates(self):
+        """The guard judges exactly two rows from one *identified* market.
+        Alternate rungs are a different market from the main ladder even when
+        a venue reuses the id, and rows from id-less markets would otherwise
+        share one bucket per event and be judged as if they were one market —
+        both of which rejected legitimate ladders wholesale."""
+        raws = self._fixture_raws(
+            market={
+                "id": 55,
+                "type": "spread",
+                "name": "Run Line",
+                "line": 1.5,
+                "selections": [
+                    [
+                        {"name": "Cincinnati Reds", "odds": 2.4, "line": 1.5,
+                         "competitor_id": 1, "outcome_id": 1},
+                        {"name": "Philadelphia Phillies", "odds": 1.6, "line": -1.5,
+                         "competitor_id": 2, "outcome_id": 2},
+                    ]
+                ],
+                "market_lines": [
+                    {
+                        # Same id as its parent, and a real two-sided ladder.
+                        "id": 55,
+                        "type": "spread",
+                        "name": "Run Line",
+                        "line": 2.5,
+                        "selections": [
+                            [
+                                {"name": "Cincinnati Reds", "odds": 3.1, "line": 2.5,
+                                 "competitor_id": 1, "outcome_id": 3},
+                                {"name": "Philadelphia Phillies", "odds": 1.35,
+                                 "line": -2.5, "competitor_id": 2, "outcome_id": 4},
+                            ]
+                        ],
+                    },
+                ],
+            }
+        )
+        outcome = parse_prophetx(raws)
+        assert not outcome.rejections
+        assert sorted(quote.line for quote in outcome.quotes) == [-2.5, -1.5, 1.5, 2.5]
+
+    def test_a_main_and_an_alternate_rung_are_not_one_market(self):
+        """Both ladders here publish only their away side — the home rows are
+        unpriced, which is ordinary on an exchange.  Grouped without regard to
+        ``is_alternate`` they look like one market pricing one side twice, and
+        both legitimate rows were rejected.  They are two markets."""
+        raws = self._fixture_raws(
+            market={
+                "id": 55,
+                "type": "spread",
+                "name": "Run Line",
+                "line": 1.5,
+                "selections": [
+                    [
+                        {"name": "Cincinnati Reds", "odds": 2.4, "line": 1.5,
+                         "competitor_id": 1, "outcome_id": 1},
+                        {"name": "Philadelphia Phillies", "line": -1.5,
+                         "competitor_id": 2, "outcome_id": 2},
+                    ]
+                ],
+                "market_lines": [
+                    {
+                        "id": 55,
+                        "type": "spread",
+                        "name": "Run Line",
+                        "line": 2.5,
+                        "selections": [
+                            [
+                                {"name": "Cincinnati Reds", "odds": 3.1, "line": 2.5,
+                                 "competitor_id": 1, "outcome_id": 3},
+                                {"name": "Philadelphia Phillies", "line": -2.5,
+                                 "competitor_id": 2, "outcome_id": 4},
+                            ]
+                        ],
+                    },
+                ],
+            }
+        )
+        outcome = parse_prophetx(raws)
+        assert not outcome.rejections
+        assert sorted(quote.line for quote in outcome.quotes) == [1.5, 2.5]
+
+    def test_markets_without_ids_are_not_judged_as_one(self):
+        """A market with no id makes every id-less row in the event share one
+        bucket, where unrelated markets get judged as if they were a single
+        contract.  The guard only judges an *identified* market."""
+        events, _ = self._fixture_raws(market={"id": 1, "type": "moneyline",
+                                               "name": "x", "selections": []})
+        markets = _raw(
+            "prophetx",
+            "markets:MLB:00",
+            {"data": {"7": [
+                {
+                    "type": "spread", "name": "Run Line", "line": 1.5,
+                    "selections": [[
+                        {"name": "Cincinnati Reds", "odds": 2.4, "line": 1.5,
+                         "competitor_id": 1, "outcome_id": 1},
+                        {"name": "Philadelphia Phillies", "line": -1.5,
+                         "competitor_id": 2, "outcome_id": 2},
+                    ]],
+                },
+                {
+                    "type": "spread", "name": "Run Line", "line": 2.5,
+                    "selections": [[
+                        {"name": "Cincinnati Reds", "odds": 3.1, "line": 2.5,
+                         "competitor_id": 1, "outcome_id": 3},
+                        {"name": "Philadelphia Phillies", "line": -2.5,
+                         "competitor_id": 2, "outcome_id": 4},
+                    ]],
+                },
+            ]}},
+        )
+        outcome = parse_prophetx([events, markets])
+        assert not any(
+            r.reason == "market_prices_one_side_twice" for r in outcome.rejections
+        )
+        assert sorted(quote.line for quote in outcome.quotes) == [1.5, 2.5]
 
     def test_an_under_leg_mentioning_overtime_is_not_an_over(self):
         """"Incl. Overtime" is ordinary NBA/NHL total vocabulary, and a
@@ -1937,8 +2136,26 @@ class TestTheCredentialedAxis:
                 _common.market_label_text(prose)
             ), prose
         # A venue spelling full-game as ALL_PERIODS is saying the opposite of
-        # what the bare marker implies.
+        # what the bare marker implies.  Extra innings are to baseball what
+        # overtime is to hockey: included in the whole-game price, not a
+        # narrower window.
         assert not _common.mentions_a_sub_period("ALL_PERIODS Moneyline")
+        assert not _common.mentions_a_sub_period("Total Runs (Incl. Extra Innings)")
+        # ...but regulation genuinely is a narrower window wherever overtime
+        # exists, and the schema has a separate period saying so.
+        for label in ("Moneyline (Regulation Time)", "60 Minute Line",
+                      "Reg. Time Total"):
+            assert _common.mentions_a_sub_period(label), label
+        # A window named in a structured field, not in prose.  Carrying
+        # ``period_name`` while excluding the bare ``period`` was not a line
+        # anyone could defend.
+        for field in ("period", "segment", "scope", "sub_market", "market_group"):
+            assert _common.mentions_a_sub_period(
+                _common.market_label_text({"name": "Total", field: "1st Half"})
+            ), field
+        # Two tokens saying the same number agree about the line.
+        assert _common.signed_handicap("Reds +1.5 +1.5") == pytest.approx(1.5)
+        assert _common.signed_handicap("Reds +1.5 +2.5") is None
         # Neither adapter may reintroduce a private copy of the list.
         assert "_PERIOD_MARKERS" not in vars(prophetx)
         assert "_PERIOD_MARKERS" not in vars(novig)
