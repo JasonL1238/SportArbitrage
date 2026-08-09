@@ -334,6 +334,16 @@ def stakeable_odds_sources(promo_source: str) -> tuple[str, ...]:
     means the slate has no view of this book at all (Ontario tenants,
     promo-only brands), and the caller falls back to text guidance rather than
     borrowing another book's games.
+
+    The ``VIEW_ONLY_SOURCES`` filter here is the **ambient** set, and that is a
+    known, deliberately-conservative wrinkle rather than an oversight: whether
+    a feed is stakeable is a per-run fact (``hardrock`` differs between IL and
+    PA), but this filter can only *suppress* a plan — a stored IL run planned
+    from a PA-configured box loses its hardrock plans; nothing is ever staked
+    at a book the run's own set forbids, because ``_build_context``'s
+    run-state ``usable`` filter guards the money path downstream.  Threading
+    the run state here would recover those suppressed plans, at the cost of a
+    state parameter through three registry-shape helpers; taken knowingly.
     """
     brand = brand_key(promo_source)
     ordered: list[str] = [brand]

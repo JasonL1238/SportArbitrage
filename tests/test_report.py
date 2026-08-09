@@ -1858,6 +1858,56 @@ def test_every_venue_says_whether_it_can_be_bet_from_the_us() -> None:
     )
 
 
+def test_a_legacy_runs_badge_does_not_flip_with_the_readers_state() -> None:
+    """The badge's fallback arm is ``view_only_for_run``, never the ambient set.
+
+    For a legacy run (jurisdiction ``""``) the old ``is_view_only`` arm graded
+    ``hardrock`` by the reader's ODDS_STATE — " · context only, not a book" on
+    a PA-built page, a counterparty on an IL-built one — while the same page's
+    arb payload, resolved from the run, kept showing the hardrock-legged
+    position beside the badge that disowned it.  Found independently by two
+    round-6 reviewers.
+    """
+    import pytest
+
+    from src.report import _source_entry
+    from src.sources import registry
+
+    answers = set()
+    for ambient_state in ("IL", "PA"):
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(
+                registry,
+                "VIEW_ONLY_SOURCES",
+                registry.view_only_for_run(ambient_state),
+            )
+            answers.add(_source_entry("hardrock", state="")["view_only"])
+    assert answers == {False}, (
+        "a legacy run's hardrock badge flipped with the reader's configuration"
+    )
+
+
+def test_the_payload_carries_a_source_map_for_legacy_runs(populated: Store) -> None:
+    """``""`` is a real jurisdiction key — legacy runs carry it.
+
+    Without an entry the page's ``sourceInfo`` fell back to the top-level
+    ``sources`` array, built for the *latest* run's state, so a legacy run's
+    badges were graded by whatever run happened to be newest.
+    """
+    from src.jurisdictions import JURISDICTIONS
+
+    data = build_report(populated)
+    by_state = data["sources_by_jurisdiction"]
+    for state in (*JURISDICTIONS, "GLOBAL", ""):
+        assert state in by_state, f"no source map for jurisdiction {state!r}"
+    legacy = {entry["key"]: entry for entry in by_state[""]}
+    if "hardrock" in legacy:
+        assert legacy["hardrock"]["view_only"] is False, (
+            "the legacy column must grade by view_only_for_run(''), which never "
+            "contains a retail key"
+        )
+
+
 def test_a_us_regulated_venue_is_not_marked_unbettable() -> None:
     """Kalshi is the one that must not be swept up by the set.
 

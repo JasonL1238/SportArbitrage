@@ -1027,6 +1027,38 @@ def test_collect_once_applies_the_runs_view_only_set_to_the_verdict(
     assert "sport_below_two_books" in {f.code for f in result.report.warnings}
 
 
+def test_collect_once_measures_mirrors_under_the_runs_set(tmp_path: Path, collector) -> None:
+    """The alerting site's capture pin — reverting it left every suite green.
+
+    ``collect_batch_once`` collects the detected state and ODDS_STATE's in one
+    process, so the measurement set must come from the pass's own jurisdiction
+    argument, never the ambient constant.
+    """
+    from src.sources import registry
+
+    captured: list[object] = []
+    real = collector.find_mirrors
+
+    def recording(quotes, *, view_only=None):
+        captured.append(view_only)
+        return real(quotes, view_only=view_only)
+
+    raw_store = RawStore(tmp_path / "raw")
+    sources = [
+        FakeSource("bookA", [make_quote(source="bookA")], leagues=("MLB",)),
+        FakeSource("bookB", [make_quote(source="bookB")], leagues=("MLB",)),
+    ]
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(collector, "find_mirrors", recording)
+        with Store(tmp_path / "db.sqlite3") as store:
+            collector.collect_once(
+                sources, raw_store=raw_store, store=store, jurisdiction="PA"
+            )
+    assert captured == [registry.view_only_for_run("PA")], (
+        "the mirror measurement must run under the pass's own jurisdiction"
+    )
+
+
 def test_filtering_a_run_by_sport_keeps_only_that_sport(tmp_path: Path, collector) -> None:
     raw_store = RawStore(tmp_path / "raw")
     sources = [

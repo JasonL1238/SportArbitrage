@@ -208,6 +208,7 @@ try {
     globalThis.__isUsUnavailable = isUsUnavailable;
     globalThis.__currentRows = currentRows;
     globalThis.__arbBundle = arbBundle;
+    globalThis.__sportGap = sportGap;
     globalThis.__showOffshore = () => showOffshore;
     globalThis.__setShowOffshore = (on) => {
       showOffshore = on;
@@ -3615,4 +3616,37 @@ function onAnEmbeddedRun() {   // a declaration, so block order cannot matter
     process.exit(1);
   }
   console.log('the arb panel only calls a board clean when one was measured');
+}
+
+/* ── ALL-MIRROR SPORT WORDING ─────────────────────────────────────────────────
+   Run 27 rendered "one book only" over a sport priced by ten view-only feeds
+   and zero counterparties — false in both directions, and the misdirection
+   the CLI's VIEW-ONLY label was added to remove.  Executed, not substring-
+   pinned: the function is called with the two shapes and its words checked. */
+{
+  if (typeof globalThis.__sportGap !== 'function') {
+    console.error('sportGap is not exported to the smoke test — the wording pin is dead');
+    process.exit(1);
+  }
+  const allMirror = globalThis.__sportGap({
+    per_source: { an_fanduel: 100, an_betrivers: 90, an_parx: 80 },
+    books: [],
+  });
+  if (!/view-only/.test(allMirror.meta) || !/not a counterparty/.test(allMirror.meta)) {
+    console.error('all-mirror sport meta does not name the real cause:', allMirror.meta);
+    process.exit(1);
+  }
+  if (/one book/.test(allMirror.flag) || /one book/.test(allMirror.meta)) {
+    console.error('all-mirror sport still worded as "one book":', JSON.stringify(allMirror));
+    process.exit(1);
+  }
+  const genuinelyOne = globalThis.__sportGap({
+    per_source: { fanduel: 100 },
+    books: ['fanduel'],
+  });
+  if (!/one book only/.test(genuinelyOne.flag)) {
+    console.error('a genuinely one-book sport lost its honest label:', JSON.stringify(genuinelyOne));
+    process.exit(1);
+  }
+  console.log('a sport priced only by mirrors is named as such, not as one book');
 }

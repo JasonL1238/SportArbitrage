@@ -1559,11 +1559,11 @@ def _check_source_health(
     """
     # View-only feeds do not make a slate comparable — AN Open alone beside one
     # real book must not clear the two-counterparty floor.  The *run's* set,
-    # like every other consumer of the distinction: with the ambient fallback
-    # this was the last reader-state read left in the pipeline — unreachable
-    # as a live divergence today only because the divergent keys are never
-    # built into a PA/DC state pass, which is a fact about the current
-    # registry, not a property of this code.
+    # like every other consumer of the distinction.  The pre-fix ambient read
+    # was reachable, not theoretical: ``hardrock`` is built into **IL** passes
+    # (route VALIDATED, real runs carry its rows), so a batch box with
+    # ODDS_STATE=PA collecting the IL pass graded IL's slate under PA's set —
+    # a false ``insufficient_sources`` over a healthy two-book slate.
     if view_only is None:
         from src.sources.registry import VIEW_ONLY_SOURCES
 

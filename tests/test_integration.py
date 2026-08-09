@@ -1154,6 +1154,151 @@ class TestReaderCommandsUseTheRunsOwnViewOnlySet:
             "a stored run's verdict flipped with the reader's ODDS_STATE"
         )
 
+    def test_the_detectors_default_gate_measures_under_its_own_exclusions(
+        self, monkeypatch
+    ) -> None:
+        """``find_opportunities``' None default, held by capture.
+
+        The default measured with the ambient set while the caller's explicit
+        ``view_only_sources`` governed the legs — same arguments, same bytes,
+        0 opportunities on an IL box and "+15.00 guaranteed" on a PA one.
+        Latent (every src caller passes ``one_counterparty``), but the
+        docstring advertises the default as the safe path, so it is pinned.
+        """
+        from datetime import timedelta
+
+        import src.arb as arb_mod
+        from tests.conftest import make_quote
+
+        captured: list[object] = []
+        real = arb_mod.counterparty_groups
+
+        def recording(quotes, *, mirrors=None, view_only=None):
+            captured.append(view_only)
+            return real(quotes, mirrors=mirrors, view_only=view_only)
+
+        custom = frozenset({"an_open", "some_mirror"})
+        rows = [
+            make_quote(source="fanduel", commence_time=datetime.now(UTC) + timedelta(hours=6))
+        ]
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(arb_mod, "counterparty_groups", recording)
+            arb_mod.find_opportunities(
+                rows, as_of=datetime.now(UTC), view_only_sources=custom
+            )
+        assert captured == [custom], (
+            "the default gate must measure under the exclusions the legs use"
+        )
+
+    def test_every_remeasuring_site_passes_the_runs_set_to_the_gate(
+        self, tmp_path: Path, monkeypatch, capsys
+    ) -> None:
+        """The five threaded sites round 5 shipped unpinned, held by capture.
+
+        Reverting any one of them left the whole suite green, because only the
+        ``arb`` command and ``_coverage_for_run`` carried behavioral pins.
+        This test intercepts the gate itself and asserts each site hands it
+        the run's own set — a capture pin rather than a behavioral one, which
+        is weaker in principle but kills the revert of every site precisely.
+        """
+        from datetime import timedelta
+
+        import src.settings
+        from src.sources import registry
+        from src.validation import ValidationReport
+        from tests.conftest import make_quote
+
+        monkeypatch.setattr(src.settings, "DATA_DIR", tmp_path)
+        monkeypatch.setattr(src.settings, "RAW_DIR", tmp_path / "raw")
+        monkeypatch.setattr(src.settings, "DB_PATH", tmp_path / "db.sqlite3")
+
+        kickoff = datetime.now(UTC) + timedelta(hours=6)
+        rows = [
+            make_quote(
+                source=source, source_market_id=f"{source}-m",
+                commence_time=kickoff, observed_at=datetime.now(UTC),
+                raw_ref=f"{source}/20260808T160000Z/x/abc",
+            )
+            for source in ("hardrock", "fanduel")
+        ]
+        with Store(tmp_path / "db.sqlite3") as store:
+            run = store.start_run(
+                datetime.now(UTC), jurisdiction="IL", route_scope="state",
+            )
+            store.save_quotes_by_source(run, rows)
+            store.finish_run(
+                run, finished_at=datetime.now(UTC),
+                report=ValidationReport(quote_count=len(rows), event_count=1),
+                counterparties={},
+            )
+
+        il_set = registry.view_only_for_run("IL")
+        captured: dict[str, object] = {}
+
+        import src.arb as arb_mod
+
+        real = arb_mod.counterparty_groups
+
+        def recording(quotes, *, mirrors=None, view_only=None, _site=captured):
+            _site.setdefault("calls", []).append(view_only)
+            return real(quotes, mirrors=mirrors, view_only=view_only)
+
+        # One patch covers every site: all four modules call the *function*,
+        # three via module-attribute lookups resolved at call time through
+        # their own import of the name — patch each namespace that bound it.
+        import src.collector as collector_mod
+        import src.report as report_mod
+
+        monkeypatch.setattr(arb_mod, "counterparty_groups", recording)
+        monkeypatch.setattr(collector_mod, "counterparty_groups", recording)
+        monkeypatch.setattr(report_mod, "counterparty_groups", recording)
+
+        # Site: lines CLI.
+        captured.clear()
+        assert collector_mod.main(["lines", "--run", str(run)]) == 0
+        capsys.readouterr()
+        assert captured.get("calls") == [il_set], "lines gate must get IL's set"
+
+        # Site: report._arb_payload.
+        captured.clear()
+        with Store(tmp_path / "db.sqlite3") as store:
+            report_mod._arb_payload(store, [run], as_of=datetime.now(UTC))
+        assert captured.get("calls") == [il_set], "_arb_payload gate must get IL's set"
+
+        # Site: report._promo_plans — the odds run's state, not the promo's.
+        # A **PA** odds run, because PA's set differs from the ungoverned
+        # fallback (it adds hardrock) while IL's happens to equal it — an IL
+        # run here could not tell the fix from the revert.
+        from src.validation import ValidationReport as _VR
+
+        with Store(tmp_path / "db.sqlite3") as store:
+            pa_run = store.start_run(
+                datetime.now(UTC), jurisdiction="PA", route_scope="state",
+            )
+            store.save_quotes_by_source(pa_run, rows)
+            store.finish_run(
+                pa_run, finished_at=datetime.now(UTC),
+                report=_VR(quote_count=len(rows), event_count=1),
+                counterparties={},
+            )
+        pa_set = registry.view_only_for_run("PA")
+        assert pa_set != registry.view_only_for_run(""), (
+            "the discriminating premise of this site check"
+        )
+        captured.clear()
+        with Store(tmp_path / "db.sqlite3") as store:
+            plans, meta = report_mod._promo_plans(
+                store,
+                [{"source": "fanduel", "offer_id": "o1", "title": "t",
+                  "summary": "s", "kind": "bonus_bet"}],
+                [pa_run],
+                datetime.now(UTC),
+                state=None,
+            )
+        assert captured.get("calls") == [pa_set], (
+            "_promo_plans must resolve the odds run's jurisdiction"
+        )
+
     def test_lines_says_not_active_when_that_is_the_reason(
         self, tmp_path: Path, monkeypatch, capsys
     ) -> None:

@@ -1049,7 +1049,14 @@ def find_opportunities(
         quotes = [quote for quote in quotes if quote.source not in view_only]
 
     if one_counterparty is None:
-        one_counterparty = counterparty_groups(quotes)
+        # Measured under the same set the legs were just filtered by.  Without
+        # the thread this default measured with the *ambient* set while the
+        # caller's explicit ``view_only_sources`` governed the legs — the same
+        # arguments and the same bytes produced 0 opportunities on an IL box
+        # and "+15.00 guaranteed" with both legs at one counterparty on a PA
+        # box.  Latent (every src caller passes one_counterparty explicitly),
+        # but the docstring advertises this default as the safe path.
+        one_counterparty = counterparty_groups(quotes, view_only=view_only)
     if order_book_sources is None:
         order_book_sources = _order_driven_sources()
     order_driven = frozenset(order_book_sources)

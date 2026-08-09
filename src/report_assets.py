@@ -2439,6 +2439,27 @@ function selectRun(id) {
   renderRunScoped();
 }
 
+/** Why a non-comparable sport cannot be compared, said truthfully.
+    "one book only" was false in both directions on an all-republisher run:
+    zero books a bet could be placed at, ten view-only feeds — and it pointed
+    the operator at the collector, the exact misdirection the CLI's VIEW-ONLY
+    label was added to remove.  `books` is counterparty-only; `per_source`
+    counts every feed with rows. */
+function sportGap(entry) {
+  const feeds = Object.keys(entry.per_source || {}).length;
+  const counterparties = (entry.books || []).length;
+  if (!counterparties && feeds) {
+    return { flag: `  — view-only feeds only`,
+             meta: `${feeds} view-only feed(s) priced it — a mirror is not a ` +
+                   `counterparty, so nothing can be compared` };
+  }
+  if (!counterparties) {
+    return { flag: '  — no books', meta: 'no book priced it' };
+  }
+  return { flag: '  — one book only',
+           meta: 'only one book priced it — nothing to compare it with' };
+}
+
 /** Sports offered by the run being viewed, marked with whether they are usable. */
 function buildSportPicker() {
   const pick = el('sport-pick');
@@ -2449,7 +2470,7 @@ function buildSportPicker() {
   pick.innerHTML = ['<option value="">every sport</option>'].concat(
     offered.map((entry) => {
       const flag = entry.comparable ? ''
-        : (entry.meets_bar ? '  — no shared fixture' : '  — one book only');
+        : (entry.meets_bar ? '  — no shared fixture' : sportGap(entry).flag);
       return `<option value="${escapeHtml(entry.sport)}">${escapeHtml(sportLabel(entry.sport))}${flag}</option>`;
     })
   ).join('');
@@ -2460,7 +2481,7 @@ function buildSportPicker() {
         ? `${chosen.books.length} books, ${chosen.cross_book_events} shared fixture(s) — comparable`
         : (chosen.meets_bar
             ? `${chosen.books.length} books but no fixture both priced — nothing to compare`
-            : 'only one book priced it — nothing to compare it with'))
+            : sportGap(chosen).meta))
     : `${offered.filter((e) => e.comparable).length} of ${offered.length} sport(s) comparable across books`;
 }
 
@@ -2726,7 +2747,7 @@ function renderChrome() {
       usableSports.length === 1 ? '' : 's'} you can compare</span>`,
     singleSports.length
       ? `<span class="pill warn"><i></i>${singleSports.length} sport${
-          singleSports.length === 1 ? '' : 's'} only one book covered</span>`
+          singleSports.length === 1 ? '' : 's'} not comparable</span>`
       : '',
     currentSport ? `<span class="pill accent">showing ${escapeHtml(sportLabel(currentSport))}</span>` : '',
     // Loud on purpose. The default view is the one whose prices can all be
@@ -4596,8 +4617,13 @@ function renderSports() {
         return cell(n ? n.toLocaleString() : '—', n ? '' : 'dim');
       },
     })),
-    { band: 'totals', label: 'Books', num: true,
-      cell: (r) => cell(r.books.length, r.books.length >= DATA.meta.min_books ? '' : 'dim') },
+    // "Feeds", because this league-level count includes view-only mirrors —
+    // unlike the sport grid's counterparty-only Books column above it, which
+    // used to sit as "Books 0" directly over an MLB row reading "Books 10",
+    // the 10 styled as clearing the two-book bar.  A feed count is a true
+    // statement; a book count that includes mirrors is not.
+    { band: 'totals', label: 'Feeds', num: true,
+      cell: (r) => cell(r.books.length, r.books.length ? '' : 'dim') },
     { band: 'totals', label: 'Fixtures', num: true, cell: (r) => cell(r.event_count) },
     { band: 'totals', label: 'Prices', num: true, cell: (r) => cell(r.quote_count.toLocaleString()) },
   ], leagueRows, { empty: 'No leagues were recorded for this collection.' });

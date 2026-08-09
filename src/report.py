@@ -1130,12 +1130,17 @@ def build_report(
             _source_entry(key, state=latest_jurisdiction)
             for key in sorted(_venues_on_the_page(runs, quotes, strings))
         ],
+        # ``""`` is a real key: legacy runs carry it as their jurisdiction, and
+        # without an entry the page's ``sourceInfo`` fell back to the top-level
+        # ``sources`` array — built for *latest_jurisdiction*, not the run
+        # being viewed — so a legacy run's badges were graded by whatever run
+        # happened to be newest.
         "sources_by_jurisdiction": {
             state: [
                 _source_entry(key, state=state)
                 for key in sorted(_venues_on_the_page(runs, quotes, strings))
             ]
-            for state in (*JURISDICTIONS, "GLOBAL")
+            for state in (*JURISDICTIONS, "GLOBAL", "")
         },
         "venue_kinds": VENUE_KINDS,
         "runs": runs,
@@ -1532,6 +1537,18 @@ def _promo_plans(
             return {}, {"reason": "empty_odds_run", "odds_run_id": run_id}
         everything, _ = reconcile_event_keys(quotes)
         recorded = odds_store.recorded_counterparty_groups(run_id)
+        # The **odds** run's jurisdiction, not the promo run's.  The *state*
+        # parameter is derived from the promo run, and every real promo run
+        # predates jurisdiction-aware scraping (jurisdiction ``''``) — so a
+        # governed odds run was being planned under the ungoverned fallback,
+        # and the panel named a hedge at a book the run's own state declares
+        # view-only while the promos CLI on the same stores refused it.  When
+        # both states are known they already match (the caller filters odds
+        # runs to the promo state), so preferring the odds run's is never a
+        # contradiction, only a recovery of the fact the promo run lost.
+        odds_row = odds_store.run_row(run_id)
+        odds_state = ((odds_row["jurisdiction"] if odds_row else "") or "").strip().upper()
+        plan_state = odds_state or (state or "")
         built = build_promo_plans(
             offers,
             everything,
@@ -1540,11 +1557,11 @@ def _promo_plans(
                 {}
                 if recorded
                 else counterparty_groups(
-                    everything, view_only=view_only_for_run(state or "")
+                    everything, view_only=view_only_for_run(plan_state)
                 ),
                 recorded,
             ),
-            state=state,
+            state=plan_state or None,
         )
         meta = dict(built["meta"])
         meta["odds_run_id"] = run_id
@@ -2148,7 +2165,7 @@ def _source_entry(key: str, *, state: str | None = None) -> dict[str, Any]:
         RETAIL_SOURCE_KEYS,
         STATE_LICENSED_REPUBLISHER_KEYS,
         US_UNAVAILABLE_SOURCE_KEYS,
-        is_view_only,
+        view_only_for_run,
         view_only_for_state,
     )
 
@@ -2167,12 +2184,18 @@ def _source_entry(key: str, *, state: str | None = None) -> dict[str, Any]:
     charge = commission_for(key)
     entry["commission"] = "" if charge.is_free else charge.describe()
     entry["settles"] = _SETTLEMENT_WORDS[regime_for(key)]
+    # The last arm is ``view_only_for_run``, never the ambient ``is_view_only``:
+    # for a legacy run the ambient read graded ``hardrock``'s badge by the
+    # reader's ODDS_STATE — " · context only, not a book" on a PA-built page,
+    # a counterparty on an IL-built one — while the same page's arb payload,
+    # resolved from the run, kept showing the hardrock-legged position beside
+    # the badge that disowned it.  Two reviewers found this independently.
     entry["view_only"] = (
         key in REPUBLISHED_SOURCE_KEYS
         if state == "GLOBAL"
         else key in view_only_for_state(state)
         if state in JURISDICTIONS
-        else is_view_only(key)
+        else key in view_only_for_run(state or "")
     )
     # A state-licensed republisher is not a global route.  ``an_fanduel`` is asked
     # for Pennsylvania's own book id (255) on a PA run, so the page must not badge
