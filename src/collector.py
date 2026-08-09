@@ -952,6 +952,7 @@ def collect_once(
         store=store,
         run_id=run_id,
         narrowed=bool(sports or leagues),
+        view_only=registry.view_only_for_run(run_state),
     )
     if route_scope == "state":
         native_producing = {
@@ -1534,6 +1535,7 @@ def _check_source_health(
     store: Store | None = None,
     run_id: int | None = None,
     narrowed: bool = False,
+    view_only: frozenset[str] | None = None,
 ) -> None:
     """Judge the run against what was asked for, not against a fixed floor.
 
@@ -1555,19 +1557,26 @@ def _check_source_health(
       to shout about.  Graded an error for that reason: the row count alone would
       stay plausible while a feed quietly died.
     """
-    from src.sources.registry import VIEW_ONLY_SOURCES
-
     # View-only feeds do not make a slate comparable — AN Open alone beside one
-    # real book must not clear the two-counterparty floor.
+    # real book must not clear the two-counterparty floor.  The *run's* set,
+    # like every other consumer of the distinction: with the ambient fallback
+    # this was the last reader-state read left in the pipeline — unreachable
+    # as a live divergence today only because the divergent keys are never
+    # built into a PA/DC state pass, which is a fact about the current
+    # registry, not a property of this code.
+    if view_only is None:
+        from src.sources.registry import VIEW_ONLY_SOURCES
+
+        view_only = VIEW_ONLY_SOURCES
     producing = [
         h.source_key
         for h in health
-        if h.quote_count > 0 and h.source_key not in VIEW_ONLY_SOURCES
+        if h.quote_count > 0 and h.source_key not in view_only
     ]
     silent = [
         h.source_key
         for h in health
-        if h.quote_count == 0 and h.source_key not in VIEW_ONLY_SOURCES
+        if h.quote_count == 0 and h.source_key not in view_only
     ]
 
     if len(producing) < MIN_HEALTHY_SOURCES:
