@@ -1072,8 +1072,17 @@ class TestThePlanCommand:
         # blind under ODDS_STATE=PA: with the reader configured for PA the
         # ambient set *equals* pa_set, and a regression to ambient grading —
         # the exact class this pin holds — passed unseen.  A set no state
-        # resolver can produce makes ambient grading distinguishable under
-        # every reader configuration.
+        # resolver can produce makes call-time ambient reads distinguishable
+        # under every reader configuration.
+        #
+        # The planner is imported FIRST, because the CLI imports it lazily and
+        # the planner binds the ambient set by value at module top: if this
+        # test is the first in the process to trigger that import, the module
+        # body executes inside the patched window and the sentinel freezes
+        # into the planner's copy forever — monkeypatch restores the registry,
+        # not another module's cache.
+        import src.promos.planner  # noqa: F401 — bind its ambient copy pre-sentinel
+
         sentinel = frozenset({"__ambient_sentinel__"})
         monkeypatch.setattr(registry, "VIEW_ONLY_SOURCES", sentinel)
         assert pa_set != sentinel
@@ -1091,6 +1100,19 @@ class TestThePlanCommand:
         assert self._run(["plan"]) == 0
         assert captured == [pa_set], (
             "the promos CLI must measure its gate under the odds run's own set"
+        )
+        # The sentinel intercepts only call-time reads.  The regression form
+        # the sentinel cannot see — and the dominant style in this codebase —
+        # is a module-top `from ... import VIEW_ONLY_SOURCES`, which binds the
+        # real ambient set before any patch exists whenever the module was
+        # already imported.  That form's signature is the name appearing in
+        # the module's own globals, which this refuses directly.
+        import sys
+
+        assert "VIEW_ONLY_SOURCES" not in vars(sys.modules["src.promos.collector"]), (
+            "the promos CLI gained an import-time ambient binding, which no "
+            "call-time sentinel can distinguish from the run's set on a "
+            "matching-state box"
         )
 
     def test_the_header_names_the_home_and_away_teams_the_right_way_round(

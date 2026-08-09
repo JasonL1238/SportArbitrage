@@ -257,11 +257,14 @@ class SportCoverage:
 
     def summary(self) -> str:
         verdict = "USABLE" if self.is_comparable else "NOT COMPARABLE"
-        books = ", ".join(self.sources) or "no books"
+        books = ", ".join(self.sources) or "no feeds"
+        # "feed(s)": ``sources`` counts every feed with rows, view-only mirrors
+        # included; a bar-meeting sport with 2 counterparties and 8 mirrors
+        # printed "10 book(s)" unqualified.
         line = (
             f"{self.sport:<11} {verdict:<15} {self.quote_count:>6} quotes "
             f"{self.event_count:>4} fixtures ({self.cross_book_events} cross-book)  "
-            f"{len(self.sources)} book(s): {books}"
+            f"{len(self.sources)} feed(s): {books}"
         )
         if not self.meets_two_book_bar:
             view_only_count = len(self.sources) - len(self.counterparty_sources)
@@ -814,7 +817,7 @@ def collect_once(
     total_sources = len(source_list)
     _progress({
         "phase": "starting",
-        "message": f"Starting scrape of {total_sources} book(s)",
+        "message": f"Starting scrape of {total_sources} feed(s)",
         "done": 0,
         "total": total_sources,
         "quote_count": 0,

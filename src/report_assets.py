@@ -2832,8 +2832,8 @@ function renderOverview() {
   const homeStats = [
     ['games', hasRows ? events.size : run.event_count, `on ${DATA.meta.slate_dates}`],
     ['prices to compare', (hasRows ? live.length : run.quote_count).toLocaleString(),
-      'from every book that answered' + scoped],
-    ['books that answered', producing.length,
+      'from every feed that answered' + scoped],
+    ['feeds that answered', producing.length,
       producing.length ? producing.map((h) => book(h.key)).join(', ') : 'none yet'],
     ['sports you can compare', usableSports.length,
       usableSports.length
@@ -2896,7 +2896,9 @@ function renderOverview() {
       band: 'prices found', label: book(s), num: true,
       cell: (r) => { const v = r.per.get(s) || 0; return cell(v || '—', v ? '' : 'dim'); },
     })),
-    { band: 'prices found', label: 'All books', num: true, cell: (r) => cell(r.total) },
+    // "All feeds": the per-column set includes view-only mirrors and the
+    // consensus column, none of which is a book you can bet at.
+    { band: 'prices found', label: 'All feeds', num: true, cell: (r) => cell(r.total) },
   ], matrixRows, { empty: 'No prices stored for this collection.' });
 }
 

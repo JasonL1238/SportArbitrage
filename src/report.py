@@ -257,6 +257,70 @@ SOURCE_NOTES: dict[str, dict[str, str]] = {
         "what": "1xBet prices as Action Network publishes them — a redundant secondary "
                 "feed beside the primary 1xBet adapter, kept for durability.",
     },
+    "an_parx": {
+        "label": "betPARX (Action Network)",
+        "host": "api.actionnetwork.com",
+        "kind": "sportsbook",
+        "what": "betPARX prices from Action Network's public scoreboard — the only "
+                "observation path into this book until a first-party route exists.",
+    },
+    "an_unibet": {
+        "label": "Unibet (Action Network)",
+        "host": "api.actionnetwork.com",
+        "kind": "sportsbook",
+        "what": "Unibet prices from Action Network's public scoreboard. Watched for "
+                "Mohegan Pennsylvania, whose online skin ran on Unibet's licence — a "
+                "mapping the venue's own records would have to confirm.",
+    },
+    "an_thescore": {
+        "label": "theScore Bet (Action Network)",
+        "host": "api.actionnetwork.com",
+        "kind": "sportsbook",
+        "what": "theScore Bet prices from Action Network's public scoreboard — the only "
+                "observation path into this book until a first-party route exists.",
+    },
+    "an_fanatics": {
+        "label": "Fanatics (Action Network)",
+        "host": "api.actionnetwork.com",
+        "kind": "sportsbook",
+        "what": "Fanatics prices from Action Network's public scoreboard.",
+    },
+    "an_hardrock": {
+        "label": "Hard Rock (Action Network)",
+        "host": "api.actionnetwork.com",
+        "kind": "sportsbook",
+        "what": "Hard Rock prices from Action Network's public scoreboard — a secondary "
+                "feed beside the first-party Hard Rock adapter.",
+    },
+    "an_bally": {
+        "label": "Bally Bet (Action Network)",
+        "host": "api.actionnetwork.com",
+        "kind": "sportsbook",
+        "what": "Bally Bet prices from Action Network's public scoreboard; New Jersey "
+                "is the only licence its id table covers.",
+    },
+    "an_fliff": {
+        "label": "Fliff (Action Network)",
+        "host": "api.actionnetwork.com",
+        "kind": "sportsbook",
+        "what": "Registered for Fliff's Action Network id, which has never returned a "
+                "price on either endpoint version — kept as a loud gap, not a feed.",
+    },
+    "an_circa": {
+        "label": "Circa (Action Network)",
+        "host": "api.actionnetwork.com",
+        "kind": "sportsbook",
+        "what": "Registered for Circa's Action Network id, which has never returned a "
+                "price on either endpoint version — kept as a loud gap, not a feed.",
+    },
+    "an_superbook": {
+        "label": "SuperBook (Action Network)",
+        "host": "api.actionnetwork.com",
+        "kind": "sportsbook",
+        "what": "Registered against id 14, which Action Network's own catalogue names "
+                "Westgate — and which has never returned a price on either endpoint "
+                "version. Kept as a loud gap, not a feed.",
+    },
     "matchbook": {
         "label": "Matchbook",
         "host": "www.matchbook.com",

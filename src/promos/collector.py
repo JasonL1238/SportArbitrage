@@ -393,7 +393,7 @@ def collect_promos_once(
         _progress(
             {
                 "phase": "starting",
-                "message": f"Starting promo scrape of {total} book(s)",
+                "message": f"Starting promo scrape of {total} feed(s)",
                 "done": 0,
                 "total": total,
                 "offer_count": 0,
