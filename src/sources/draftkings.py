@@ -397,7 +397,8 @@ def _eventgroup_from_sportscontent(
             # recorded a different number from the one the same row's American
             # value encodes: measured on the 2026-08-08 Pennsylvania capture,
             # ``trueOdds`` agrees with the published American price on **122 of
-            # 122** selections and ``displayOdds.decimal`` on 67, drifting up to
+            # 122** selections and ``displayOdds.decimal`` on only about two-thirds
+            # of them (66-68 by metric), drifting up to
             # 2.06% — ``-213`` printed as ``1.46`` against a true 1.46948357.
             #
             # Validation caught it as ``odds_format_mismatch`` on 14 markets and

@@ -1040,6 +1040,50 @@ class TestThePlanCommand:
         pairs = [frozenset(group) for groups in gate.values() for group in groups]
         assert frozenset({"betrivers_kambi", "leovegas_kambi"}) in pairs, gate
 
+    def test_the_cli_measures_the_gate_under_the_odds_runs_state(
+        self, tmp_path, monkeypatch,
+    ):
+        """The promos CLI's gate site, held by capture.
+
+        Round 5 threaded the odds run's jurisdiction into this site and a
+        round-7 reviewer proved the revert left 1,500 tests green — the
+        existing gate test's seeded run is state-blind, so it cannot tell the
+        run's set from the ambient one.  A PA odds run can: PA's view-only set
+        differs from the ungoverned fallback (it adds hardrock), and that
+        premise is asserted rather than assumed.
+        """
+        import sqlite3 as _sqlite3
+
+        import src.arb as arb_mod
+        from src import settings as settings_mod
+        from src.sources import registry
+
+        self._seed(tmp_path, monkeypatch)
+        with _sqlite3.connect(settings_mod.DB_PATH) as connection:
+            connection.execute(
+                "UPDATE collection_run SET jurisdiction='PA', route_scope='state'"
+            )
+
+        pa_set = registry.view_only_for_run("PA")
+        assert pa_set != registry.view_only_for_run(""), (
+            "the discriminating premise of this pin"
+        )
+
+        captured: list = []
+        real = arb_mod.counterparty_groups
+
+        def recording(quotes, *, mirrors=None, view_only=None):
+            captured.append(view_only)
+            return real(quotes, mirrors=mirrors, view_only=view_only)
+
+        # The CLI imports the symbol function-locally from src.arb at call
+        # time, so patching the arb namespace intercepts it.
+        monkeypatch.setattr(arb_mod, "counterparty_groups", recording)
+        assert self._run(["plan"]) == 0
+        assert captured == [pa_set], (
+            "the promos CLI must measure its gate under the odds run's own set"
+        )
+
     def test_the_header_names_the_home_and_away_teams_the_right_way_round(
         self, seeded, capsys,
     ):

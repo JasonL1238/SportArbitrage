@@ -209,6 +209,11 @@ try {
     globalThis.__currentRows = currentRows;
     globalThis.__arbBundle = arbBundle;
     globalThis.__sportGap = sportGap;
+    globalThis.__sourceInfo = sourceInfo;
+    globalThis.__SOURCE_INFO_BY_STATE = SOURCE_INFO_BY_STATE;
+    globalThis.__runById = runById;
+    globalThis.__setCurrentRun = (id) => { currentRunId = id; };
+    globalThis.__currentRun = () => currentRunId;
     globalThis.__showOffshore = () => showOffshore;
     globalThis.__setShowOffshore = (on) => {
       showOffshore = on;
@@ -3649,4 +3654,41 @@ function onAnEmbeddedRun() {   // a declaration, so block order cannot matter
     process.exit(1);
   }
   console.log('a sport priced only by mirrors is named as such, not as one book');
+}
+
+/* ── LEGACY RUN BADGES ────────────────────────────────────────────────────────
+   The runs payload spells a legacy run's jurisdiction "UNKNOWN"; the source
+   map spells the same column "".  The lookup missed on that one spelling and
+   fell back to the latest run's column — a legacy run's badges graded by
+   whatever run happened to be newest.  Executed against the real lookup. */
+{
+  if (typeof globalThis.__sourceInfo !== 'function' || !globalThis.__runById) {
+    console.error('sourceInfo/runById are not exported — the legacy-badge pin is dead');
+    process.exit(1);
+  }
+  const legacyMap = globalThis.__SOURCE_INFO_BY_STATE.get('');
+  if (!legacyMap) {
+    console.error('the payload has no "" source column for legacy runs');
+    process.exit(1);
+  }
+  // A sentinel that exists ONLY in the "" column: if the lookup resolves
+  // through any other column or the top-level fallback, it comes back empty —
+  // most real keys carry identical badges in every column, so probing with
+  // one of them cannot tell the right column from the wrong one.
+  legacyMap.set('__legacy_probe__', { key: '__legacy_probe__', label: 'LEGACY-COLUMN', view_only: true });
+  const before = globalThis.__currentRun();
+  globalThis.__runById.set(999999, { id: 999999, jurisdiction: 'UNKNOWN', sports: [] });
+  globalThis.__setCurrentRun(999999);
+  const got = globalThis.__sourceInfo('__legacy_probe__');
+  globalThis.__runById.delete(999999);
+  globalThis.__setCurrentRun(before);
+  legacyMap.delete('__legacy_probe__');
+  if (got.label !== 'LEGACY-COLUMN') {
+    console.error(
+      'viewing a legacy (UNKNOWN-jurisdiction) run did not read the "" source ' +
+      `column: got ${JSON.stringify(got)}`
+    );
+    process.exit(1);
+  }
+  console.log('a legacy run reads its own source column, not the latest run’s');
 }

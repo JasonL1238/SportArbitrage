@@ -303,7 +303,8 @@ Two defects had to fall first, both caught by this validation pass:
   `sportscontent` payload carries `trueOdds: 1.46948357` beside
   `displayOdds.decimal: "1.46"`, and the converter preferred the printed string.
   Measured on this capture, `trueOdds` agrees with the published American price
-  on **122 of 122** selections, the display value on 67, drifting to 2.06%.
+  on **122 of 122** selections, the display value on only about two-thirds
+(66-68 depending on the comparison metric), drifting to 2.06%.
   Fourteen `odds_format_mismatch` errors failed the run; the parser now prefers
   `trueOdds`. Run 28's stored DraftKings rows predate the fix and its replay now
   FAILs with exactly that drift — the replay checker refusing pre-fix evidence,

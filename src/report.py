@@ -1425,14 +1425,24 @@ def _promo_payload(
         promo_state = str((run or {}).get("jurisdiction") or "").upper()
         if promo_state == "UNKNOWN":
             promo_state = ""
+        def _run_jurisdiction(candidate: int) -> str | None:
+            # ``(row or {})["jurisdiction"]`` raised KeyError for an absent
+            # run: a sqlite Row indexes by name, an empty dict does not.
+            # Unreachable today (candidates come from this store's own
+            # listing), which is exactly when a crash-on-absence survives
+            # unnoticed until the listing and the lookup drift apart.
+            if odds_store is None:
+                return None
+            row = odds_store.run_row(candidate)
+            return row["jurisdiction"] if row is not None else None
+
         matching_quote_runs = (
             tuple(quote_run_ids)
             if not promo_state
             else tuple(
                 candidate
                 for candidate in quote_run_ids
-                if odds_store is not None
-                and (odds_store.run_row(candidate) or {})["jurisdiction"] == promo_state
+                if _run_jurisdiction(candidate) == promo_state
             )
         )
         if not matching_quote_runs and odds_store is not None and promo_state:

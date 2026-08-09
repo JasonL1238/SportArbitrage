@@ -1663,7 +1663,14 @@ const SOURCE_INFO_BY_STATE = new Map(Object.entries(DATA.sources_by_jurisdiction
   .map(([state, entries]) => [state, new Map((entries || []).map((s) => [s.key, s]))]));
 function sourceInfo(key) {
   const run = typeof runById !== 'undefined' ? runById.get(currentRunId) : null;
-  const scoped = run && SOURCE_INFO_BY_STATE.get(run.jurisdiction || '');
+  // The runs payload spells a legacy run's jurisdiction "UNKNOWN"; the source
+  // map spells the same column "".  Without the normalization the lookup
+  // missed, fell back to the top-level array built for the *latest* run's
+  // state, and a legacy run's badges were graded by whatever run happened to
+  // be newest — the exact fallback the "" column was added to remove, alive
+  // one spelling away.
+  const state = run && (run.jurisdiction === 'UNKNOWN' ? '' : (run.jurisdiction || ''));
+  const scoped = run && SOURCE_INFO_BY_STATE.get(state);
   return (scoped && scoped.get(key)) || SOURCE_INFO.get(key) || {};
 }
 const book = (key) => sourceInfo(key).label || key;
@@ -3201,7 +3208,7 @@ function renderBrowseGames(node, noteNode, events) {
       <span class="when">${escapeHtml(fmtClock(e.commence))} · ${escapeHtml(sportLabel(e.sport))}${
         league ? ` · ${escapeHtml(league)}` : ''}</span>
       <b>${escapeHtml(nick(e.awayRaw))} <span class="dim">@</span> ${escapeHtml(nick(e.homeRaw))}</b>
-      <span class="meta">${e.bySource.size} book${e.bySource.size === 1 ? '' : 's'} · ${e.rows.length} prices</span>
+      <span class="meta">${e.bySource.size} feed${e.bySource.size === 1 ? '' : 's'} · ${e.rows.length} prices</span>
       ${lines ? `<div class="mlines">${lines}</div>` : ''}
       <span class="cta">Open game &rarr;</span>
     </a>`;
@@ -4870,7 +4877,9 @@ function renderEvents() {
       band: mode === 'source' ? 'prices, per sportsbook' : 'prices, per kind of bet',
       label: heading(k), num: true, cell: (e) => heat(pickMap(e).get(k) || 0),
     })),
-    { band: 'totals', label: 'Books', num: true, cell: (e) => cell(e.bySource.size) },
+    // "Feeds": bySource counts every feed with rows, view-only mirrors
+    // included — the same misnomer relabelled at the league grid.
+    { band: 'totals', label: 'Feeds', num: true, cell: (e) => cell(e.bySource.size) },
     { band: 'totals', label: 'Prices', num: true, cell: (e) => cell(e.rows.length) },
   ], events, { className: 'cov', noun: 'games', empty: all.length
       ? 'No games match these filters.'
@@ -4918,7 +4927,7 @@ function selectEvent(key) {
   el('event-title').textContent = `${fullName(event.awayRaw)} at ${fullName(event.homeRaw)}`;
   el('event-sub').textContent = `${sportLabel(event.sport)} · ${leagueLabel(event.league)} · ${
     fmtClock(event.commence)} · ${event.rows.length} prices from ${
-    event.bySource.size} book${event.bySource.size === 1 ? '' : 's'}`;
+    event.bySource.size} feed${event.bySource.size === 1 ? '' : 's'}`;
   el('event-count').textContent = event.key;
 
   const sources = [...event.bySource.keys()].sort();
