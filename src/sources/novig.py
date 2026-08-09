@@ -81,6 +81,7 @@ from src.sources._common import (
     envelope_source,
     latest_capture,
     latest_per_endpoint,
+    mentions_a_sub_period,
     parse_iso_time,
     within_schedule_horizon,
 )
@@ -315,6 +316,7 @@ class NovigAdapter:
         # came up short), and only a league whose *every* book call failed is
         # re-raised as the league's failure.
         lost: list[str] = []
+        first_failure: SourceError | None = None
         attempted = 0
         for index, market_id in enumerate(in_scope):
             if index >= MAX_BOOKS_PER_LEAGUE:
@@ -342,12 +344,22 @@ class NovigAdapter:
                     "%s: book %s failed: %s", self._source_key, market_id, exc
                 )
                 lost.append(f"{market_id}: {exc}")
+                if first_failure is None:
+                    first_failure = exc
         if lost:
-            if attempted == len(lost):
-                raise SourceError(
+            if attempted == len(lost) and first_failure is not None:
+                # Re-raise the venue's **own** failure, not a base-class
+                # wrapper: the collector records ``exc.kind`` as the health
+                # row's error_kind and persists ``exc.raw`` as the bytes that
+                # explain the refusal.  A generic ``source_error`` with no
+                # capture is precisely the diagnosis an operator cannot act on
+                # — and this path is the one where the venue refused
+                # everything, which is when those bytes matter most.
+                first_failure.args = (
                     f"{self._source_key}: {league_key}: every one of {attempted} "
-                    f"order-book request(s) failed; first: {lost[0]}"
+                    f"order-book request(s) failed; first: {first_failure}",
                 )
+                raise first_failure
             tally.truncated(
                 league_key,
                 SourceError(
@@ -485,7 +497,10 @@ class _Fixture:
 class _OpenMarket:
     """One open market's metadata, awaiting its order book."""
 
-    __slots__ = ("market_id", "our_market", "event_id", "strike", "outcomes", "raw_ref")
+    __slots__ = (
+        "market_id", "our_market", "event_id", "strike", "outcomes",
+        "raw_ref", "description",
+    )
 
     def __init__(
         self,
@@ -495,6 +510,7 @@ class _OpenMarket:
         strike: float | None,
         outcomes: list[dict[str, Any]],
         raw_ref: str,
+        description: str = "",
     ) -> None:
         self.market_id = market_id
         self.our_market = our_market
@@ -502,6 +518,7 @@ class _OpenMarket:
         self.strike = strike
         self.outcomes = outcomes
         self.raw_ref = raw_ref
+        self.description = description
 
 
 def parse_novig(raws: Sequence[RawResponse]) -> ParseOutcome:
@@ -581,6 +598,7 @@ def parse_novig(raws: Sequence[RawResponse]) -> ParseOutcome:
                     if isinstance(entry_, dict)
                 ],
                 raw_ref=raw.ref,
+                description=str(entry.get("description") or ""),
             )
 
     for raw in raws:
@@ -771,6 +789,62 @@ def _parse_book(
         )
         return
 
+    # A sub-period market wearing a game-market type.  The venue's type enum
+    # is documented open ("MONEY / SPREAD / TOTAL / …"), so whether it reuses
+    # those three strings for halves and quarters is unknown — and publishing
+    # a first-half total as a full-game one corrupts the comparison silently,
+    # because it joins real full-game rows at the same line and prices a
+    # different bet.  Skipping a full-game market by mistake is the
+    # recoverable direction.
+    if mentions_a_sub_period(
+        market.description, *(entry.get("description") for entry in market.outcomes)
+    ):
+        outcome.skipped["non_full_game_market"] += 1
+        return
+
+    lines: dict[str, float | None] = {}
+    if market.our_market is Market.SPREAD:
+        # Judge the two handicaps as a pair, exactly as the sibling adapter
+        # does: one description saying "-1.5" is not evidence that the *other*
+        # says "+1.5", and a payload printing the same sign on both sides
+        # would publish an away leg at underdog pricing that pairs with a real
+        # home +1.5 elsewhere into a phantom guaranteed profit.  A real
+        # handicap pair sums to zero; a pick'em (0/0) is such a pair.
+        resolved = [
+            _signed_line(str(entry.get("description") or ""))
+            for entry in market.outcomes
+        ]
+        if (
+            resolved[0] is None
+            or resolved[1] is None
+            or abs(resolved[0] + resolved[1]) > 1e-9
+        ):
+            outcome.reject(
+                source,
+                "spread_sign_unresolved",
+                f"book {market.market_id}: outcome descriptions do not present "
+                f"two sign-opposed handicaps ({resolved!r})",
+                event_id=fixture.event_id,
+            )
+            return
+        # ...and cross-check against the market's own strike when it has one.
+        # The strike is the magnitude the venue itself published; a
+        # description whose number disagrees with it is not a handicap this
+        # parser understands, whatever it looks like.
+        if market.strike is not None and abs(abs(resolved[0]) - abs(market.strike)) > 1e-9:
+            outcome.reject(
+                source,
+                "spread_line_disagrees_with_strike",
+                f"book {market.market_id}: descriptions read {resolved[0]:g} "
+                f"against a strike of {market.strike:g}",
+                event_id=fixture.event_id,
+            )
+            return
+        for entry, line in zip(market.outcomes, resolved):
+            identifier = entry.get("id")
+            if isinstance(identifier, str):
+                lines[identifier] = line
+
     for this, other in (
         (market.outcomes[0], market.outcomes[1]),
         (market.outcomes[1], market.outcomes[0]),
@@ -782,6 +856,7 @@ def _parse_book(
             market,
             fixture,
             by_outcome,
+            lines,
             source=source,
             outcome=outcome,
         )
@@ -794,6 +869,7 @@ def _parse_outcome(
     market: _OpenMarket,
     fixture: _Fixture,
     by_outcome: Mapping[str, Mapping[str, Any]],
+    lines: Mapping[str, float | None],
     *,
     source: str,
     outcome: ParseOutcome,
@@ -832,7 +908,12 @@ def _parse_outcome(
 
     description = str(this.get("description") or "")
     our_selection, line = _resolve_selection(
-        description, market, fixture, source=source, outcome=outcome
+        description,
+        market,
+        fixture,
+        pair_line=lines.get(this_id),
+        source=source,
+        outcome=outcome,
     )
     if our_selection is None:
         return
@@ -893,17 +974,18 @@ def _resolve_selection(
     market: _OpenMarket,
     fixture: _Fixture,
     *,
+    pair_line: float | None,
     source: str,
     outcome: ParseOutcome,
 ) -> tuple[Selection | None, float | None]:
     """Which side this outcome is, and at what line.
 
     Totals read Over/Under plus the market strike.  Moneylines resolve the
-    club named in the description.  Spreads additionally demand a **signed**
-    number in the description itself: the market-level ``strike`` is one
-    unsigned magnitude for two opposite handicaps, and guessing which side is
-    the favourite flips the sign of every wrong guess — so a spread outcome
-    that does not state its own signed line is a rejection, not a coin flip.
+    club named in the description.  Spreads take *pair_line* — the handicap
+    :func:`_parse_book` already validated against its opposite and against
+    the market's strike — because the market-level ``strike`` is one unsigned
+    magnitude for two opposite handicaps, and guessing which side is the
+    favourite flips the sign of every wrong guess.
     """
     if market.our_market is Market.TOTAL:
         lowered = description.lower()
@@ -954,33 +1036,47 @@ def _resolve_selection(
     if market.our_market is Market.MONEYLINE:
         return selection, None
 
-    signed = _signed_line(description)
-    if signed is None:
+    if pair_line is None:
+        # Unreachable while _parse_book validates the pair first, and kept so
+        # a future caller cannot publish an unvalidated handicap by omission.
         outcome.reject(
             source,
             "spread_sign_unresolved",
-            f"{fixture.event_id}: spread outcome {description!r} states no "
-            "signed line",
+            f"{fixture.event_id}: spread outcome {description!r} reached "
+            "publication without a validated handicap",
             event_id=fixture.event_id,
         )
         return None, None
-    return selection, signed
+    return selection, pair_line
+
+
+#: A signed token this large is an American price, not a handicap.  ±100 is
+#: the boundary of the American scale and no team handicap in the leagues this
+#: adapter serves approaches it (NFL blowout lines top out near 27).  Exchange
+#: rows do display prices — "Phillies -110" — and reading one as a handicap
+#: publishes a −110 line, which validation then either faults as
+#: ``line_out_of_range`` or, in the high-total leagues, accepts as junk.
+_PRICE_SHAPED = 100.0
 
 
 def _signed_line(description: str) -> float | None:
     """The one explicitly signed handicap in the text, e.g. ``"KC -3.5"``.
 
-    Exactly one, or nothing: a description carrying two signed numbers
-    ("Phils -110 -1.5") does not say which is the handicap, and taking the
-    first — or the last — is a coin flip wearing a rule's clothes.  The
-    ambiguous case rejects upstream under ``spread_sign_unresolved``, which
-    is the honest reading until a genuine capture shows the venue's format.
+    Exactly one handicap-shaped token, or nothing.  Two of them ("Phils -110
+    -1.5") do not say which is the handicap — taking the first, or the last,
+    is a coin flip wearing a rule's clothes — and a lone price-shaped token
+    ("Phillies -110") is a price, not a line.  Both ambiguous cases resolve to
+    ``None``, which :func:`_parse_book` rejects as ``spread_sign_unresolved``:
+    the honest reading until a genuine capture shows the venue's format.
     """
     found: list[float] = []
     for token in description.replace("(", " ").replace(")", " ").split():
         if token[:1] in "+-" and len(token) > 1:
             try:
-                found.append(float(token))
+                value = float(token)
             except ValueError:
                 continue
+            if abs(value) >= _PRICE_SHAPED:
+                continue
+            found.append(value)
     return found[0] if len(found) == 1 else None

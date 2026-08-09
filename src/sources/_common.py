@@ -600,6 +600,48 @@ def capabilities_from(
     }
 
 
+#: Tokens in a market or selection label that mark a **sub-period** — a window
+#: narrower than the whole game.
+#:
+#: One list, shared, because two adapters keeping their own drift apart: the
+#: credentialed exchanges arrived with ProphetX guarding this and Novig not
+#: guarding it at all, so a "1st Half Over 4.5" would have published as a
+#: full-game total on one venue and been skipped on the other.  A sub-period
+#: market published as full-game corrupts the comparison silently — it joins
+#: real full-game rows at the same line and prices a different bet.
+#:
+#: Includes the compact spellings (``1H``, ``H1``, ``Q1``, ``F5``) because a
+#: word-only list reads "1H Moneyline" as a full game.  Deliberately **not**
+#: here: ``OT`` and ``overtime``, which mark whether extra time *counts toward*
+#: a whole-game price rather than naming a narrower window — treating them as
+#: sub-period markers would skip ordinary full-game markets that merely say so.
+#:
+#: Provisional for any venue whose vocabulary has not been seen in a genuine
+#: capture; erring toward skipping is the recoverable direction (a visible
+#: coverage gap rather than a corrupted comparison).
+PERIOD_MARKERS: frozenset[str] = frozenset(
+    {
+        "half", "halves", "quarter", "quarters", "inning", "innings",
+        "period", "periods", "frame", "set", "sets", "map", "maps",
+        "1st", "2nd", "3rd", "4th", "first", "second", "third", "fourth",
+        "1h", "2h", "h1", "h2", "1q", "2q", "3q", "4q",
+        "q1", "q2", "q3", "q4", "p1", "p2", "p3", "f5", "1i",
+    }
+)
+
+
+def mentions_a_sub_period(*labels: Any) -> bool:
+    """Does any of *labels* name a window narrower than the whole game?
+
+    Tokenised rather than substring-matched: ``"Setanta"`` contains ``"set"``
+    and names no period, and a substring rule would skip it.
+    """
+    text = " ".join(str(label or "") for label in labels).lower()
+    for separator in ("-", "/", "(", ")", ",", ":"):
+        text = text.replace(separator, " ")
+    return bool({token.strip(".") for token in text.split()} & PERIOD_MARKERS)
+
+
 def drop_duplicate_selections(source: str, outcome: Any) -> None:
     """Keep one row per ``dedup_key``, rejecting the rest.
 

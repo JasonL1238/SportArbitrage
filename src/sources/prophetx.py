@@ -80,6 +80,7 @@ from src.sources._common import (
     envelope_source,
     latest_capture,
     latest_per_endpoint,
+    mentions_a_sub_period,
     parse_iso_time,
     within_schedule_horizon,
 )
@@ -128,30 +129,9 @@ _MARKET_TYPES: Mapping[str, Market] = {
     "total": Market.TOTAL,
 }
 
-#: Tokens in a market ``name`` / ``group_name`` that mark a non-full-game
-#: window.  The docs do not enumerate the vocabulary, so this list errs toward
-#: skipping: a full-game market wrongly skipped is a visible coverage gap,
-#: while a first-half market published as full-game corrupts the comparison
-#: silently.  The first genuine capture must confirm or replace this list.
-_PERIOD_MARKERS: frozenset[str] = frozenset(
-    {
-        "half",
-        "halves",
-        "quarter",
-        "inning",
-        "innings",
-        "period",
-        "periods",
-        "1st",
-        "2nd",
-        "3rd",
-        "4th",
-        "first",
-        "second",
-        "third",
-        "fourth",
-    }
-)
+# The sub-period vocabulary lives in ``_common.PERIOD_MARKERS``, shared with
+# the sibling exchange adapter: two private copies drift, and this pair proved
+# it — one guarded the window and the other did not.
 
 
 def _credentials() -> tuple[str, str]:
@@ -462,7 +442,18 @@ def _match_tournaments(
 
 
 def _spread_lines_are_sign_opposed(flat: Sequence[Mapping[str, Any]]) -> bool:
-    """Exactly two selections whose own lines are non-zero and sum to zero."""
+    """Exactly two selections whose own lines sum to zero.
+
+    Zero itself passes: a pick'em is a real, common market (both sides at
+    ``0.0``), it is the one line with no sign left to resolve, and the rest of
+    the pipeline handles it — ``home.line == -away.line`` holds trivially and
+    both the schema and the plausibility check accept 0.  Rejecting it cost
+    nothing less than the venue's health: ``SourceHealth.ok`` is false while
+    any rejection stands, so one PK game on the slate would have graded
+    ProphetX unhealthy every pass until tip-off — a parser-failure signal
+    spent on a venue behaving normally, which is the failure mode this
+    adapter's sibling comments already warn against twice.
+    """
     if len(flat) != 2:
         return False
     lines = []
@@ -471,13 +462,11 @@ def _spread_lines_are_sign_opposed(flat: Sequence[Mapping[str, Any]]) -> bool:
         if not isinstance(line, (int, float)) or isinstance(line, bool):
             return False
         lines.append(float(line))
-    return abs(lines[0] + lines[1]) < 1e-9 and lines[0] != 0.0
+    return abs(lines[0] + lines[1]) < 1e-9
 
 
 def _looks_full_game(market: Mapping[str, Any]) -> bool:
-    text = f"{market.get('name') or ''} {market.get('group_name') or ''}".lower()
-    tokens = set(text.replace("-", " ").replace("/", " ").split())
-    return not (tokens & _PERIOD_MARKERS)
+    return not mentions_a_sub_period(market.get("name"), market.get("group_name"))
 
 
 class _Fixture:

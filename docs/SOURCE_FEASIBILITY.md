@@ -67,6 +67,20 @@ the bearer token travels in a request header, which envelopes do not persist.
   probabilities to three places. The takeable price of outcome A is therefore
   derived: `1 − best_bid(B)`. The market payload's `last` is trade history,
   not a takeable price, and is never published as one.
+- Spread handicaps are read from the two outcome **descriptions** and judged
+  as a pair — they must be sign-opposed and agree in magnitude with the
+  market's own `strike` — because the strike alone is one unsigned number
+  serving two opposite handicaps. A signed token of ±100 or more is an
+  American price, not a line: exchange rows display prices ("Phillies -110"),
+  and reading one as a handicap publishes a -110 line that validation faults
+  on MLB and silently accepts as junk in the high-total leagues.
+- The venue's market-type enum is documented open (`MONEY / SPREAD / TOTAL /
+  …`), so whether it reuses those strings for halves and quarters is
+  **unknown**. Both adapters therefore screen market and outcome text against
+  one shared sub-period vocabulary (`_common.PERIOD_MARKERS`, compact
+  spellings included); `OT` is deliberately excluded, since it marks whether
+  extra time counts toward a whole-game price rather than naming a narrower
+  window.
 - The fees page settles two questions the API reference leaves open:
   `qty` is defined as **100 qty = 1 contract of $1.00 payout** (so the stake
   available at the derived price is `(qty/100) × (1 − bid)` dollars), and the

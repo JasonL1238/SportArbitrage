@@ -568,6 +568,15 @@ class TestNovigBookFailuresStayContained:
         finally:
             adapter.close()
         assert "every one of 1 order-book request(s) failed" in str(caught.value)
+        # The venue's own failure, not a base-class wrapper: the collector
+        # records ``kind`` as the health row's error_kind and persists ``raw``
+        # as the bytes explaining the refusal.  A generic ``source_error``
+        # with no capture is the diagnosis an operator cannot act on — and
+        # this is the path where the venue refused everything.
+        assert caught.value.kind == "http_status"
+        assert caught.value.raw is not None
+        assert caught.value.raw.status_code == 404
+        assert "gone" in caught.value.raw.body
 
 
 # ── parser edges, on documented shapes ───────────────────────────────────────
@@ -762,6 +771,52 @@ class TestProphetXParserEdges:
             "spread_sign_unresolved"
         ]
 
+    def test_a_pick_em_spread_publishes_and_keeps_the_source_healthy(self):
+        """Zero is a real line — a pick'em is common in the NFL and NBA — and
+        it is the one line with no sign left to resolve.  Rejecting it would
+        cost the venue's health, not just the market: SourceHealth.ok is false
+        while any rejection stands, so one PK game on the slate would grade
+        ProphetX unhealthy every pass until tip-off."""
+        raws = self._fixture_raws(
+            market={
+                "id": 55,
+                "type": "spread",
+                "name": "Run Line",
+                "selections": [
+                    [
+                        {"name": "Cincinnati Reds", "odds": 1.95, "line": 0.0,
+                         "competitor_id": 1, "outcome_id": 1},
+                        {"name": "Philadelphia Phillies", "odds": 1.95, "line": -0.0,
+                         "competitor_id": 2, "outcome_id": 2},
+                    ]
+                ],
+            }
+        )
+        outcome = parse_prophetx(raws)
+        assert not outcome.rejections
+        assert len(outcome.quotes) == 2
+        assert all(quote.line == 0.0 for quote in outcome.quotes)
+
+    def test_a_compact_period_spelling_is_not_a_full_game_market(self):
+        """"1H Moneyline" is a first half; the word-only marker list this
+        adapter shipped with read it as a whole game."""
+        raws = self._fixture_raws(
+            market={
+                "id": 55,
+                "type": "moneyline",
+                "name": "1H Moneyline",
+                "selections": [
+                    [
+                        {"name": "Cincinnati Reds", "odds": 2.1,
+                         "competitor_id": 1, "outcome_id": 1},
+                    ]
+                ],
+            }
+        )
+        outcome = parse_prophetx(raws)
+        assert not outcome.quotes
+        assert outcome.skipped["non_full_game_market"] == 1
+
     def test_the_same_event_batched_twice_dedupes_instead_of_aborting(self):
         """An event listed by two matched tournaments used to fetch its market
         batch twice, and two identical batches parse into colliding dedup keys
@@ -888,9 +943,12 @@ class TestNovigParserEdges:
             _raw("novig", f"book:MLB:{market['id']}", book),
         ]
 
-    def test_a_spread_outcome_without_a_signed_line_is_rejected_not_guessed(self):
-        """The strike is one unsigned magnitude for two opposite handicaps;
-        guessing the favourite flips the sign of every wrong guess."""
+    def test_a_spread_pair_with_one_unsigned_side_is_rejected_whole(self):
+        """The strike is one unsigned magnitude for two opposite handicaps, so
+        guessing the favourite flips the sign of every wrong guess.  One side
+        stating "-1.5" is not evidence the other says "+1.5" — the pair is
+        judged together, and an unresolved pair takes the whole market with
+        it rather than publishing the half that happened to parse."""
         market = {
             "id": "m2",
             "type": "SPREAD",
@@ -911,12 +969,127 @@ class TestNovigParserEdges:
             ],
         }
         outcome = parse_novig(self._raws(market, book))
-        assert len(outcome.quotes) == 1
-        assert outcome.quotes[0].selection is Selection.HOME
-        assert outcome.quotes[0].line == -1.5
+        assert not outcome.quotes
         assert [rejection.reason for rejection in outcome.rejections] == [
             "spread_sign_unresolved"
         ]
+
+    def test_a_same_signed_spread_pair_is_rejected_not_published(self):
+        """Both descriptions printing "-1.5" is a payload contradicting
+        itself.  Published, the away leg carries underdog pricing at the
+        favourite's line and pairs with a real home +1.5 elsewhere into a
+        phantom guaranteed profit — the class the sibling adapter's pair
+        invariant already refuses."""
+        market = {
+            "id": "m8",
+            "type": "SPREAD",
+            "eventId": "ev1",
+            "strike": 1.5,
+            "outcomes": [
+                {"id": "o1", "description": "Cincinnati Reds -1.5"},
+                {"id": "o2", "description": "Philadelphia Phillies -1.5"},
+            ],
+        }
+        book = {
+            "marketId": "m8",
+            "outcomeLadders": [
+                {"outcomeId": "o1",
+                 "bids": [{"price": 0.4, "currency": "CASH", "status": "RESTING"}]},
+                {"outcomeId": "o2",
+                 "bids": [{"price": 0.55, "currency": "CASH", "status": "RESTING"}]},
+            ],
+        }
+        outcome = parse_novig(self._raws(market, book))
+        assert not outcome.quotes
+        assert [rejection.reason for rejection in outcome.rejections] == [
+            "spread_sign_unresolved"
+        ]
+
+    def test_a_handicap_disagreeing_with_the_strike_is_rejected(self):
+        """The strike is the magnitude the venue itself published; a
+        description whose number contradicts it is not a handicap this parser
+        understands, however well-formed the pair looks."""
+        market = {
+            "id": "m9",
+            "type": "SPREAD",
+            "eventId": "ev1",
+            "strike": 7.5,
+            "outcomes": [
+                {"id": "o1", "description": "Cincinnati Reds +1.5"},
+                {"id": "o2", "description": "Philadelphia Phillies -1.5"},
+            ],
+        }
+        book = {
+            "marketId": "m9",
+            "outcomeLadders": [
+                {"outcomeId": "o1",
+                 "bids": [{"price": 0.4, "currency": "CASH", "status": "RESTING"}]},
+                {"outcomeId": "o2",
+                 "bids": [{"price": 0.55, "currency": "CASH", "status": "RESTING"}]},
+            ],
+        }
+        outcome = parse_novig(self._raws(market, book))
+        assert not outcome.quotes
+        assert [rejection.reason for rejection in outcome.rejections] == [
+            "spread_line_disagrees_with_strike"
+        ]
+
+    def test_a_sub_period_market_never_publishes_as_full_game(self):
+        """The venue's type enum is documented open, so whether MONEY/SPREAD/
+        TOTAL are reused for halves is unknown — and a first-half total
+        published as full-game joins real full-game rows at the same line
+        while pricing a different bet."""
+        market = {
+            "id": "m10",
+            "type": "TOTAL",
+            "description": "CIN v PHI 1st Half Total",
+            "eventId": "ev1",
+            "strike": 4.5,
+            "outcomes": [
+                {"id": "o1", "description": "Over 4.5"},
+                {"id": "o2", "description": "Under 4.5"},
+            ],
+        }
+        book = {
+            "marketId": "m10",
+            "outcomeLadders": [
+                {"outcomeId": "o1",
+                 "bids": [{"price": 0.5, "currency": "CASH", "status": "RESTING"}]},
+                {"outcomeId": "o2",
+                 "bids": [{"price": 0.5, "currency": "CASH", "status": "RESTING"}]},
+            ],
+        }
+        outcome = parse_novig(self._raws(market, book))
+        assert not outcome.quotes
+        assert not outcome.rejections
+        assert outcome.skipped["non_full_game_market"] == 1
+
+    def test_a_compact_period_spelling_is_caught_too(self):
+        """"1H" is a first half; a word-only marker list reads it as a whole
+        game.  The shared vocabulary carries the compact spellings."""
+        market = {
+            "id": "m11",
+            "type": "MONEY",
+            "description": "CIN v PHI 1H Moneyline",
+            "eventId": "ev1",
+            "strike": None,
+            "outcomes": [
+                {"id": "o1", "description": "Cincinnati Reds"},
+                {"id": "o2", "description": "Philadelphia Phillies"},
+            ],
+        }
+        book = {
+            "marketId": "m11",
+            "outcomeLadders": [
+                {"outcomeId": "o1",
+                 "bids": [{"price": 0.5, "currency": "CASH", "status": "RESTING"}]},
+                {"outcomeId": "o2",
+                 "bids": [{"price": 0.5, "currency": "CASH", "status": "RESTING"}]},
+            ],
+        }
+        outcome = parse_novig(self._raws(market, book))
+        assert not outcome.quotes
+        assert outcome.skipped["non_full_game_market"] == 1
 
     def test_an_empty_opposite_ladder_yields_no_quote(self):
         market = {
@@ -1007,22 +1180,69 @@ class TestNovigParserEdges:
             "duplicate_outcome_id"
         ]
 
-    def test_a_description_with_two_signed_numbers_is_ambiguous(self):
-        """"Phils -110 -1.5" does not say which number is the handicap, and
-        taking the first — or the last — is a coin flip wearing a rule's
-        clothes.  Exactly one signed token resolves; anything else rejects."""
+    def test_a_price_token_is_never_read_as_a_handicap(self):
+        """Exchange rows display prices: "Phillies -110" is what somebody pays,
+        not a 110-run handicap.  Read as a line it publishes -110.0, which
+        validation then faults as out-of-range on MLB and silently accepts as
+        junk on the high-total leagues.  A lone price-shaped token resolves to
+        nothing (and the pair rejects); a price *beside* a handicap leaves the
+        handicap unambiguous."""
+        priced_only = {
+            "id": "m7a",
+            "type": "SPREAD",
+            "eventId": "ev1",
+            "strike": 7.5,
+            "outcomes": [
+                {"id": "o1", "description": "Cincinnati Reds +110"},
+                {"id": "o2", "description": "Philadelphia Phillies -110"},
+            ],
+        }
+        ladders = {
+            "outcomeLadders": [
+                {"outcomeId": "o1",
+                 "bids": [{"price": 0.4, "currency": "CASH", "status": "RESTING"}]},
+                {"outcomeId": "o2",
+                 "bids": [{"price": 0.55, "currency": "CASH", "status": "RESTING"}]},
+            ]
+        }
+        outcome = parse_novig(
+            self._raws(priced_only, ladders | {"marketId": "m7a"})
+        )
+        assert not outcome.quotes
+        assert [rejection.reason for rejection in outcome.rejections] == [
+            "spread_sign_unresolved"
+        ]
+
+        both = {
+            "id": "m7b",
+            "type": "SPREAD",
+            "eventId": "ev1",
+            "strike": 1.5,
+            "outcomes": [
+                {"id": "o1", "description": "Cincinnati Reds +1.5 (+110)"},
+                {"id": "o2", "description": "Philadelphia Phillies -110 -1.5"},
+            ],
+        }
+        outcome = parse_novig(self._raws(both, ladders | {"marketId": "m7b"}))
+        assert not outcome.rejections
+        assert sorted(quote.line for quote in outcome.quotes) == [-1.5, 1.5]
+
+    def test_two_handicap_shaped_tokens_stay_ambiguous(self):
+        """Two plausible handicaps in one description say nothing about which
+        is the line, and picking either is a coin flip wearing a rule's
+        clothes."""
         market = {
-            "id": "m7",
+            "id": "m7c",
             "type": "SPREAD",
             "eventId": "ev1",
             "strike": 1.5,
             "outcomes": [
                 {"id": "o1", "description": "Cincinnati Reds +1.5"},
-                {"id": "o2", "description": "Philadelphia Phillies -110 -1.5"},
+                {"id": "o2", "description": "Philadelphia Phillies -1.5 -2.5"},
             ],
         }
         book = {
-            "marketId": "m7",
+            "marketId": "m7c",
             "outcomeLadders": [
                 {"outcomeId": "o1",
                  "bids": [{"price": 0.4, "currency": "CASH", "status": "RESTING"}]},
@@ -1031,7 +1251,7 @@ class TestNovigParserEdges:
             ],
         }
         outcome = parse_novig(self._raws(market, book))
-        assert [quote.line for quote in outcome.quotes] == [1.5]
+        assert not outcome.quotes
         assert [rejection.reason for rejection in outcome.rejections] == [
             "spread_sign_unresolved"
         ]
@@ -1223,6 +1443,25 @@ class TestTheCredentialedAxis:
         ):
             assert suffix in settings.ENV_NAMES
             assert settings.ENV_NAMES[suffix][0] == f"ODDS_{suffix}"
+
+    def test_the_period_vocabulary_is_shared_not_copied(self):
+        """Two private copies drift, and this pair proved it: ProphetX guarded
+        the window and Novig did not, so one venue would have skipped a
+        first-half total and the other published it as full-game.  "OT" stays
+        deliberately out — it marks whether extra time counts toward a
+        whole-game price, not a narrower window, so treating it as a period
+        marker would skip ordinary full-game markets that merely say so."""
+        from src.sources import _common, novig, prophetx
+
+        assert _common.mentions_a_sub_period("CIN v PHI 1st Half Total")
+        assert _common.mentions_a_sub_period("1H Moneyline")
+        assert not _common.mentions_a_sub_period("Moneyline (incl. OT)")
+        assert not _common.mentions_a_sub_period("Setanta Sports Cup")
+        # Neither adapter may reintroduce a private copy of the list.
+        assert "_PERIOD_MARKERS" not in vars(prophetx)
+        assert "_PERIOD_MARKERS" not in vars(novig)
+        assert prophetx.mentions_a_sub_period is _common.mentions_a_sub_period
+        assert novig.mentions_a_sub_period is _common.mentions_a_sub_period
 
     def test_token_shaped_response_headers_never_reach_an_envelope(self):
         """Request headers are never stored, which keeps the outbound bearer
