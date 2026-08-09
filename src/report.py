@@ -558,6 +558,14 @@ SKIP_NOTES: list[tuple[str, str]] = [
      "in games, for instance."),
     ("not_a_full_period_result",
      "Settles on something other than the result of a whole scoring window."),
+    ("event_not_open_pregame",
+     "The venue no longer lists this fixture as open for pre-match trading — it has "
+     "started, been settled, or been pulled — so its prices are not the pre-match "
+     "prices this pipeline compares."),
+    ("not_a_two_outcome_market",
+     "An order-driven market with more or fewer than two outcomes. Where only bids "
+     "rest on the book, one side's price is derived from the other side's best bid, "
+     "and that derivation means nothing when there is no single other side."),
     ("half_only_market",
      "Settles at half time only, and is collected only where the book labels the period "
      "unambiguously."),

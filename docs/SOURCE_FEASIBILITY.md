@@ -76,11 +76,23 @@ the bearer token travels in a request header, which envelopes do not persist.
   on MLB and silently accepts as junk in the high-total leagues.
 - The venue's market-type enum is documented open (`MONEY / SPREAD / TOTAL /
   …`), so whether it reuses those strings for halves and quarters is
-  **unknown**. Both adapters therefore screen market and outcome text against
-  one shared sub-period vocabulary (`_common.PERIOD_MARKERS`, compact
-  spellings included); `OT` is deliberately excluded, since it marks whether
+  **unknown**. Two defences, in order: the `_MARKET_TYPES` allowlist is the
+  primary one (the enum's other documented members — `TEAM_TOTAL`,
+  `PLAYER_GOALS` — are their own types, so a half plausibly is too), and a
+  text screen is the secondary one. Both adapters screen every string field
+  the market payload carries *and* each outcome's own label against one
+  shared vocabulary (`_common.PERIOD_MARKERS`, compact spellings in both
+  orders included); `OT` is deliberately excluded, since it marks whether
   extra time counts toward a whole-game price rather than naming a narrower
-  window.
+  window. Novig screens at fetch as well as at parse, so a sub-period market
+  does not spend one of the 60 per-league book requests before being
+  discarded.
+- **The residual is real and unresolved**: a sub-period market spelled with a
+  game type and carrying no period word anywhere in its payload is
+  indistinguishable from a full-game one, and would publish as full-game. The
+  documented `markets/open` shape carries no period field at all, so nothing
+  in the payload settles it — the first genuine capture must, and until then
+  this is a stated gap rather than a closed one.
 - The fees page settles two questions the API reference leaves open:
   `qty` is defined as **100 qty = 1 contract of $1.00 payout** (so the stake
   available at the derived price is `(qty/100) × (1 − bid)` dollars), and the
@@ -106,8 +118,13 @@ wrong page:
    registered non-consensus key resolves to a link;
 6. a `src/report.SOURCE_NOTES` entry with `kind: exchange` — without one the
    sources page renders the venue as an unknown sportsbook;
-7. flip the stays-unregistered pin in `tests/test_prophetx_novig.py`;
-8. the full acceptance bar in the plan (healthy collect, replay PASS,
+7. a `src/report.SKIP_NOTES` entry for every skip reason the adapter emits
+   that no existing note covers —
+   `test_every_real_skip_reason_has_an_explanation` is parametrised off the
+   registry and goes red on an unexplained reason. Prefer an existing
+   spelling to a new one;
+8. flip the stays-unregistered pin in `tests/test_prophetx_novig.py`;
+9. the full acceptance bar in the plan (healthy collect, replay PASS,
    counted in `comparable_group_count`).
 
 If a response body carries a partner or account identifier, there is no

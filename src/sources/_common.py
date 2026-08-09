@@ -621,13 +621,27 @@ def capabilities_from(
 #: coverage gap rather than a corrupted comparison).
 PERIOD_MARKERS: frozenset[str] = frozenset(
     {
-        "half", "halves", "quarter", "quarters", "inning", "innings",
-        "period", "periods", "frame", "set", "sets", "map", "maps",
+        "half", "halves", "halftime", "ht", "quarter", "quarters",
+        "inning", "innings", "period", "periods", "frame", "set", "sets",
+        "map", "maps",
         "1st", "2nd", "3rd", "4th", "first", "second", "third", "fourth",
-        "1h", "2h", "h1", "h2", "1q", "2q", "3q", "4q",
-        "q1", "q2", "q3", "q4", "p1", "p2", "p3", "f5", "1i",
+        # Both orders of every compact spelling.  Carrying ``p1`` without
+        # ``1p`` is not a smaller version of this list, it is a hole in the
+        # shape of one league: ``1P`` is the standard spelling of a hockey
+        # first period, and NHL is a default league for both exchanges.
+        "1h", "2h", "h1", "h2",
+        "1q", "2q", "3q", "4q", "q1", "q2", "q3", "q4",
+        "1p", "2p", "3p", "p1", "p2", "p3",
+        "f5", "1i", "i1",
     }
 )
+
+#: Punctuation that separates words in a market label.  Underscore earns its
+#: place from the venues themselves — Novig's own enums are SCREAMING_SNAKE
+#: (``OPEN_PREGAME``), so ``FIRST_HALF_TOTAL`` is the spelling to expect from
+#: one — and the dash family because a label is as likely to read
+#: ``"Total—1H"`` as ``"Total - 1H"``.
+_LABEL_SEPARATORS = ("-", "–", "—", "/", "|", "(", ")", ",", ":", "_")
 
 
 def mentions_a_sub_period(*labels: Any) -> bool:
@@ -637,9 +651,27 @@ def mentions_a_sub_period(*labels: Any) -> bool:
     and names no period, and a substring rule would skip it.
     """
     text = " ".join(str(label or "") for label in labels).lower()
-    for separator in ("-", "/", "(", ")", ",", ":"):
+    for separator in _LABEL_SEPARATORS:
         text = text.replace(separator, " ")
     return bool({token.strip(".") for token in text.split()} & PERIOD_MARKERS)
+
+
+def market_label_text(entry: Any) -> str:
+    """Every top-level string value on a market payload, joined.
+
+    A venue's period signal lives in whatever field that venue happens to
+    name — ``name``, ``description``, ``group_name``, ``label``, ``subType``.
+    Reading one chosen field means the screen is only as good as the guess:
+    Novig's period guard read ``description``, a field absent from the shape
+    its own module docstring documents, so on the documented payload it was
+    inert.  Reading them all costs nothing and cannot be wrong about which
+    name the venue picked.
+    """
+    if not isinstance(entry, Mapping):
+        return ""
+    return " ".join(
+        value for value in entry.values() if isinstance(value, str)
+    )
 
 
 def drop_duplicate_selections(source: str, outcome: Any) -> None:

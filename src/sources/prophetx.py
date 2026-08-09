@@ -441,18 +441,27 @@ def _match_tournaments(
     return matched
 
 
-def _spread_lines_are_sign_opposed(flat: Sequence[Mapping[str, Any]]) -> bool:
-    """Exactly two selections whose own lines sum to zero.
+def _spread_lines_are_sign_opposed(
+    flat: Sequence[Mapping[str, Any]], market: Mapping[str, Any]
+) -> bool:
+    """Exactly two selections whose own lines sum to zero — and agree with
+    the market's own line when it states one.
 
-    Zero itself passes: a pick'em is a real, common market (both sides at
-    ``0.0``), it is the one line with no sign left to resolve, and the rest of
-    the pipeline handles it — ``home.line == -away.line`` holds trivially and
-    both the schema and the plausibility check accept 0.  Rejecting it cost
-    nothing less than the venue's health: ``SourceHealth.ok`` is false while
-    any rejection stands, so one PK game on the slate would have graded
-    ProphetX unhealthy every pass until tip-off — a parser-failure signal
-    spent on a venue behaving normally, which is the failure mode this
-    adapter's sibling comments already warn against twice.
+    Zero sums pass, because a pick'em is a real and common market and is the
+    one line with no sign left to resolve.  Rejecting it cost more than the
+    market: ``SourceHealth.ok`` is false while any rejection stands, so one PK
+    game on the slate graded ProphetX unhealthy every pass until tip-off — a
+    parser-failure signal spent on a venue behaving normally.
+
+    But ``0`` is also what a missing numeric field defaults to, and a pair of
+    defaulted zeros sums to zero just as neatly as a pick'em does.  What tells
+    them apart is the market's *own* ``line``: a real PK market states 0 or
+    states nothing, while a market that says 1.5 and hands over two zeroed
+    selections is contradicting itself, and publishing that pair prices a
+    handicap bet as a pick'em — a 25% phantom arbitrage in the measured case.
+    So the magnitudes must agree with the market's when it states one.  This
+    is the corroboration the sibling adapter gets from ``strike``; the field
+    was here all along and only the totals path was reading it.
     """
     if len(flat) != 2:
         return False
@@ -462,7 +471,12 @@ def _spread_lines_are_sign_opposed(flat: Sequence[Mapping[str, Any]]) -> bool:
         if not isinstance(line, (int, float)) or isinstance(line, bool):
             return False
         lines.append(float(line))
-    return abs(lines[0] + lines[1]) < 1e-9
+    if abs(lines[0] + lines[1]) > 1e-9:
+        return False
+    stated = market.get("line")
+    if isinstance(stated, (int, float)) and not isinstance(stated, bool):
+        return abs(abs(lines[0]) - abs(float(stated))) < 1e-9
+    return True
 
 
 def _looks_full_game(market: Mapping[str, Any]) -> bool:
@@ -554,7 +568,7 @@ def parse_prophetx(raws: Sequence[RawResponse]) -> ParseOutcome:
         for event_id, markets in _markets_by_event(payload):
             fixture = fixtures.get(event_id)
             if fixture is None:
-                outcome.skipped["markets_for_unknown_event"] += 1
+                outcome.skipped["market_on_out_of_scope_event"] += 1
                 continue
             if fixture.commence_time <= raw.fetched_at:
                 # The gate runs against this price's own response: the events
@@ -591,7 +605,7 @@ def _accept_event(
     if not isinstance(competitors, list) or len(competitors) != 2:
         # Outrights and specials list one competitor or many; game markets
         # list exactly two.  Out of scope rather than broken.
-        outcome.skipped["not_a_two_competitor_event"] += 1
+        outcome.skipped["non_game_event"] += 1
         return
     commence = parse_iso_time(entry.get("scheduled"))
     if commence is None:
@@ -602,7 +616,7 @@ def _accept_event(
         )
         return
     if not within_schedule_horizon(commence, raw.fetched_at, competition):
-        outcome.skipped["outside_schedule_horizon"] += 1
+        outcome.skipped["event_beyond_the_leagues_schedule_horizon"] += 1
         return
 
     resolved: list[tuple[Participant, Mapping[str, Any]]] = []
@@ -703,12 +717,8 @@ def _parse_market(
     if our_market is None:
         # ``sup_moneyline`` and whatever else the venue adds: counted, not
         # errors — the docs enumerate four types and scope is three of them.
-        outcome.skipped[f"market_type_{raw_type or 'missing'}"] += 1
+        outcome.skipped[f"market_type_out_of_scope:{raw_type or 'missing'}"] += 1
         return
-    if not _looks_full_game(market):
-        outcome.skipped["non_full_game_market"] += 1
-        return
-
     selections = market.get("selections")
     flat: list[Mapping[str, Any]] = []
     if isinstance(selections, list):
@@ -717,7 +727,20 @@ def _parse_market(
                 flat.append(row)
             elif isinstance(row, list):
                 flat.extend(entry for entry in row if isinstance(entry, dict))
-    if our_market is Market.SPREAD and not _spread_lines_are_sign_opposed(flat):
+
+    # Screen the selections' own text too, not only the market's.  A venue
+    # that says "Total" at the market and "1st Half Over 4.5" at the
+    # selection is naming the window in the only place it names it, and
+    # reading just the market published two full-game totals at 4.5 that
+    # join real full-game rows while pricing a different bet.
+    if not _looks_full_game(market) or mentions_a_sub_period(
+        *(entry.get("name") for entry in flat),
+        *(entry.get("display_name") for entry in flat),
+    ):
+        outcome.skipped["period_out_of_scope"] += 1
+        return
+
+    if our_market is Market.SPREAD and not _spread_lines_are_sign_opposed(flat, market):
         # The whole-market invariant, not a per-selection one: a numeric line
         # is not evidence of a *signed* line.  Two selections both carrying
         # ``+1.5`` are the round-1 sign ambiguity moved one level down, and
@@ -777,7 +800,7 @@ def _parse_selection(
     if not isinstance(odds, (int, float)) or isinstance(odds, bool) or odds <= 1.0:
         # An exchange side nobody prices arrives without usable odds; that is
         # thin liquidity, not corruption.
-        outcome.skipped["no_price_on_selection"] += 1
+        outcome.skipped["contract_without_a_takeable_offer"] += 1
         return
     if not is_plausible_decimal_odds(float(odds)):
         outcome.skipped["price_outside_the_plausible_band"] += 1

@@ -531,6 +531,61 @@ class TestNovigBookFailuresStayContained:
         outcome = parse_novig(raws)
         assert len(outcome.quotes) == 1
 
+    def test_sub_period_markets_never_spend_the_book_budget(self, monkeypatch):
+        """The parse-time screen costs a request first: a sub-period market
+        spends one of the per-league book budget and is then discarded.  On a
+        slate carrying halves that burned half the budget and left a third of
+        the games with no coverage at all."""
+        monkeypatch.setattr(settings, "NOVIG_CLIENT_ID", "ID")
+        monkeypatch.setattr(settings, "NOVIG_CLIENT_SECRET", "SEC")
+        base = {
+            "eventId": "ev1", "strike": None,
+            "outcomes": [
+                {"id": "o1", "description": "Cincinnati Reds"},
+                {"id": "o2", "description": "Philadelphia Phillies"},
+            ],
+        }
+        book_paths: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            path = request.url.path
+            if path == "/nbx/v1/auth/emm-token":
+                return httpx.Response(200, json={"access_token": "T"})
+            if path == "/nbx/v2/emm/events":
+                return httpx.Response(200, json=[{
+                    "id": "ev1", "type": "Game", "status": "OPEN_PREGAME",
+                    "league": "MLB", "scheduledStart": LIVE_GAME_ISO,
+                    "game": {
+                        "homeTeam": {"name": "Philadelphia Phillies"},
+                        "awayTeam": {"name": "Cincinnati Reds"},
+                    },
+                }])
+            if path == "/nbx/v2/emm/markets/open":
+                return httpx.Response(200, json=[
+                    base | {"id": "full", "type": "MONEY"},
+                    base | {"id": "half", "type": "MONEY",
+                            "description": "1st Half Moneyline"},
+                ])
+            if path.startswith("/nbx/v2/emm/book/"):
+                book_paths.append(path)
+                return httpx.Response(200, json={
+                    "marketId": path.rsplit("/", 1)[1],
+                    "outcomeLadders": [
+                        {"outcomeId": "o2",
+                         "bids": [{"price": 0.5, "qty": 100, "currency": "CASH",
+                                   "status": "RESTING"}]},
+                    ],
+                })
+            raise AssertionError(f"unexpected request {request.url}")
+
+        client = _FormAwareClient(transport=httpx.MockTransport(handler))
+        adapter = NovigAdapter(leagues=("MLB",), client=client)
+        try:
+            adapter.fetch_raw()
+        finally:
+            adapter.close()
+        assert book_paths == ["/nbx/v2/emm/book/full"]
+
     def test_a_league_whose_every_book_died_is_a_failure(self, monkeypatch):
         monkeypatch.setattr(settings, "NOVIG_CLIENT_ID", "ID")
         monkeypatch.setattr(settings, "NOVIG_CLIENT_SECRET", "SEC")
@@ -712,7 +767,7 @@ class TestProphetXParserEdges:
         alternates = [quote for quote in outcome.quotes if quote.is_alternate]
         assert len(mains) == 2 and len(alternates) == 2
         assert sorted(quote.line for quote in alternates) == [-2.5, 2.5]
-        assert outcome.skipped["non_full_game_market"] == 1
+        assert outcome.skipped["period_out_of_scope"] == 1
 
     def test_same_signed_selection_lines_are_rejected_not_published(self):
         """A numeric selection line is not evidence of a *signed* one: two
@@ -797,6 +852,58 @@ class TestProphetXParserEdges:
         assert len(outcome.quotes) == 2
         assert all(quote.line == 0.0 for quote in outcome.quotes)
 
+    def test_defaulted_zero_lines_are_not_mistaken_for_a_pick_em(self):
+        """Zero is also what a missing numeric field defaults to, and a pair of
+        defaulted zeros sums to zero as neatly as a pick'em does.  The market's
+        own line tells them apart: one that says 1.5 and hands over two zeroed
+        selections is contradicting itself, and publishing that pair prices a
+        handicap bet as a pick'em — a measured 25% phantom arbitrage against a
+        peer book's real PK."""
+        raws = self._fixture_raws(
+            market={
+                "id": 55,
+                "type": "spread",
+                "name": "Run Line",
+                "line": 1.5,
+                "selections": [
+                    [
+                        {"name": "Cincinnati Reds", "odds": 3.50, "line": 0,
+                         "competitor_id": 1, "outcome_id": 1},
+                        {"name": "Philadelphia Phillies", "odds": 1.30, "line": 0,
+                         "competitor_id": 2, "outcome_id": 2},
+                    ]
+                ],
+            }
+        )
+        outcome = parse_prophetx(raws)
+        assert not outcome.quotes
+        assert [rejection.reason for rejection in outcome.rejections] == [
+            "spread_sign_unresolved"
+        ]
+
+    def test_selection_text_is_screened_for_the_window_too(self):
+        """A venue that says "Total" at the market and "1st Half Over 4.5" at
+        the selection is naming the window in the only place it names it."""
+        raws = self._fixture_raws(
+            market={
+                "id": 55,
+                "type": "total",
+                "name": "Total",
+                "line": 4.5,
+                "selections": [
+                    [
+                        {"display_name": "1st Half Over 4.5", "odds": 1.95,
+                         "line": 4.5, "outcome_id": 1},
+                        {"display_name": "1st Half Under 4.5", "odds": 1.95,
+                         "line": 4.5, "outcome_id": 2},
+                    ]
+                ],
+            }
+        )
+        outcome = parse_prophetx(raws)
+        assert not outcome.quotes
+        assert outcome.skipped["period_out_of_scope"] == 1
+
     def test_a_compact_period_spelling_is_not_a_full_game_market(self):
         """"1H Moneyline" is a first half; the word-only marker list this
         adapter shipped with read it as a whole game."""
@@ -815,7 +922,7 @@ class TestProphetXParserEdges:
         )
         outcome = parse_prophetx(raws)
         assert not outcome.quotes
-        assert outcome.skipped["non_full_game_market"] == 1
+        assert outcome.skipped["period_out_of_scope"] == 1
 
     def test_the_same_event_batched_twice_dedupes_instead_of_aborting(self):
         """An event listed by two matched tournaments used to fetch its market
@@ -1062,7 +1169,128 @@ class TestNovigParserEdges:
         outcome = parse_novig(self._raws(market, book))
         assert not outcome.quotes
         assert not outcome.rejections
-        assert outcome.skipped["non_full_game_market"] == 1
+        assert outcome.skipped["period_out_of_scope"] == 1
+
+    def test_a_total_whose_description_contradicts_the_strike_is_rejected(self):
+        """"Over 8.5" published at a strike of 9.5 pairs with a real Under 9.5
+        elsewhere into a phantom arb, while the bet actually struck is Over
+        8.5.  The spread path already refuses this; a total is the same
+        contract shape and the same hazard."""
+        market = {
+            "id": "m12",
+            "type": "TOTAL",
+            "eventId": "ev1",
+            "strike": 9.5,
+            "outcomes": [
+                {"id": "o1", "description": "Over 8.5"},
+                {"id": "o2", "description": "Under 8.5"},
+            ],
+        }
+        book = {
+            "marketId": "m12",
+            "outcomeLadders": [
+                {"outcomeId": "o1",
+                 "bids": [{"price": 0.5, "currency": "CASH", "status": "RESTING"}]},
+                {"outcomeId": "o2",
+                 "bids": [{"price": 0.5, "currency": "CASH", "status": "RESTING"}]},
+            ],
+        }
+        outcome = parse_novig(self._raws(market, book))
+        assert not outcome.quotes
+        assert sorted(r.reason for r in outcome.rejections) == [
+            "total_line_disagrees_with_strike",
+            "total_line_disagrees_with_strike",
+        ]
+
+    def test_the_window_screen_reads_every_string_field_not_one_guess(self):
+        """The documented ``markets/open`` shape carries no ``description``
+        field at all, so a guard reading only that one was inert on the
+        payload this adapter's own docstring documents — a first-half total
+        published as full-game, silently.  Whatever field the venue names the
+        window in, it is read."""
+        market = {
+            "id": "m13",
+            "type": "TOTAL",
+            # No "description": the documented shape.  The window is named in
+            # a field this parser never chose in advance.
+            "label": "1st Half Total",
+            "eventId": "ev1",
+            "strike": 4.5,
+            "outcomes": [
+                {"id": "o1", "description": "Over 4.5"},
+                {"id": "o2", "description": "Under 4.5"},
+            ],
+        }
+        book = {
+            "marketId": "m13",
+            "outcomeLadders": [
+                {"outcomeId": "o1",
+                 "bids": [{"price": 0.5, "currency": "CASH", "status": "RESTING"}]},
+                {"outcomeId": "o2",
+                 "bids": [{"price": 0.5, "currency": "CASH", "status": "RESTING"}]},
+            ],
+        }
+        outcome = parse_novig(self._raws(market, book))
+        assert not outcome.quotes
+        assert outcome.skipped["period_out_of_scope"] == 1
+
+    def test_the_window_screen_reads_outcome_text_as_well(self):
+        """The market's own fields can be silent while each outcome names the
+        window — the mirror of the case above, and the arm that survived a
+        sweep because both period pins put the marker in the market label."""
+        market = {
+            "id": "m15",
+            "type": "TOTAL",
+            "eventId": "ev1",
+            "strike": 4.5,
+            "outcomes": [
+                {"id": "o1", "description": "1st Half Over 4.5"},
+                {"id": "o2", "description": "1st Half Under 4.5"},
+            ],
+        }
+        book = {
+            "marketId": "m15",
+            "outcomeLadders": [
+                {"outcomeId": "o1",
+                 "bids": [{"price": 0.5, "currency": "CASH", "status": "RESTING"}]},
+                {"outcomeId": "o2",
+                 "bids": [{"price": 0.5, "currency": "CASH", "status": "RESTING"}]},
+            ],
+        }
+        outcome = parse_novig(self._raws(market, book))
+        assert not outcome.quotes
+        assert outcome.skipped["period_out_of_scope"] == 1
+
+    def test_a_market_pricing_one_side_twice_is_refused(self):
+        """A two-outcome market prices opposite sides by construction, so two
+        legs agreeing on the side means the payload named one club on both
+        outcomes.  The dedup guard cannot see it — sign-opposed handicaps give
+        the rows different lines — and published they are two bets on the same
+        team presented as a hedge."""
+        market = {
+            "id": "m14",
+            "type": "SPREAD",
+            "eventId": "ev1",
+            "strike": 1.5,
+            "outcomes": [
+                {"id": "o1", "description": "Cincinnati Reds +1.5"},
+                {"id": "o2", "description": "Cincinnati Reds -1.5"},
+            ],
+        }
+        book = {
+            "marketId": "m14",
+            "outcomeLadders": [
+                {"outcomeId": "o1",
+                 "bids": [{"price": 0.4, "currency": "CASH", "status": "RESTING"}]},
+                {"outcomeId": "o2",
+                 "bids": [{"price": 0.55, "currency": "CASH", "status": "RESTING"}]},
+            ],
+        }
+        outcome = parse_novig(self._raws(market, book))
+        assert not outcome.quotes
+        assert [r.reason for r in outcome.rejections] == [
+            "market_prices_one_side_twice"
+        ]
 
     def test_a_compact_period_spelling_is_caught_too(self):
         """"1H" is a first half; a word-only marker list reads it as a whole
@@ -1089,7 +1317,7 @@ class TestNovigParserEdges:
         }
         outcome = parse_novig(self._raws(market, book))
         assert not outcome.quotes
-        assert outcome.skipped["non_full_game_market"] == 1
+        assert outcome.skipped["period_out_of_scope"] == 1
 
     def test_an_empty_opposite_ladder_yields_no_quote(self):
         market = {
@@ -1457,6 +1685,27 @@ class TestTheCredentialedAxis:
         assert _common.mentions_a_sub_period("1H Moneyline")
         assert not _common.mentions_a_sub_period("Moneyline (incl. OT)")
         assert not _common.mentions_a_sub_period("Setanta Sports Cup")
+        # Both orders of every compact spelling.  Carrying "p1" without "1p"
+        # was a hole in the shape of one league: "1P" is the standard spelling
+        # of a hockey first period, and the NHL is a default league here.
+        for spelling in ("1P Moneyline", "P1 Moneyline", "2H Total",
+                         "H2 Total", "Q1 Spread", "1Q Spread",
+                         "Halftime Result", "F5 Total"):
+            assert _common.mentions_a_sub_period(spelling), spelling
+        # The separators a label actually uses, including the underscore the
+        # venue's own SCREAMING_SNAKE enums imply and the dash family.
+        for spelling in ("FIRST_HALF_TOTAL", "Total—1H", "Total–1H",
+                         "Total|1H", "Run Line - 1st Half", "Total (1H)"):
+            assert _common.mentions_a_sub_period(spelling), spelling
+        # Trailing punctuation is not part of the word: "1st." and "Total,
+        # 2nd." are the same markers wearing a full stop.
+        for spelling in ("Total 1st.", "Moneyline, 2nd.", "Total 1H."):
+            assert _common.mentions_a_sub_period(spelling), spelling
+        # Every string field of a market payload, whatever the venue named it.
+        assert _common.market_label_text(
+            {"id": "m1", "label": "1st Half Total", "strike": 4.5}
+        ) == "m1 1st Half Total"
+        assert _common.market_label_text(None) == ""
         # Neither adapter may reintroduce a private copy of the list.
         assert "_PERIOD_MARKERS" not in vars(prophetx)
         assert "_PERIOD_MARKERS" not in vars(novig)

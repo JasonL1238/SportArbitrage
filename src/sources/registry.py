@@ -240,8 +240,16 @@ NATIONWIDE_SOURCE_KEYS: frozenset[str] = frozenset({"kalshi"})
 #: 6. a ``src.report.SOURCE_NOTES`` entry with ``kind`` set to
 #:    ``exchange`` — without one the sources page renders the venue as an
 #:    unknown *sportsbook*, which for these two is affirmatively wrong;
-#: 7. flipping the stays-unregistered pin in ``tests/test_prophetx_novig.py``;
-#: 8. the full acceptance bar (healthy collect, replay PASS, counted in
+#: 7. a ``src.report.SKIP_NOTES`` entry for every skip reason the adapter can
+#:    emit that no existing note already covers —
+#:    ``tests/test_report.py::test_every_real_skip_reason_has_an_explanation``
+#:    is parametrised off the registry and goes red on an unexplained reason,
+#:    and the page renders one as a generic shrug.  Prefer an existing
+#:    spelling over a new one: both these adapters were rewritten onto the
+#:    established vocabulary rather than keeping the names they were born
+#:    with;
+#: 8. flipping the stays-unregistered pin in ``tests/test_prophetx_novig.py``;
+#: 9. the full acceptance bar (healthy collect, replay PASS, counted in
 #:    ``comparable_group_count``).
 CREDENTIALED_SOURCE_KEYS: frozenset[str] = frozenset({"prophetx", "novig"})
 
