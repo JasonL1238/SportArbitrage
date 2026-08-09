@@ -35,9 +35,12 @@ the bearer token travels in a request header, which envelopes do not persist.
   `data.refresh_token` (3 days).
 - `GET /mm/get_tournaments` → `GET /mm/get_sport_events?tournament_id=` →
   `GET /mm/get_multiple_markets?event_ids=` (form-style non-exploded).
-  Selections carry decimal `odds`, `display_odds`, a `stake` liquidity figure,
-  `competitor_id` and `outcome_id`; events carry `competitors[].side`,
-  `scheduled` (ISO 8601) and `status`.
+  Selections carry decimal `odds`, `display_odds`, `competitor_id`,
+  `outcome_id`, and a `stake` number whose semantics the reference does not
+  state — available-to-match or already-matched volume, and in what currency,
+  are open questions, so the adapter publishes no stake ceiling until the
+  first credentialed session answers them.  Events carry
+  `competitors[].side`, `scheduled` (ISO 8601) and `status`.
 - **The reference marks `get_markets` and `get_multiple_markets` deprecated
   without naming a successor.** First credentialed session must re-check; a
   `/v4/` price-ladder endpoint already exists, so a versioned market surface
@@ -52,8 +55,10 @@ the bearer token travels in a request header, which envelopes do not persist.
 - Production `https://api.novig.us`; QA `https://api-qa.novig.us`.
 - `POST /nbx/v1/auth/emm-token` (`grant_type=client_credentials`, `client_id`,
   `client_secret`) → 30-minute bearer. The docs show the fields without naming
-  the encoding; the adapter sends RFC 6749 form-encoding — confirm on first
-  session.
+  the encoding; the adapter sends RFC 6749 form-encoding as a pre-encoded
+  string with an explicit content type, so every transport client (curl_cffi,
+  browser mode, injected test clients) puts the same bytes on the wire —
+  confirm the venue accepts it on first session.
 - `GET /nbx/v2/emm/events?league=&status=OPEN_PREGAME&limit=&offset=`
   (512 req/s), `GET /nbx/v2/emm/markets/open?league=&marketType=` and
   `GET /nbx/v2/emm/book/{marketId}?currency=CASH` (128 req/s each). League

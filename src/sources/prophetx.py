@@ -39,7 +39,9 @@ API surface, measured from https://docs.prophetx.co on 2026-08-09:
   ?tournament_id=`` → events with ``competitors`` (each carrying ``side``),
   ``scheduled`` (ISO 8601) and ``status``; ``GET /mm/get_multiple_markets
   ?event_ids=`` → markets keyed by event id, selections carrying decimal
-  ``odds`` and a ``stake`` liquidity figure.
+  ``odds`` and a ``stake`` number whose semantics the reference does not
+  state (available-to-match or already-matched?), so it is not published as
+  a limit.
 - The reference pages mark ``/mm/get_markets`` and ``/mm/get_multiple_markets``
   **deprecated** without naming a successor.  The first live session must
   re-check that note; if a versioned replacement exists by then, move.
@@ -74,7 +76,10 @@ from src.sources._common import (
     SourceClient,
     Tier,
     capabilities_from,
+    drop_duplicate_selections,
     envelope_source,
+    latest_capture,
+    latest_per_endpoint,
     parse_iso_time,
     within_schedule_horizon,
 )
@@ -294,7 +299,11 @@ class ProphetXAdapter:
         into: list[RawResponse],
     ) -> list[int]:
         """This league's events and market batches, appended as they arrive."""
-        event_ids: list[int] = []
+        # ``dict.fromkeys`` and not a list: an event listed by two matched
+        # tournaments would otherwise fetch its market batch twice, and two
+        # batches parse into colliding dedup keys — which the storage layer's
+        # UNIQUE constraint answers by aborting the whole run's insert.
+        seen_event_ids: dict[int, None] = {}
         for tournament_id in tournament_ids:
             events_raw = self._http.get(
                 f"{self.base_url}/mm/get_sport_events",
@@ -306,7 +315,8 @@ class ProphetXAdapter:
             for entry in _event_entries(events_raw, source=self._source_key):
                 event_id = entry.get("event_id")
                 if isinstance(event_id, int):
-                    event_ids.append(event_id)
+                    seen_event_ids[event_id] = None
+        event_ids = list(seen_event_ids)
         for index in range(0, len(event_ids), EVENT_IDS_PER_REQUEST):
             chunk = event_ids[index : index + EVENT_IDS_PER_REQUEST]
             into.append(
@@ -335,7 +345,11 @@ class ProphetXAdapter:
                 json={"access_key": access_key, "secret_key": secret_key},
             )
         except Exception as exc:  # noqa: BLE001 - transport stacks vary
-            if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+            # AssertionError is re-raised alongside the interrupt pair: it is
+            # how a test proves no socket was opened, and how a programming
+            # error announces itself — neither may be laundered into a
+            # "credentials missing" diagnosis.
+            if isinstance(exc, (KeyboardInterrupt, SystemExit, AssertionError)):
                 raise
             raise LoginRequiredError(
                 f"{self._source_key}:auth: {type(exc).__name__} during login"
@@ -409,15 +423,26 @@ def _event_entries(raw: RawResponse, *, source: str) -> list[dict[str, Any]]:
 def _match_tournaments(
     raw: RawResponse, leagues: Sequence[str], *, source: str
 ) -> dict[str, list[int]]:
-    """League key → tournament ids, by whole-token name match.
+    """League key → tournament ids, by **exact name equality** only.
 
-    Token equality and not substring: ``"WNBA"`` contains ``"NBA"``, so a
-    substring rule would file every WNBA tournament under the NBA and publish
-    women's-league prices as NBA rows.  Tokenising first makes the two keys
-    disjoint — ``"WNBA"`` tokenises to itself, never to ``"NBA"``.
+    A tournament matches when its whole name, case-folded, equals the league
+    key (``"NBA"``) or the league's display name (``"National Basketball
+    Association"``).  Not containment, not tokens: ``"NBA Summer League"``
+    and ``"NBA G League"`` both *contain* the token ``NBA`` and are not the
+    NBA — Summer League fields the real franchises and G League affiliates
+    carry parent nicknames ("Maine Celtics" resolves to BOS), so an admitted
+    development tournament can mint the same event key as a real same-night
+    fixture and feed its prices into the cross-book comparison as NBA legs.
+    A spelling this rule misses shows up as a visibly empty scope, which is
+    the recoverable direction; the first credentialed capture settles the
+    venue's actual vocabulary.
     """
     payload = require_mapping(raw.json(), source=source, endpoint=raw.endpoint)
-    wanted = {key.upper() for key in leagues}
+    wanted: dict[str, str] = {}
+    for key in leagues:
+        upper = key.upper()
+        wanted[upper] = upper
+        wanted[league_registry.league(key).name.upper()] = upper
     matched: dict[str, list[int]] = {}
     for entry in _data_list(payload, "tournaments"):
         if not isinstance(entry, dict):
@@ -425,11 +450,10 @@ def _match_tournaments(
         tournament_id = entry.get("id")
         if not isinstance(tournament_id, int):
             continue
-        name = str(entry.get("name") or "")
-        tokens = {token.upper() for token in name.replace("-", " ").split()}
-        hits = wanted & tokens
-        if len(hits) == 1:
-            matched.setdefault(next(iter(hits)), []).append(tournament_id)
+        name = " ".join(str(entry.get("name") or "").split()).upper()
+        league_key = wanted.get(name)
+        if league_key is not None:
+            matched.setdefault(league_key, []).append(tournament_id)
     return matched
 
 
@@ -482,6 +506,10 @@ def parse_prophetx(raws: Sequence[RawResponse]) -> ParseOutcome:
     """
     outcome = ParseOutcome()
     source = envelope_source(raws, fallback=SOURCE_KEY)
+    # Newest pass, one response per label: the endpoint scheme carries batch
+    # counters (``markets:MLB:00``), so a directory holding two runs would
+    # otherwise emit yesterday's price beside today's — see ``latest_capture``.
+    raws = latest_per_endpoint(latest_capture(raws))
 
     fixtures: dict[str, _Fixture] = {}
     per_league_events: dict[str, dict[str, tuple[str, Any]]] = {}
@@ -531,6 +559,9 @@ def parse_prophetx(raws: Sequence[RawResponse]) -> ParseOutcome:
             for market in markets:
                 if isinstance(market, dict):
                     _parse_market(market, fixture, raw, source=source, outcome=outcome)
+    # Storage enforces dedup_key with a UNIQUE constraint whose failure aborts
+    # the whole insert; every peer parser guards it here and so does this one.
+    drop_duplicate_selections(source, outcome)
     return outcome
 
 
@@ -775,7 +806,9 @@ def _parse_selection(
             return
 
     line: float | None = None
-    if our_market in (Market.SPREAD, Market.TOTAL):
+    if our_market is Market.TOTAL:
+        # A total's strike is shared and sign-free, so the market-level line
+        # is a legitimate fallback for a selection that omits its own.
         for candidate in (selection.get("line"), market.get("line")):
             if isinstance(candidate, (int, float)) and not isinstance(candidate, bool):
                 line = float(candidate)
@@ -784,20 +817,35 @@ def _parse_selection(
             outcome.reject(
                 source,
                 "missing_line",
-                f"{fixture.event_id}: {our_market.value} selection without a line",
+                f"{fixture.event_id}: total selection without a line",
+                event_id=fixture.event_id,
+            )
+            return
+    elif our_market is Market.SPREAD:
+        # No market-level fallback here, ever: the market's one number is an
+        # unsigned magnitude serving two opposite handicaps, and stamping it
+        # on both sides fabricates the sign of one of them — the phantom-arb
+        # class the Novig parser refuses under the same reason code.  A
+        # spread selection prices *its own* signed line or it is rejected.
+        candidate = selection.get("line")
+        if isinstance(candidate, (int, float)) and not isinstance(candidate, bool):
+            line = float(candidate)
+        else:
+            outcome.reject(
+                source,
+                "spread_sign_unresolved",
+                f"{fixture.event_id}: spread selection {name!r} carries no "
+                "signed line of its own",
                 event_id=fixture.event_id,
             )
             return
 
-    stake = selection.get("stake")
-    limit = (
-        float(stake)
-        if isinstance(stake, (int, float))
-        and not isinstance(stake, bool)
-        and stake > 0
-        else None
-    )
-
+    # ``stake`` is documented as a number and nothing more — whether it is
+    # money still available to match or volume already matched, and in what
+    # currency, the reference does not say.  Publishing it as a stake ceiling
+    # under the wrong reading would overstate every ProphetX limit, so no
+    # ``limit_amount`` is published until the first credentialed session
+    # settles the semantics (recorded in SOURCE_FEASIBILITY).
     selection_id = selection.get("outcome_id")
     line_id = selection.get("line_id")
     try:
@@ -830,7 +878,7 @@ def _parse_selection(
                     if selection_id is not None
                     else (str(line_id) if line_id is not None else None)
                 ),
-                limit_amount=limit,
+                limit_amount=None,
                 status=QuoteStatus.ACTIVE,
             )
         )

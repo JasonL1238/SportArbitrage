@@ -58,6 +58,7 @@ from __future__ import annotations
 import json
 import logging
 from typing import Any, Mapping, Sequence
+from urllib.parse import urlencode
 
 from src import leagues as league_registry
 from src import settings
@@ -76,7 +77,10 @@ from src.sources._common import (
     SourceClient,
     Tier,
     capabilities_from,
+    drop_duplicate_selections,
     envelope_source,
+    latest_capture,
+    latest_per_endpoint,
     parse_iso_time,
     within_schedule_horizon,
 )
@@ -262,13 +266,28 @@ class NovigAdapter:
                 headers=auth,
             )
             into.append(raw)
-            entries = _entry_list(raw, source=self._source_key)
-            for entry in entries:
+            for entry in _entry_list(raw, source=self._source_key):
                 identifier = entry.get("id")
                 if isinstance(identifier, str):
                     event_ids.add(identifier)
-            if len(entries) < EVENTS_PAGE_LIMIT:
+            # Page-full is judged on the payload's own row count, not on how
+            # many rows survived the dict filter — a page carrying malformed
+            # rows is still a full page, and ending pagination on it would
+            # silently drop the slate behind it.
+            if _row_count(raw) < EVENTS_PAGE_LIMIT:
                 break
+        else:
+            # Falling off the cap with the last page still full means the
+            # venue had more; a bound on request volume is politeness and
+            # stays, but reporting the scope as complete afterwards is not.
+            tally.truncated(
+                league_key,
+                CoverageCappedError(
+                    f"{self._source_key}: {league_key} still had full event "
+                    f"pages when the {MAX_EVENT_PAGES}-page cap was reached; "
+                    "the rest were not collected"
+                ),
+            )
 
         markets_raw = self._http.get(
             f"{self.base_url}/nbx/v2/emm/markets/open",
@@ -316,18 +335,31 @@ class NovigAdapter:
         :class:`LoginRequiredError` without echoing the body.
         """
         try:
+            # RFC 6749's default encoding; the docs show the fields without
+            # naming one — first credentialed session confirms.  Encoded here
+            # rather than passed as a dict because the transport clients
+            # disagree about dicts: curl_cffi form-encodes ``data=``, but the
+            # Playwright browser client serializes a dict as JSON, which
+            # would silently change the wire format under
+            # ``ODDS_FETCH_MODE=browser``.  A pre-encoded string with an
+            # explicit content type means every client sends the same bytes.
             response = self._client.post(
                 f"{self.base_url}{TOKEN_PATH}",
-                # RFC 6749's default encoding; the docs show the fields
-                # without naming one.  First credentialed session confirms.
-                data={
-                    "grant_type": "client_credentials",
-                    "client_id": client_id,
-                    "client_secret": client_secret,
-                },
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                data=urlencode(
+                    {
+                        "grant_type": "client_credentials",
+                        "client_id": client_id,
+                        "client_secret": client_secret,
+                    }
+                ),
             )
         except Exception as exc:  # noqa: BLE001 - transport stacks vary
-            if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+            # AssertionError re-raised alongside the interrupt pair: it is how
+            # a test proves no socket was opened, and how a programming error
+            # announces itself — neither may be laundered into a "credentials
+            # missing" diagnosis.
+            if isinstance(exc, (KeyboardInterrupt, SystemExit, AssertionError)):
                 raise
             raise LoginRequiredError(
                 f"{self._source_key}:auth: {type(exc).__name__} during token exchange"
@@ -366,8 +398,8 @@ class NovigAdapter:
 # ── module-level parsing, deterministic and I/O-free ─────────────────────────
 
 
-def _entry_list(raw: RawResponse, *, source: str) -> list[dict[str, Any]]:
-    """The response's entry array, whether bare or wrapped in ``data``.
+def _raw_rows(raw: RawResponse) -> list[Any]:
+    """The response's entry array as sent, whether bare or wrapped in ``data``.
 
     The reference pages describe the DTOs without stating the envelope; both
     plausible shapes are read and anything else is an empty list the caller
@@ -375,13 +407,26 @@ def _entry_list(raw: RawResponse, *, source: str) -> list[dict[str, Any]]:
     """
     payload = raw.json()
     if isinstance(payload, list):
-        return [entry for entry in payload if isinstance(entry, dict)]
+        return payload
     if isinstance(payload, dict):
         for key in ("data", "events", "markets", "items"):
             value = payload.get(key)
             if isinstance(value, list):
-                return [entry for entry in value if isinstance(entry, dict)]
+                return value
     return []
+
+
+def _row_count(raw: RawResponse) -> int:
+    try:
+        return len(_raw_rows(raw))
+    except ValueError:
+        return 0
+
+
+def _entry_list(raw: RawResponse, *, source: str) -> list[dict[str, Any]]:
+    """The well-formed entries: :func:`_raw_rows` narrowed to mappings."""
+    del source
+    return [entry for entry in _raw_rows(raw) if isinstance(entry, dict)]
 
 
 class _Fixture:
@@ -434,6 +479,10 @@ def parse_novig(raws: Sequence[RawResponse]) -> ParseOutcome:
     endpoint label, as with the Action Network and ProphetX parsers."""
     outcome = ParseOutcome()
     source = envelope_source(raws, fallback=SOURCE_KEY)
+    # Newest pass, one response per label: ``events:MLB:00`` is a position
+    # counter, so a directory holding two runs would otherwise emit both
+    # runs' prices — see ``latest_capture``.
+    raws = latest_per_endpoint(latest_capture(raws))
 
     fixtures: dict[str, _Fixture] = {}
     per_league_events: dict[str, dict[str, tuple[str, Any]]] = {}
@@ -522,6 +571,9 @@ def parse_novig(raws: Sequence[RawResponse]) -> ParseOutcome:
             outcome.skipped["event_already_started"] += 1
             continue
         _parse_book(raw, market, fixture, source=source, outcome=outcome)
+    # Storage enforces dedup_key with a UNIQUE constraint whose failure aborts
+    # the whole insert; every peer parser guards it here and so does this one.
+    drop_duplicate_selections(source, outcome)
     return outcome
 
 
@@ -764,10 +816,14 @@ def _parse_outcome(
                 # 100 qty = one $1.00-payout contract (fees page), so the
                 # dollars stakeable at this price without walking the ladder
                 # are contracts × price.  Confirmed against the docs, still to
-                # be verified against the first genuine capture.
+                # be verified against the first genuine capture.  A positive
+                # amount that rounds below one cent becomes None rather than
+                # 0.0: the Quote validator refuses a zero limit, and filing a
+                # working extreme-price row as invalid_quote would spend a
+                # parser-failure signal on a book behaving normally.
                 limit_amount=(
-                    round((qty_at_best / 100.0) * takeable, 2)
-                    if qty_at_best > 0
+                    limit
+                    if (limit := round((qty_at_best / 100.0) * takeable, 2)) >= 0.01
                     else None
                 ),
                 status=QuoteStatus.ACTIVE,

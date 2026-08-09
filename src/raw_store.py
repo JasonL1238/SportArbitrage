@@ -42,7 +42,23 @@ def _refuse_constant(name: str) -> float:
 
 #: Headers worth keeping for auditing freshness and CDN behaviour.  Anything
 #: resembling a credential is deliberately not stored.
-_HEADER_DENYLIST = frozenset({"set-cookie", "authorization", "proxy-authorization"})
+# Response headers that must never reach a stored envelope.  The first three
+# have been here since captures began; the token-shaped names joined when the
+# first credentialed venues (ProphetX, Novig) made them load-bearing — a venue
+# that echoes a refreshed session token in a response header would otherwise
+# persist it into every envelope of the pass.  Request headers are never
+# stored at all, which is what keeps the outbound bearer token out.
+_HEADER_DENYLIST = frozenset(
+    {
+        "set-cookie",
+        "authorization",
+        "proxy-authorization",
+        "x-auth-token",
+        "x-access-token",
+        "x-refresh-token",
+        "x-api-key",
+    }
+)
 
 
 def _slug(text: str) -> str:

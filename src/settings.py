@@ -2,7 +2,10 @@
 
 Everything the collector writes stays inside one directory so a run leaves no
 trace elsewhere and can be inspected or deleted wholesale.  Odds sources are
-public endpoints of each venue's own website — no book credentials.  Optional
+public endpoints of each venue's own website — no book credentials — with two
+named exceptions: the credentialed exchanges ProphetX and Novig
+(``ODDS_PROPHETX_*`` / ``ODDS_NOVIG_*``), whose adapters exist ahead of their
+registration and refuse at fetch time when the variables are unset.  Optional
 SMS alerts use Twilio (``ODDS_TWILIO_*``); without those variables the pipeline
 still collects and simply skips texting.
 
