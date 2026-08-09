@@ -138,6 +138,29 @@ SOURCE_NOTES: dict[str, dict[str, str]] = {
                 "an honest User-Agent with a public access id, so whole-game moneylines, "
                 "spreads and totals can be collected without a browser session.",
     },
+    "draftkings": {
+        "label": "DraftKings",
+        "host": "sportsbook-nash.draftkings.com",
+        "kind": "sportsbook",
+        "what": "First-party feed behind DraftKings's own state door — the US-ST-SB "
+                "site path, ST being the state code. Publishes both a display price "
+                "and a true price per selection; the true one is what gets recorded.",
+    },
+    "hardrock": {
+        "label": "Hard Rock Bet",
+        "host": "api.hardrocksportsbook.com",
+        "kind": "sportsbook",
+        "what": "First-party GraphQL feed behind Hard Rock's own app. Needs a "
+                "licensed-state egress to answer with a slate at all.",
+    },
+    "caesars": {
+        "label": "Caesars",
+        "host": "api.americanwagering.com",
+        "kind": "sportsbook",
+        "what": "First-party feed behind Caesars's own per-state path. Its CDN refuses "
+                "some egresses outright, which is recorded as the wall it is rather "
+                "than worked around.",
+    },
     "cloudbet": {
         "label": "Cloudbet",
         "host": "www.cloudbet.com",
@@ -205,6 +228,27 @@ SOURCE_NOTES: dict[str, dict[str, str]] = {
         "kind": "sportsbook",
         "what": "bet365's named VegasInsider column, retained as fallback and "
                 "cross-check data for the same sportsbook.",
+    },
+    "vi_betmgm": {
+        "label": "BetMGM (VegasInsider)",
+        "host": "www.vegasinsider.com",
+        "kind": "sportsbook",
+        "what": "BetMGM's named column on VegasInsider's public comparison table. "
+                "A redundant observation path, never a separate counterparty.",
+    },
+    "vi_fanduel": {
+        "label": "FanDuel (VegasInsider)",
+        "host": "www.vegasinsider.com",
+        "kind": "sportsbook",
+        "what": "FanDuel's named column on VegasInsider's public comparison table. "
+                "A redundant observation path, never a separate counterparty.",
+    },
+    "vi_betrivers": {
+        "label": "BetRivers (VegasInsider)",
+        "host": "www.vegasinsider.com",
+        "kind": "sportsbook",
+        "what": "BetRivers's named column on VegasInsider's public comparison table. "
+                "A redundant observation path, never a separate counterparty.",
     },
     "vsin_circa": {
         "label": "Circa (VSiN)",

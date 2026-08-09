@@ -9679,6 +9679,19 @@ class TestOperatorFacingSentencesAreTrueOnANewBook:
             assert key not in lede, lede
             assert SOURCE_NOTES[key]["label"] in lede
 
+    def test_source_notes_names_every_registered_source(self) -> None:
+        """The lede's own comment claims "SOURCE_NOTES … names every registered
+        source", and the sources page falls back to an unknown-venue card
+        (raw key, hardcoded sportsbook kind) for any it misses.  Six registered
+        keys were missing when this pin landed — draftkings, hardrock, caesars
+        and the three vi_ book columns — so the claim was false and every one
+        of them rendered as "No description recorded"."""
+        from src.report import SOURCE_NOTES
+        from src.sources import registry
+
+        missing = sorted(set(registry.keys()) - set(SOURCE_NOTES))
+        assert missing == [], missing
+
     def test_a_failed_middle_pass_fails_the_batch(self) -> None:
         """The sticky property, pinned structurally: once any pass fails the
         exit code must never be reassigned back to zero."""

@@ -76,12 +76,28 @@ the bearer token travels in a request header, which envelopes do not persist.
   pregame-zero rather than the live coefficient. Makers pay nothing in both
   regimes.
 
-Registration checklist when keys arrive, for either venue: descriptor +
-classification in the four reachability sets, `COMMISSIONS` and `SETTLEMENT`
-entries, a genuine capture committed under `tests/fixtures/raw/`, distinctness
-against every registered source, and the full acceptance bar in the plan. If a
-response body carries a partner or account identifier, there is no sanctioned
-path to a committed fixture — that would be the finding.
+Registration checklist when keys arrive, for either venue — deliberately
+identical to the copy on `CREDENTIALED_SOURCE_KEYS` in
+`src/sources/registry.py`, because a step missing from either copy is how an
+operator registers per instructions and still fails the suite or ships a
+wrong page:
+
+1. descriptor in `_BASE_SOURCES`, classified in the four reachability sets;
+2. `COMMISSIONS` and `SETTLEMENT` entries (Novig's commission must encode
+   pregame-zero, per the fees measurement above);
+3. a genuine capture committed under `tests/fixtures/raw/`;
+4. distinctness against every registered source, plus `src/redundancy.py`
+   for any intentional failover pair;
+5. a `src/betlinks.py` entry — `tests/test_betlinks.py` asserts every
+   registered non-consensus key resolves to a link;
+6. a `src/report.SOURCE_NOTES` entry with `kind: exchange` — without one the
+   sources page renders the venue as an unknown sportsbook;
+7. flip the stays-unregistered pin in `tests/test_prophetx_novig.py`;
+8. the full acceptance bar in the plan (healthy collect, replay PASS,
+   counted in `comparable_group_count`).
+
+If a response body carries a partner or account identifier, there is no
+sanctioned path to a committed fixture — that would be the finding.
 
 ## Polymarket US and Crypto.com Sports: both walls, measured — 2026-08-09
 

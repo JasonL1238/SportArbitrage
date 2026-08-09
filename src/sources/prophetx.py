@@ -453,8 +453,25 @@ def _match_tournaments(
         name = " ".join(str(entry.get("name") or "").split()).upper()
         league_key = wanted.get(name)
         if league_key is not None:
-            matched.setdefault(league_key, []).append(tournament_id)
+            bucket = matched.setdefault(league_key, [])
+            # One id can arrive under both accepted spellings ("NBA" and the
+            # display name); fetching it twice wastes a request per duplicate.
+            if tournament_id not in bucket:
+                bucket.append(tournament_id)
     return matched
+
+
+def _spread_lines_are_sign_opposed(flat: Sequence[Mapping[str, Any]]) -> bool:
+    """Exactly two selections whose own lines are non-zero and sum to zero."""
+    if len(flat) != 2:
+        return False
+    lines = []
+    for selection in flat:
+        line = selection.get("line")
+        if not isinstance(line, (int, float)) or isinstance(line, bool):
+            return False
+        lines.append(float(line))
+    return abs(lines[0] + lines[1]) < 1e-9 and lines[0] != 0.0
 
 
 def _looks_full_game(market: Mapping[str, Any]) -> bool:
@@ -711,17 +728,32 @@ def _parse_market(
                 flat.append(row)
             elif isinstance(row, list):
                 flat.extend(entry for entry in row if isinstance(entry, dict))
-    for selection in flat:
-        _parse_selection(
-            selection,
-            market,
-            our_market,
-            fixture,
-            raw,
-            source=source,
-            outcome=outcome,
-            is_alternate=is_alternate,
+    if our_market is Market.SPREAD and not _spread_lines_are_sign_opposed(flat):
+        # The whole-market invariant, not a per-selection one: a numeric line
+        # is not evidence of a *signed* line.  Two selections both carrying
+        # ``+1.5`` are the round-1 sign ambiguity moved one level down, and
+        # only the pair can reveal it — a real handicap market's two sides
+        # sum to zero.  Anything else (one side, no lines, same sign) is
+        # rejected whole rather than published half-verified.
+        outcome.reject(
+            source,
+            "spread_sign_unresolved",
+            f"{fixture.event_id}: spread market {market.get('id')} does not "
+            "present two sign-opposed selection lines",
+            event_id=fixture.event_id,
         )
+    else:
+        for selection in flat:
+            _parse_selection(
+                selection,
+                market,
+                our_market,
+                fixture,
+                raw,
+                source=source,
+                outcome=outcome,
+                is_alternate=is_alternate,
+            )
 
     # ``market_lines`` nests the alternate ladders as further markets of the
     # same shape.  One level of recursion, flagged alternate, so a ladder

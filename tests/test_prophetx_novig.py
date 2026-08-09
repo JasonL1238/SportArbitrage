@@ -450,6 +450,126 @@ class TestNovigFetchKeepsTheSecretsOut:
         assert phils.limit_amount == pytest.approx(28.0)
 
 
+class TestNovigBookFailuresStayContained:
+    """A market listed by ``markets/open`` can be matched out in the seconds
+    before its book call.  That refusal is churn, not a scope failure: the
+    league's other books must still be fetched, the loss must surface as a
+    truncation, and only a league whose every book call failed is a failure."""
+
+    def _handler(self, seen_paths: list[str]):
+        event = {
+            "id": "ev1", "type": "Game", "status": "OPEN_PREGAME",
+            "league": "MLB", "scheduledStart": LIVE_GAME_ISO,
+            "game": {
+                "homeTeam": {"name": "Philadelphia Phillies"},
+                "awayTeam": {"name": "Cincinnati Reds"},
+            },
+        }
+        base = {
+            "type": "MONEY", "eventId": "ev1", "strike": None,
+            "outcomes": [
+                {"id": "o1", "description": "Cincinnati Reds"},
+                {"id": "o2", "description": "Philadelphia Phillies"},
+            ],
+        }
+        book_two = {
+            "marketId": "m2",
+            "outcomeLadders": [
+                {"outcomeId": "o2",
+                 "bids": [{"price": 0.5, "qty": 1000, "currency": "CASH",
+                           "status": "RESTING"}]},
+            ],
+        }
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen_paths.append(request.url.path)
+            path = request.url.path
+            if path == "/nbx/v1/auth/emm-token":
+                return httpx.Response(200, json={"access_token": "T"})
+            if path == "/nbx/v2/emm/events":
+                return httpx.Response(200, json=[event])
+            if path == "/nbx/v2/emm/markets/open":
+                # m1 listed twice: the duplicated row must not fetch its book
+                # twice.  m1's book then vanishes; m2's answers.
+                return httpx.Response(
+                    200,
+                    json=[base | {"id": "m1"}, base | {"id": "m1"}, base | {"id": "m2"}],
+                )
+            if path == "/nbx/v2/emm/book/m1":
+                return httpx.Response(404, json={"error": "market closed"})
+            if path == "/nbx/v2/emm/book/m2":
+                return httpx.Response(200, json=book_two)
+            raise AssertionError(f"unexpected request {request.url}")
+
+        return handler
+
+    def test_one_dead_book_does_not_cost_the_league(self, monkeypatch):
+        monkeypatch.setattr(settings, "NOVIG_CLIENT_ID", "ID")
+        monkeypatch.setattr(settings, "NOVIG_CLIENT_SECRET", "SEC")
+        seen_paths: list[str] = []
+        client = _FormAwareClient(transport=httpx.MockTransport(self._handler(seen_paths)))
+        adapter = NovigAdapter(leagues=("MLB",), client=client)
+        try:
+            raws = adapter.fetch_raw()
+            tally = adapter.last_fetch
+        finally:
+            adapter.close()
+        # The book after the dead one was fetched, and the duplicated market
+        # row asked for its book exactly once.
+        assert [raw.endpoint for raw in raws] == [
+            "events:MLB:00",
+            "markets:MLB",
+            "book:MLB:m2",
+        ]
+        assert seen_paths.count("/nbx/v2/emm/book/m1") == 1
+        # Health: the league produced and is not failed; the loss is a
+        # truncation naming its size.
+        assert tally is not None
+        assert tally.failed_scopes == []
+        assert len(tally.truncated_scopes) == 1
+        assert "1 of 2" in tally.truncated_scopes[0]
+        outcome = parse_novig(raws)
+        assert len(outcome.quotes) == 1
+
+    def test_a_league_whose_every_book_died_is_a_failure(self, monkeypatch):
+        monkeypatch.setattr(settings, "NOVIG_CLIENT_ID", "ID")
+        monkeypatch.setattr(settings, "NOVIG_CLIENT_SECRET", "SEC")
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            path = request.url.path
+            if path == "/nbx/v1/auth/emm-token":
+                return httpx.Response(200, json={"access_token": "T"})
+            if path == "/nbx/v2/emm/events":
+                return httpx.Response(200, json=[{
+                    "id": "ev1", "type": "Game", "status": "OPEN_PREGAME",
+                    "league": "MLB", "scheduledStart": LIVE_GAME_ISO,
+                    "game": {
+                        "homeTeam": {"name": "Philadelphia Phillies"},
+                        "awayTeam": {"name": "Cincinnati Reds"},
+                    },
+                }])
+            if path == "/nbx/v2/emm/markets/open":
+                return httpx.Response(200, json=[{
+                    "id": "m1", "type": "MONEY", "eventId": "ev1", "strike": None,
+                    "outcomes": [
+                        {"id": "o1", "description": "Cincinnati Reds"},
+                        {"id": "o2", "description": "Philadelphia Phillies"},
+                    ],
+                }])
+            if path == "/nbx/v2/emm/book/m1":
+                return httpx.Response(404, json={"error": "gone"})
+            raise AssertionError(f"unexpected request {request.url}")
+
+        client = _FormAwareClient(transport=httpx.MockTransport(handler))
+        adapter = NovigAdapter(leagues=("MLB",), client=client)
+        try:
+            with pytest.raises(Exception) as caught:
+                adapter.fetch_raw()
+        finally:
+            adapter.close()
+        assert "every one of 1 order-book request(s) failed" in str(caught.value)
+
+
 # ── parser edges, on documented shapes ───────────────────────────────────────
 
 
@@ -559,6 +679,8 @@ class TestProphetXParserEdges:
                             [
                                 {"name": "Cincinnati Reds", "odds": 3.1, "line": 2.5,
                                  "competitor_id": 1, "outcome_id": 3},
+                                {"name": "Philadelphia Phillies", "odds": 1.35,
+                                 "line": -2.5, "competitor_id": 2, "outcome_id": 4},
                             ]
                         ],
                     },
@@ -569,7 +691,7 @@ class TestProphetXParserEdges:
                         "selections": [
                             [
                                 {"name": "Cincinnati Reds", "odds": 2.0, "line": 0.5,
-                                 "competitor_id": 1, "outcome_id": 4},
+                                 "competitor_id": 1, "outcome_id": 5},
                             ]
                         ],
                     },
@@ -579,9 +701,35 @@ class TestProphetXParserEdges:
         outcome = parse_prophetx(raws)
         mains = [quote for quote in outcome.quotes if not quote.is_alternate]
         alternates = [quote for quote in outcome.quotes if quote.is_alternate]
-        assert len(mains) == 2 and len(alternates) == 1
-        assert alternates[0].line == 2.5
+        assert len(mains) == 2 and len(alternates) == 2
+        assert sorted(quote.line for quote in alternates) == [-2.5, 2.5]
         assert outcome.skipped["non_full_game_market"] == 1
+
+    def test_same_signed_selection_lines_are_rejected_not_published(self):
+        """A numeric selection line is not evidence of a *signed* one: two
+        selections both carrying +1.5 are the round-1 ambiguity moved one
+        level down, and only the pair reveals it — a real handicap's two
+        sides sum to zero."""
+        raws = self._fixture_raws(
+            market={
+                "id": 55,
+                "type": "spread",
+                "name": "Run Line",
+                "selections": [
+                    [
+                        {"name": "Cincinnati Reds", "odds": 2.4, "line": 1.5,
+                         "competitor_id": 1, "outcome_id": 1},
+                        {"name": "Philadelphia Phillies", "odds": 1.6, "line": 1.5,
+                         "competitor_id": 2, "outcome_id": 2},
+                    ]
+                ],
+            }
+        )
+        outcome = parse_prophetx(raws)
+        assert not outcome.quotes
+        assert [rejection.reason for rejection in outcome.rejections] == [
+            "spread_sign_unresolved"
+        ]
 
     def test_a_spread_with_only_a_market_level_line_is_rejected_not_signed(self):
         """The market's one number is an unsigned magnitude serving two
@@ -608,9 +756,10 @@ class TestProphetXParserEdges:
         )
         outcome = parse_prophetx(raws)
         assert not outcome.quotes
-        assert sorted(rejection.reason for rejection in outcome.rejections) == [
-            "spread_sign_unresolved",
-            "spread_sign_unresolved",
+        # One rejection for the market, not one per selection: the invariant
+        # is a property of the pair, so it is judged and reported once.
+        assert [rejection.reason for rejection in outcome.rejections] == [
+            "spread_sign_unresolved"
         ]
 
     def test_the_same_event_batched_twice_dedupes_instead_of_aborting(self):
@@ -703,6 +852,9 @@ class TestProphetXParserEdges:
                         {"id": 3, "name": "NBA Summer League"},
                         {"id": 4, "name": "NBA G League"},
                         {"id": 5, "name": "National Basketball Association"},
+                        # The same id under both accepted spellings must not
+                        # be fetched twice.
+                        {"id": 2, "name": "National Basketball Association"},
                     ]
                 }
             },
@@ -826,6 +978,107 @@ class TestNovigParserEdges:
         assert reds.decimal_odds == pytest.approx(250.0)
         assert reds.limit_amount is None
         assert phils.limit_amount == pytest.approx(5.0)
+
+    def test_duplicate_outcome_ids_are_rejected_not_self_priced(self):
+        """The complement rule hinges on B being the *other* side.  Two
+        outcomes sharing an id price each side off its own ladder, and a
+        single venue then fabricates an arbitrage all by itself."""
+        market = {
+            "id": "m6",
+            "type": "MONEY",
+            "eventId": "ev1",
+            "strike": None,
+            "outcomes": [
+                {"id": "o1", "description": "Cincinnati Reds"},
+                {"id": "o1", "description": "Philadelphia Phillies"},
+            ],
+        }
+        book = {
+            "marketId": "m6",
+            "outcomeLadders": [
+                {"outcomeId": "o1",
+                 "bids": [{"price": 0.6, "qty": 1000, "currency": "CASH",
+                           "status": "RESTING"}]},
+            ],
+        }
+        outcome = parse_novig(self._raws(market, book))
+        assert not outcome.quotes
+        assert [rejection.reason for rejection in outcome.rejections] == [
+            "duplicate_outcome_id"
+        ]
+
+    def test_a_description_with_two_signed_numbers_is_ambiguous(self):
+        """"Phils -110 -1.5" does not say which number is the handicap, and
+        taking the first — or the last — is a coin flip wearing a rule's
+        clothes.  Exactly one signed token resolves; anything else rejects."""
+        market = {
+            "id": "m7",
+            "type": "SPREAD",
+            "eventId": "ev1",
+            "strike": 1.5,
+            "outcomes": [
+                {"id": "o1", "description": "Cincinnati Reds +1.5"},
+                {"id": "o2", "description": "Philadelphia Phillies -110 -1.5"},
+            ],
+        }
+        book = {
+            "marketId": "m7",
+            "outcomeLadders": [
+                {"outcomeId": "o1",
+                 "bids": [{"price": 0.4, "currency": "CASH", "status": "RESTING"}]},
+                {"outcomeId": "o2",
+                 "bids": [{"price": 0.55, "currency": "CASH", "status": "RESTING"}]},
+            ],
+        }
+        outcome = parse_novig(self._raws(market, book))
+        assert [quote.line for quote in outcome.quotes] == [1.5]
+        assert [rejection.reason for rejection in outcome.rejections] == [
+            "spread_sign_unresolved"
+        ]
+
+    def test_a_stale_trailing_events_page_cannot_overwrite_the_fixture(self):
+        """``events:MLB:01`` is positional: a longer *older* run leaves a
+        trailing page no newer run's label replaces, and fixtures are written
+        last-wins — so without run selection, today's live book prices file
+        under yesterday's start time, which feeds both the pregame gate and
+        the event key.  Only ``latest_capture`` drops that page."""
+        stale_time = NOW - timedelta(hours=2)
+        stale_iso = (NOW + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        market = {
+            "id": "m1",
+            "type": "MONEY",
+            "eventId": "ev1",
+            "strike": None,
+            "outcomes": [
+                {"id": "o1", "description": "Cincinnati Reds"},
+                {"id": "o2", "description": "Philadelphia Phillies"},
+            ],
+        }
+        book = {
+            "marketId": "m1",
+            "outcomeLadders": [
+                {"outcomeId": "o2",
+                 "bids": [{"price": 0.52, "qty": 1000, "currency": "CASH",
+                           "status": "RESTING"}]},
+            ],
+        }
+        fresh = self._raws(market, book)
+        stale_event = {
+            "id": "ev1",
+            "status": "OPEN_PREGAME",
+            "league": "MLB",
+            "scheduledStart": stale_iso,
+            "game": {
+                "homeTeam": {"name": "Philadelphia Phillies"},
+                "awayTeam": {"name": "Cincinnati Reds"},
+            },
+        }
+        stale_pages = [
+            _raw("novig", "events:MLB:00", [stale_event], fetched_at=stale_time),
+            _raw("novig", "events:MLB:01", [stale_event], fetched_at=stale_time),
+        ]
+        outcome = parse_novig([*stale_pages, *fresh])
+        assert [quote.commence_time for quote in outcome.quotes] == [GAME_TIME]
 
     def test_two_money_markets_on_one_event_dedupe_instead_of_aborting(self):
         """``dedup_key`` carries no market id, so a venue listing two MONEY

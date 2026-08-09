@@ -219,9 +219,30 @@ NATIONWIDE_SOURCE_KEYS: frozenset[str] = frozenset({"kalshi"})
 #: one exists before then (a response body carrying a partner or account id
 #: has no sanctioned path at all, and that would be the finding).
 #: ``tests/test_prophetx_novig.py`` pins both directions: the keys stay out of
-#: :func:`keys` today, and this set names them so registration is a one-step
-#: decision — add the descriptor, classify it in the four reachability sets,
-#: declare COMMISSIONS and SETTLEMENT, and commit the capture.
+#: :func:`keys` today, and this set names them so registering later is a
+#: *decision* with a complete checklist rather than a drift.  Registration
+#: takes all of the following — the list is deliberately identical to the one
+#: in ``docs/SOURCE_FEASIBILITY.md``, and a step missing from either copy is
+#: a defect, because the suite enforces most of these and the report renders
+#: the rest:
+#:
+#: 1. the descriptor in :data:`_BASE_SOURCES`, classified in the four
+#:    reachability sets (the cover check refuses anything less);
+#: 2. ``COMMISSIONS`` and ``SETTLEMENT`` entries (``_check_registry``
+#:    refuses their absence; Novig's must encode pregame-zero — see the
+#:    adapter docstring);
+#: 3. a genuine capture committed under ``tests/fixtures/raw/``
+#:    (``conftest`` demands one per registered key);
+#: 4. distinctness measured against every registered source, and any
+#:    intentional failover pair declared in ``src.redundancy``;
+#: 5. a ``src.betlinks`` entry — ``tests/test_betlinks.py`` asserts every
+#:    registered non-consensus key resolves to a link;
+#: 6. a ``src.report.SOURCE_NOTES`` entry with ``kind`` set to
+#:    ``exchange`` — without one the sources page renders the venue as an
+#:    unknown *sportsbook*, which for these two is affirmatively wrong;
+#: 7. flipping the stays-unregistered pin in ``tests/test_prophetx_novig.py``;
+#: 8. the full acceptance bar (healthy collect, replay PASS, counted in
+#:    ``comparable_group_count``).
 CREDENTIALED_SOURCE_KEYS: frozenset[str] = frozenset({"prophetx", "novig"})
 
 VIEW_ONLY_SOURCES: frozenset[str] = REPUBLISHED_SOURCE_KEYS | jurisdiction(

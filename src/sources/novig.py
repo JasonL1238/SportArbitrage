@@ -297,15 +297,26 @@ class NovigAdapter:
         )
         into.append(markets_raw)
 
-        in_scope = [
-            entry
-            for entry in _entry_list(markets_raw, source=self._source_key)
-            if str(entry.get("type") or "") in _MARKET_TYPES
-            and isinstance(entry.get("id"), str)
-            and isinstance(entry.get("eventId"), str)
-            and entry.get("eventId") in event_ids
-        ]
-        for index, market in enumerate(in_scope):
+        # Keyed by market id so a duplicated row cannot fetch its book twice.
+        in_scope: dict[str, dict[str, Any]] = {}
+        for entry in _entry_list(markets_raw, source=self._source_key):
+            if (
+                str(entry.get("type") or "") in _MARKET_TYPES
+                and isinstance(entry.get("id"), str)
+                and isinstance(entry.get("eventId"), str)
+                and entry.get("eventId") in event_ids
+            ):
+                in_scope.setdefault(entry["id"], entry)
+        # One vanished market must not cost the league: a market listed by
+        # ``markets/open`` can be matched out or closed in the seconds before
+        # its book call, and the resulting refusal is churn, not a scope
+        # failure — the earlier responses in this very list still parse.  A
+        # lost book is recorded as a truncation (the scope answered and then
+        # came up short), and only a league whose *every* book call failed is
+        # re-raised as the league's failure.
+        lost: list[str] = []
+        attempted = 0
+        for index, market_id in enumerate(in_scope):
             if index >= MAX_BOOKS_PER_LEAGUE:
                 tally.truncated(
                     league_key,
@@ -316,14 +327,33 @@ class NovigAdapter:
                     ),
                 )
                 break
-            market_id = str(market["id"])
-            into.append(
-                self._http.get(
-                    f"{self.base_url}/nbx/v2/emm/book/{market_id}",
-                    endpoint=f"book:{league_key}:{market_id}",
-                    params={"currency": "CASH"},
-                    headers=auth,
+            attempted += 1
+            try:
+                into.append(
+                    self._http.get(
+                        f"{self.base_url}/nbx/v2/emm/book/{market_id}",
+                        endpoint=f"book:{league_key}:{market_id}",
+                        params={"currency": "CASH"},
+                        headers=auth,
+                    )
                 )
+            except SourceError as exc:
+                log.warning(
+                    "%s: book %s failed: %s", self._source_key, market_id, exc
+                )
+                lost.append(f"{market_id}: {exc}")
+        if lost:
+            if attempted == len(lost):
+                raise SourceError(
+                    f"{self._source_key}: {league_key}: every one of {attempted} "
+                    f"order-book request(s) failed; first: {lost[0]}"
+                )
+            tally.truncated(
+                league_key,
+                SourceError(
+                    f"{len(lost)} of {attempted} order books were refused or "
+                    f"vanished mid-pass; first: {lost[0]}"
+                ),
             )
         return len(in_scope)
 
@@ -722,6 +752,25 @@ def _parse_book(
         outcome.skipped["not_a_two_outcome_market"] += 1
         return
 
+    # ...and only when the two outcomes are actually distinct.  The whole
+    # 1 − bid(B) rule hinges on B being the *other* side; a payload whose two
+    # outcomes share an id would price each side off its own ladder, and a
+    # single venue then fabricates an arbitrage all by itself (two 2.5s on
+    # one coin: combined implied probability 0.8).  ``status`` and
+    # ``currency`` get defensive filters below for untidy captures — the
+    # identity the derivation rests on deserves no less.
+    first_id, second_id = (
+        market.outcomes[0].get("id"),
+        market.outcomes[1].get("id"),
+    )
+    if first_id == second_id:
+        outcome.reject(
+            source,
+            "duplicate_outcome_id",
+            f"book {market.market_id}: both outcomes carry id {first_id!r}",
+        )
+        return
+
     for this, other in (
         (market.outcomes[0], market.outcomes[1]),
         (market.outcomes[1], market.outcomes[0]),
@@ -919,11 +968,19 @@ def _resolve_selection(
 
 
 def _signed_line(description: str) -> float | None:
-    """An explicitly signed handicap in the text, e.g. ``"KC -3.5"``."""
+    """The one explicitly signed handicap in the text, e.g. ``"KC -3.5"``.
+
+    Exactly one, or nothing: a description carrying two signed numbers
+    ("Phils -110 -1.5") does not say which is the handicap, and taking the
+    first — or the last — is a coin flip wearing a rule's clothes.  The
+    ambiguous case rejects upstream under ``spread_sign_unresolved``, which
+    is the honest reading until a genuine capture shows the venue's format.
+    """
+    found: list[float] = []
     for token in description.replace("(", " ").replace(")", " ").split():
         if token[:1] in "+-" and len(token) > 1:
             try:
-                return float(token)
+                found.append(float(token))
             except ValueError:
                 continue
-    return None
+    return found[0] if len(found) == 1 else None
