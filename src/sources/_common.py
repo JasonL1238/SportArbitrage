@@ -669,6 +669,12 @@ _WHOLE_GAME_PHRASES = (
     "includes extra time",
     "incl overtime", "including overtime", "inc overtime",
     "with overtime", "includes overtime", "incl ot", "including ot",
+    # The inclusion word trails as often as it leads — "Total Runs (Extra
+    # Innings Included)" says exactly what "Incl. Extra Innings" says, and
+    # reading only the prefix form made the postfix one a sub-period market.
+    "extra innings included", "extra inning included", "extra time included",
+    "overtime included", "ot included", "et included",
+    "overtime shootout included", "overtime and shootout included",
 )
 
 #: Windows that only a *phrase* names: no single token in "extra time" or
@@ -702,7 +708,11 @@ def mentions_a_sub_period(*labels: Any) -> bool:
     )
     for phrase in _WHOLE_GAME_PHRASES:
         text = text.replace(phrase, " ")
-    if any(phrase in text for phrase in _SUB_PERIOD_PHRASES):
+    # Padded, so a phrase matches on word boundaries: an unpadded ``in`` test
+    # reads "extra time" inside "extra timeout", which is the substring
+    # mistake this module's own tokenising exists to avoid.
+    padded = f" {text} "
+    if any(f" {phrase} " in padded for phrase in _SUB_PERIOD_PHRASES):
         return True
     return bool(set(text.split()) & PERIOD_MARKERS)
 

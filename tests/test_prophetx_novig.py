@@ -2210,8 +2210,16 @@ class TestTheCredentialedAxis:
         # settled on those frames alone is exactly one.
         for whole in ("Total Runs (Incl. Extra Innings)",
                       "Total Runs Including Extra Innings",
-                      "Moneyline incl extra time"):
+                      "Moneyline incl extra time",
+                      # The inclusion word trails as often as it leads.
+                      "Total Runs (Extra Innings Included)",
+                      "Winner - Overtime Included",
+                      "Extra Time Included",
+                      "Moneyline (Incl. OT)",
+                      "Total Points (Including Overtime)"):
             assert not _common.mentions_a_sub_period(whole), whole
+        # ...and a phrase matches on word boundaries, not as a substring.
+        assert not _common.mentions_a_sub_period("Extra Timeouts Used")
         for narrow in ("Extra Innings Only", "Extra Time Winner",
                        "Extra Time Total Goals"):
             assert _common.mentions_a_sub_period(narrow), narrow
