@@ -815,12 +815,22 @@ def refuse_mid_move_pairings(source: str, outcome: Any) -> None:
     Written for the HTML line trackers (VegasInsider, VSiN), whose cells update
     one at a time: a column read mid-move pairs one side's fresh price with the
     other side's stale one, producing a combination the book never offered.
-    Measured on the committed 2026-08-03 ``vi_hardrock`` capture: Hard Rock's
-    total shown as ``o8.5 +110 / u8.5 −105`` — implied probabilities summing to
-    0.9884 — while every other column sat at 8/−115 and Hard Rock's own feed
-    later that day priced 7.5 at −135/+100.  No bookmaker publishes a
-    negative-margin pairing; published here, either leg pairs with another
-    book's genuine other side into a phantom arbitrage.
+    Measured twice on the committed 2026-08-03 ``vi_hardrock`` capture: the
+    total shown as ``o8.5 +110 / u8.5 −105`` (implied sum 0.9884) while every
+    other column sat at 8 with normal juice (overs −110 to −115) and Hard
+    Rock's own feed later that day priced 7.5 at −135/+100; and the WSH@PHI
+    spread shown as ``home −1.5 +145 / away +1.5 −140`` (implied sum 0.9915),
+    which the first synthesized ``market_key`` tore into two groups of one and
+    therefore never judged.  No bookmaker publishes a negative-margin pairing;
+    published here, either leg pairs with another book's genuine other side
+    into a phantom arbitrage.
+
+    Written for id-less venues only: grouping rides ``market_key``, whose
+    synthesized fallback reconstructs market identity from row fields.  A
+    venue that *reuses* one real market id across a ladder's rungs would merge
+    rungs here and a genuine middle could be deleted as fabricated — neither
+    current caller has ids at all, and a new caller with ids should think
+    before pointing this at them.
 
     A *skip* rather than a rejection, because nothing about the bytes is
     malformed and nothing about the medium is surprising — per-cell updates are

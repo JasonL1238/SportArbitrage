@@ -100,6 +100,16 @@ def core_markets(sport: Sport) -> frozenset[tuple[Market, Period]]:
 MIN_OVERROUND = 1.0
 MAX_OVERROUND = 1.6
 
+#: Float dust is not a losing price.  An exactly-fair pair — vi_hardrock's
+#: TOR@HOU spread read ``away +1.5 −170 / home −1.5 +170`` mid-move, whose
+#: implied probabilities are 17/27 and 10/27 — sums to 1.0 in arithmetic and
+#: 0.9999999999999998 in floats, and the strict ``< MIN_OVERROUND`` comparison
+#: produced an error whose own message refuted it: "sum to 1.0000 < 1.0".
+#: Breaking even is not "pricing itself to lose"; the tolerance is the same
+#: 1e-9 the source-contract suite and ``refuse_mid_move_pairings`` use, so the
+#: three judges of one question cannot disagree at the boundary.
+OVERROUND_FLOAT_TOLERANCE = 1e-9
+
 #: The same floor for an **order-driven** venue, where the reasoning above does
 #: not hold.
 #:
@@ -876,7 +886,7 @@ def _check_markets(
             order_driven = source in order_book_sources
             if order_driven:
                 sub_unity.setdefault(source, []).append(overround)
-            if overround < MIN_OVERROUND:
+            if overround < MIN_OVERROUND - OVERROUND_FLOAT_TOLERANCE:
                 # On an order-driven venue the boundary is the **net** sum: the
                 # two sides are separate books, and "crossed" only means
                 # anything if somebody could actually take both at a profit —
@@ -964,7 +974,7 @@ def _check_markets(
         # a 3% shift never crosses their own book — while still inflating their
         # prices against *other* books, which is where the phantom position
         # would be built.
-        if middle < MIN_OVERROUND:
+        if middle < MIN_OVERROUND - OVERROUND_FLOAT_TOLERANCE:
             report.add(
                 Severity.ERROR,
                 "systematic_sub_unity_pricing",

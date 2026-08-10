@@ -2,6 +2,15 @@
 
 Last updated: 2026-08-03 (Hard Rock IL complete; other three diagnosed)
 
+> **Superseded in part, 2026-08-09.** This document's standing instruction to
+> keep `an_fliff`/`an_circa`/`an_superbook` registered ("do not … unregister
+> the sources") was reversed by an explicit operator decision: all three are
+> **deregistered**, the suite is **fully green** (docs/testing.md is the
+> canonical baseline record), and re-registration requires Action Network
+> restoring the tenant first and a genuine capture second. Every red-baseline
+> number below is history. Current source state lives in
+> `docs/SOURCE_FEASIBILITY.md`; the first-party research below remains valid.
+
 ## Active objective
 
 Establish anonymous first-party odds acquisition for Caesars, Hard Rock,

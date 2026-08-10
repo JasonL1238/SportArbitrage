@@ -227,6 +227,36 @@ class TestInterface:
         outcome.skipped["odds_not_an_object"] += 0
         assert dict(outcome.skipped) == {"odds_not_an_object": 2}
 
+    def test_every_demonstrated_door_into_a_zero_count_reason_is_closed(self) -> None:
+        """The ``+=`` idiom is one of five doors, and an adversarial pass walked
+        through the other four: ``Counter.update`` (and so the constructor and
+        ``copy``) bypasses ``__setitem__`` at the dict level when the counter is
+        empty; an increment undone by a decrement leaves the key at zero; and
+        ``setdefault`` inserts at the C level.  ``extend`` composes from
+        ``update``, so a zero held by one outcome must not propagate either.
+        """
+        from src.sources.base import ParseOutcome, ReasonCounter
+
+        assert dict(ReasonCounter({"r": 0})) == {}
+        counter = ReasonCounter()
+        counter.update({"r": 0})
+        assert dict(counter) == {}
+        counter["r"] += 2
+        counter["r"] -= 2
+        assert dict(counter) == {}
+        counter["r"] += 2
+        counter.subtract({"r": 2})
+        assert dict(counter) == {}
+        assert counter.setdefault("r", 0) == 0
+        assert dict(counter) == {}
+        counter["kept"] += 3
+        assert dict(counter.copy()) == {"kept": 3}
+        receiving = ParseOutcome()
+        holding = ParseOutcome()
+        holding.skipped.update({"r": 0, "kept": 1})
+        receiving.extend(holding)
+        assert dict(receiving.skipped) == {"kept": 1}
+
 
 class TestRowIdentity:
     def test_league_is_registered_and_matches_the_sport(self, adapter_case) -> None:

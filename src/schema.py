@@ -266,14 +266,29 @@ class Quote(BaseModel):
         """Identity of the market this row belongs to.
 
         Keyed on the *source's own* market id, because that is what defines one
-        market at the book.  Deriving the group from this row's own line instead
-        would tear a spread in half — the home row is at -1.5 and the away row at
-        +1.5 — and then pair each half with the opposite side of a different
-        alternate-line market.
+        market at the book.  The synthesized fallback (for venues that publish
+        no market id — the HTML line trackers) must reconstruct that identity
+        from row fields, and a spread's two rows differ on exactly the fields a
+        naive key would read: the home row is at -1.5 and the away row at +1.5,
+        and ``side`` names the team rather than the market.  The first version
+        embedded both, so every id-less spread landed in a group of one — no
+        completeness check, no overround check, and ``refuse_mid_move_pairings``
+        structurally blind to a third of what the trackers publish (a sub-fair
+        -1.5/+1.5 pairing on the committed 2026-08-03 vi_hardrock capture,
+        summing 0.9915, sailed through while the same capture's total was
+        caught).  A spread therefore keys on the **unsigned** line with no
+        side; ``is_alternate`` still separates a ladder's rungs from the main
+        line, which is as much as can be reconstructed without the venue's id.
         """
+        if self.market is Market.SPREAD:
+            side_part = ""
+            line_part = abs(self.line) if self.line is not None else None
+        else:
+            side_part = self.side.value if self.side else ""
+            line_part = self.line
         market_id = self.source_market_id or (
             f"{self.market.value}|{self.period.value}|"
-            f"{self.side.value if self.side else ''}|{self.line}|{self.is_alternate}"
+            f"{side_part}|{line_part}|{self.is_alternate}"
         )
         return (self.source, self.source_event_id, market_id)
 

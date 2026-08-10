@@ -747,10 +747,12 @@ def test_illinois_circa_entry_is_shaped_to_fail_loudly():
     Action Network's only Circa book is the stateless id 78 (zero rows in every
     league, re-measured 2026-08-03) and the 2026-08-08 catalogue lists no
     ``Circa IL``.  ``vsin_circa`` is the Las Vegas line tracker, so it may only
-    ever be ``OTHER_LICENCE`` context.  Anyone upgrading this entry — a direct
-    key, a same-licence feed — is claiming an Illinois price source that has
-    been measured not to exist, and this pin makes that claim a failing test
-    rather than a quietly green checklist.
+    ever be ``OTHER_LICENCE`` context — grading ``NON_LOCAL_ONLY`` when VSiN
+    answers and ``MISSING`` when it does not, ERROR severity either way.
+    Anyone upgrading this entry — a direct key, a same-licence feed — is
+    claiming an Illinois price source that has been measured not to exist, and
+    this pin makes that claim a failing test rather than a quietly green
+    checklist.
     """
     circa = next(book for book in REQUIRED_BOOKS["IL"] if book.book == "Circa")
     assert circa.direct is None

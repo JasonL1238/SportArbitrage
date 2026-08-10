@@ -309,6 +309,34 @@ def test_negative_overround_is_an_error() -> None:
     assert "negative_overround" in _codes(quotes)
 
 
+def test_an_exactly_fair_pair_is_not_priced_to_lose() -> None:
+    """Float dust must not convict a break-even pairing.
+
+    ``away −170 / home +170`` has implied probabilities 17/27 and 10/27 — an
+    arithmetic sum of exactly 1.0 that floats render as 0.9999999999999998.
+    The strict ``< MIN_OVERROUND`` comparison filed it as negative_overround
+    with a message that refuted itself ("sum to 1.0000 < 1.0"), measured on
+    the committed vi_hardrock TOR@HOU spread the day the synthesized
+    ``market_key`` fix first let validation see tracker spreads whole.
+    Breaking even is not pricing yourself to lose.
+    """
+    quotes = _full_slate("bookA") + _full_slate("bookB")
+    quotes = [q for q in quotes if not (q.source == "bookA" and q.market is Market.SPREAD)]
+    quotes += [
+        make_quote(
+            source="bookA", market=Market.SPREAD, selection=Selection.AWAY,
+            line=1.5, decimal_odds=1 + 100 / 170, american_odds=-170,
+            source_market_id="bookA-sp",
+        ),
+        make_quote(
+            source="bookA", market=Market.SPREAD, selection=Selection.HOME,
+            line=-1.5, decimal_odds=2.7, american_odds=170,
+            source_market_id="bookA-sp",
+        ),
+    ]
+    assert "negative_overround" not in _codes(quotes)
+
+
 def test_unmirrored_spread_is_an_error() -> None:
     quotes = _full_slate("bookA") + _full_slate("bookB")
     quotes[3] = make_quote(

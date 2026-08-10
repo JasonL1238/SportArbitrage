@@ -11,16 +11,18 @@ from src.sources.vegasinsider import parse_vegasinsider
 
 
 #: The 2026-08-03 page carries 8 games × 3 markets × 2 sides = 48 rows per
-#: column.  ``vi_hardrock`` publishes two fewer: its total on LAD@CHC read
-#: ``o8.5 +110 / u8.5 −105`` — implied probabilities summing to 0.9884, a
-#: pairing no book offers, produced by the tracker's cells updating one at a
-#: time — and ``refuse_mid_move_pairings`` drops both legs and counts them.
+#: column.  ``vi_hardrock`` publishes four fewer, both drops mid-move pairings
+#: no book offered at once: its LAD@CHC total read ``o8.5 +110 / u8.5 −105``
+#: (implied sum 0.9884) and its WSH@PHI spread read ``home −1.5 +145 /
+#: away +1.5 −140`` (implied sum 0.9915 — the pair the first synthesized
+#: ``market_key`` tore in half and therefore never judged).
+#: ``refuse_mid_move_pairings`` drops all four legs and counts them.
 @pytest.mark.parametrize(
     ("source", "expected", "dropped"),
     [
         ("vi_draftkings", 48, 0),
         ("vi_caesars", 48, 0),
-        ("vi_hardrock", 46, 2),
+        ("vi_hardrock", 44, 4),
         ("vi_fanatics", 48, 0),
         ("vi_bet365", 48, 0),
     ],

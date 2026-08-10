@@ -141,6 +141,38 @@ def test_market_key_groups_by_source_market_not_by_line() -> None:
     assert other.market_key != home.market_key
 
 
+def test_an_idless_spread_still_groups_as_one_market() -> None:
+    """The synthesized fallback must not tear a spread in half.
+
+    Venues with no market id — the HTML line trackers — get a key built from
+    row fields, and the first version embedded the row's own signed line and
+    side, so every tracker spread landed in a group of one: no completeness
+    check, no overround check, and ``refuse_mid_move_pairings`` structurally
+    blind to spreads.  Measured on the committed 2026-08-03 ``vi_hardrock``
+    capture: home −1.5 +145 / away +1.5 −140, implied sum 0.9915, published.
+    The unsigned line groups the pair; ``is_alternate`` still separates a
+    ladder's rungs; and a team total's ``side`` still scopes its market, so
+    the home and away team totals do not merge.
+    """
+    home = make_quote(market=Market.SPREAD, selection=Selection.HOME, line=-1.5,
+                      decimal_odds=2.45, american_odds=145, source_market_id=None)
+    away = make_quote(market=Market.SPREAD, selection=Selection.AWAY, line=1.5,
+                      decimal_odds=1.714, american_odds=-140, source_market_id=None)
+    assert home.source_market_id is None
+    assert home.market_key == away.market_key
+
+    alt = make_quote(market=Market.SPREAD, selection=Selection.HOME, line=-1.5,
+                     decimal_odds=2.45, american_odds=145, is_alternate=True,
+                     source_market_id=None)
+    assert alt.market_key != home.market_key
+
+    home_tt = make_quote(market=Market.TEAM_TOTAL, selection=Selection.OVER,
+                         line=4.5, side=Side.HOME, source_market_id=None)
+    away_tt = make_quote(market=Market.TEAM_TOTAL, selection=Selection.UNDER,
+                         line=4.5, side=Side.AWAY, source_market_id=None)
+    assert home_tt.market_key != away_tt.market_key
+
+
 def test_dedup_key_separates_lines_and_sides() -> None:
     over_85 = make_quote(market=Market.TOTAL, selection=Selection.OVER, line=8.5)
     over_95 = make_quote(market=Market.TOTAL, selection=Selection.OVER, line=9.5)

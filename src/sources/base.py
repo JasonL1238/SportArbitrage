@@ -51,15 +51,39 @@ class ReasonCounter(Counter):
     (``len(rows) - len(usable)``, ``_v2_row_count(...)``), and the v2 Action
     Network parser shipped exactly this: ``odds_not_an_object: 0`` on every
     capture whose rows were all objects, which
-    ``test_out_of_scope_input_is_counted_rather_than_ignored`` refuses.  The
-    invariant — every recorded reason counted at least one row — is made true
-    by construction here rather than re-earned at each call site.
+    ``test_out_of_scope_input_is_counted_rather_than_ignored`` refuses.
+
+    "By construction" has to cover more than the ``+=`` idiom, because an
+    adversarial pass demonstrated three other doors: ``Counter.update`` (and
+    therefore the constructor and ``copy``) takes a dict-level fast path that
+    bypasses ``__setitem__`` when the counter is empty, and an increment
+    followed by a matching decrement leaves an existing key at zero.  So
+    ``__setitem__`` *removes* a key set to zero rather than keeping it, and
+    ``update`` purges zeros after delegating.  Runs 13–27 in the working store
+    predate this class and hold the old zero-count rows; stored records are
+    history and are not rewritten.
     """
 
     def __setitem__(self, key: str, value: int) -> None:
-        if value == 0 and key not in self:
+        if value == 0:
+            super().pop(key, None)
             return
         super().__setitem__(key, value)
+
+    def update(self, iterable=None, /, **kwds) -> None:  # type: ignore[override]
+        # Only the empty-counter dict-level fast path escapes __setitem__;
+        # subtract() needs no twin because it assigns per element and the
+        # zero-delete in __setitem__ already catches it (mutation-verified).
+        super().update(iterable, **kwds)
+        for key in [key for key, count in self.items() if count == 0]:
+            del self[key]
+
+    def setdefault(self, key: str, default: int | None = None) -> int | None:
+        # dict.setdefault inserts at the C level without calling __setitem__,
+        # so a zero default would materialize the key; answer 0 without holding it.
+        if default == 0 and key not in self:
+            return 0
+        return super().setdefault(key, default)
 
 
 @dataclass

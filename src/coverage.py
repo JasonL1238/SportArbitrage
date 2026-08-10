@@ -272,9 +272,11 @@ def _required(
 #:   every league asked, and the catalogue lists no ``Circa IL``.  Circa's own
 #:   site names VSiN as its odds aggregator, so ``vsin_circa`` is declared here —
 #:   as ``OTHER_LICENCE``, because it is the Las Vegas line tracker, not an
-#:   Illinois price.  The entry grades ``MISSING`` and is meant to: an IGB book
-#:   the operator named, with no Illinois-licence observation path, should fail
-#:   loudly rather than be quietly absent from the table.
+#:   Illinois price.  The entry fails loudly and is meant to: ``NON_LOCAL_ONLY``
+#:   on any run where VSiN answers, ``MISSING`` when it does not — both ERROR
+#:   severity, both unobserved-locally.  An IGB book the operator named, with no
+#:   Illinois-licence observation path, should never be quietly absent from the
+#:   table.
 #: * ``theScore Bet`` is watched through id 4601, which no committed capture has
 #:   ever requested.  The first-party ``us-il`` GraphQL surface answered anonymous
 #:   probes on 2026-08-04 and is the adapter candidate that would satisfy the rule

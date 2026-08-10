@@ -355,6 +355,42 @@ def test_the_unproven_books_are_captured_on_their_own_id_and_parse(
         )
 
 
+def test_the_periods_evidence_cannot_quietly_leave_the_fixture_pool() -> None:
+    """At least one committed AN baseball board must parse to sub-game windows.
+
+    The windows-present assertion above is conditional on an ``:mlb`` board
+    being in the key's store — a soccer board has no innings to show — which
+    makes it *self-disabling*: a recapture pass that happens to store no
+    baseball board (any pass in the MLB offseason) would silently retire the
+    suite's only committed-bytes proof that ``periods=`` yields F5/F1 windows,
+    with zero failing tests.  This floor pin makes that loss loud.  It binds
+    the pool, not one key, so the evidence may move between keys — today it
+    lives in ``an_parx``'s and ``an_unibet``'s 2026-08-08 Pennsylvania MLB
+    boards.  If MLB itself is dark at recapture time, the honest moves are a
+    capture of another innings-bearing board or a deliberate, recorded change
+    to this pin — not a quiet conditional.
+    """
+    store = RawStore(FIXTURE_RAW_DIR)
+    mlb_paths = sorted(FIXTURE_RAW_DIR.glob("an_*__*-mlb_*.json"))
+    assert mlb_paths, "no Action Network baseball board is committed at all"
+    windowed = set()
+    for path in mlb_paths:
+        raw = store.read(path)
+        if "periods=event%2Cfirstfiveinnings%2Cfirstinning" not in raw.url:
+            continue
+        source_key = path.name.split("__", 1)[0]
+        adapter = registry.descriptor(source_key).replay_instance()
+        try:
+            outcome = adapter.parse([raw])
+        finally:
+            adapter.close()
+        windowed |= {q.period for q in outcome.quotes} - {Period.FULL_GAME}
+    assert windowed, (
+        "no committed AN baseball board parses to a sub-game window; the "
+        "periods= proof has left the fixture pool"
+    )
+
+
 def test_every_live_action_network_request_names_its_book_ids() -> None:
     """No request relies on v2's *unnamed* default, which nobody has measured.
 

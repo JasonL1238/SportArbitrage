@@ -297,10 +297,12 @@ offline fixture pool now spans capture vintages on shared NFL events.
 `an_parx`'s 2026-08-08 PA NFL board carried LAC@HOU with the away side
 favoured; by 2026-08-10 the line had genuinely crossed to the home side, and
 the cross-book identity test correctly refused the pool. The stale
-`scoreboard-74-nfl` file was retired (its MLB board, 351 rows, remains
-`an_parx`'s contract evidence); it cannot be recaptured from Illinois because
-74 is a Pennsylvania-scoped request, and the next PA-egress recapture replaces
-it with a fresh board. Retiring a superseded genuine capture is fixture
+`scoreboard-74-nfl` file was retired (its MLB board — **255 rows**; the
+retired NFL board parsed to 96, and an earlier revision of this note wrongly
+attributed their 351-row total to the surviving board — remains `an_parx`'s
+contract evidence); it cannot be recaptured from Illinois because 74 is a
+Pennsylvania-scoped request, and the next PA-egress recapture replaces it
+with a fresh board. Retiring a superseded genuine capture is fixture
 curation, not synthesis — nothing was edited, and the removal is recorded
 here.
 
@@ -722,14 +724,21 @@ Illinois. In particular, the IGB has issued cease-and-desist letters to
 [Polymarket, Kalshi, and Bovada](https://igb.illinois.gov/sports-wagering/cease-and-desist-letters.html).
 
 **Operator decision, 2026-08-09:** asked directly how Kalshi and Polymarket US
-should be presented on Illinois runs given those letters, the operator chose to
-keep them takeable — `registry.takeable_from_state` continues to admit Kalshi
-in every state, and no per-state exclusion table is added. (Bovada is already
-in `US_UNAVAILABLE_SOURCE_KEYS` on independent grounds.) An earlier revision of
+should be presented on Illinois runs given those letters, the operator chose
+"keep as-is (takeable)" — no per-state exclusion table is added. What that
+mechanically means today: **Kalshi** stays in the nationwide-takeable set on
+IL runs, unchanged. **Polymarket** has no takeable referent to keep: the one
+registered `polymarket` key reads the offshore book and sits in
+`US_UNAVAILABLE_SOURCE_KEYS`, and no `polymarket_us` key exists yet — nothing
+named Polymarket is takeable on an Illinois run today. The decision's
+Polymarket half is therefore *prospective*: when `polymarket_us` is registered
+(after the operator's KYC and keys), it enters the takeable set without an IL
+carve-out unless the operator revisits this. (Bovada, the third letter
+recipient, is US-unavailable on independent grounds.) An earlier revision of
 this note said these feeds "must not be presented as Illinois betting
-counterparties"; that wording described the letters' position, and the recorded
-decision above — not this note — is the repository's answer. The letters
-themselves remain a fact worth re-checking if the IGB escalates.
+counterparties"; that wording described the letters' position, and the
+recorded decision above — not this note — is the repository's answer. The
+letters themselves remain a fact worth re-checking if the IGB escalates.
 
 ### First-party acquisition follow-up — 2026-08-04 UTC
 
@@ -777,7 +786,7 @@ material price drift instead.
 | Hard Rock Bet | `hardrock` | `an_hardrock` | `vi_hardrock` | **Three paths registered.** First party now returns current IL core markets parser-clean; AN v2 and VI provide diagnostic comparison rows. |
 | bet365 | not implemented | `an_bet365` | `vi_bet365` | AN and VI produce comparison rows. A normal browser shows first-party IL odds, but fresh isolated automation does not complete its catalog subscription. |
 | Fanatics | not implemented | `an_fanatics` | `vi_fanatics` | AN v2 and VI produce comparison rows. The current web host is marketing-only; native-app first-party discovery remains. |
-| Circa | app-only surface; no web adapter | `an_circa` | `vsin_circa` | Circa's own site points to VSiN as an odds aggregator. The named VSiN column produced 48 MLB quotes / 8 events with no rejections. It is a Las Vegas line tracker, so use it as fallback and drift evidence rather than proof of Illinois-state price identity. AN is retained but currently omits Circa. |
+| Circa | app-only surface; no web adapter | `an_circa` | `vsin_circa` | Circa's own site points to VSiN as an odds aggregator. The named VSiN column produced 48 MLB quotes / 8 events with no rejections. It is a Las Vegas line tracker, so use it as fallback and drift evidence rather than proof of Illinois-state price identity. *(2026-08-09: `an_circa` has since been deregistered — see § "Three registered ids carry no odds"; `vsin_circa` is now Circa's only feed.)* |
 | theScore Bet | verified IL GraphQL surface; adapter pending | none | none | Official `us-il` edge returned a valid anonymous startup, MLB competition, and lines payload. This is the strongest next first-party adapter candidate. |
 
 The retained Action Network feeds were rechecked from Illinois on 2026-08-03.
@@ -786,11 +795,11 @@ current Action Network web board revealed a v2 endpoint and grouped `markets`
 schema. After adding dual-schema parsing, v2 restored real 48-quote MLB captures
 for Hard Rock, Fanatics, and Bally. Fliff, Circa, and SuperBook still returned
 zero requested-book rows across MLB, WNBA, NFL, NHL, and soccer. Those remaining
-three cannot yet supply the real, non-empty captures required by the offline
-source contract. Their independent fallbacks remain registered where available,
-but the full offline suite remains blocked until Action Network restores those
-tenants or a different genuine feed is integrated under an accurately named
-source.
+three cannot supply the real, non-empty captures required by the offline
+source contract. *(This paragraph's ending is superseded: on 2026-08-09 the
+operator approved deregistering all three rather than waiting — see § "Three
+registered ids carry no odds" — and the full suite is green. `vsin_circa`
+remains registered as Circa's fallback.)*
 
 ### Pennsylvania: no book reaches the two-feed bar
 
@@ -842,6 +851,9 @@ page to each of the three new parsers yields 48 quotes apiece. They need a
 recapture on a live slate, not a code change; `test_the_adapter_produced_rows_at_all`
 would currently fail on all six, masked only by the pre-existing
 `an_fliff` / `an_circa` / `an_superbook` fixture gap that errors first.
+*(Resolved 2026-08-10: the dead-slate captures were replaced with live
+IL-egress ones parsing 18/54/54 rows, and the fixture gap is gone with the
+deregistration — see § "One stale board retired for vintage coherence".)*
 
 bet365 and Fanatics previously read as cross-checked; their second feed was the
 Las Vegas column, so they no longer can. For the six books with no first-party
