@@ -725,6 +725,38 @@ def test_pennsylvania_declares_every_book_the_operator_named():
     }
 
 
+def test_illinois_declares_every_book_the_operator_named():
+    """The ten IGB online operators, so quietly dropping one is a failing test."""
+    assert {book.book for book in REQUIRED_BOOKS["IL"]} == {
+        "bet365",
+        "BetMGM",
+        "BetRivers",
+        "Caesars",
+        "Circa",
+        "DraftKings",
+        "FanDuel",
+        "Fanatics",
+        "Hard Rock Bet",
+        "theScore Bet",
+    }
+
+
+def test_illinois_circa_entry_is_shaped_to_fail_loudly():
+    """Circa has no Illinois-licence observation path, and the entry says so.
+
+    Action Network's only Circa book is the stateless id 78 (zero rows in every
+    league, re-measured 2026-08-03) and the 2026-08-08 catalogue lists no
+    ``Circa IL``.  ``vsin_circa`` is the Las Vegas line tracker, so it may only
+    ever be ``OTHER_LICENCE`` context.  Anyone upgrading this entry — a direct
+    key, a same-licence feed — is claiming an Illinois price source that has
+    been measured not to exist, and this pin makes that claim a failing test
+    rather than a quietly green checklist.
+    """
+    circa = next(book for book in REQUIRED_BOOKS["IL"] if book.book == "Circa")
+    assert circa.direct is None
+    assert circa.republishers == {"vsin_circa": Corroboration.OTHER_LICENCE}
+
+
 def test_unlicensed_republisher_explains_itself_rather_than_reading_as_a_gap():
     """``UNAVAILABLE`` is a licensing fact, not a broken feed.
 

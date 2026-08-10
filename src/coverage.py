@@ -257,7 +257,57 @@ def _required(
 #: 429s as rate limiting is what makes the guessing look unfinished rather than
 #: answered.  Finding these books first-party needs the token from their own web
 #: application (:mod:`src.sources.research`), not more guesses.
+#:
+#: Illinois's list is the ten online operators on the IGB's authorized-sportsbook
+#: page (recorded 2026-08-03 in ``docs/SOURCE_FEASIBILITY.md``).  All nine Action
+#: Network ids were confirmed by name against the 2026-08-08 catalogue capture —
+#: 3915 ``'bet365 IL'``, 282 ``'BetMGM IL'``, 262 ``'BetRivers IL'``, 279
+#: ``'Caesars IL'``/``williamhillil``, 1538 ``'DK IL'``, 270 ``'FanDuel IL'``,
+#: 2990 ``'Fanatics IL'``, 3646 ``'HardRock IL'``, 4601 ``'theScore Bet IL'`` —
+#: and those nine are the catalogue's *complete* Illinois-tagged set.  Two entries
+#: are shaped by what exists rather than what one would want:
+#:
+#: * ``Circa`` has **no same-licence feed at all**.  Action Network's only Circa
+#:   book is the stateless id 78, re-measured 2026-08-03 returning zero rows in
+#:   every league asked, and the catalogue lists no ``Circa IL``.  Circa's own
+#:   site names VSiN as its odds aggregator, so ``vsin_circa`` is declared here —
+#:   as ``OTHER_LICENCE``, because it is the Las Vegas line tracker, not an
+#:   Illinois price.  The entry grades ``MISSING`` and is meant to: an IGB book
+#:   the operator named, with no Illinois-licence observation path, should fail
+#:   loudly rather than be quietly absent from the table.
+#: * ``theScore Bet`` is watched through id 4601, which no committed capture has
+#:   ever requested.  The first-party ``us-il`` GraphQL surface answered anonymous
+#:   probes on 2026-08-04 and is the adapter candidate that would satisfy the rule
+#:   outright; until either lands, ``SINGLE_SOURCE`` on paper and unproven in
+#:   practice, exactly as ``an_parx``/``an_unibet`` were recorded for Pennsylvania.
 REQUIRED_BOOKS: Mapping[str, tuple[RequiredBook, ...]] = {
+    "IL": (
+        _required("bet365", same=("an_bet365",), other=("vi_bet365",)),
+        _required("BetMGM", "betmgm", same=("an_betmgm",), other=("vi_betmgm",)),
+        _required(
+            "BetRivers",
+            "betrivers_kambi",
+            same=("an_betrivers",),
+            other=("vi_betrivers",),
+        ),
+        _required("Caesars", "caesars", same=("an_caesars",), other=("vi_caesars",)),
+        _required("Circa", other=("vsin_circa",)),
+        _required(
+            "DraftKings",
+            "draftkings",
+            same=("an_draftkings",),
+            other=("vi_draftkings",),
+        ),
+        _required("FanDuel", "fanduel", same=("an_fanduel",), other=("vi_fanduel",)),
+        _required("Fanatics", same=("an_fanatics",), other=("vi_fanatics",)),
+        _required(
+            "Hard Rock Bet",
+            "hardrock",
+            same=("an_hardrock",),
+            other=("vi_hardrock",),
+        ),
+        _required("theScore Bet", same=("an_thescore",)),
+    ),
     "PA": (
         _required("bet365", same=("an_bet365",), other=("vi_bet365",)),
         _required("BetMGM", "betmgm", same=("an_betmgm",), other=("vi_betmgm",)),
