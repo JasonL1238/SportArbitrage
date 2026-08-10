@@ -30,6 +30,7 @@ from src.sources._common import (
     envelope_source,
     latest_per_endpoint,
     parse_iso_time,
+    refuse_mid_move_pairings,
 )
 from src.sources.base import ParseOutcome
 from src.sources.guards import FormatChangeError, SourceError
@@ -179,6 +180,10 @@ def parse_vegasinsider(raws: Sequence[RawResponse]) -> ParseOutcome:
                 )
             )
     drop_duplicate_selections(source, outcome)
+    # After dedup, so the judged group is what would otherwise publish.  A
+    # tracker column read mid-move pairs one side's fresh price with the
+    # other's stale one — see the helper's docstring for the measured case.
+    refuse_mid_move_pairings(source, outcome)
     return outcome
 
 

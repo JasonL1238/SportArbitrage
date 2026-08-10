@@ -569,6 +569,12 @@ SKIP_NOTES: list[tuple[str, str]] = [
      "two-outcome market cannot do. The payload named one competitor on both "
      "outcomes, and the pair would otherwise read as a hedge while both bets sat on "
      "the same team."),
+    ("market_prices_the_book_to_lose",
+     "A line tracker's column showed a complete market whose prices sum below fair "
+     "— a combination no book offers, produced when the page's cells update one at "
+     "a time and the read landed mid-move. Both legs are dropped, because either "
+     "one paired with another book's genuine other side reads as an arbitrage that "
+     "does not exist."),
     ("event_not_open_pregame",
      "The venue no longer lists this fixture as open for pre-match trading — it has "
      "started, been settled, or been pulled — so its prices are not the pre-match "

@@ -3,8 +3,12 @@
 Circa's own betting-menu page points readers to VSiN as an odds aggregator
 while reserving its complete real-time menu for the mobile app.  This adapter
 therefore supplies an independent, named Circa observation path; it is a
-republisher, not a second counterparty, and is paired with ``an_circa`` in
-``src.redundancy``.
+republisher, not a second counterparty.  It is also Circa's **only** feed:
+``an_circa`` was deregistered on 2026-08-09 after Action Network's id 78
+returned zero rows in every league on both endpoint versions, so there is no
+redundancy pair to declare and no state licence behind these numbers — VSiN
+tracks the Las Vegas board, which is why ``coverage`` may only ever count it
+as ``OTHER_LICENCE`` context.
 """
 from __future__ import annotations
 
@@ -31,6 +35,7 @@ from src.sources._common import (
     drop_duplicate_selections,
     envelope_source,
     latest_per_endpoint,
+    refuse_mid_move_pairings,
 )
 from src.sources.base import ParseOutcome
 from src.sources.guards import FormatChangeError, SourceError
@@ -230,6 +235,10 @@ def parse_vsin_circa(raws: Sequence[RawResponse]) -> ParseOutcome:
                 )
             )
     drop_duplicate_selections(source, outcome)
+    # Same medium, same hazard as VegasInsider: VSiN's cells update one at a
+    # time, so a column read mid-move can pair prices the book never offered
+    # together.  Judged after dedup, on what would otherwise publish.
+    refuse_mid_move_pairings(source, outcome)
     return outcome
 
 

@@ -28,7 +28,13 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 from urllib.parse import urlsplit
 
 from src.raw_store import RawResponse
-from src.schema import Market, Selection
+from src.schema import (
+    SELECTIONS_BY_MARKET,
+    Market,
+    QuoteStatus,
+    Selection,
+    draw_is_priced,
+)
 from src.sources.guards import (
     EmptyResponseError,
     RateLimitedError,
@@ -801,6 +807,64 @@ def refuse_one_sided_market(
         event_id=event_id,
     )
     del outcome.quotes[first_index:]
+
+
+def refuse_mid_move_pairings(source: str, outcome: Any) -> None:
+    """Drop every complete one-book market whose prices sum below fair.
+
+    Written for the HTML line trackers (VegasInsider, VSiN), whose cells update
+    one at a time: a column read mid-move pairs one side's fresh price with the
+    other side's stale one, producing a combination the book never offered.
+    Measured on the committed 2026-08-03 ``vi_hardrock`` capture: Hard Rock's
+    total shown as ``o8.5 +110 / u8.5 −105`` — implied probabilities summing to
+    0.9884 — while every other column sat at 8/−115 and Hard Rock's own feed
+    later that day priced 7.5 at −135/+100.  No bookmaker publishes a
+    negative-margin pairing; published here, either leg pairs with another
+    book's genuine other side into a phantom arbitrage.
+
+    A *skip* rather than a rejection, because nothing about the bytes is
+    malformed and nothing about the medium is surprising — per-cell updates are
+    how these pages work, so hitting one is routine operation to count, not a
+    format change to alarm on.
+
+    Only a **complete** market is judged, with the same completeness rule the
+    source-contract suite applies: a three-way moneyline missing its draw leg
+    legitimately sums below 1.0 and is left alone.
+    """
+    grouped: dict[tuple[str, str, str], list[Any]] = {}
+    for quote in outcome.quotes:
+        grouped.setdefault(quote.market_key, []).append(quote)
+
+    doomed: set[tuple[str, str, str]] = set()
+    for market_key, rows in grouped.items():
+        if len(rows) < 2 or any(row.status is not QuoteStatus.ACTIVE for row in rows):
+            continue
+        present = {row.selection for row in rows}
+        if rows[0].market is Market.MONEYLINE:
+            needed = {Selection.HOME, Selection.AWAY}
+            if draw_is_priced(rows[0].sport, rows[0].period):
+                needed = needed | {Selection.DRAW}
+            if not needed <= present:
+                continue
+        elif not SELECTIONS_BY_MARKET[rows[0].market] <= present:
+            continue
+        overround = sum(row.implied_probability for row in rows)
+        if overround >= 1.0 - 1e-9:
+            continue
+        doomed.add(market_key)
+        outcome.skipped["market_prices_the_book_to_lose"] += len(rows)
+        log.info(
+            "%s: dropped %s — %d legs sum to %.4f, a pairing the book never "
+            "offered at once",
+            source,
+            market_key,
+            len(rows),
+            overround,
+        )
+    if doomed:
+        outcome.quotes[:] = [
+            quote for quote in outcome.quotes if quote.market_key not in doomed
+        ]
 
 
 #: Field names that carry a market's **label** — the human-readable name of

@@ -10,17 +10,31 @@ from src.schema import Market, Selection
 from src.sources.vegasinsider import parse_vegasinsider
 
 
+#: The 2026-08-03 page carries 8 games × 3 markets × 2 sides = 48 rows per
+#: column.  ``vi_hardrock`` publishes two fewer: its total on LAD@CHC read
+#: ``o8.5 +110 / u8.5 −105`` — implied probabilities summing to 0.9884, a
+#: pairing no book offers, produced by the tracker's cells updating one at a
+#: time — and ``refuse_mid_move_pairings`` drops both legs and counts them.
 @pytest.mark.parametrize(
-    "source",
-    ["vi_draftkings", "vi_caesars", "vi_hardrock", "vi_fanatics", "vi_bet365"],
+    ("source", "expected", "dropped"),
+    [
+        ("vi_draftkings", 48, 0),
+        ("vi_caesars", 48, 0),
+        ("vi_hardrock", 46, 2),
+        ("vi_fanatics", 48, 0),
+        ("vi_bet365", 48, 0),
+    ],
 )
-def test_real_mlb_capture_produces_complete_game_lines(source: str) -> None:
+def test_real_mlb_capture_produces_complete_game_lines(
+    source: str, expected: int, dropped: int
+) -> None:
     path = glob.glob(f"tests/fixtures/raw/{source}__*.json")
     assert len(path) == 1
     raw = RawStore("tests/fixtures/raw").read(path[0])
     outcome = parse_vegasinsider([raw])
     assert not outcome.rejections
-    assert len(outcome.quotes) == 48
+    assert len(outcome.quotes) == expected
+    assert outcome.skipped["market_prices_the_book_to_lose"] == dropped
     assert {quote.source for quote in outcome.quotes} == {source}
     assert {quote.market for quote in outcome.quotes} == {
         Market.MONEYLINE, Market.SPREAD, Market.TOTAL,
