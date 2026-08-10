@@ -301,29 +301,39 @@ def test_a_second_licences_capture_is_refused_not_quietly_preferred() -> None:
 
 @pytest.mark.parametrize(
     "source,book_id",
-    (("an_parx", 74), ("an_thescore", 4623), ("an_unibet", 246)),
+    (("an_parx", 74), ("an_thescore", 4601), ("an_unibet", 246)),
 )
-def test_pennsylvanias_own_books_are_captured_and_parse_with_periods(
+def test_the_unproven_books_are_captured_on_their_own_id_and_parse(
     source: str, book_id: int
 ) -> None:
-    """The three feeds this work existed to unblock, held to what they produced.
+    """The three feeds the v2 work existed to unblock, held to what they produced.
 
     Each of these shipped a fixture that asked a **New Jersey** id through v1 —
     1929, 247, 4620 — and parsed to zero rows, so every contract test over them
-    passed by having nothing to check. Replaced 2026-08-08 with a Pennsylvania
-    capture on v2 against a live pregame slate.
+    passed by having nothing to check. Replaced 2026-08-08 with Pennsylvania
+    captures on v2 against a live pregame slate.
 
-    Three properties, and each one failed before the recapture: the fixture asks
-    Pennsylvania's id, it parses to rows rather than an empty outcome, and the
-    period windows are present — which is `periods=` demonstrated on committed
-    bytes rather than argued from a live request that nobody can replay.
+    The id pinned here is the licence the key's fixture store currently holds,
+    because the store is **single-licence by the parser's own guard** — one
+    pass writes one book id, and mixing two states' captures under one key is
+    refused as a format change.  ``an_parx``/``an_unibet`` hold their
+    2026-08-08 Pennsylvania captures (74, 246).  ``an_thescore`` holds its
+    2026-08-10 Illinois capture (4601, the id's first-ever request — 74 soccer
+    rows), taken for the Illinois campaign; the 4623 Pennsylvania proof (225
+    rows) is recorded in ``docs/SOURCE_FEASIBILITY.md`` and its store returns
+    with the next PA-egress recapture.
+
+    The properties held per key: the fixture asks the key's own id, rides v2,
+    asked for the period windows, and parses to rows.  The windows-present
+    property is provable only where a **baseball** board is in the store — a
+    soccer board has no innings — so it binds exactly the keys that hold one.
     """
     paths = sorted(FIXTURE_RAW_DIR.glob(f"{source}__*.json"))
     assert paths, f"{source} lost its capture"
     raws = [RawStore(FIXTURE_RAW_DIR).read(path) for path in paths]
 
     assert all(f":{book_id}:" in raw.endpoint for raw in raws), (
-        f"{source} must be captured on Pennsylvania's own id {book_id}"
+        f"{source} must be captured on its own id {book_id}"
     )
     assert all(f"/web/v2/" in raw.url for raw in raws), "captured on v2"
     assert all("periods=" in raw.url for raw in raws), (
@@ -338,10 +348,11 @@ def test_pennsylvanias_own_books_are_captured_and_parse_with_periods(
 
     assert outcome.quotes, f"{source} parses to nothing — an empty fixture again"
     assert not outcome.rejections, [str(r) for r in outcome.rejections[:3]]
-    assert {quote.period for quote in outcome.quotes} > {Period.FULL_GAME}, (
-        "a v2 capture that asked for periods and came back full-game-only means "
-        "the parameter stopped working, which is silent in production"
-    )
+    if any(":mlb" in raw.endpoint for raw in raws):
+        assert {quote.period for quote in outcome.quotes} > {Period.FULL_GAME}, (
+            "a v2 capture that asked for periods and came back full-game-only "
+            "means the parameter stopped working, which is silent in production"
+        )
 
 
 def test_every_live_action_network_request_names_its_book_ids() -> None:
@@ -381,14 +392,18 @@ def test_asking_for_baseball_windows_does_not_empty_another_sports_board() -> No
     The quiet failure would be v2 treating unknown window names on a
     non-baseball board as "match nothing" — every Action Network tenant's
     NBA/NFL/NHL board emptying the day the parameter shipped, with each request
-    still answering 200.  The committed betPARX NFL capture is the evidence it
-    does not: same request shape, ``periods=`` in the URL, and the board parses
-    to full-game rows (the baseball windows are simply absent, as they should
-    be for a sport that has no innings).
+    still answering 200.  The committed theScore Bet Illinois **soccer** capture
+    (2026-08-10, the first-ever request of id 4601) is the evidence it does
+    not: same request shape, ``periods=`` in the URL, and the board parses to
+    74 full-game rows (the baseball windows are simply absent, as they should
+    be for a sport that has no innings).  The evidence used to be the betPARX
+    Pennsylvania NFL board; that file was retired 2026-08-09 when its stale
+    preseason line clashed with the fresh-vintage fixture pool — see
+    ``docs/SOURCE_FEASIBILITY.md`` § "One stale board retired".
     """
     store = RawStore(FIXTURE_RAW_DIR)
-    paths = sorted(FIXTURE_RAW_DIR.glob("an_parx__*-nfl_*.json"))
-    assert paths, "the NFL capture is this test's entire evidence"
+    paths = sorted(FIXTURE_RAW_DIR.glob("an_thescore__*-soccer_*.json"))
+    assert paths, "the soccer capture is this test's entire evidence"
     raws = [store.read(path) for path in paths]
     # The full encoded window list, not the bare parameter name: a recapture
     # that asked ``periods=event`` alone would prove nothing about unknown
@@ -400,7 +415,7 @@ def test_asking_for_baseball_windows_does_not_empty_another_sports_board() -> No
     outcome = parse_actionnetwork(raws)
     assert not outcome.rejections
     assert len(outcome.quotes) >= 50, (
-        f"an NFL board answering {len(outcome.quotes)} rows is the emptying "
+        f"a soccer board answering {len(outcome.quotes)} rows is the emptying "
         "this test exists to catch"
     )
     assert {quote.period for quote in outcome.quotes} == {Period.FULL_GAME}
