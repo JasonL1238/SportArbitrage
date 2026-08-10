@@ -42,13 +42,33 @@ class Rejection:
     context: dict[str, Any] = field(default_factory=dict)
 
 
+class ReasonCounter(Counter):
+    """A :class:`Counter` that refuses to materialize a reason that counted nothing.
+
+    ``counter[reason] += n`` with ``n == 0`` inserts the key at zero on a plain
+    ``Counter`` — a label asserting that out-of-scope input was seen when none
+    was.  Several call sites increment by *computed* row counts
+    (``len(rows) - len(usable)``, ``_v2_row_count(...)``), and the v2 Action
+    Network parser shipped exactly this: ``odds_not_an_object: 0`` on every
+    capture whose rows were all objects, which
+    ``test_out_of_scope_input_is_counted_rather_than_ignored`` refuses.  The
+    invariant — every recorded reason counted at least one row — is made true
+    by construction here rather than re-earned at each call site.
+    """
+
+    def __setitem__(self, key: str, value: int) -> None:
+        if value == 0 and key not in self:
+            return
+        super().__setitem__(key, value)
+
+
 @dataclass
 class ParseOutcome:
     """Everything a parse produced: rows, failures, and deliberate omissions."""
 
     quotes: list[Quote] = field(default_factory=list)
     rejections: list[Rejection] = field(default_factory=list)
-    skipped: Counter[str] = field(default_factory=Counter)
+    skipped: Counter[str] = field(default_factory=ReasonCounter)
     """Counts of *out-of-scope* input, keyed by reason.  Player props, futures
     and pitcher-conditional markets are expected and not errors — but they are
     counted so "we collected everything" is never assumed."""

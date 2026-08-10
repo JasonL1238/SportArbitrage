@@ -208,6 +208,25 @@ class TestInterface:
             assert reason and reason.strip(), "a skip reason must be a stable label"
             assert count > 0
 
+    def test_a_zero_increment_records_no_skip_reason_at_all(self) -> None:
+        """``skipped[reason] += 0`` must leave the map untouched.
+
+        A plain ``Counter`` materializes the key at zero, and the v2 Action
+        Network parser shipped exactly that (``odds_not_an_object: 0`` on every
+        capture whose rows were all objects) — a label asserting out-of-scope
+        input was seen when none was.  The invariant the test above states is
+        made structural by ``ReasonCounter``; this pin fails if ``ParseOutcome``
+        ever reverts to a plain ``Counter``.
+        """
+        from src.sources.base import ParseOutcome
+
+        outcome = ParseOutcome()
+        outcome.skipped["odds_not_an_object"] += 0
+        assert dict(outcome.skipped) == {}
+        outcome.skipped["odds_not_an_object"] += 2
+        outcome.skipped["odds_not_an_object"] += 0
+        assert dict(outcome.skipped) == {"odds_not_an_object": 2}
+
 
 class TestRowIdentity:
     def test_league_is_registered_and_matches_the_sport(self, adapter_case) -> None:
