@@ -1429,7 +1429,8 @@ def _check_line_orientation(quotes: Sequence[Quote], report: ValidationReport) -
     merely half a point off must not be indicted for it.  What no honest source
     does is put the favourite on the other side, over and over.
     """
-    # Only sources that publish **one** primary handicap per fixture are judged.
+    # Only sources that publish **one** primary handicap per scoring window
+    # are judged.
     #
     # A source that publishes a symmetric ladder has no side to be wrong about:
     # Kalshi lists "PIT wins by over 1.5/2.5/3.5" *and* "AZ wins by over
@@ -1438,7 +1439,19 @@ def _check_line_orientation(quotes: Sequence[Quote], report: ValidationReport) -
     # check, and including it by picking one row arbitrarily does not add
     # information — it adds noise, and it dilutes the sources where the check
     # does work.
-    laddered: dict[str, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
+    #
+    # The window is (event, PERIOD), not event alone.  Grouped by event only,
+    # a source posting a full-game spread beside a first-5-innings or
+    # regulation spread — betrivers_kambi's ordinary baseball and hockey
+    # slate — held two lines per group, tripped the one-line exemption meant
+    # for ladders, and was never judged at all: measured on run 32, 0 of 15
+    # baseball and 0 of 7 hockey cells graded, so a wholesale sign flip on
+    # exactly the multi-window book produced no finding of any kind.  It also
+    # compared honest sources across windows (a regulation line against a
+    # full-game median) and charged them sign disagreements they never made.
+    laddered: dict[tuple[str, str], dict[str, list[float]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
     for quote in quotes:
         if (
             quote.market is not Market.SPREAD
@@ -1448,17 +1461,17 @@ def _check_line_orientation(quotes: Sequence[Quote], report: ValidationReport) -
             or quote.status is not QuoteStatus.ACTIVE
         ):
             continue
-        laddered[quote.event_key][quote.source].append(quote.line)
-    main: dict[str, dict[str, float]] = {
-        event_key: {
+        laddered[quote.event_key, quote.period.value][quote.source].append(quote.line)
+    main: dict[tuple[str, str], dict[str, float]] = {
+        window: {
             source: lines[0] for source, lines in per_source.items() if len(lines) == 1
         }
-        for event_key, per_source in laddered.items()
+        for window, per_source in laddered.items()
     }
 
     disagreements: dict[str, list[str]] = defaultdict(list)
     shared: Counter[str] = Counter()
-    for event_key, per_source in main.items():
+    for (event_key, period), per_source in main.items():
         if len(per_source) < 2:
             continue
         consensus = median(per_source.values())
@@ -1468,7 +1481,11 @@ def _check_line_orientation(quotes: Sequence[Quote], report: ValidationReport) -
         for source, line in per_source.items():
             shared[source] += 1
             if line != 0 and (line > 0) != (consensus > 0):
-                disagreements[source].append(event_key)
+                disagreements[source].append(
+                    event_key
+                    if period == Period.FULL_GAME.value
+                    else f"{event_key} ({period})"
+                )
 
     for source, events in sorted(disagreements.items()):
         total = shared[source]

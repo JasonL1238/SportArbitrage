@@ -567,37 +567,43 @@ def migrate_database(path: str | Path, *, backup: bool = True) -> Migration:
         # 4, and *then* refused — leaving a half-migrated file behind an error
         # message that said "the database is unchanged", and, with --no-backup,
         # the remedy "restore None".
+        # "Nothing was changed" is true of the database, and the backup taken
+        # before the transaction still exists — say so, or refusals quietly
+        # accumulate .bak files behind a message claiming cleanliness.
+        leftover = (
+            f" (the pre-migration backup {backup_path} is a plain copy of the "
+            "unchanged database; keep or delete it)"
+            if backup_path
+            else ""
+        )
         broken = conn.execute("PRAGMA foreign_key_check").fetchall()
         if broken:
             raise MigrationError(
                 f"{path}: {len(broken)} row(s) have foreign keys that would be "
-                "inconsistent after migration; nothing was changed"
+                f"inconsistent after migration; nothing was changed{leftover}"
             )
         stored = conn.execute("SELECT COUNT(*) FROM quote").fetchone()[0]
         if stored != len(rows):
             raise MigrationError(
                 f"{path}: rebuilt {stored} quotes from {len(rows)} read; nothing was "
-                "changed"
+                f"changed{leftover}"
             )
-        conn.execute("UPDATE schema_meta SET version = ?", (SCHEMA_VERSION,))
-        conn.execute("COMMIT")
-
-        # After the commit, and only things that cannot fail the migration: the
-        # table was rebuilt from the v4 DDL, so its indexes have to be recreated.
-        # `IF NOT EXISTS` throughout, so this is idempotent and safe to re-run.
-        conn.executescript(_SCHEMA)
-        # Stamp every pre-existing run with the version it was collected under.
-        # The current parser has legitimately changed since those runs — a
-        # replayed v3 capture can differ from its stored rows without any byte
-        # being corrupt — and without the stamp no surface could say so:
-        # ``replay`` on a freshly migrated history reported FormatChangeError
-        # and field drifts as corruption, and the dashboard masthead read
-        # "replay FAIL (21)" immediately after a successful migrate.
-        #
-        # The additive columns first: ``_SCHEMA``'s CREATE TABLE IF NOT EXISTS
-        # is a no-op on the pre-existing ``collection_run``, and the additive
-        # pass otherwise only runs when a :class:`Store` next opens the file —
-        # which has not happened yet.
+        # Stamp every pre-existing run with the version it was collected under
+        # — INSIDE the transaction, atomic with the version bump.  The current
+        # parser has legitimately changed since those runs — a replayed v3
+        # capture can differ from its stored rows without any byte being
+        # corrupt — and without the stamp no surface could say so: ``replay``
+        # on a freshly migrated history reported FormatChangeError and field
+        # drifts as corruption, and the dashboard masthead read "replay FAIL
+        # (21)" immediately after a successful migrate.  The stamp used to be
+        # written after the COMMIT, "where nothing can fail the migration" —
+        # but a crash in that window left version 4 with no stamps at all: a
+        # re-run early-returned with "already at schema version 4", the next
+        # Store open backfilled the column as NULL, and every v3-era run's
+        # legitimate drift read as corruption permanently, with nothing able
+        # to detect or repair the state.  (Plain ``execute`` throughout: the
+        # ALTERs and UPDATE are transactional in SQLite; only
+        # ``executescript`` would commit the open transaction.)
         existing = {row["name"] for row in conn.execute("PRAGMA table_info(collection_run)")}
         for table, column, decl in Store._ADDED_COLUMNS:
             if table == "collection_run" and column not in existing:
@@ -606,6 +612,14 @@ def migrate_database(path: str | Path, *, backup: bool = True) -> Migration:
             "UPDATE collection_run SET migrated_from = ? WHERE migrated_from IS NULL",
             (found,),
         )
+        conn.execute("UPDATE schema_meta SET version = ?", (SCHEMA_VERSION,))
+        conn.execute("COMMIT")
+
+        # After the commit, only what genuinely cannot lose anything: the
+        # rebuilt table's indexes.  `IF NOT EXISTS` throughout, so this is
+        # idempotent, and a crash here is healed by the next :class:`Store`
+        # open, which runs the same DDL.
+        conn.executescript(_SCHEMA)
     except MigrationError:
         _rollback(conn)
         conn.close()
@@ -1655,6 +1669,29 @@ class Store:
 
 
 def _quote_from_row(row: sqlite3.Row) -> Quote:
+    """Rebuild a stored row as a real :class:`Quote`, naming the row on refusal.
+
+    Only a plain SQL writer or corruption can put an illegal enum value or a
+    NULL in a required column — no committed path writes one — but when it
+    happens the refusal must be actionable: a bare ``'banana_market' is not a
+    valid Market`` names neither the run nor the rowid, while the SQL-side
+    aggregate readers (``sport_coverage``, the ``runs`` listing) happily count
+    the same row as coverage.  The aggregates stay as they are — they are
+    honest counts of what is stored — and the one place that must interpret
+    the row says exactly which row it choked on.
+    """
+    try:
+        return _quote_from_row_inner(row)
+    except (ValueError, TypeError) as exc:
+        keys = set(row.keys())
+        rowid = row["id"] if "id" in keys else "?"
+        run_id = row["run_id"] if "run_id" in keys else "?"
+        raise ValueError(
+            f"stored quote row {rowid} (run {run_id}) cannot be read back: {exc}"
+        ) from exc
+
+
+def _quote_from_row_inner(row: sqlite3.Row) -> Quote:
     return Quote(
         source=row["source"],
         observed_at=datetime.fromisoformat(row["observed_at"]),

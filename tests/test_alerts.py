@@ -173,6 +173,37 @@ class TestTheClockOnTheAlertPath:
         assert len(sent) == 1
 
 
+def test_the_alert_key_carries_the_side() -> None:
+    """``side`` is part of the detector's own market identity.
+
+    A home-team-total and an away-team-total at the same books, number and
+    prices are two different risk-free positions; without ``side`` in the
+    key they minted one, the first texted, and ``_claim`` swallowed the
+    second forever.
+    """
+    from dataclasses import replace
+
+    from src.schema import Side
+
+    base = _opportunity()
+    home = replace(base, side=Side.HOME)
+    away = replace(base, side=Side.AWAY)
+    assert opportunity_alert_key(home) != opportunity_alert_key(away)
+
+
+def test_the_alert_key_spells_zero_lines_one_way() -> None:
+    """``canonical_line`` yields ``-0.0`` from an away-perspective zero
+    handicap and groups keep whichever float arrived first, so the same
+    pick'em arb minted ``|0|`` and ``|-0|`` keys depending on quote order —
+    two texts for one position."""
+    from dataclasses import replace
+
+    base = _opportunity()
+    assert opportunity_alert_key(replace(base, line=0.0)) == opportunity_alert_key(
+        replace(base, line=-0.0)
+    )
+
+
 def test_the_alert_key_ignores_stakes() -> None:
     """Same books, selections and prices → one key, whatever the bankroll.
 

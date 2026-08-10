@@ -100,19 +100,33 @@ def opportunity_alert_key(opportunity: Opportunity) -> str:
     arb's identity — with them in the key, ``arb --run N --stake 200``
     re-minted every already-claimed position under a fresh key and the
     ledger waved it through, quietly scoping "at most one text per arb
-    ever" to "per arb per bankroll".  Keys already claimed under the old
-    stake-bearing spelling stay claimed but can never match again; a
-    position still live across that upgrade may text once more, which is
-    the acceptable direction of the error.
+    ever" to "per arb per bankroll".
+
+    ``side`` IS part of the key, because it is part of the detector's own
+    market identity (``MarketGroup`` keys on event/market/period/side/line):
+    without it, a home-team-total and an away-team-total at the same books,
+    number and prices — symmetric pricing is routine — minted one key, the
+    first texted, and the second, a genuinely different risk-free position,
+    was swallowed forever by ``_claim``.  And the line is normalized before
+    formatting: ``canonical_line`` yields ``-0.0`` from an away-perspective
+    zero handicap, groups keep whichever float arrived first, and
+    ``f"{-0.0:g}"`` spells ``-0`` — the same arb minting two keys depending
+    on quote order, double-spending "one text ever" in the other direction.
+
+    Keys claimed under older spellings stay claimed but can never match
+    again; a position still live across an upgrade may text once more,
+    which is the acceptable direction of the error.
     """
     legs = "|".join(
         f"{leg.source}:{leg.selection.value}:{leg.decimal_odds:.4f}"
         for leg in opportunity.legs
     )
-    line = "" if opportunity.line is None else f"{opportunity.line:g}"
+    side = "" if opportunity.side is None else opportunity.side.value
+    raw_line = opportunity.line
+    line = "" if raw_line is None else f"{0.0 if raw_line == 0 else raw_line:g}"
     return (
         f"{opportunity.event_key}|{opportunity.market.value}|"
-        f"{opportunity.period.value}|{line}|{legs}"
+        f"{opportunity.period.value}|{side}|{line}|{legs}"
     )
 
 

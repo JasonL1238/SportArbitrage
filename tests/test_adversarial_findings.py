@@ -1491,6 +1491,65 @@ class TestTheHandicapHasToFavourTheSameCompetitor:
             if f.code == "line_favours_the_other_competitor" and f.source == "ladder"
         ]
 
+    def test_a_multi_window_source_is_still_judged_per_window(self) -> None:
+        """The ladder exemption is one line per (event, PERIOD), not per event.
+
+        Grouped by event alone, a source posting a full-game spread beside a
+        first-5-innings spread — betrivers_kambi's ordinary baseball slate —
+        held two lines per group, tripped the one-line exemption meant for
+        symmetric ladders, and was never judged: measured on run 32, 0 of 15
+        baseball and 0 of 7 hockey cells graded, so a wholesale sign flip on
+        exactly the multi-window book produced no finding of any kind.
+        """
+        from src.validation import Severity, validate
+
+        rows = []
+        for q in self._slate():
+            if q.source == "book_two":
+                # The flip under test, on every one of book_two's rows…
+                q = q.model_copy(update={"line": -q.line})
+                rows.append(q)
+                # …and a second scoring window beside each full-game market,
+                # which used to disqualify the source from judgement entirely.
+                rows.append(q.model_copy(update={
+                    "period": Period.FIRST_5_INNINGS,
+                    "source_market_id": f"{q.source_market_id}-f5",
+                }))
+            else:
+                rows.append(q)
+        report = validate(rows)
+        found = [
+            f for f in report.findings
+            if f.code == "line_favours_the_other_competitor" and f.source == "book_two"
+        ]
+        assert found, [f.code for f in report.findings]
+        assert found[0].severity is Severity.ERROR
+
+    def test_windows_are_not_compared_across_periods(self) -> None:
+        """An honest source pricing only one window must not be charged with
+        the other window's median: grouped by event alone, a regulation-only
+        line was compared against full-game numbers it never disagreed with.
+        """
+        from src.validation import validate
+
+        rows = list(self._slate())
+        # An honest fourth source that prices ONLY first-5-innings, with the
+        # same orientation as everyone else's full-game lines.
+        for index in range(30):
+            key = f"MLB-CIN@MLB-PHI:2026-07-{10 + index % 20}#{index}"
+            for selection, line in ((Selection.HOME, -0.5), (Selection.AWAY, 0.5)):
+                rows.append(make_quote(
+                    source="f5_only", event_key=key, source_event_id=f"e{index}",
+                    market=Market.SPREAD, selection=selection, line=line,
+                    period=Period.FIRST_5_INNINGS, decimal_odds=2.0,
+                    commence_time=LATER, source_market_id=f"f5-m{index}",
+                ))
+        report = validate(rows)
+        assert not [
+            f for f in report.findings
+            if f.code == "line_favours_the_other_competitor" and f.source == "f5_only"
+        ]
+
 
 class TestTheMirrorGateIsFiledWhereItIsRead:
     def test_a_dissenting_league_label_does_not_hide_a_mirror(self) -> None:
@@ -10846,6 +10905,50 @@ class TestAPreUpgradeScopedRunKeepsItsScope:
                     SOURCE_FACTORIES["book_a"] = saved
         assert benign.startswith("DIFFERS"), benign
         assert rotted.startswith("FAIL"), rotted
+
+    def test_a_native_runs_tamper_cannot_buy_the_differs_verdict(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """DIFFERS is gated on the run's migration stamp, not on text.
+
+        On an UNSTAMPED run no preamble is inserted, so ``problems[0]`` is
+        the first appended problem — and the unreadable-bytes message
+        interpolates file-controlled text: a tampered ``envelope_version``
+        carrying the constant's words bought "DIFFERS — run predates the
+        current parser" on a native run, a fabricated provenance claim
+        rendered directly over the tamper.  The stamp is structural; no
+        problem string can reach the DIFFERS branch without it.
+        """
+        import json
+
+        from src import settings
+        from src.collector import MIGRATED_EVOLUTION_NOTE, SOURCE_FACTORIES, collect_once
+        from src.raw_store import RawStore
+        from src.report import _replay_note
+        from src.store import Store
+
+        rigged = TestReplayComparesTheWholeRow._make_rigged()
+        raw_store = RawStore(tmp_path / "raw")
+        monkeypatch.setattr(settings, "RAW_DIR", tmp_path / "raw")
+        with Store(tmp_path / "db.sqlite3") as store:
+            result = collect_once(
+                [rigged()], raw_store=raw_store, store=store, as_of=FETCHED
+            )
+            assert result.quotes
+            raw_path = next((tmp_path / "raw").rglob("*.json"))
+            envelope = json.loads(raw_path.read_text())
+            envelope["envelope_version"] = f"9 {MIGRATED_EVOLUTION_NOTE}"
+            raw_path.write_text(json.dumps(envelope))
+            saved = SOURCE_FACTORIES.get("book_a")
+            SOURCE_FACTORIES["book_a"] = rigged
+            try:
+                note = _replay_note(store, result.run_id)
+            finally:
+                if saved is None:
+                    SOURCE_FACTORIES.pop("book_a", None)
+                else:
+                    SOURCE_FACTORIES["book_a"] = saved
+        assert note.startswith("FAIL"), note
 
 
 class TestAFailedRunsPricesCarryTheVerdict:

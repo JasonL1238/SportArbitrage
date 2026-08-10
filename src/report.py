@@ -2505,7 +2505,23 @@ def _replay_note(store: Store, run_id: int) -> str:
         # inverted — DIFFERS for a migrated run with a rotted archive, hard
         # FAIL for benign migrated evolution.  The constant lives in the
         # wording itself, so the two can no longer drift apart.
-        if problems and MIGRATED_EVOLUTION_NOTE in problems[0]:
+        #
+        # And the text match alone is NOT the gate: on a run with no
+        # migration stamp, no preamble is inserted, so ``problems[0]`` is the
+        # first appended problem — whose message can interpolate
+        # file-controlled text (a tampered ``envelope_version`` rides into
+        # the unreadable-bytes ValueError verbatim, before any hash check).
+        # An adversarial round bought this DIFFERS verdict, with its false
+        # "predates the current parser" provenance, on a NATIVE run that
+        # way.  The stamp is read from the run row, structurally: when it is
+        # set and problems exist, ``_judged`` has ALWAYS inserted a
+        # code-authored preamble at index 0, so matching the constant there
+        # distinguishes exactly the benign wording from the non-vouching
+        # one; when it is absent, DIFFERS is unreachable no matter what any
+        # problem says.
+        run_row = store.run_row(run_id)
+        migrated = run_row["migrated_from"] if run_row is not None else None
+        if problems and migrated is not None and MIGRATED_EVOLUTION_NOTE in problems[0]:
             return (
                 f"DIFFERS ({len(problems) - 1}) — run predates the current "
                 "parser; can be evolution rather than corruption"

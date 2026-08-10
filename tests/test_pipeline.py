@@ -494,6 +494,93 @@ def write_v3_database(path: Path, rows=V3_ROWS) -> None:
     conn.close()
 
 
+def test_a_crash_after_the_commit_cannot_lose_the_migration_stamp(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The ``migrated_from`` stamp commits atomically with the version bump.
+
+    It used to be written after the COMMIT, "where nothing can fail the
+    migration" — but a crash in that window (which includes rebuilding every
+    quote index over the whole history) left version 4 with no stamps at
+    all: re-running ``migrate`` early-returned with "already at schema
+    version 4", the next Store open backfilled the column as NULL, and every
+    v3-era run's legitimate parser drift read as corruption permanently,
+    with nothing able to detect or repair the state.  The one thing left
+    after the COMMIT is the index rebuild, which the next Store open heals.
+    """
+    path = tmp_path / "crash.sqlite3"
+    write_v3_database(path)
+
+    real_connect = sqlite3.connect
+
+    class _CrashAfterCommit:
+        def __init__(self, real):
+            object.__setattr__(self, "_real", real)
+
+        def __getattr__(self, name):
+            return getattr(object.__getattribute__(self, "_real"), name)
+
+        def __setattr__(self, name, value):
+            setattr(object.__getattribute__(self, "_real"), name, value)
+
+        def executescript(self, script):
+            raise RuntimeError("simulated crash after COMMIT")
+
+    monkeypatch.setattr(
+        "src.store.sqlite3.connect",
+        lambda *args, **kwargs: _CrashAfterCommit(real_connect(*args, **kwargs)),
+    )
+    with pytest.raises(MigrationError):
+        migrate_database(path, backup=False)
+    monkeypatch.undo()
+
+    assert database_version(path) == SCHEMA_VERSION
+    conn = sqlite3.connect(path)
+    conn.row_factory = sqlite3.Row
+    try:
+        stamps = [
+            row["migrated_from"]
+            for row in conn.execute("SELECT migrated_from FROM collection_run")
+        ]
+    finally:
+        conn.close()
+    assert stamps and all(stamp == 3 for stamp in stamps), stamps
+
+
+def test_a_refused_migration_names_the_backup_it_leaves(tmp_path: Path) -> None:
+    """"Nothing was changed" is true of the database — and the backup taken
+    before the transaction still exists, so refusals quietly accumulated
+    ``.bak`` files behind a message claiming cleanliness."""
+    path = tmp_path / "orphan.sqlite3"
+    write_v3_database(path)
+    conn = sqlite3.connect(path)
+    with conn:
+        conn.execute("PRAGMA foreign_keys = OFF")
+        conn.execute(
+            "UPDATE quote SET run_id = 999 WHERE rowid = "
+            "(SELECT rowid FROM quote LIMIT 1)"
+        )
+    conn.close()
+    with pytest.raises(MigrationError) as caught:
+        migrate_database(path, backup=True)
+    assert "backup" in str(caught.value), caught.value
+    assert database_version(path) == 3
+
+
+def test_a_corrupt_stored_row_is_named_when_read_back(tmp_path: Path) -> None:
+    """Only a plain SQL writer or corruption can store an illegal enum, but
+    when one exists the refusal must name the row: a bare "'banana_market'
+    is not a valid Market" named neither run nor rowid, while the SQL-side
+    aggregate readers counted the same row as healthy coverage."""
+    with Store(tmp_path / "db.sqlite3") as store:
+        run = store.start_run(datetime.now(UTC))
+        store.save_quotes(run, [make_quote()])
+        store._conn.execute("UPDATE quote SET market = 'banana_market'")
+        store._conn.commit()
+        with pytest.raises(ValueError, match=r"stored quote row \d+ \(run \d+\)"):
+            store.load_quotes(run)
+
+
 def test_an_old_database_is_refused_rather_than_written_into(tmp_path: Path) -> None:
     """Appending v4 rows to a v3 table would produce one table whose rows mean two
     different things, and nothing downstream could tell which was which."""
