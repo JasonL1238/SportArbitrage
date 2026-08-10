@@ -78,7 +78,7 @@ from src.sources._common import (
     Tier,
     capabilities_from,
     drop_duplicate_selections,
-    drop_same_side_pairs,
+    refuse_one_sided_market,
     envelope_source,
     latest_capture,
     latest_per_endpoint,
@@ -664,7 +664,6 @@ def parse_novig(raws: Sequence[RawResponse]) -> ParseOutcome:
             outcome.skipped["event_already_started"] += 1
             continue
         _parse_book(raw, market, fixture, source=source, outcome=outcome)
-    drop_same_side_pairs(source, outcome)
     # Storage enforces dedup_key with a UNIQUE constraint whose failure aborts
     # the whole insert; every peer parser guards it here and so does this one.
     drop_duplicate_selections(source, outcome)
@@ -891,6 +890,9 @@ def _parse_book(
             if isinstance(identifier, str):
                 lines[identifier] = line
 
+    # Where this market's rows begin, so the one-sided check below judges
+    # exactly them rather than inferring the grouping from finished quotes.
+    first_index = len(outcome.quotes)
     for this, other in (
         (market.outcomes[0], market.outcomes[1]),
         (market.outcomes[1], market.outcomes[0]),
@@ -906,6 +908,13 @@ def _parse_book(
             source=source,
             outcome=outcome,
         )
+    refuse_one_sided_market(
+        source,
+        outcome,
+        first_index,
+        market_id=market.market_id,
+        event_id=fixture.event_id,
+    )
 
 
 def _parse_outcome(

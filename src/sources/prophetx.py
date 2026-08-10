@@ -77,7 +77,7 @@ from src.sources._common import (
     Tier,
     capabilities_from,
     drop_duplicate_selections,
-    drop_same_side_pairs,
+    refuse_one_sided_market,
     envelope_source,
     latest_capture,
     latest_per_endpoint,
@@ -601,7 +601,6 @@ def parse_prophetx(raws: Sequence[RawResponse]) -> ParseOutcome:
             for market in markets:
                 if isinstance(market, dict):
                     _parse_market(market, fixture, raw, source=source, outcome=outcome)
-    drop_same_side_pairs(source, outcome)
     # Storage enforces dedup_key with a UNIQUE constraint whose failure aborts
     # the whole insert; every peer parser guards it here and so does this one.
     drop_duplicate_selections(source, outcome)
@@ -771,11 +770,16 @@ def _parse_market(
     # a genuine full-game price elsewhere into an apparent arbitrage that one
     # overtime winner loses on both legs.  The sibling adapter refuses the
     # same shape; this is the guard it did not get.
+    #
+    # Scoped to this market's own pair, not to the recursion below: returning
+    # here cost a market its legitimate alternate ladders as well, and an
+    # alternate that prices a real two-sided rung is worth keeping even when
+    # the main line is a shape this parser will not read.
     if len(flat) != 2:
         outcome.skipped["not_a_two_outcome_market"] += 1
-        return
-
-    if our_market is Market.SPREAD and not _spread_lines_are_sign_opposed(flat, market):
+    elif our_market is Market.SPREAD and not _spread_lines_are_sign_opposed(
+        flat, market
+    ):
         # The whole-market invariant, not a per-selection one: a numeric line
         # is not evidence of a *signed* line.  Two selections both carrying
         # ``+1.5`` are the round-1 sign ambiguity moved one level down, and
@@ -790,6 +794,10 @@ def _parse_market(
             event_id=fixture.event_id,
         )
     else:
+        # Where this market's rows begin, so the one-sided check below judges
+        # exactly them — the grouping the parser knows and a post-pass over
+        # finished quotes can only guess at.
+        first_index = len(outcome.quotes)
         for selection in flat:
             _parse_selection(
                 selection,
@@ -801,6 +809,13 @@ def _parse_market(
                 outcome=outcome,
                 is_alternate=is_alternate,
             )
+        refuse_one_sided_market(
+            source,
+            outcome,
+            first_index,
+            market_id=market.get("id"),
+            event_id=fixture.event_id,
+        )
 
     # ``market_lines`` nests the alternate ladders as further markets of the
     # same shape.  One level of recursion, flagged alternate, so a ladder

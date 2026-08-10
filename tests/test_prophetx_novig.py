@@ -1128,6 +1128,71 @@ class TestProphetXParserEdges:
         assert not outcome.rejections
         assert sorted(quote.line for quote in outcome.quotes) == [1.5, 2.5]
 
+    def test_a_market_without_an_id_is_still_judged_for_one_sidedness(self):
+        """Exempting id-less markets traded a false positive for a false
+        negative: the pair below is the very shape the guard exists for, and
+        it published unjudged because the payload happened to omit an id.
+        Judging by parse call needs no id at all."""
+        events, _ = self._fixture_raws(market={"id": 1, "type": "moneyline",
+                                               "name": "x", "selections": []})
+        markets = _raw(
+            "prophetx",
+            "markets:MLB:00",
+            {"data": {"7": [
+                {
+                    "type": "spread", "name": "Run Line", "line": 1.5,
+                    "selections": [[
+                        {"name": "Cincinnati Reds", "odds": 2.4, "line": 1.5,
+                         "competitor_id": 1, "outcome_id": 1},
+                        {"name": "Cincinnati Reds", "odds": 1.6, "line": -1.5,
+                         "competitor_id": 1, "outcome_id": 2},
+                    ]],
+                },
+            ]}},
+        )
+        outcome = parse_prophetx([events, markets])
+        assert not outcome.quotes
+        assert [r.reason for r in outcome.rejections] == [
+            "market_prices_one_side_twice"
+        ]
+
+    def test_a_failed_main_line_does_not_cost_its_alternates(self):
+        """The count guard returned before the alternates recursion, so a main
+        line this parser will not read took every legitimate rung with it."""
+        raws = self._fixture_raws(
+            market={
+                "id": 55,
+                "type": "spread",
+                "name": "Run Line",
+                # Three-way main line: a shape this parser refuses.
+                "selections": [[
+                    {"name": "Cincinnati Reds", "odds": 2.9, "line": 1.5,
+                     "competitor_id": 1, "outcome_id": 1},
+                    {"name": "Draw", "odds": 4.2, "outcome_id": 2},
+                    {"name": "Philadelphia Phillies", "odds": 2.6, "line": -1.5,
+                     "competitor_id": 2, "outcome_id": 3},
+                ]],
+                "market_lines": [
+                    {
+                        "id": 56,
+                        "type": "spread",
+                        "name": "Run Line",
+                        "line": 2.5,
+                        "selections": [[
+                            {"name": "Cincinnati Reds", "odds": 3.1, "line": 2.5,
+                             "competitor_id": 1, "outcome_id": 4},
+                            {"name": "Philadelphia Phillies", "odds": 1.35,
+                             "line": -2.5, "competitor_id": 2, "outcome_id": 5},
+                        ]],
+                    },
+                ],
+            }
+        )
+        outcome = parse_prophetx(raws)
+        assert outcome.skipped["not_a_two_outcome_market"] == 1
+        assert sorted(quote.line for quote in outcome.quotes) == [-2.5, 2.5]
+        assert all(quote.is_alternate for quote in outcome.quotes)
+
     def test_markets_without_ids_are_not_judged_as_one(self):
         """A market with no id makes every id-less row in the event share one
         bucket, where unrelated markets get judged as if they were a single
@@ -2140,7 +2205,16 @@ class TestTheCredentialedAxis:
         # overtime is to hockey: included in the whole-game price, not a
         # narrower window.
         assert not _common.mentions_a_sub_period("ALL_PERIODS Moneyline")
-        assert not _common.mentions_a_sub_period("Total Runs (Incl. Extra Innings)")
+        # The inclusion word carries the whole meaning: extra frames counted
+        # *toward* a whole-game price are not a narrower window, but a market
+        # settled on those frames alone is exactly one.
+        for whole in ("Total Runs (Incl. Extra Innings)",
+                      "Total Runs Including Extra Innings",
+                      "Moneyline incl extra time"):
+            assert not _common.mentions_a_sub_period(whole), whole
+        for narrow in ("Extra Innings Only", "Extra Time Winner",
+                       "Extra Time Total Goals"):
+            assert _common.mentions_a_sub_period(narrow), narrow
         # ...but regulation genuinely is a narrower window wherever overtime
         # exists, and the schema has a separate period saying so.
         for label in ("Moneyline (Regulation Time)", "60 Minute Line",

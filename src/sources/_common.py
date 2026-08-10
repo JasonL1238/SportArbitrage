@@ -657,12 +657,28 @@ _LABEL_SEPARATORS = ("-", "–", "—", "/", "|", "(", ")", ",", ":", "_")
 #: class silently.
 _WHOLE_GAME_PHRASES = (
     "all periods", "all quarters", "all halves", "all innings",
-    # Extra innings are to baseball what overtime is to hockey: they are
-    # *included in* a whole-game price, so saying so does not name a narrower
-    # window.  Without this an ordinary MLB total reading "Total Runs (Incl.
-    # Extra Innings)" screened out as a sub-period market.
-    "extra innings", "extra inning", "extra time",
+    # Extra innings are to baseball what overtime is to hockey: *included in*
+    # a whole-game price, so saying so does not name a narrower window.  But
+    # only when the label says they are included — the inclusion word carries
+    # the whole meaning.  Stripping a bare "extra innings" read "Extra Innings
+    # Only", a market settled on the extra frames alone, as a full game.
+    "incl extra innings", "including extra innings", "inc extra innings",
+    "with extra innings", "includes extra innings",
+    "incl extra inning", "including extra inning",
+    "incl extra time", "including extra time", "with extra time",
+    "includes extra time",
+    "incl overtime", "including overtime", "inc overtime",
+    "with overtime", "includes overtime", "incl ot", "including ot",
 )
+
+#: Windows that only a *phrase* names: no single token in "extra time" or
+#: "extra innings" is a period marker, and adding "time" or "extra" to the
+#: token list would flag half the full-game markets in the world.  Checked
+#: after the whole-game phrases are stripped, so "incl. extra innings" is
+#: already gone by the time "extra innings" is looked for — the inclusion
+#: word is what separates "counted toward the whole game" from "settled on
+#: these frames alone".
+_SUB_PERIOD_PHRASES = ("extra innings", "extra inning", "extra time", "overtime")
 
 
 def _screening_text(labels: Sequence[Any]) -> str:
@@ -678,10 +694,17 @@ def mentions_a_sub_period(*labels: Any) -> bool:
     Tokenised rather than substring-matched: ``"Setanta"`` contains ``"set"``
     and names no period, and a substring rule would skip it.
     """
-    text = _screening_text(labels)
+    # Tokens lose their trailing punctuation *before* the phrase pass, so
+    # "Incl. Extra Innings" and "Incl Extra Innings" are one phrase to match
+    # rather than two spellings to enumerate.
+    text = " ".join(
+        token.strip(".") for token in _screening_text(labels).split()
+    )
     for phrase in _WHOLE_GAME_PHRASES:
         text = text.replace(phrase, " ")
-    return bool({token.strip(".") for token in text.split()} & PERIOD_MARKERS)
+    if any(phrase in text for phrase in _SUB_PERIOD_PHRASES):
+        return True
+    return bool(set(text.split()) & PERIOD_MARKERS)
 
 
 def resolve_over_under(description: str) -> Selection | None:
@@ -731,55 +754,43 @@ def signed_handicap(description: str, *, price_shaped: float = 100.0) -> float |
     return found.pop() if len(found) == 1 else None
 
 
-def drop_same_side_pairs(source: str, outcome: Any) -> None:
-    """Refuse a market whose published legs all land on the same side.
+def refuse_one_sided_market(
+    source: str, outcome: Any, first_index: int, *, market_id: Any, event_id: str
+) -> None:
+    """Refuse the rows one market just produced if they all name one side.
 
-    A two-outcome market prices opposite sides by construction, so two rows
-    from one market agreeing on ``selection`` means the payload named one club
-    (or one competitor id) on both outcomes.  :func:`drop_duplicate_selections`
-    cannot see it — sign-opposed handicaps give the rows different lines and
+    *first_index* is ``len(outcome.quotes)`` taken **before** the market was
+    parsed, so ``outcome.quotes[first_index:]`` is exactly that market's
+    output.  Judging by parse call rather than by reconstructing the grouping
+    from the finished rows is the whole point: two attempts to infer it from
+    quote fields both failed in the ways an inference does.  Keying on
+    ``source_market_id`` alone put every row from every *id-less* market in an
+    event into one bucket and judged unrelated markets as a single contract;
+    exempting the id-less ones instead then let a genuine same-side pair from
+    such a market publish unjudged.  And a venue that reuses one id across a
+    ladder's rungs defeats any key built from ids, however many fields are
+    bolted on — the parser knows which rows came from which market, so it is
+    the parser that asks.
+
+    A market prices opposite sides by construction, so two or more rows all
+    agreeing on ``selection`` means the payload named one club (or one
+    competitor id) on both outcomes.  :func:`drop_duplicate_selections` cannot
+    see it — sign-opposed handicaps give the rows different lines and
     therefore different dedup keys — and published, they are two bets on the
     same team presented as a hedge: paired against another book's genuine
     other side they read as an arbitrage while both legs lose together.
     """
-    def key(quote: Any) -> tuple[str, str, bool]:
-        # ``is_alternate`` is part of the identity: a main ladder and an
-        # alternate ladder are different markets even when a venue gives them
-        # one id, and judging their rows together rejected legitimate
-        # alternate rungs wholesale.
-        return (
-            quote.source_market_id or "",
-            quote.source_event_id,
-            bool(getattr(quote, "is_alternate", False)),
-        )
-
-    by_market: dict[tuple[str, str, bool], list[Any]] = {}
-    for quote in outcome.quotes:
-        by_market.setdefault(key(quote), []).append(quote)
-    doomed = set()
-    for group, quotes in by_market.items():
-        market_id, event_id, _ = group
-        # Judged only where the premise holds: **exactly two** rows from one
-        # identified market.  A market with no id at all would put every
-        # id-less row in the event into one bucket and judge unrelated markets
-        # as one, and a bucket of three or more is a ladder rather than the
-        # two sides of a contract — neither is the shape this refuses.
-        if not market_id or len(quotes) != 2:
-            continue
-        if len({quote.selection for quote in quotes}) > 1:
-            continue
-        outcome.reject(
-            source,
-            "market_prices_one_side_twice",
-            f"{event_id}: market {market_id} published {len(quotes)} legs all "
-            f"on {quotes[0].selection.value}",
-            event_id=event_id,
-        )
-        doomed.add(group)
-    if doomed:
-        outcome.quotes = [
-            quote for quote in outcome.quotes if key(quote) not in doomed
-        ]
+    produced = outcome.quotes[first_index:]
+    if len(produced) < 2 or len({quote.selection for quote in produced}) > 1:
+        return
+    outcome.reject(
+        source,
+        "market_prices_one_side_twice",
+        f"{event_id}: market {market_id} published {len(produced)} legs all "
+        f"on {produced[0].selection.value}",
+        event_id=event_id,
+    )
+    del outcome.quotes[first_index:]
 
 
 #: Field names that carry a market's **label** — the human-readable name of
