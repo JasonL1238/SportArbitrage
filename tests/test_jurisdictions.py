@@ -505,7 +505,7 @@ def test_the_per_state_book_id_question_is_not_the_state_scoped_question() -> No
 
     for key in ("an_fanduel", "an_betmgm", "an_thescore"):
         assert files_per_state_book_id(key), key
-    for key in ("vi_fanduel", "vsin_circa", "an_circa", "pinnacle"):
+    for key in ("vi_fanduel", "vsin_circa", "an_bovada", "pinnacle"):
         assert not files_per_state_book_id(key), key
 
     # False, and every one of them is nonetheless pinned per state — by a route

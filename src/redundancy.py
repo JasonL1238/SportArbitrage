@@ -53,7 +53,6 @@ REDUNDANT_PAIRS: tuple[tuple[str, str], ...] = (
     ("an_caesars", "vi_caesars"),
     ("an_fanatics", "vi_fanatics"),
     ("an_bet365", "vi_bet365"),
-    ("an_circa", "vsin_circa"),
     # Newly registered VegasInsider columns for books that already have an
     # Action Network feed and, for three of them, a first-party adapter.  Every
     # combination has to be declared or ``src.coverage`` gains a second
@@ -169,9 +168,8 @@ def check_redundancy(
         # Scoped to a retail primary, because demanding a state licence of the
         # others is a category error rather than a finding.  ``bovada`` and
         # ``an_bovada`` are two views of an offshore book that holds no US state
-        # licence anywhere, and ``an_circa`` / ``vsin_circa`` are two views of one
-        # Las Vegas board; for those, the mirror genuinely is the failover and the
-        # original message is the true one.
+        # licence anywhere; for those, the mirror genuinely is the failover and
+        # the original message is the true one.
         watches_a_state_licence = primary in RETAIL_SOURCE_KEYS or is_local(primary)
         local = [mirror for mirror in live if is_local(mirror)]
         if watches_a_state_licence and not local:

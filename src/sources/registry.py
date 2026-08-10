@@ -106,7 +106,7 @@ REPUBLISHED_SOURCE_KEYS: frozenset[str] = frozenset(
     for entry in (
         "an_draftkings", "an_caesars", "vi_draftkings", "vi_caesars",
         "vi_hardrock", "vi_fanatics", "vi_bet365", "an_hardrock",
-        "an_fanatics", "an_fliff", "an_circa", "an_superbook", "an_bally",
+        "an_fanatics", "an_bally",
         "an_bet365", "an_open", "an_fanduel", "an_betrivers", "an_betmgm",
         "an_bovada", "an_onexbet", "an_parx", "an_unibet", "an_thescore",
         "vi_betmgm", "vi_fanduel", "vi_betrivers",
@@ -555,27 +555,22 @@ _BASE_SOURCES: tuple[SourceDescriptor, ...] = (
         adapter=VsinCircaAdapter,
         kind=SourceKind.SPORTSBOOK,
     ),
-    # Hard Rock / Fanatics / Fliff / Circa / Westgate(SuperBook) / Bally —
-    # Action Network catalog ids.  First-party adapters are the real path once
-    # ODDS_HTTP_PROXY is set.  Fliff is sweepstakes-style in many states —
-    # treat legs with extra caution (still a sportsbook kind for schema).
+    # Hard Rock / Fanatics / Bally — Action Network catalog ids.  First-party
+    # adapters are the real path once ODDS_HTTP_PROXY is set.
     #
-    # Fliff (2292), Circa (78) and SuperBook (14) are absent from **both**
-    # endpoint versions: asked alone on 2026-08-08, no response on either
-    # carried the id requested, and none of the three appears in any capture in
-    # this repository.  (The reply carried the defaults and nothing else on that
-    # thin board; stored v1 captures show v1 answering an unknown id with an
-    # assortment of other books instead, so "the defaults" is what happened that
-    # minute rather than what v1 does in general.)  So the v2
-    # switch is not the fix for them and no request shape here is.
-    #
-    # They are not "failing loudly": having no fixture, they take the
-    # session-scoped ``registered_raws`` down with them, and roughly 1600
-    # unrelated assertions — the whole shared source contract included — error at
-    # setup instead of running.  One of those unrun assertions is
-    # ``test_the_adapter_produced_rows_at_all``, which is precisely the check
-    # that would have caught the Pennsylvania feeds returning nothing.  The
-    # blast radius is the problem, not the redness; see docs/testing.md.
+    # ``an_fliff`` (2292), ``an_circa`` (78) and ``an_superbook`` (14) were
+    # registered beside these until 2026-08-09 and are **deliberately absent**
+    # now.  Both endpoint versions were asked for each id alone on 2026-08-08
+    # and neither reply carried the id requested; no capture in this repository
+    # ever held a row for any of the three.  Registered, they could not fail
+    # loudly: having no genuine fixture, they took the session-scoped
+    # ``registered_raws`` down with them, and roughly 1600 unrelated assertions
+    # — the whole shared source contract included — errored at setup instead of
+    # running.  The operator approved deregistration on 2026-08-09.
+    # Re-registration requires Action Network restoring the tenant **and** a
+    # genuine non-empty capture, in that order — see docs/SOURCE_FEASIBILITY.md.
+    # (Circa's only remaining feed is ``vsin_circa``, the Las Vegas line
+    # tracker, which is cross-licence context rather than any state's price.)
     SourceDescriptor(
         key="an_hardrock",
         adapter=ActionNetworkAdapter,
@@ -593,24 +588,6 @@ _BASE_SOURCES: tuple[SourceDescriptor, ...] = (
             "book_id": 2988,
             "fetch_book_ids": "2988,2990,79,4727,69,68,123,75,71",
         },
-    ),
-    SourceDescriptor(
-        key="an_fliff",
-        adapter=ActionNetworkAdapter,
-        kind=SourceKind.SPORTSBOOK,
-        config={"book_id": 2292, "fetch_book_ids": "2292"},
-    ),
-    SourceDescriptor(
-        key="an_circa",
-        adapter=ActionNetworkAdapter,
-        kind=SourceKind.SPORTSBOOK,
-        config={"book_id": 78, "fetch_book_ids": "78"},
-    ),
-    SourceDescriptor(
-        key="an_superbook",
-        adapter=ActionNetworkAdapter,
-        kind=SourceKind.SPORTSBOOK,
-        config={"book_id": 14, "fetch_book_ids": "14"},
     ),
     SourceDescriptor(
         key="an_bally",

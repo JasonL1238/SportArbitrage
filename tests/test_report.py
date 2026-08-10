@@ -2132,10 +2132,10 @@ def test_a_state_licensed_republisher_is_not_badged_global() -> None:
     for key in ("fanduel", "an_fanduel", "an_parx", "an_thescore"):
         assert _source_entry(key)["route_scope"] == "state", key
     # Feeds that publish one board for the whole country stay global — including
-    # ``an_circa``, an Action Network feed pinned to a fixed id rather than a
+    # ``an_bovada``, an Action Network feed pinned to a fixed id rather than a
     # per-state one, which is the case a membership test on the ``an_`` prefix
     # would have got wrong.
-    for key in ("vi_fanduel", "vsin_circa", "an_circa", "pinnacle", "smarkets"):
+    for key in ("vi_fanduel", "vsin_circa", "an_bovada", "pinnacle", "smarkets"):
         assert _source_entry(key)["route_scope"] == "global", key
 
 

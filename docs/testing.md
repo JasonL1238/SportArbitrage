@@ -91,18 +91,18 @@ python scripts/check_agent_docs.py
 
 The full suite currently contains thousands of cases and exercises real captured payloads offline. Do not substitute a live collection run for it.
 
-### Known baseline blocker
+### Baseline
 
-As of 2026-08-03, the full suite cannot become green because registered
-`an_fliff`, `an_circa`, and `an_superbook` have no genuine non-empty committed
-captures. The session-scoped registered-fixture setup reports `an_fliff` first,
-then causes many dependent tests to error. Treat that cascade as one fixture
-contract blocker, not hundreds of unrelated regressions. Do not synthesize
-fixtures or unregister sources to hide it; see `docs/SOURCE_FEASIBILITY.md`.
-
-Run focused tests that do not require the complete registered fixture slate,
-and still run the full command when the change warrants it. Report its exact
-result and distinguish new failures from this documented baseline.
+The suite is expected fully green. The long-standing blocker — registered
+`an_fliff`, `an_circa`, and `an_superbook` with no genuine non-empty captures,
+which errored ~1600 session-scoped fixture-dependent cases — ended on
+2026-08-09 when the operator approved deregistering all three (measurements
+and the re-registration condition are in `docs/SOURCE_FEASIBILITY.md`). The
+rule that produced the blocker still stands: never synthesize a fixture, and
+never unregister a source *to hide* a failure — this removal was a recorded
+operator decision about feeds Action Network had dropped, not a cleanup of red
+tests. Report the full suite's exact result; any failure is now a regression,
+not baseline.
 
 ## Build and smoke checks
 

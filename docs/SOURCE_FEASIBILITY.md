@@ -246,12 +246,63 @@ the live run this is `empty_after_parse: parsed 0 quotes from 5 responses;
 skipped={'odds_for_other_book': 934}` — the payload is full of prices, none of
 them this book's.
 
-**These three are the entire 1617-error baseline.** `conftest.py::_load` is
+**These three were the entire 1617-error baseline.** `conftest.py::_load` is
 session-scoped and asserts a fixture exists for every registered source, so three
-missing fixtures abort the whole contract suite rather than three tests of it. No
-fixture can be captured, because there is nothing to capture. They stay registered
-and failing per the agreed plan — recording the numbers rather than unregistering
-— which means the contract suite stays dark until that call is revisited.
+missing fixtures aborted the whole contract suite rather than three tests of it. No
+fixture could be captured, because there was nothing to capture. They stayed
+registered and failing per the agreed plan until the call was revisited.
+
+**Deregistered 2026-08-09, with the operator's explicit approval.** The decision
+was put to the operator during the Illinois campaign planning and approved: all
+three descriptors removed, along with their `COMMISSIONS`/`SETTLEMENT` entries,
+bet links (including SuperBook's Colorado door — no feed produces a row to link
+from), `SOURCE_NOTES`, the `an_circa`/`vsin_circa` redundancy pair, and their
+Pennsylvania view-only listings. Replay of stored runs that hold their raw
+responses (180 on disk, all parsing to zero quotes) records "no adapter
+available" as a note rather than a failure, because losing the ability to
+re-parse bytes that produced no rows loses nothing. Circa's only remaining feed
+is `vsin_circa`, the Las Vegas line tracker, declared `OTHER_LICENCE` context in
+Illinois's required-book table.
+
+**Re-registration condition, in order:** Action Network restores the tenant
+(the id answers with its own rows on v2), **then** a genuine non-empty capture
+is committed. Not the reverse — registering ahead of the capture is exactly
+what bought the 1617-error baseline the first time.
+
+### theScore Bet's Illinois id answers — 2026-08-10T01:05Z
+
+The first-ever request of Action Network id 4601 (`theScore Bet IL`,
+confirmed by name in the catalogue) returned **74 soccer rows across 11
+fixtures, zero rejections**, from matching Illinois egress on run 35 (replay
+PASS). The NFL board answered but carried no 4601 odds (no preseason lines
+posted); MLB/WNBA/NHL were a dead Sunday-evening slate. So the watcher
+`REQUIRED_BOOKS["IL"]` declares for theScore Bet is now **proven to answer**,
+which `an_parx` and `an_unibet` never were for PA until their recapture.
+
+The key's fixture store now holds this Illinois capture — and only it,
+because the parser refuses two licences' captures in one store. The 4623
+Pennsylvania capture (225 rows, 2026-08-08) was retired from the store; its
+proof stands recorded in § "The Pennsylvania recapture" and the file returns
+with the next PA-egress pass. The same swap discipline applies to every
+`an_*` key the Illinois recapture touches: **replace the fixture set per key,
+never append across licences.**
+
+### One stale board retired for vintage coherence — 2026-08-09
+
+Un-darkening the contract suite required live 2026-08-10T00:50Z recaptures of
+`vi_betmgm`/`vi_fanduel`/`vi_betrivers` (their 2026-08-07 captures were the
+dead-slate pages that parse to zero). On a Sunday-evening board the only
+pregame content was NFL preseason, so those fixtures' rows are NFL — and the
+offline fixture pool now spans capture vintages on shared NFL events.
+`an_parx`'s 2026-08-08 PA NFL board carried LAC@HOU with the away side
+favoured; by 2026-08-10 the line had genuinely crossed to the home side, and
+the cross-book identity test correctly refused the pool. The stale
+`scoreboard-74-nfl` file was retired (its MLB board, 351 rows, remains
+`an_parx`'s contract evidence); it cannot be recaptured from Illinois because
+74 is a Pennsylvania-scoped request, and the next PA-egress recapture replaces
+it with a fresh board. Retiring a superseded genuine capture is fixture
+curation, not synthesis — nothing was edited, and the removal is recorded
+here.
 
 ## Action Network: the two endpoint versions are different catalogues — 2026-08-08
 
@@ -668,9 +719,17 @@ names ten online operators: bet365, BetMGM, BetRivers, Caesars, Circa,
 DraftKings, theScore Bet, Fanatics, FanDuel, and Hard Rock Bet. "Available in a
 comparison table" does not by itself mean an operator is legal or usable in
 Illinois. In particular, the IGB has issued cease-and-desist letters to
-[Polymarket, Kalshi, and Bovada](https://igb.illinois.gov/sports-wagering/cease-and-desist-letters.html);
-their adapters remain research inputs but must not be presented as Illinois
-betting counterparties.
+[Polymarket, Kalshi, and Bovada](https://igb.illinois.gov/sports-wagering/cease-and-desist-letters.html).
+
+**Operator decision, 2026-08-09:** asked directly how Kalshi and Polymarket US
+should be presented on Illinois runs given those letters, the operator chose to
+keep them takeable — `registry.takeable_from_state` continues to admit Kalshi
+in every state, and no per-state exclusion table is added. (Bovada is already
+in `US_UNAVAILABLE_SOURCE_KEYS` on independent grounds.) An earlier revision of
+this note said these feeds "must not be presented as Illinois betting
+counterparties"; that wording described the letters' position, and the recorded
+decision above — not this note — is the repository's answer. The letters
+themselves remain a fact worth re-checking if the IGB escalates.
 
 ### First-party acquisition follow-up — 2026-08-04 UTC
 

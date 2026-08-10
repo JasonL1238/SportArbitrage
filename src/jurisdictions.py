@@ -123,8 +123,9 @@ def _route(
 #: The ids for the nine books above were confirmed to return moneyline prices on
 #: 2026-08-06 by naming the whole set on one request and counting rows per book.
 #: That check is why the table is trusted and why ``an_superbook`` (Westgate,
-#: id 14) is absent: it is a Nevada book that has never appeared in this payload,
-#: and registering it unverified is what bought three permanently empty sources.
+#: id 14) never entered it: a Nevada book that never appeared in this payload.
+#: Registering ids unverified is what bought three permanently empty sources
+#: (``an_fliff``/``an_circa``/``an_superbook``, deregistered 2026-08-09).
 #:
 #: **Which endpoint version these ids answer on is now settled: ``web/v2``.**  An
 #: earlier note here could not say, because the adapter defaulted to ``web/v1``
@@ -452,9 +453,6 @@ PA = Jurisdiction(
             "vi_hardrock",
             "an_hardrock",
             "vsin_circa",
-            "an_circa",
-            "an_fliff",
-            "an_superbook",
             "an_bally",
         }
     ),

@@ -211,16 +211,17 @@ class TestAStatePartitionedBookLinksItsOwnState:
         """Better a brand chooser than a confident wrong state — for every
         state-partitioned book, not only the one the defect was found on.
 
-        Two deliberate exceptions, both protected by inventory rather than the
-        resolver, and both asserted on purpose so a change to either fact
-        shows up here:
+        One deliberate exception, protected by inventory rather than the
+        resolver, and asserted on purpose so a change to the fact shows up
+        here:
 
         * ``unibet`` — no US brand chooser exists (``unibet.com`` is the
           global gambling site); its only feed is built for PA/NJ runs alone
           and is view-only everywhere.
-        * ``superbook`` — Colorado's own door, behind ``an_superbook``
-          (Westgate, id 14), a feed that has never produced a row on either
-          endpoint version; there is no row to link from.
+
+        (``superbook`` was the second exception until 2026-08-09, when
+        ``an_superbook`` — a feed that never produced a row on either endpoint
+        version — was deregistered along with its Colorado door.)
         """
         from src.sources.registry import REPUBLISHED_SOURCE_KEYS
 
@@ -228,7 +229,6 @@ class TestAStatePartitionedBookLinksItsOwnState:
             ("betrivers_kambi", "betrivers_kambi", None),
             ("caesars", "caesars", None),
             ("unibet", "an_unibet", "https://pa.unibet.com"),
-            ("superbook", "an_superbook", "https://co.superbook.com"),
         ):
             quote = make_quote(source=quote_source, source_event_id="1", league="ATP")
             link = bet_link(quote)

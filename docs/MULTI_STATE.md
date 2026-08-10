@@ -242,10 +242,11 @@ Use this when Step 2 fails for a venue.
   BetRivers and DraftKings were promoted to `validated` (evidence in
   `SOURCE_FEASIBILITY.md` § "Pennsylvania first-party routes promoted").
   BetMGM and Caesars remain `template` — access id and CDN block respectively.
-- Existing independent blocker: three retained Action Network source keys
-  (`an_fliff`, `an_circa`, `an_superbook`) carry ids with no odds on either
-  endpoint version, so no genuine capture can exist and the full offline
-  contract suite stays dark until they are re-decided.
+- Resolved 2026-08-09: the three retained Action Network source keys
+  (`an_fliff`, `an_circa`, `an_superbook`) that carried ids with no odds on
+  either endpoint version were deregistered with the operator's approval,
+  un-darkening the full offline contract suite. Re-registration requires
+  Action Network restoring the tenant and a genuine non-empty capture.
 
 ---
 

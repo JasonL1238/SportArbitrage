@@ -343,28 +343,6 @@ SOURCE_NOTES: dict[str, dict[str, str]] = {
         "what": "Bally Bet prices from Action Network's public scoreboard; New Jersey "
                 "is the only licence its id table covers.",
     },
-    "an_fliff": {
-        "label": "Fliff (Action Network)",
-        "host": "api.actionnetwork.com",
-        "kind": "sportsbook",
-        "what": "Registered for Fliff's Action Network id, which has never returned a "
-                "price on either endpoint version — kept as a loud gap, not a feed.",
-    },
-    "an_circa": {
-        "label": "Circa (Action Network)",
-        "host": "api.actionnetwork.com",
-        "kind": "sportsbook",
-        "what": "Registered for Circa's Action Network id, which has never returned a "
-                "price on either endpoint version — kept as a loud gap, not a feed.",
-    },
-    "an_superbook": {
-        "label": "SuperBook (Action Network)",
-        "host": "api.actionnetwork.com",
-        "kind": "sportsbook",
-        "what": "Registered against id 14, which Action Network's own catalogue names "
-                "Westgate — and which has never returned a price on either endpoint "
-                "version. Kept as a loud gap, not a feed.",
-    },
     "matchbook": {
         "label": "Matchbook",
         "host": "www.matchbook.com",

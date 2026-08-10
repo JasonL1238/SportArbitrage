@@ -1949,7 +1949,18 @@ def replay_run(
             stored_state = str(run_row["jurisdiction"] or "") if run_row else ""
             factory = replay_factory(stored_state, source_key)
         except (KeyError, RuntimeError):
-            problems.append(f"{source_key}: no adapter available to replay this source")
+            # Same judgement as a parse that raises, below: losing the ability to
+            # re-parse bytes that produced no rows loses nothing, and stored runs
+            # legitimately outlive registrations — ``an_circa``/``an_fliff``/
+            # ``an_superbook`` left 180 raw responses and zero quotes behind when
+            # they were deregistered on 2026-08-09.  A deregistered source that
+            # *did* store rows still fails the replay, because those rows are now
+            # genuinely irreproducible.
+            message = f"{source_key}: no adapter available to replay this source"
+            if source_key in produced:
+                problems.append(message)
+            else:
+                log.info("%s (it stored no rows on this run, so nothing is lost)", message)
             continue
         source = factory()
         try:

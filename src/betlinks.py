@@ -82,14 +82,11 @@ MIRROR_BOOK: Mapping[str, str] = {
     "an_betrivers": "betrivers_kambi",
     "an_bovada": "bovada",
     "an_caesars": "caesars",
-    "an_circa": "circa",
     "an_draftkings": "draftkings",
     "an_fanatics": "fanatics",
     "an_fanduel": "fanduel",
-    "an_fliff": "fliff",
     "an_hardrock": "hardrock",
     "an_onexbet": "onexbet",
-    "an_superbook": "superbook",
     "an_parx": "parx",
     "an_thescore": "thescore",
     # Action Network files this book as ``UnibetPA``; the Pennsylvania online
@@ -162,7 +159,6 @@ SITE: Mapping[str, str] = {
     "draftkings": "https://sportsbook.draftkings.com",
     "fanatics": "https://sportsbook.fanatics.com",
     "fanduel": "https://sportsbook.fanduel.com",
-    "fliff": "https://www.getfliff.com",
     "hardrock": "https://app.hardrock.bet",
     "kalshi": "https://kalshi.com",
     "leovegas_kambi": "https://www.leovegas.com/en-ca/sport",
@@ -171,7 +167,6 @@ SITE: Mapping[str, str] = {
     "pinnacle": "https://www.pinnacle.com/en",
     "polymarket": "https://polymarket.com",
     "smarkets": "https://smarkets.com",
-    "superbook": "https://co.superbook.com",
     "parx": "https://www.betparx.com",
     "thescore": "https://www.thescore.bet",
     # Deliberately Pennsylvania's door, in knowing tension with the "stateless
@@ -181,9 +176,7 @@ SITE: Mapping[str, str] = {
     # produces a unibet leg, is built for PA and NJ runs alone (both resolved
     # by STATE_SITE) and is view-only everywhere, so no money surface reaches
     # this entry.  A governed IL or DC run asking would receive PA's door — it
-    # cannot ask, because no such run can hold the feed.  ``superbook`` two
-    # entries up is the same shape: Colorado's own door, behind a feed
-    # (``an_superbook``, Westgate id 14) that has never produced a row.
+    # cannot ask, because no such run can hold the feed.
     "unibet": "https://pa.unibet.com",
     "sxbet": "https://sx.bet",
 }
