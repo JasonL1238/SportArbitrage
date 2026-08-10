@@ -295,6 +295,19 @@ with the next PA-egress pass. The same swap discipline applies to every
 `an_*` key the Illinois recapture touches: **replace the fixture set per key,
 never append across licences.**
 
+### Deliberate parser changes and the replay verdict — 2026-08-09
+
+`replay of run N: FAIL` with "row count differs / replay lost row" is what a
+**deliberate parser change** looks like on a run stored before the change, and
+the mid-move guard is one: stored runs **14** (IL, 2026-08-03, vi_hardrock
+42→36), **19** (GLOBAL) and **20** (PA, both 2026-08-06, 56→50 each) now
+re-parse to fewer rows *by design* — the dropped legs are the mid-move
+pairings the guard exists to delete, including the 0.5167 moneyline pairing
+the coverage prose cites. Their bytes verify against their recorded sha256s;
+nothing is corrupted. `replay_run` now says this itself: a non-migrated FAIL
+whose bytes verify opens with "the current parser disagreeing with the parser
+that stored this run" and points here. Do not re-diagnose these three runs.
+
 ### One stale board retired for vintage coherence — 2026-08-09
 
 Un-darkening the contract suite required live 2026-08-10T00:50Z recaptures of

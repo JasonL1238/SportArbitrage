@@ -4070,6 +4070,86 @@ class TestReplayComparesTheWholeRow:
         assert any("lost row" in problem for problem in problems), problems
         assert any("invented row" in problem for problem in problems), problems
 
+    def test_replay_judges_no_adapter_by_stored_rows_not_by_health(self, tmp_path) -> None:
+        """"Stored rows" is the stored fact, so it comes off the quote table.
+
+        ``source_health.quote_count`` is what the adapter produced; the two
+        diverge exactly when the insert failed or a scope filter dropped
+        everything (``Store.stored_quote_counts``'s own docstring).  In that
+        divergence, judging by health files a deregistered source's missing
+        adapter as a *problem* — failing the replay over rows that were never
+        in the database and therefore cannot be lost.
+        """
+        from src.collector import SOURCE_FACTORIES, collect_once, replay_run
+        from src.raw_store import RawStore
+        from src.sources.base import ParseOutcome
+        from src.store import Store
+
+        class Rigged:
+            source_key = "book_a"
+            leagues = ("MLB",)
+
+            def fetch_raw(self):
+                return [_raw("book_a", "markets-01", {"markets": []})]
+
+            def parse(self, raws):
+                return ParseOutcome(quotes=[
+                    make_quote(source="book_a", selection=Selection.HOME,
+                               decimal_odds=2.10, source_market_id="ml"),
+                    make_quote(source="book_a", selection=Selection.AWAY,
+                               decimal_odds=1.95, source_market_id="ml"),
+                ])
+
+            def close(self) -> None:
+                pass
+
+        raw_store = RawStore(tmp_path / "raw")
+        with Store(tmp_path / "db.sqlite3") as store:
+            result = collect_once(
+                [Rigged()], raw_store=raw_store, store=store, as_of=FETCHED
+            )
+            assert result.quotes
+            # The insert-failed divergence: health says 2 produced, the quote
+            # table holds none.
+            store._conn.execute(
+                "DELETE FROM quote WHERE run_id = ?", (result.run_id,)
+            )
+            store._conn.commit()
+            saved = SOURCE_FACTORIES.pop("book_a", None)
+            try:
+                ok, problems = replay_run(
+                    result.run_id, store=store, raw_store=raw_store
+                )
+            finally:
+                if saved is not None:
+                    SOURCE_FACTORIES["book_a"] = saved
+        assert ok, problems
+        assert not any("no adapter available" in p for p in problems), problems
+
+    def test_a_verified_byte_divergence_names_the_two_possible_causes(self, tmp_path) -> None:
+        """A non-migrated FAIL whose bytes verify must say what kind of claim
+        it is making.
+
+        The migration stamp was the only channel that admitted the parser
+        legitimately changes, so a deliberate change — the 2026-08-09 mid-move
+        guard re-parsing older tracker captures to fewer rows by design —
+        convicted v4-native stored runs with bare corruption-shaped output
+        ("row count differs / replay lost row") and nothing saying why.  The
+        verdict stays FAIL either way; the preamble is the difference between
+        a reader re-diagnosing corruption and a reader checking the recorded
+        parser changes.
+        """
+        ok, problems = self._run(
+            tmp_path, mutate=lambda q: q.model_copy(update={"american_odds": -9999})
+        )
+        assert not ok
+        assert problems[0].startswith(
+            "run "
+        ) and "current parser disagreeing with the parser that stored" in problems[0], (
+            problems
+        )
+        assert "sha256" in problems[0], problems
+
 
 class TestTheProfitFloorIsCheckedAtTheBankrollYouCanActuallyStake:
     """``rounding_destroys_edge`` ran only against the notional bankroll.
@@ -13576,3 +13656,32 @@ class TestArbAndLinesAgreeAboutTheSameStoredRun:
         assert "no leg you can reach" not in arb_out, arb_out
         assert "not reachable" not in lines_out, lines_out
         assert "pinnacle" in lines_out, lines_out
+
+
+class TestCaesarsLeagueFallbackMatchesWholeWords:
+    """"nba" is a substring of "wnba", and the competition table iterates
+    NBA-first — so the name fallback filed every WNBA competition under NBA,
+    whose team names then fail participant resolution as loud rejections.
+    The fallback exists precisely because seasonal ids rotate, so it has to
+    be right the day a rotated WNBA id arrives under an unknown uuid.
+    """
+
+    def test_wnba_is_not_swallowed_by_nba(self) -> None:
+        from src.sources.caesars import _league_from_event
+
+        assert _league_from_event(
+            {"competition": {"id": "rotated-away", "name": "WNBA"}}
+        ) == "WNBA"
+
+    def test_the_words_still_match_inside_longer_names(self) -> None:
+        from src.sources.caesars import _league_from_event
+
+        assert _league_from_event(
+            {"competition": {"id": "rotated-away", "name": "NBA Summer League"}}
+        ) == "NBA"
+        assert _league_from_event(
+            {"competition": {"id": "rotated-away", "name": "WNBA Commissioner's Cup"}}
+        ) == "WNBA"
+        assert _league_from_event(
+            {"competition": {"id": "rotated-away", "name": "nothing known"}}
+        ) is None

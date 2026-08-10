@@ -18,7 +18,7 @@ from src.sources.vegasinsider import parse_vegasinsider
 #: synthesized ``market_key`` tore in half and never judged), and two
 #: **zero-vig** spreads, ``±1.5 −115/+115`` and ``±1.5 −170/+170`` (sum
 #: exactly 1.0) — a retail column's genuine pairs on this same capture carry
-#: 0.75–1.4% margin, so at-fair is as fabricated as below it.
+#: +0.65% to +4.1% margin, so at-fair is as fabricated as below it.
 @pytest.mark.parametrize(
     ("source", "expected", "dropped"),
     [
@@ -67,7 +67,8 @@ def test_an_exactly_fair_tracker_pairing_is_dropped_whole() -> None:
     """At-fair is as fabricated as below it on a retail tracker column.
 
     Hard Rock's genuine pairs on the committed 2026-08-03 capture carry
-    0.75–1.4% margin; the same column's ``±1.5 −170/+170`` (implied sum
+    +0.65% to +4.1% margin (the floor is SF@TEX at +0.649%, measured — do not
+    calibrate a threshold from prose without re-measuring); the same column's ``±1.5 −170/+170`` (implied sum
     exactly 1.0) is a mid-move read the book never hung, and round 2 of the
     adversarial loop measured it publishing with no finding anywhere — the
     guard's old boundary kept anything ≥ fair, and the validation epsilon had

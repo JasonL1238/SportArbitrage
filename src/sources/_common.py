@@ -850,7 +850,7 @@ def refuse_mid_move_pairings(source: str, outcome: Any) -> None:
     The bar is stricter than "priced to lose": a pairing is kept only when it
     carries **some margin**, because a retail tracker column at exactly fair
     is as fabricated as one below it — Hard Rock's genuine pairs on the same
-    2026-08-03 capture carry 0.75–1.4% margin, while the mid-move artifacts
+    2026-08-03 capture carry +0.65% to +4.1% margin, while the mid-move artifacts
     read 0.9884, 0.9915, and twice exactly 1.0000 (±115/∓115, ±170/∓170).
     Validation's ``negative_overround`` keeps its own looser boundary — break
     even is not *losing* — so this guard is deliberately the strict judge of

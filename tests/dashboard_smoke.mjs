@@ -1838,6 +1838,60 @@ if (process.argv[3]) {
   if (problems.length) process.exit(1);
 }
 
+// A spread bet's drill-down must list BOTH sides. The sibling lookup matched on
+// the raw signed line, and a spread's mirror carries the negation — so no spread
+// drill-down ever showed its other side and the venue's cut (the panel's stated
+// purpose) could never be computed for any spread, at any book. The clicked
+// side renders 'plain'; every other side renders 'plain dim' — the dim cell is
+// the signal that the mirror was found.
+{
+  const COL = globalThis.__COL;
+  const data = globalThis.__DATA;
+  onAnEmbeddedRun();
+  const pick = nodes.get('run-pick');
+  const currentId = Number(pick && pick.value);
+  if (!globalThis.__detailLoaded(currentId)) {
+    console.log('spread drill-down check skipped; current run carries no detail');
+  } else {
+    const spreads = ((data.quotes && data.quotes.rows) || [])
+      .filter((r) => r[COL.run_id] === currentId)
+      .filter((r) => data.strings[r[COL.market]] === 'spread')
+      .filter((r) => {
+        const i = r[COL.status];
+        return i !== null && i !== undefined && i >= 0 && data.strings[i] === 'active';
+      });
+    const byEvent = new Map();
+    for (const r of spreads) {
+      const ev = data.strings[r[COL.event_key]];
+      if (!byEvent.has(ev)) byEvent.set(ev, new Set());
+      byEvent.get(ev).add(data.strings[r[COL.selection]]);
+    }
+    const target = spreads.find((r) => byEvent.get(data.strings[r[COL.event_key]]).size >= 2);
+    if (!target) {
+      console.log('spread drill-down check skipped; no two-sided spread in the embedded run');
+    } else {
+      const key = [
+        data.strings[target[COL.event_key]], 'spread',
+        data.strings[target[COL.period]], '',
+        target[COL.line], data.strings[target[COL.selection]], '0',
+      ].join('~');
+      globalThis.location.hash = '#bet/' + encodeURIComponent(key);
+      globalThis.__applyRoute();
+      const sides = nodes.get('bet-sides')?.innerHTML || '';
+      const problems = [];
+      if (sides.includes('Only one side of this bet was stored')) {
+        problems.push('the drill-down claims one side was stored while its mirror sits in the same run');
+      }
+      if (!sides.includes('plain dim')) {
+        problems.push('no dim sibling row rendered — the mirrored side was not found');
+      }
+      console.log(problems.length ? 'SPREAD DRILL-DOWN TORN: ' + problems.join('; ')
+        : 'a spread drill-down lists both sides');
+      if (problems.length) process.exit(1);
+    }
+  }
+}
+
 // "Separate bets — each with every side priced" must count only the groups that
 // actually have every side priced. Counting ``marketGroups.size`` made the
 // overview claim a larger number than the Checks panel's "bets fully priced"

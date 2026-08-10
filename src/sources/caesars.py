@@ -11,6 +11,7 @@ envelopes and does not depend on that wall.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Mapping, Sequence
@@ -188,8 +189,9 @@ class CaesarsAdapter:
                 tally.failed(
                     label,
                     SourceError(
-                        f"{self._source_key}:{label}: no event details — "
-                        "ODDS_HTTP_PROXY to a licensed state may be required"
+                        f"{self._source_key}:{label}: no event details — the "
+                        "competition may simply be out of season (NHL all "
+                        "summer), or a licensed-state egress may be required"
                     ),
                 )
         tally.require_something(what="pregame Caesars event")
@@ -334,9 +336,15 @@ def _league_from_event(event: Mapping[str, Any]) -> str | None:
         for known_id, _sport, league in COMPETITIONS:
             if cid == known_id:
                 return league
+        # Whole words, not substrings: "nba" is a substring of "wnba", and the
+        # table iterates NBA-first, so a plain ``in`` filed every WNBA
+        # competition under NBA — whose team names then fail participant
+        # resolution as loud rejections.  The seasonal-id comment above is why
+        # this fallback exists at all, so it has to be right for id rotation.
         name = str(comp.get("name") or "").casefold()
+        words = set(re.split(r"[^a-z0-9]+", name))
         for _cid, _sport, league in COMPETITIONS:
-            if league.casefold() in name:
+            if league.casefold() in words:
                 return league
     # Fall back to competition id on the event itself.
     cid = str(event.get("competitionId") or "")

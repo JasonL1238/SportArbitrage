@@ -5241,16 +5241,36 @@ function renderBet(key) {
   // either: comparing the row's real flag against a key that no longer carries
   // it made 21,232 bets print "only one side of this bet was stored" with both
   // sides sitting in the same file.
-  const groupOf = (r) => [str(r[COL.market]), str(r[COL.period]), str(r[COL.side]) || '',
-    r[COL.line] === null ? '' : r[COL.line]].join('~');
-  const wanted = [spec.market, spec.period, spec.side || '',
-    spec.line === null ? '' : spec.line].join('~');
+  //
+  // A spread's two sides carry OPPOSITE signed lines (home -1.5 / away +1.5)
+  // and no side field, so its siblings match on the unsigned line — the same
+  // rule as the detector's canonical_line, Quote.market_key, and marketGroups.
+  // Matching on the raw line meant no spread drill-down ever showed its other
+  // side, so the venue's cut — this panel's stated purpose — could never be
+  // computed for any spread, at any book, id'd or not.
+  const groupLine = (market, line) =>
+    (line === null || line === undefined ? '' : (market === 'spread' ? Math.abs(line) : line));
+  const groupOf = (r) => [str(r[COL.market]), str(r[COL.period]),
+    (str(r[COL.market]) === 'spread' ? '' : str(r[COL.side]) || ''),
+    groupLine(str(r[COL.market]), r[COL.line])].join('~');
+  const wanted = [spec.market, spec.period,
+    (spec.market === 'spread' ? '' : spec.side || ''),
+    groupLine(spec.market, spec.line)].join('~');
   const runRowsNow = rowsByRun.get(sample.run.id) || [];
   const siblings = new Map();
   for (const r of runRowsNow) {
     if (str(r[COL.event_key]) !== spec.event || groupOf(r) !== wanted) continue;
     const sel = str(r[COL.selection]);
-    if (!siblings.has(sel)) siblings.set(sel, { selection: sel, prices: new Map() });
+    // Each side carries its OWN line (a spread's mirror is the negation), so
+    // the sibling remembers it: the description, notation, and the go: link
+    // below must speak the side's number, not the clicked side's.
+    if (!siblings.has(sel)) {
+      siblings.set(sel, {
+        selection: sel,
+        line: r[COL.line] === null || r[COL.line] === undefined ? null : r[COL.line],
+        prices: new Map(),
+      });
+    }
     // A book may reach the same number through its main market and an extra
     // one.  The detector takes the better of the two (src/arb.py), so this must
     // not be last-write-wins — the panel would show the worse price for the leg
@@ -5265,7 +5285,7 @@ function renderBet(key) {
 
   table(el('bet-sides'), [
     { band: 'the side', label: 'The bet', cell: (s) => {
-        const one = Object.assign({}, bet, { selection: s.selection });
+        const one = Object.assign({}, bet, { selection: s.selection, line: s.line });
         return cell(describeBet(one, home, away), s.selection === spec.selection ? 'plain' : 'plain dim',
           notation(one, home, away));
       } },
@@ -5285,8 +5305,11 @@ function renderBet(key) {
   ], [...siblings.values()].sort((a, b) =>
        SELECTION_ORDER.indexOf(a.selection) - SELECTION_ORDER.indexOf(b.selection)), {
     empty: 'Only one side of this bet was stored, so the book’s cut cannot be worked out.',
+    // The target key must be one betKeyOf actually generates for the target
+    // row — the sibling's own line, not the clicked side's, or a spread's
+    // mirrored side linked to a bet that does not exist.
     go: (s) => href('bet', [spec.event, spec.market, spec.period, spec.side || '',
-      spec.line === null ? '' : spec.line, s.selection, spec.is_alternate ? '1' : '0'].join('~')),
+      s.line === null ? '' : s.line, s.selection, spec.is_alternate ? '1' : '0'].join('~')),
   });
 
   const totals = sideSources.map((source) => {

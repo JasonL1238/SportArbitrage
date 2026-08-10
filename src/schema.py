@@ -283,9 +283,12 @@ class Quote(BaseModel):
         spread offers sharing an absolute line (home −1.5 and away −1.5 as
         separate markets, or a ladder holding both signs of one rung) would
         share a key.  No id-less venue publishes that shape; if one ever does,
-        the failure is a loud false ``repeated_selection_within_market`` ERROR,
-        never silence, and ``refuse_mid_move_pairings`` refuses to judge a
-        spread group whose lines are not sign-opposed for the same reason.
+        the failure is loud, never silence — the two-offers shape fires
+        ``spread_not_mirrored`` and ``negative_overround`` ERRORs, and the
+        both-signs ladder (four rows under one key) fires
+        ``repeated_selection_within_market`` — and
+        ``refuse_mid_move_pairings`` refuses to judge a spread group whose
+        lines are not sign-opposed for the same reason.
         """
         if self.market is Market.SPREAD:
             side_part = ""

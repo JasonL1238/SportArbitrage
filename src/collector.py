@@ -1916,6 +1916,41 @@ def replay_run(
                 "are still what was collected, and a sha mismatch (none unless "
                 "named below) is the only sign of changed bytes",
             )
+        elif (
+            problems
+            and not any("sha256" in problem for problem in problems)
+            and any(
+                marker in problem
+                for problem in problems
+                for marker in (
+                    "row count differs",
+                    "replay lost row",
+                    "replay invented row",
+                    "changed on replay",
+                )
+            )
+        ):
+            # The migration stamp was the only channel that admitted the parser
+            # legitimately changes, so a deliberate change convicted every
+            # v4-native run it touched with corruption-shaped output — the
+            # 2026-08-09 mid-move guard re-parses older line-tracker captures
+            # to fewer rows *by design*, and an adversarial round found runs
+            # whose replay read "row count differs / replay lost row" with
+            # nothing saying why.  Every stored byte carrying a recorded
+            # sha256 verified (a mismatch raises out of RawStore.read and is
+            # named above), so the differences below are the current parser
+            # disagreeing with the one that stored the run.  The verdict stays
+            # FAIL because replay cannot tell evolution from regression — but
+            # it now states which two things the reader must tell apart.
+            problems.insert(
+                0,
+                f"run {run_id}'s stored bytes verified against their recorded "
+                "sha256s, so the differences below are the current parser "
+                "disagreeing with the parser that stored this run. A deliberate "
+                "parser change looks exactly like this (deliberate ones are "
+                "recorded in docs/SOURCE_FEASIBILITY.md); corrupted bytes would "
+                "be named as a sha256 mismatch instead",
+            )
         return not problems, problems
     by_source_paths: dict[str, list[Path]] = {}
     for source_key, path in store.raw_paths(run_id):
@@ -1937,8 +1972,16 @@ def replay_run(
     # says.  The invented-row case is still caught — a source that stored nothing
     # and now parses to something is a divergence, and it reaches the comparison
     # below rather than being skipped.
+    #
+    # "Stored rows" is the *stored* fact, so it is read off the quote table and
+    # not off ``source_health.quote_count`` — the two diverge exactly when a
+    # source's insert failed or a scope filter dropped everything it produced
+    # (see ``Store.stored_quote_counts``), and in both divergent cases the
+    # health number files the judgement on the wrong side: a problem for a
+    # source with nothing stored, or a note for one whose stored rows are now
+    # genuinely irreproducible.
     produced = {
-        row["source_key"] for row in store.health_for_run(run_id) if row["quote_count"]
+        source for source, count in store.stored_quote_counts(run_id).items() if count
     }
 
     replayed: list[Quote] = []
