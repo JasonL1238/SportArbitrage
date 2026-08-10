@@ -49,10 +49,18 @@ DEFAULT_ORIGIN = "https://www.caesars.com/sportsbook-and-casino"
 HOST_INTERVAL = 0.6
 
 #: competitionId → (sport, league).  UUIDs observed on the public API.
+#:
+#: All five confirmed against the Illinois sports menu captured
+#: 2026-08-04T00:43Z (``data/research/caesars/IL/20260804T004333Z``,
+#: response-010): the NFL and NBA ids already here appeared unchanged, and the
+#: menu supplied the three seasonal ids that were missing.  Seasonal ids can
+#: rotate — re-read them from a fresh menu capture, never guess.
 COMPETITIONS: tuple[tuple[str, Sport, str], ...] = (
     ("007d7c61-07a7-4e18-bb40-15104b6eac92", Sport.FOOTBALL, "NFL"),
     ("5806c896-4eec-4de1-874f-afed93114b8c", Sport.BASKETBALL, "NBA"),
-    # MLB / NHL / WNBA ids vary by season; highlights still work when known.
+    ("04f90892-3afa-4e84-acce-5b89f151063d", Sport.BASEBALL, "MLB"),
+    ("b7b715a9-c7e8-4c47-af0a-77385b525e09", Sport.HOCKEY, "NHL"),
+    ("fa3dd530-9699-4731-8ff2-6b3df29ae403", Sport.BASKETBALL, "WNBA"),
 )
 
 MARKET_NAMES: dict[str, tuple[Market, Period]] = {
