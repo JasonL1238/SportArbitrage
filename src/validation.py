@@ -1459,9 +1459,19 @@ def _check_line_orientation(quotes: Sequence[Quote], report: ValidationReport) -
     #   full-game majority that could have judged it.
     # Within the merged full-contest class a source may post both spellings;
     # the full-game line speaks for it rather than disqualifying it as a
-    # ladder.  And a window is judged only with THREE OR MORE sources: two
-    # sources have no majority, only a midpoint, and both of its failure
-    # shapes above are worse than saying nothing.
+    # ladder.  And a window is judged only with THREE OR MORE voters: two
+    # have no majority, only a midpoint, and both of its failure shapes
+    # above are worse than saying nothing.
+    #
+    # Honest coverage, measured 2026-08-10 so the record cannot overclaim:
+    # run 32's baseball cells grade 15/15 per source (the original 0/15
+    # darkness is gone), but its hockey stays ungraded (two networks — the
+    # majority floor refuses), a wholesale flip on a sub-20-fixture slate
+    # caps at WARNING (MIN_LINE_SIGN_FIXTURES), and single-book runs have
+    # no orientation coverage at all.  Silence over false conviction is the
+    # deliberate trade throughout; the price-agreement check remains the
+    # net under every one of these refusals and independently names flipped
+    # sources.
     _FULL = "full"
     laddered: dict[tuple[str, str], dict[str, dict[str, list[float]]]] = defaultdict(
         lambda: defaultdict(lambda: defaultdict(list))
@@ -1491,6 +1501,27 @@ def _check_line_orientation(quotes: Sequence[Quote], report: ValidationReport) -
                 chosen[source] = next(iter(per_period.values()))[0]
         main[window_key] = chosen
 
+    # One VOTE per adapter network, not per registered tenant.  This check
+    # hunts PARSER bugs — a handicap attached to the wrong side by the code
+    # that reads the feed — and ``betrivers_kambi`` / ``leovegas_kambi`` are
+    # one parser registered twice (both descriptors construct
+    # ``BetRiversKambiAdapter``), as are the Action Network and VegasInsider
+    # tenant families.  Counted per tenant, a sign flip in the shared Kambi
+    # adapter flipped two of three "voters" at once: measured on run 25, the
+    # pair is a strict majority in 29 of pinnacle's 31 three-source soccer
+    # windows, and simulating the flip convicted HONEST pinnacle with the
+    # systematic ERROR at 69% while both flipped tenants walked with
+    # sub-threshold warnings — the one check whose message names a culprit
+    # named the wrong one.  A network's vote is the median of its tenants'
+    # lines; every tenant is still judged and named individually against
+    # the consensus.  Sources outside the registry (every synthetic test
+    # book) are their own network.
+    from src.sources.registry import BY_BASE_KEY
+
+    def _network(source: str) -> str:
+        descriptor = BY_BASE_KEY.get(source)
+        return descriptor.adapter.__name__ if descriptor is not None else source
+
     # Rates are judged per (source, window class): pooled across windows, a
     # wholesale flip of one window on a two-window book capped at 50% and
     # could never reach the systematic threshold, and the message counted
@@ -1498,9 +1529,12 @@ def _check_line_orientation(quotes: Sequence[Quote], report: ValidationReport) -
     disagreements: dict[tuple[str, str], list[str]] = defaultdict(list)
     shared: Counter[tuple[str, str]] = Counter()
     for (event_key, window), per_source in main.items():
-        if len(per_source) < 3:
+        networks: dict[str, list[float]] = defaultdict(list)
+        for source, line in per_source.items():
+            networks[_network(source)].append(line)
+        if len(networks) < 3:
             continue
-        consensus = median(per_source.values())
+        consensus = median(median(lines) for lines in networks.values())
         if consensus == 0:
             # A pick'em says nothing about which side is favoured.
             continue

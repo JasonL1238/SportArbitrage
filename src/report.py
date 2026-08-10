@@ -2549,7 +2549,12 @@ def _replay_note(store: Store, run_id: int) -> str:
             and (migrated is not None or NATIVE_EVOLUTION_NOTE in problems[0])
             else 0
         )
-        return f"FAIL ({len(problems) - preamble})"
+        # Floored at 1: a genuine preamble always travels with at least one
+        # comparison problem, so a subtraction reaching 0 can only mean the
+        # native text-match hit a tampered problem that IS the run's one
+        # real defect — "FAIL (1)" is then strictly more accurate than
+        # "FAIL (0)".
+        return f"FAIL ({max(len(problems) - preamble, 1)})"
     except Exception as exc:  # noqa: BLE001 - a view must never be the thing that breaks
         return f"unavailable: {type(exc).__name__}"
 

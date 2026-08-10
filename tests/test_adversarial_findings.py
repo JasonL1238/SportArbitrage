@@ -1626,6 +1626,79 @@ class TestTheHandicapHasToFavourTheSameCompetitor:
         assert found, [f.code for f in report.findings]
         assert found[0].severity is Severity.ERROR
 
+    def test_correlated_tenants_cast_one_vote(self) -> None:
+        """betrivers_kambi and leovegas_kambi are ONE parser registered twice.
+
+        Counted per tenant, a sign flip in the shared adapter — the exact
+        bug class this check hunts — made the flipped pair the median
+        majority: honest pinnacle was convicted with the systematic ERROR
+        at 69% on run 25's real slate while both flipped tenants walked
+        with sub-threshold warnings.  With one vote per adapter network,
+        two tenants plus one independent book is only two networks — below
+        the majority floor, refused rather than misjudged.
+        """
+        from src.validation import validate
+
+        rows = []
+        for index in range(30):
+            key = f"MLB-CIN@MLB-PHI:2026-07-{10 + index % 20}#{index}"
+            for source, home_line in (
+                ("betrivers_kambi", 1.5),   # the shared-adapter flip
+                ("leovegas_kambi", 1.5),
+                ("pinnacle", -1.5),          # honest
+            ):
+                for selection, line in (
+                    (Selection.HOME, home_line), (Selection.AWAY, -home_line)
+                ):
+                    rows.append(make_quote(
+                        source=source, event_key=key, source_event_id=f"e{index}",
+                        market=Market.SPREAD, selection=selection, line=line,
+                        decimal_odds=1.95, commence_time=LATER,
+                        source_market_id=f"{source}-m{index}",
+                    ))
+        report = validate(rows)
+        assert not [
+            f for f in report.findings
+            if f.code == "line_favours_the_other_competitor"
+        ], [
+            (f.source, f.message[:70]) for f in report.findings
+            if f.code == "line_favours_the_other_competitor"
+        ]
+
+    def test_a_flipped_network_is_convicted_tenant_by_tenant(self) -> None:
+        """With a genuine three-network majority the flipped pair loses:
+        the consensus is one vote per network, and every tenant of the
+        flipped network is judged and named individually.  Counted per
+        tenant, this same slate's 2v2 median was a midpoint of zero and
+        the window was skipped as a pick'em — blind."""
+        from src.validation import Severity, validate
+
+        rows = []
+        for index in range(30):
+            key = f"MLB-CIN@MLB-PHI:2026-07-{10 + index % 20}#{index}"
+            for source, home_line in (
+                ("betrivers_kambi", 1.5),
+                ("leovegas_kambi", 1.5),
+                ("pinnacle", -1.5),
+                ("fanduel", -1.5),
+            ):
+                for selection, line in (
+                    (Selection.HOME, home_line), (Selection.AWAY, -home_line)
+                ):
+                    rows.append(make_quote(
+                        source=source, event_key=key, source_event_id=f"e{index}",
+                        market=Market.SPREAD, selection=selection, line=line,
+                        decimal_odds=1.95, commence_time=LATER,
+                        source_market_id=f"{source}-m{index}",
+                    ))
+        report = validate(rows)
+        found = {
+            f.source: f for f in report.findings
+            if f.code == "line_favours_the_other_competitor"
+        }
+        assert set(found) == {"betrivers_kambi", "leovegas_kambi"}, set(found)
+        assert all(f.severity is Severity.ERROR for f in found.values())
+
     def test_windows_are_not_compared_across_periods(self) -> None:
         """An honest source pricing only one window must not be charged with
         the other window's median: grouped by event alone, a regulation-only
@@ -11060,6 +11133,52 @@ class TestAPreUpgradeScopedRunKeepsItsScope:
                 else:
                     SOURCE_FACTORIES["book_a"] = saved
         assert note.startswith("FAIL"), note
+
+    def test_a_tampered_lone_problem_still_counts_as_one(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """The count floor: a native run whose ONE problem carries the
+        native constant's words (file-controlled text again) subtracted its
+        only real defect and rendered the degenerate "FAIL (0)".  A genuine
+        preamble always travels with at least one comparison problem, so a
+        subtraction reaching zero can only mean the text-match hit a
+        tampered problem — "FAIL (1)" is strictly more accurate."""
+        import json
+
+        from src import settings
+        from src.collector import NATIVE_EVOLUTION_NOTE, SOURCE_FACTORIES, collect_once
+        from src.raw_store import RawStore
+        from src.report import _replay_note
+        from src.store import Store
+
+        rigged = TestReplayComparesTheWholeRow._make_rigged()
+        raw_store = RawStore(tmp_path / "raw")
+        monkeypatch.setattr(settings, "RAW_DIR", tmp_path / "raw")
+        with Store(tmp_path / "db.sqlite3") as store:
+            result = collect_once(
+                [rigged()], raw_store=raw_store, store=store, as_of=FETCHED
+            )
+            assert result.quotes
+            # Zero stored rows, so the unreadable-bytes line is the run's
+            # one and only problem.
+            store._conn.execute(
+                "DELETE FROM quote WHERE run_id = ?", (result.run_id,)
+            )
+            store._conn.commit()
+            raw_path = next((tmp_path / "raw").rglob("*.json"))
+            envelope = json.loads(raw_path.read_text())
+            envelope["envelope_version"] = f"9 {NATIVE_EVOLUTION_NOTE}"
+            raw_path.write_text(json.dumps(envelope))
+            saved = SOURCE_FACTORIES.get("book_a")
+            SOURCE_FACTORIES["book_a"] = rigged
+            try:
+                note = _replay_note(store, result.run_id)
+            finally:
+                if saved is None:
+                    SOURCE_FACTORIES.pop("book_a", None)
+                else:
+                    SOURCE_FACTORIES["book_a"] = saved
+        assert note == "FAIL (1)", note
 
 
 class TestAFailedRunsPricesCarryTheVerdict:
