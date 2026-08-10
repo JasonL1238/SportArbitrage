@@ -185,9 +185,10 @@ class RawResponse:
             # into one an attacker (or a disk fault) could remove along with
             # the evidence: strip the key, rewrite the body, and the tampered
             # envelope read back clean.  Every envelope this codebase has ever
-            # written records the hash — all 5,033 stored envelopes (382
-            # committed fixtures + 4,651 archive files) carry it, measured
-            # 2026-08-09 — so a missing field is a stripped or foreign
+            # written records the hash — all 5,100 stored envelopes (200
+            # committed fixtures + 4,900 archive files across data/raw and
+            # data/raw_promos, every vintage v1–v3) carry it, measured
+            # 2026-08-10 — so a missing field is a stripped or foreign
             # envelope, never an older vintage.
             raise ValueError(
                 f"raw envelope for {raw.ref} carries no recorded sha256, so its "

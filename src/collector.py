@@ -1899,35 +1899,59 @@ def replay_run(
     # A run stamped by ``migrate`` was collected under an older schema, and the
     # parser has legitimately changed since — a difference on such a run can be
     # evolution rather than corruption, and the verdict has to say which kind of
-    # claim it is making.  The stamp is the only thing that can tell them apart:
-    # the sha check still catches changed bytes either way.  Applied to **every**
-    # failing return, including "no stored raw responses" — v3 predates raw
-    # capture for some runs, which is itself evolution rather than loss.
+    # claim it is making.  Applied to **every** failing return, including "no
+    # stored raw responses" — v3 predates raw capture for some runs, which is
+    # itself evolution rather than loss.  But the stamp explains COMPARISONS,
+    # not byte integrity: the first wording asserted "the stored rows are still
+    # what was collected, and a sha mismatch is the only sign of changed bytes"
+    # unconditionally, and once read failures became problems for every source
+    # (round 5), a migrated run with a deleted or truncated archive file
+    # printed that vouching clause directly above its own FileNotFoundError —
+    # the oldest runs, whose archives are the likeliest to have rotted, got the
+    # most confident preamble.  Both branches now gate the byte-integrity
+    # claim on every problem being a row comparison, which since round 5
+    # genuinely means every envelope was read and every recorded sha256
+    # verified.
     run_row = store.run_row(run_id)
     migrated_from = run_row["migrated_from"] if run_row is not None else None
 
+    _COMPARISON_MARKERS = (
+        "row count differs",
+        "replay lost row",
+        "replay invented row",
+        "changed on replay",
+    )
+
     def _judged(problems: list[str]) -> tuple[bool, list[str]]:
-        if problems and migrated_from is not None:
-            problems.insert(
-                0,
-                f"run {run_id} was collected under schema v{migrated_from} and "
-                "migrated: the parser has changed since, so the differences below "
-                "can be parser evolution rather than corruption — the stored rows "
-                "are still what was collected, and a sha mismatch (none unless "
-                "named below) is the only sign of changed bytes",
-            )
-        elif problems and all(
-            any(
-                marker in problem
-                for marker in (
-                    "row count differs",
-                    "replay lost row",
-                    "replay invented row",
-                    "changed on replay",
-                )
-            )
+        comparison_only = bool(problems) and all(
+            any(marker in problem for marker in _COMPARISON_MARKERS)
             for problem in problems
-        ):
+        )
+        if problems and migrated_from is not None:
+            if comparison_only:
+                problems.insert(
+                    0,
+                    f"run {run_id} was collected under schema v{migrated_from} "
+                    "and migrated: the parser has changed since, and every "
+                    "stored raw byte verified against its recorded sha256 — "
+                    "the differences below lie between the stored rows and the "
+                    "current parser's reading of those verified bytes, which "
+                    "is what parser evolution looks like; an edit to the "
+                    "stored rows themselves, which no sha256 covers, would "
+                    "look the same",
+                )
+            else:
+                problems.insert(
+                    0,
+                    f"run {run_id} was collected under schema v{migrated_from} "
+                    "and migrated: the parser has changed since, so a "
+                    "row-comparison difference below can be parser evolution "
+                    "rather than corruption. A problem that is not a row "
+                    "comparison — unreadable stored bytes, a replay raise, "
+                    "absent raw responses — is not explained by the migration "
+                    "stamp, and nothing here vouches for the archive's bytes",
+                )
+        elif comparison_only:
             # The migration stamp was the only channel that admitted the parser
             # legitimately changes, so a deliberate change convicted every
             # v4-native run it touched with corruption-shaped output — the
@@ -1941,7 +1965,7 @@ def replay_run(
             # (json.loads on a truncated file) and surfaced under a message
             # carrying no marker and no 'sha256'.  Every read failure is now
             # a "stored bytes unreadable" problem regardless of stored row
-            # count (see the replay loop), so all-comparison genuinely means
+            # count (see the replay loop), so comparison_only genuinely means
             # every envelope was read and every recorded sha256 verified.
             # What the sha256 does NOT cover is the quote table: an edited
             # stored row is comparison-shaped too, so the preamble names both
@@ -2029,6 +2053,11 @@ def replay_run(
             # and the version/field KeyErrors all raise *before* any hash
             # check and were downgraded to log lines on zero-row sources, so
             # a rotted archive replayed to PASS.
+            #
+            # A source that DID store rows and fails here also surfaces in
+            # the comparison below as lost rows — deliberate, not a double
+            # count: those stored rows are genuinely irreproducible, and
+            # this line, inserted first, says why.
             try:
                 raws = [raw_store.read(path) for path in paths]
             except Exception as exc:  # noqa: BLE001
@@ -2072,18 +2101,39 @@ def replay_run(
     if len(stored) != len(replayed):
         problems.append(f"row count differs: stored {len(stored)}, replayed {len(replayed)}")
 
+    # Truncation is disclosed, never silent: run 1's replay is a 627-row net
+    # delta that printed as five lost and five invented rows with nothing
+    # saying more existed — the one surface able to show a divergence's scale
+    # understated it (the same standard the arb output holds; see the note
+    # rejecting a silent [:10] slice).  Each marker deliberately CONTAINS its
+    # category's comparison phrase ("replay lost row" / "replay invented row"
+    # / "changed on replay") so a truncated listing still counts as
+    # comparison-shaped and does not rob a genuine evolution FAIL of its
+    # verdict preamble.
     missing = set(stored_map) - set(replay_map)
     added = set(replay_map) - set(stored_map)
     for key in sorted(missing)[:5]:
         problems.append(f"replay lost row: {key}")
+    if len(missing) > 5:
+        problems.append(
+            f"replay lost rows: {len(missing) - 5} more beyond the 5 shown"
+        )
     for key in sorted(added)[:5]:
         problems.append(f"replay invented row: {key}")
+    if len(added) > 5:
+        problems.append(
+            f"replay invented rows: {len(added) - 5} more beyond the 5 shown"
+        )
 
     for key in sorted(set(stored_map) & set(replay_map)):
         before, after = stored_map[key], replay_map[key]
         for field, was, now in _row_differences(before, after):
             problems.append(f"{field} changed on replay for {key}: {was!r} -> {now!r}")
         if len(problems) > 20:
+            problems.append(
+                "more rows changed on replay than are shown: the field "
+                "comparison stopped at this point"
+            )
             break
 
     return _judged(problems)
@@ -2641,6 +2691,8 @@ def _cmd_replay(args: argparse.Namespace) -> int:
         )
         for problem in problems[:25]:
             print(f"  {problem}")
+        if len(problems) > 25:
+            print(f"  … and {len(problems) - 25} more problem(s) not shown")
         return 0 if ok else 1
 
 
@@ -2796,7 +2848,7 @@ def _cmd_show(args: argparse.Namespace) -> int:
             line = "" if row["line"] is None else f" {row['line']:+g}"
             side = f" {row['side']}" if row["side"] else ""
             print(
-                f"  {row['source']:<16} {row['sport']:<11} {row['league']:<8}"
+                f"  {row['source']:<16} {row['sport']:<11} {row['league']:<15} "
                 f"{row['event_key']:<34} {row['market']:<11}"
                 f"{row['period']:<16}{side:<5} {row['selection']:<6}{line:<7}"
                 f" {row['decimal_odds']:>7.3f} {row['american_odds']:>+5d}  {row['status']}"

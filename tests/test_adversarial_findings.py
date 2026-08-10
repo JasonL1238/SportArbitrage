@@ -4372,6 +4372,76 @@ class TestReplayComparesTheWholeRow:
             "verified against their recorded sha256s" in p for p in problems
         ), problems
 
+    def test_a_truncated_diff_listing_discloses_its_own_truncation(self, tmp_path) -> None:
+        """The listing may bound its length, never its honesty.
+
+        Run 1's real replay is a 627-row net delta that printed as five lost
+        and five invented rows with nothing saying more existed — the one
+        surface able to show a divergence's scale understated it, while the
+        same file explicitly rejects a silent slice for arb output.  The
+        markers deliberately contain their category's comparison phrase, so
+        a truncated listing on a genuine evolution run must NOT cost the
+        verdict its verified-bytes preamble — asserted here alongside the
+        marker itself.
+        """
+        from src.collector import SOURCE_FACTORIES, collect_once, replay_run
+        from src.raw_store import RawStore
+        from src.sources.base import ParseOutcome
+        from src.store import Store
+
+        def rows():
+            out = []
+            for i, line in enumerate((1.5, 2.5, 3.5, 4.5)):
+                for sel, signed in ((Selection.HOME, -line), (Selection.AWAY, line)):
+                    out.append(make_quote(
+                        source="book_a", selection=sel, market=Market.SPREAD,
+                        line=signed, decimal_odds=1.9 + i * 0.01,
+                        source_market_id=f"sp{i}",
+                    ))
+            return out
+
+        class Wide:
+            source_key = "book_a"
+            leagues = ("MLB",)
+
+            def fetch_raw(self):
+                return [_raw("book_a", "markets-01", {"markets": []})]
+
+            def parse(self, raws):
+                return ParseOutcome(quotes=rows())
+
+            def close(self) -> None:
+                pass
+
+        raw_store = RawStore(tmp_path / "raw")
+        with Store(tmp_path / "db.sqlite3") as store:
+            result = collect_once(
+                [Wide()], raw_store=raw_store, store=store, as_of=FETCHED
+            )
+            assert len(result.quotes) == 8
+            # Seven of eight stored rows vanish: replay now invents seven,
+            # two beyond the five the listing shows.
+            store._conn.execute(
+                "DELETE FROM quote WHERE rowid IN ("
+                "SELECT rowid FROM quote WHERE run_id = ? LIMIT 7)",
+                (result.run_id,),
+            )
+            store._conn.commit()
+            saved = SOURCE_FACTORIES.get("book_a")
+            SOURCE_FACTORIES["book_a"] = Wide
+            try:
+                ok, problems = replay_run(result.run_id, store=store, raw_store=raw_store)
+            finally:
+                if saved is None:
+                    SOURCE_FACTORIES.pop("book_a", None)
+                else:
+                    SOURCE_FACTORIES["book_a"] = saved
+        assert not ok
+        assert any(
+            "replay invented rows: 2 more beyond the 5 shown" in p for p in problems
+        ), problems
+        assert "verified against" in problems[0] and "sha256" in problems[0], problems
+
     def test_a_verified_byte_divergence_names_its_possible_causes(self, tmp_path) -> None:
         """A non-migrated FAIL whose bytes verify must say what kind of claim
         it is making.
@@ -9931,6 +10001,93 @@ class TestAMigratedRunsReplayNamesTheParserNotCorruption:
             )
         assert not ok
         assert "collected under schema v3" in problems[0], problems
+
+    def test_a_migrated_runs_read_failure_is_not_vouched_for(self, tmp_path) -> None:
+        """The stamp explains comparisons, not byte integrity.
+
+        The first wording asserted "the stored rows are still what was
+        collected, and a sha mismatch is the only sign of changed bytes"
+        on EVERY failing migrated return.  Once read failures became
+        problems for every source (round 5), a migrated run with a deleted
+        archive file printed that vouching clause directly above its own
+        FileNotFoundError — the oldest runs, whose archives are the
+        likeliest to have rotted, wore the most confident preamble.
+        """
+        from src.collector import SOURCE_FACTORIES, collect_once, replay_run
+        from src.raw_store import RawStore
+        from src.store import Store
+
+        rigged = TestReplayComparesTheWholeRow._make_rigged()
+        raw_store = RawStore(tmp_path / "raw")
+        with Store(tmp_path / "db.sqlite3") as store:
+            result = collect_once(
+                [rigged()], raw_store=raw_store, store=store, as_of=FETCHED
+            )
+            assert result.quotes
+            store._conn.execute(
+                "DELETE FROM quote WHERE run_id = ?", (result.run_id,)
+            )
+            store._conn.execute(
+                "UPDATE collection_run SET migrated_from = 3 WHERE id = ?",
+                (result.run_id,),
+            )
+            store._conn.commit()
+            next((tmp_path / "raw").rglob("*.json")).unlink()
+            saved = SOURCE_FACTORIES.get("book_a")
+            SOURCE_FACTORIES["book_a"] = rigged
+            try:
+                ok, problems = replay_run(result.run_id, store=store, raw_store=raw_store)
+            finally:
+                if saved is None:
+                    SOURCE_FACTORIES.pop("book_a", None)
+                else:
+                    SOURCE_FACTORIES["book_a"] = saved
+        assert not ok
+        assert "collected under schema v3" in problems[0], problems
+        assert "nothing here vouches" in problems[0], problems
+        assert "verified against" not in problems[0], problems
+        assert any("stored bytes unreadable" in p for p in problems), problems
+
+    def test_a_migrated_all_comparison_fail_names_verified_bytes(self, tmp_path) -> None:
+        """When every problem IS a comparison, the migrated preamble may —
+        and should — say the bytes verified, with the same two-sided framing
+        the non-migrated preamble carries (an edited stored row looks the
+        same, and no sha256 covers the quote table).
+        """
+        from src.collector import SOURCE_FACTORIES, collect_once, replay_run
+        from src.raw_store import RawStore
+        from src.store import Store
+
+        rigged = TestReplayComparesTheWholeRow._make_rigged()
+        raw_store = RawStore(tmp_path / "raw")
+        with Store(tmp_path / "db.sqlite3") as store:
+            result = collect_once(
+                [rigged()], raw_store=raw_store, store=store, as_of=FETCHED
+            )
+            assert result.quotes
+            store._conn.execute(
+                "DELETE FROM quote WHERE rowid = ("
+                "SELECT rowid FROM quote WHERE run_id = ? LIMIT 1)",
+                (result.run_id,),
+            )
+            store._conn.execute(
+                "UPDATE collection_run SET migrated_from = 3 WHERE id = ?",
+                (result.run_id,),
+            )
+            store._conn.commit()
+            saved = SOURCE_FACTORIES.get("book_a")
+            SOURCE_FACTORIES["book_a"] = rigged
+            try:
+                ok, problems = replay_run(result.run_id, store=store, raw_store=raw_store)
+            finally:
+                if saved is None:
+                    SOURCE_FACTORIES.pop("book_a", None)
+                else:
+                    SOURCE_FACTORIES["book_a"] = saved
+        assert not ok
+        assert "collected under schema v3" in problems[0], problems
+        assert "verified against its recorded sha256" in problems[0], problems
+        assert "would look the same" in problems[0], problems
 
 
 class TestTheFlowStripAccountsForTheScopeFilter:

@@ -69,8 +69,9 @@ def test_sha_stripped_raw_file_is_refused(tmp_path: Path) -> None:
     tamper above became undetectable the moment the tamperer also removed
     the reference value it would have been caught against — rewrite the
     body, drop ``sha256``, and the envelope read back clean.  Every envelope
-    this codebase has ever written records the hash (all 5,033 stored
-    envelopes measured 2026-08-09), so absence is itself the tamper signal.
+    this codebase has ever written records the hash (all 5,100 stored
+    envelopes measured 2026-08-10, every vintage v1–v3), so absence is
+    itself the tamper signal.
     """
     store = RawStore(tmp_path)
     path = store.write(make_raw('{"a": 1}'))
@@ -1309,9 +1310,10 @@ def test_version_1_envelopes_remain_replayable(tmp_path: Path) -> None:
     them.
 
     The sha256 is NOT part of what v1 lacks: every stored envelope of every
-    version records one (all 5,033 measured 2026-08-09), and ``from_envelope``
-    refuses an envelope without it — so this synthetic v1 carries the hash the
-    real ones do, and only headers/capture_id are absent.
+    version records one (all 5,100 measured 2026-08-10, including all four
+    v1 files), and ``from_envelope`` refuses an envelope without it — so
+    this synthetic v1 carries the hash the real ones do, and only
+    headers/capture_id are absent.
     """
     import hashlib
 

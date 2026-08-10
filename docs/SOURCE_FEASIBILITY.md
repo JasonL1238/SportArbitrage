@@ -295,25 +295,45 @@ with the next PA-egress pass. The same swap discipline applies to every
 `an_*` key the Illinois recapture touches: **replace the fixture set per key,
 never append across licences.**
 
-### Deliberate parser changes and the replay verdict — 2026-08-09
+### Deliberate parser changes and the replay verdict — 2026-08-09, population corrected 2026-08-10
 
-`replay of run N: FAIL` with "row count differs / replay lost row" is what a
-**deliberate parser change** looks like on a run stored before the change, and
-the mid-move guard is one: stored runs **14** (IL, 2026-08-03, vi_hardrock
-42→36), **19** (GLOBAL) and **20** (PA, both 2026-08-06, 56→50 each) now
-re-parse to fewer rows *by design* — the dropped legs are the mid-move
-pairings the guard exists to delete, including the 0.5167 moneyline pairing
-the coverage prose cites. The same three problem lists also carry two
-*earlier* deliberate changes' fingerprints (measured 2026-08-09, offline):
-five cloudbet `first_5_innings` spread lost/invented **pairs** per run — the
-away leg's line respelled `'0'` → `'-0'` by the zero-line sign
-canonicalization — and DraftKings `decimal_odds`/`implied_probability`
-precision differences from the trueOdds change. All of it is recorded parser
-evolution; none of it is corruption. Their bytes verify against their
-recorded sha256s. `replay_run` says this itself: a non-migrated FAIL whose
-bytes verify opens with a preamble placing the differences "between the
-stored rows and the current parser's reading of those verified bytes" and
-points here. Do not re-diagnose these three runs.
+`replay of run N: FAIL` with comparison-shaped problems under the
+verified-bytes preamble is what a **deliberate parser change** looks like on
+a run stored before the change. An earlier revision of this section drew the
+boundary around three runs; the full population, measured offline 2026-08-10
+by replaying **all 35 stored runs**, is twenty:
+
+- **PASS**: 13, 23, 27, 29, 30, 31, 32, 33, 34, 35.
+- **Nothing to replay**: 5, 6, 11, 12, 26.
+- **FAIL — the mid-move guard plus older fingerprints**: **14** (IL,
+  2026-08-03, vi_hardrock 42→36), **19** (GLOBAL) and **20** (PA, both
+  2026-08-06, 56→50 each) re-parse to fewer rows *by design* — the dropped
+  legs are the mid-move pairings the guard exists to delete, including the
+  0.5167 moneyline pairing the coverage prose cites.
+- **FAIL — the older fingerprints alone**: **15, 16, 17, 18, 21, 22, 24,
+  25** carry the same two earlier deliberate changes without the vi_hardrock
+  drop: five cloudbet `first_5_innings` spread lost/invented **pairs** per
+  run (the away leg's line respelled `'0'` → `'-0'` by the zero-line sign
+  canonicalization) and DraftKings `decimal_odds`/`implied_probability`
+  precision differences from the trueOdds change. **28** (PA, 2026-08-08
+  17:06Z) is DraftKings-only: the trueOdds change went live between run 28
+  and run 29 (17:11Z, commit 5832927), so 28 is the last run stored under
+  the old readings.
+- **FAIL — pre-campaign legacy**: **1, 2, 3, 4, 7, 8, 9, 10** (the
+  2026-07-30 era) fail with larger diffs from the many parser evolutions
+  since — run 1 replays stored 2,680 → replayed 3,307 (+627 net: lost
+  `an_bet365` first-5-innings moneylines, invented cloudbet full-game
+  moneylines, and more; the listing now discloses its own truncation). No
+  section enumerates every legacy delta and none is planned: the preamble
+  and this paragraph are the diagnosis.
+
+Every one of the twenty verifies its bytes against the recorded sha256s;
+none of it is corruption. `replay_run` says this itself: a FAIL whose bytes
+verify opens with a preamble placing the differences "between the stored
+rows and the current parser's reading of those verified bytes" and points
+here. Do not re-diagnose any run on this list while its problems stay
+comparison-shaped under that preamble. A FAIL **outside** this list, a
+"stored bytes unreadable" problem, or a sha256 mismatch is a real alarm.
 
 ### One stale board retired for vintage coherence — 2026-08-09
 
@@ -815,7 +835,7 @@ material price drift instead.
 | bet365 | not implemented | `an_bet365` | `vi_bet365` | AN and VI produce comparison rows. A normal browser shows first-party IL odds, but fresh isolated automation does not complete its catalog subscription. |
 | Fanatics | not implemented | `an_fanatics` | `vi_fanatics` | AN v2 and VI produce comparison rows. The current web host is marketing-only; native-app first-party discovery remains. |
 | Circa | app-only surface; no web adapter | `an_circa` | `vsin_circa` | Circa's own site points to VSiN as an odds aggregator. The named VSiN column produced 48 MLB quotes / 8 events with no rejections. It is a Las Vegas line tracker, so use it as fallback and drift evidence rather than proof of Illinois-state price identity. *(2026-08-09: `an_circa` has since been deregistered — see § "Three registered ids carry no odds"; `vsin_circa` is now Circa's only feed.)* |
-| theScore Bet | verified IL GraphQL surface; adapter pending | none | none | Official `us-il` edge returned a valid anonymous startup, MLB competition, and lines payload. This is the strongest next first-party adapter candidate. |
+| theScore Bet | verified IL GraphQL surface; adapter pending | none | none | Official `us-il` edge returned a valid anonymous startup, MLB competition, and lines payload. This is the strongest next first-party adapter candidate. *(2026-08-10: superseded — `an_thescore` now carries IL id 4601 and is proven: 74 soccer rows, run 35, replay PASS; see § "theScore Bet's Illinois id answers". The "none" in the Action Network column describes the 2026-08-03 catalogue state.)* |
 
 The retained Action Network feeds were rechecked from Illinois on 2026-08-03.
 The old v1 scoreboard returned games but omitted all six requested books. The

@@ -277,11 +277,13 @@ def _required(
 #:   severity, both unobserved-locally.  An IGB book the operator named, with no
 #:   Illinois-licence observation path, should never be quietly absent from the
 #:   table.
-#: * ``theScore Bet`` is watched through id 4601, which no committed capture has
-#:   ever requested.  The first-party ``us-il`` GraphQL surface answered anonymous
-#:   probes on 2026-08-04 and is the adapter candidate that would satisfy the rule
-#:   outright; until either lands, ``SINGLE_SOURCE`` on paper and unproven in
-#:   practice, exactly as ``an_parx``/``an_unibet`` were recorded for Pennsylvania.
+#: * ``theScore Bet`` is watched through id 4601, **proven** on 2026-08-10: the
+#:   first request from Illinois returned 74 soccer rows across 11 fixtures
+#:   (run 35, replay PASS, capture committed as ``an_thescore`` contract
+#:   evidence — SOURCE_FEASIBILITY § "theScore Bet's Illinois id answers").
+#:   So ``SINGLE_SOURCE`` here is observed, not on-paper.  The first-party
+#:   ``us-il`` GraphQL surface answered anonymous probes on 2026-08-04 and is
+#:   the Phase 2 adapter that would upgrade the grade to ``DIRECT``.
 REQUIRED_BOOKS: Mapping[str, tuple[RequiredBook, ...]] = {
     "IL": (
         _required("bet365", same=("an_bet365",), other=("vi_bet365",)),
