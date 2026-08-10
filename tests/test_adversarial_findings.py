@@ -1525,6 +1525,107 @@ class TestTheHandicapHasToFavourTheSameCompetitor:
         assert found, [f.code for f in report.findings]
         assert found[0].severity is Severity.ERROR
 
+    def test_a_two_source_window_convicts_nobody(self) -> None:
+        """Two sources have no majority, only a midpoint — refuse to judge.
+
+        The per-period regrouping created secondary windows holding exactly
+        two judgeable sources in production, and a median of two fails both
+        ways: a symmetric flip cancels to 0 and reads as a pick'em (blind),
+        and an asymmetric flip where the flipped book quotes the larger
+        magnitude hands the midpoint the flipped sign — the HONEST source
+        was convicted with a systematic ERROR while the flipped one walked.
+        """
+        from src.validation import validate
+
+        rows = []
+        for index in range(30):
+            key = f"MLB-CIN@MLB-PHI:2026-07-{10 + index % 20}#{index}"
+            for source, home_line in (("honest_book", -0.5), ("flipped_book", 0.75)):
+                for selection, line in (
+                    (Selection.HOME, home_line), (Selection.AWAY, -home_line)
+                ):
+                    rows.append(make_quote(
+                        source=source, event_key=key, source_event_id=f"e{index}",
+                        market=Market.SPREAD, selection=selection, line=line,
+                        period=Period.FIRST_5_INNINGS, decimal_odds=1.95,
+                        commence_time=LATER, source_market_id=f"{source}-f5-{index}",
+                    ))
+        report = validate(rows)
+        assert not [
+            f for f in report.findings
+            if f.code == "line_favours_the_other_competitor"
+        ], [
+            (f.source, f.severity, f.message[:80]) for f in report.findings
+            if f.code == "line_favours_the_other_competitor"
+        ]
+
+    def test_a_one_window_wholesale_flip_is_systematic(self) -> None:
+        """Rates are judged per window class, not pooled across windows.
+
+        Pooled per source, a wholesale flip of one window on a two-window
+        book capped at 50% shared cells — structurally below the systematic
+        threshold — so a wrong-side mapping on one criterion label (only
+        "Handicap - First 5 Innings", say) could never earn more than a
+        WARNING, with the message counting windows as "fixtures".
+        """
+        from src.validation import Severity, validate
+
+        rows = []
+        for q in self._slate():
+            rows.append(q)  # honest full-game window for all three books
+            flip = -1.0 if q.source == "book_two" else 1.0
+            rows.append(q.model_copy(update={
+                "period": Period.FIRST_5_INNINGS,
+                "line": q.line * flip,
+                "source_market_id": f"{q.source_market_id}-f5",
+            }))
+        report = validate(rows)
+        found = [
+            f for f in report.findings
+            if f.code == "line_favours_the_other_competitor" and f.source == "book_two"
+        ]
+        assert found, [f.code for f in report.findings]
+        assert found[0].severity is Severity.ERROR, found[0].message
+        assert "first_5_innings" in found[0].message
+
+    def test_a_regulation_flip_is_judged_against_the_full_game_consensus(self) -> None:
+        """FULL_GAME and REGULATION share a favourite (FULL_CONTEST_WINDOWS),
+        so a regulation-only source is judged by the full-game majority.
+
+        Split by raw period, hockey's regulation window held too few sources
+        to judge at all, and the one book posting only regulation spreads —
+        betrivers_kambi's ordinary hockey slate — could flip unnoticed.
+        """
+        from src.validation import Severity, validate
+
+        rows = []
+        for index in range(30):
+            key = f"NHL-CIN@NHL-PHI:2026-07-{10 + index % 20}#{index}"
+            for source in ("book_one", "book_three"):
+                for selection, line in ((Selection.HOME, -1.5), (Selection.AWAY, 1.5)):
+                    rows.append(make_quote(
+                        source=source, event_key=key, source_event_id=f"e{index}",
+                        sport=Sport.HOCKEY, league="NHL",
+                        market=Market.SPREAD, selection=selection, line=line,
+                        decimal_odds=1.95, commence_time=LATER,
+                        source_market_id=f"{source}-m{index}",
+                    ))
+            for selection, line in ((Selection.HOME, 1.5), (Selection.AWAY, -1.5)):
+                rows.append(make_quote(
+                    source="reg_only", event_key=key, source_event_id=f"e{index}",
+                    sport=Sport.HOCKEY, league="NHL",
+                    market=Market.SPREAD, selection=selection, line=line,
+                    period=Period.REGULATION, decimal_odds=1.95,
+                    commence_time=LATER, source_market_id=f"reg-m{index}",
+                ))
+        report = validate(rows)
+        found = [
+            f for f in report.findings
+            if f.code == "line_favours_the_other_competitor" and f.source == "reg_only"
+        ]
+        assert found, [f.code for f in report.findings]
+        assert found[0].severity is Severity.ERROR
+
     def test_windows_are_not_compared_across_periods(self) -> None:
         """An honest source pricing only one window must not be charged with
         the other window's median: grouped by event alone, a regulation-only
@@ -10898,6 +10999,11 @@ class TestAPreUpgradeScopedRunKeepsItsScope:
                 benign = _replay_note(store, result.run_id)
                 next((tmp_path / "raw").rglob("*.json")).unlink()
                 rotted = _replay_note(store, result.run_id)
+                from src.collector import replay_run
+
+                _, rotted_problems = replay_run(
+                    result.run_id, store=store, raw_store=raw_store
+                )
             finally:
                 if saved is None:
                     SOURCE_FACTORIES.pop("book_a", None)
@@ -10905,6 +11011,11 @@ class TestAPreUpgradeScopedRunKeepsItsScope:
                     SOURCE_FACTORIES["book_a"] = saved
         assert benign.startswith("DIFFERS"), benign
         assert rotted.startswith("FAIL"), rotted
+        # The FAIL count names real problems, not the code-authored preamble
+        # a stamped run always opens with — the DIFFERS branch subtracted its
+        # explanation while the FAIL branch counted it, so the number meant
+        # different things depending on the verdict.
+        assert rotted == f"FAIL ({len(rotted_problems) - 1})", (rotted, rotted_problems)
 
     def test_a_native_runs_tamper_cannot_buy_the_differs_verdict(
         self, tmp_path, monkeypatch

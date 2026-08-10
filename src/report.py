@@ -2489,7 +2489,11 @@ def _replay_note(store: Store, run_id: int) -> str:
     Imported lazily: the report itself must stay usable without the adapters.
     """
     try:
-        from src.collector import MIGRATED_EVOLUTION_NOTE, replay_run
+        from src.collector import (
+            MIGRATED_EVOLUTION_NOTE,
+            NATIVE_EVOLUTION_NOTE,
+            replay_run,
+        )
         from src.raw_store import RawStore
 
         ok, problems = replay_run(run_id, store=store, raw_store=RawStore(settings.RAW_DIR))
@@ -2519,6 +2523,14 @@ def _replay_note(store: Store, run_id: int) -> str:
         # distinguishes exactly the benign wording from the non-vouching
         # one; when it is absent, DIFFERS is unreachable no matter what any
         # problem says.
+        # The stamp is read here a SECOND time — replay_run reads it for its
+        # own preamble — so the two reads can disagree only if an external
+        # SQL writer stamps the run between them (no committed path stamps a
+        # v4 run; migrate early-returns at v4).  Recorded by an adversarial
+        # round and accepted as residual: the hardening would be returning
+        # the judged verdict kind from replay_run, a return-shape change
+        # rippling through every caller for a state only hand-written SQL
+        # can create.
         run_row = store.run_row(run_id)
         migrated = run_row["migrated_from"] if run_row is not None else None
         if problems and migrated is not None and MIGRATED_EVOLUTION_NOTE in problems[0]:
@@ -2526,7 +2538,18 @@ def _replay_note(store: Store, run_id: int) -> str:
                 f"DIFFERS ({len(problems) - 1}) — run predates the current "
                 "parser; can be evolution rather than corruption"
             )
-        return f"FAIL ({len(problems)})"
+        # The FAIL count names real problems, not the explanation: on a
+        # stamped run _judged always authors problems[0] (whichever
+        # wording), and a native comparison-only FAIL opens with its own
+        # constant.  The native half is textual and can only ever shift the
+        # COUNT by one, never the verdict.
+        preamble = (
+            1
+            if problems
+            and (migrated is not None or NATIVE_EVOLUTION_NOTE in problems[0])
+            else 0
+        )
+        return f"FAIL ({len(problems) - preamble})"
     except Exception as exc:  # noqa: BLE001 - a view must never be the thing that breaks
         return f"unavailable: {type(exc).__name__}"
 

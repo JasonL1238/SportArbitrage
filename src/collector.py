@@ -1864,6 +1864,13 @@ def _report_sport_coverage(
 #: the phrase.
 MIGRATED_EVOLUTION_NOTE = "which is what parser evolution looks like"
 
+#: The native comparison-only preamble's own marker, used by the masthead
+#: only to keep its FAIL count honest (the explanation line is subtracted,
+#: not counted as a defect).  Never used to choose a verdict: a tampered
+#: problem carrying these words could shift the count by one, never the
+#: verdict, which is the acceptable blast radius for a textual check.
+NATIVE_EVOLUTION_NOTE = "A deliberate parser change looks exactly like this"
+
 
 def replay_run(
     run_id: int,
@@ -2001,11 +2008,11 @@ def replay_run(
                 f"run {run_id}'s stored raw bytes verified against their "
                 "recorded sha256s, so the differences below lie between the "
                 "stored rows and the current parser's reading of those "
-                "verified bytes. A deliberate parser change looks exactly "
-                "like this (deliberate ones are recorded in "
-                "docs/SOURCE_FEASIBILITY.md); so would an edit to the stored "
-                "rows themselves, which no sha256 covers; corrupted raw bytes "
-                "would be named as a sha256 mismatch instead",
+                f"verified bytes. {NATIVE_EVOLUTION_NOTE} (deliberate ones "
+                "are recorded in docs/SOURCE_FEASIBILITY.md); so would an "
+                "edit to the stored rows themselves, which no sha256 covers; "
+                "corrupted raw bytes would be named as a sha256 mismatch "
+                "instead",
             )
         return not problems, problems
     by_source_paths: dict[str, list[Path]] = {}

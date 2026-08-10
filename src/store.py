@@ -490,6 +490,7 @@ def migrate_database(path: str | Path, *, backup: bool = True) -> Migration:
     # migrating at all.
     conn = sqlite3.connect(path, isolation_level=None)
     conn.row_factory = sqlite3.Row
+    committed = False
     try:
         conn.execute("PRAGMA foreign_keys = OFF")
         rows = conn.execute("SELECT * FROM quote ORDER BY id").fetchall()
@@ -614,6 +615,7 @@ def migrate_database(path: str | Path, *, backup: bool = True) -> Migration:
         )
         conn.execute("UPDATE schema_meta SET version = ?", (SCHEMA_VERSION,))
         conn.execute("COMMIT")
+        committed = True
 
         # After the commit, only what genuinely cannot lose anything: the
         # rebuilt table's indexes.  `IF NOT EXISTS` throughout, so this is
@@ -627,6 +629,17 @@ def migrate_database(path: str | Path, *, backup: bool = True) -> Migration:
     except Exception as exc:  # noqa: BLE001 - every failure must leave v3 intact
         _rollback(conn)
         conn.close()
+        if committed:
+            # The migration itself is DONE — version and stamps travelled in
+            # one COMMIT — and only the index rebuild was interrupted, which
+            # the next Store open completes.  The old message sent the
+            # operator to restore a backup over a successful migration.
+            raise MigrationError(
+                f"{path}: the migration committed (version {SCHEMA_VERSION}, "
+                "stamps included); only the index rebuild was interrupted, "
+                "and the next open of this database completes it — no "
+                f"restore is needed ({type(exc).__name__}: {exc})"
+            ) from exc
         version = database_version(path)
         state = (
             f"the database is unchanged and still version {found}"

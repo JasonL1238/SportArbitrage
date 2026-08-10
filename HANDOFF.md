@@ -1,6 +1,7 @@
 # First-party sportsbook acquisition handoff
 
-Last updated: 2026-08-03 (Hard Rock IL complete; other three diagnosed)
+Last updated: 2026-08-10 (superseded-banner maintenance; content below the
+banners reflects the 2026-08-03 state it documents)
 
 > **Superseded in part, 2026-08-09.** This document's standing instruction to
 > keep `an_fliff`/`an_circa`/`an_superbook` registered ("do not … unregister

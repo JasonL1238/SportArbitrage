@@ -1440,17 +1440,31 @@ def _check_line_orientation(quotes: Sequence[Quote], report: ValidationReport) -
     # information — it adds noise, and it dilutes the sources where the check
     # does work.
     #
-    # The window is (event, PERIOD), not event alone.  Grouped by event only,
-    # a source posting a full-game spread beside a first-5-innings or
-    # regulation spread — betrivers_kambi's ordinary baseball and hockey
-    # slate — held two lines per group, tripped the one-line exemption meant
-    # for ladders, and was never judged at all: measured on run 32, 0 of 15
-    # baseball and 0 of 7 hockey cells graded, so a wholesale sign flip on
-    # exactly the multi-window book produced no finding of any kind.  It also
-    # compared honest sources across windows (a regulation line against a
-    # full-game median) and charged them sign disagreements they never made.
-    laddered: dict[tuple[str, str], dict[str, list[float]]] = defaultdict(
-        lambda: defaultdict(list)
+    # The window is (event, WINDOW CLASS), where the class merges the
+    # full-contest periods and keeps every other period its own.  Three
+    # defect generations decided this shape:
+    # * grouped by event alone, a source posting a full-game spread beside a
+    #   first-5-innings or regulation one — betrivers_kambi's ordinary slate
+    #   — held two lines per group, tripped the one-line ladder exemption,
+    #   and was never judged (0 of 15 baseball, 0 of 7 hockey cells on run
+    #   32), while honest single-window sources were charged cross-window
+    #   disagreements they never made;
+    # * grouped by raw period, the secondary windows that fix created hold
+    #   exactly TWO judgeable sources in production, and a median of two is
+    #   a midpoint: a symmetric flip cancels to 0 and reads as a pick'em
+    #   (blind), and an asymmetric flip hands the midpoint the flipped sign
+    #   and CONVICTS THE HONEST SOURCE — a false systematic ERROR;
+    # * FULL_GAME and REGULATION share a favourite (FULL_CONTEST_WINDOWS
+    #   codifies it), so splitting them starved hockey's window of the
+    #   full-game majority that could have judged it.
+    # Within the merged full-contest class a source may post both spellings;
+    # the full-game line speaks for it rather than disqualifying it as a
+    # ladder.  And a window is judged only with THREE OR MORE sources: two
+    # sources have no majority, only a midpoint, and both of its failure
+    # shapes above are worse than saying nothing.
+    _FULL = "full"
+    laddered: dict[tuple[str, str], dict[str, dict[str, list[float]]]] = defaultdict(
+        lambda: defaultdict(lambda: defaultdict(list))
     )
     for quote in quotes:
         if (
@@ -1461,34 +1475,44 @@ def _check_line_orientation(quotes: Sequence[Quote], report: ValidationReport) -
             or quote.status is not QuoteStatus.ACTIVE
         ):
             continue
-        laddered[quote.event_key, quote.period.value][quote.source].append(quote.line)
-    main: dict[tuple[str, str], dict[str, float]] = {
-        window: {
-            source: lines[0] for source, lines in per_source.items() if len(lines) == 1
-        }
-        for window, per_source in laddered.items()
-    }
+        window = _FULL if quote.period in FULL_CONTEST_WINDOWS else quote.period.value
+        laddered[quote.event_key, window][quote.source][quote.period.value].append(
+            quote.line
+        )
+    main: dict[tuple[str, str], dict[str, float]] = {}
+    for window_key, per_source in laddered.items():
+        chosen: dict[str, float] = {}
+        for source, per_period in per_source.items():
+            if any(len(lines) > 1 for lines in per_period.values()):
+                continue  # a symmetric ladder — nothing to judge
+            if Period.FULL_GAME.value in per_period:
+                chosen[source] = per_period[Period.FULL_GAME.value][0]
+            else:
+                chosen[source] = next(iter(per_period.values()))[0]
+        main[window_key] = chosen
 
-    disagreements: dict[str, list[str]] = defaultdict(list)
-    shared: Counter[str] = Counter()
-    for (event_key, period), per_source in main.items():
-        if len(per_source) < 2:
+    # Rates are judged per (source, window class): pooled across windows, a
+    # wholesale flip of one window on a two-window book capped at 50% and
+    # could never reach the systematic threshold, and the message counted
+    # windows as "fixtures".
+    disagreements: dict[tuple[str, str], list[str]] = defaultdict(list)
+    shared: Counter[tuple[str, str]] = Counter()
+    for (event_key, window), per_source in main.items():
+        if len(per_source) < 3:
             continue
         consensus = median(per_source.values())
         if consensus == 0:
             # A pick'em says nothing about which side is favoured.
             continue
         for source, line in per_source.items():
-            shared[source] += 1
+            shared[source, window] += 1
             if line != 0 and (line > 0) != (consensus > 0):
-                disagreements[source].append(
-                    event_key
-                    if period == Period.FULL_GAME.value
-                    else f"{event_key} ({period})"
+                disagreements[source, window].append(
+                    event_key if window == _FULL else f"{event_key} ({window})"
                 )
 
-    for source, events in sorted(disagreements.items()):
-        total = shared[source]
+    for (source, window), events in sorted(disagreements.items()):
+        total = shared[source, window]
         rate = len(events) / total
         if rate < NOTABLE_LINE_SIGN_DISAGREEMENT_RATE:
             # Books really do land either side of a pick'em, and saying so on
@@ -1498,11 +1522,14 @@ def _check_line_orientation(quotes: Sequence[Quote], report: ValidationReport) -
             total >= MIN_LINE_SIGN_FIXTURES
             and rate > MAX_LINE_SIGN_DISAGREEMENT_RATE
         )
+        window_label = (
+            "" if window == _FULL else f" (the {window} window)"
+        )
         report.add(
             Severity.ERROR if systematic else Severity.WARNING,
             "line_favours_the_other_competitor",
-            f"{source}'s main handicap favours the opposite competitor from the other "
-            f"sources on {len(events)} of {total} shared fixture(s) "
+            f"{source}'s main handicap{window_label} favours the opposite competitor "
+            f"from the other sources on {len(events)} of {total} shared fixture(s) "
             f"({rate * 100:.0f}%; e.g. {', '.join(sorted(events)[:_EXAMPLES])})"
             + (
                 " — that is the whole slate, not a difference of opinion about the "

@@ -530,10 +530,73 @@ def test_a_crash_after_the_commit_cannot_lose_the_migration_stamp(
         "src.store.sqlite3.connect",
         lambda *args, **kwargs: _CrashAfterCommit(real_connect(*args, **kwargs)),
     )
+    with pytest.raises(MigrationError) as caught:
+        migrate_database(path, backup=False)
+    monkeypatch.undo()
+
+    # And the error tells the truth: the migration committed, only the index
+    # rebuild was interrupted — the first wording sent the operator to
+    # "restore <backup>" over a successful migration.
+    assert "no restore is needed" in str(caught.value), caught.value
+
+    assert database_version(path) == SCHEMA_VERSION
+    conn = sqlite3.connect(path)
+    conn.row_factory = sqlite3.Row
+    try:
+        stamps = [
+            row["migrated_from"]
+            for row in conn.execute("SELECT migrated_from FROM collection_run")
+        ]
+    finally:
+        conn.close()
+    assert stamps and all(stamp == 3 for stamp in stamps), stamps
+
+
+def test_a_crash_at_the_stamp_write_leaves_version_3(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The stamp is atomic-or-nothing with the version bump, from both sides.
+
+    The pin above crashes at ``executescript`` only — which a one-edit
+    regression moving the stamp statements after COMMIT (but before the
+    index rebuild) slips straight past: the closing-gate round demonstrated
+    all thirteen migration tests green on that mutant while a crash at the
+    stamp write left version 4 with no stamps, permanently.  Crashing AT
+    the stamp write must roll the whole migration back — version still 3,
+    re-runnable — never commit a version the stamps did not travel with.
+    """
+    path = tmp_path / "crash-at-stamp.sqlite3"
+    write_v3_database(path)
+
+    real_connect = sqlite3.connect
+
+    class _CrashAtStamp:
+        def __init__(self, real):
+            object.__setattr__(self, "_real", real)
+
+        def __getattr__(self, name):
+            return getattr(object.__getattribute__(self, "_real"), name)
+
+        def __setattr__(self, name, value):
+            setattr(object.__getattribute__(self, "_real"), name, value)
+
+        def execute(self, sql, *params):
+            if "SET migrated_from" in sql:
+                raise RuntimeError("simulated crash at the stamp write")
+            return object.__getattribute__(self, "_real").execute(sql, *params)
+
+    monkeypatch.setattr(
+        "src.store.sqlite3.connect",
+        lambda *args, **kwargs: _CrashAtStamp(real_connect(*args, **kwargs)),
+    )
     with pytest.raises(MigrationError):
         migrate_database(path, backup=False)
     monkeypatch.undo()
 
+    assert database_version(path) == 3
+    # And the rolled-back file migrates cleanly on the next attempt, stamps
+    # and all — the whole point of atomic-or-nothing.
+    migrate_database(path, backup=False)
     assert database_version(path) == SCHEMA_VERSION
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row

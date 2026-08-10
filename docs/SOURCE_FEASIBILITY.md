@@ -276,6 +276,14 @@ bettable-looking sportsbook. Safe this time only because the store was checked
 first and holds **zero quotes** for all three keys (180 raw responses, all
 parsing to nothing). Deregistering a republisher that *did* store quotes needs
 an answer for its historical rows before the key comes out.
+*(2026-08-10 update: the position-forming surfaces — the `arb` command, the
+page's arb payload, and the source badge — now fold any stored key the
+registry no longer knows into the run's view-only set, so a ghost key can no
+longer leg a position or a text.  Promo planning does NOT carry that guard —
+it prices only the jurisdiction's latest run, where ghost keys cannot occur
+today — so the residual rule of this pattern is: never deregister a key that
+holds rows in a jurisdiction's CURRENT latest run; collect a fresh run
+without it first, then deregister.)*
 
 ### theScore Bet's Illinois id answers — 2026-08-10T01:05Z
 
