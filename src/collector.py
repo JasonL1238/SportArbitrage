@@ -1938,22 +1938,27 @@ def replay_run(
             # is a row-comparison — the first spelling ("no 'sha256' anywhere,
             # some marker somewhere") vouched for bytes it never saw, because
             # corruption raises out of RawStore.read *before* the sha check
-            # (json.loads on a truncated file) and surfaces as a "replay
-            # raised" problem carrying no marker and no 'sha256'.  When every
-            # problem is a comparison, every read succeeded, so every recorded
-            # sha256 genuinely verified, and the differences below are the
-            # current parser disagreeing with the one that stored the run.
-            # The verdict stays FAIL because replay cannot tell evolution from
-            # regression — but it states which two things the reader must
-            # tell apart.
+            # (json.loads on a truncated file) and surfaced under a message
+            # carrying no marker and no 'sha256'.  Every read failure is now
+            # a "stored bytes unreadable" problem regardless of stored row
+            # count (see the replay loop), so all-comparison genuinely means
+            # every envelope was read and every recorded sha256 verified.
+            # What the sha256 does NOT cover is the quote table: an edited
+            # stored row is comparison-shaped too, so the preamble names both
+            # sides of the diff rather than convicting the parser alone.  The
+            # verdict stays FAIL because replay cannot tell evolution from
+            # regression — but it states which things the reader must tell
+            # apart.
             problems.insert(
                 0,
-                f"run {run_id}'s stored bytes verified against their recorded "
-                "sha256s, so the differences below are the current parser "
-                "disagreeing with the parser that stored this run. A deliberate "
-                "parser change looks exactly like this (deliberate ones are "
-                "recorded in docs/SOURCE_FEASIBILITY.md); corrupted bytes would "
-                "be named as a sha256 mismatch instead",
+                f"run {run_id}'s stored raw bytes verified against their "
+                "recorded sha256s, so the differences below lie between the "
+                "stored rows and the current parser's reading of those "
+                "verified bytes. A deliberate parser change looks exactly "
+                "like this (deliberate ones are recorded in "
+                "docs/SOURCE_FEASIBILITY.md); so would an edit to the stored "
+                "rows themselves, which no sha256 covers; corrupted raw bytes "
+                "would be named as a sha256 mismatch instead",
             )
         return not problems, problems
     by_source_paths: dict[str, list[Path]] = {}
@@ -2011,22 +2016,41 @@ def replay_run(
             continue
         source = factory()
         try:
-            raws = [raw_store.read(path) for path in paths]
+            # Reading and parsing are judged separately, on provenance rather
+            # than on the exception's spelling.  A failure to READ stored
+            # bytes — a deleted file, a truncated one, a mangled or
+            # sha-stripped envelope, a recorded sha256 that no longer matches
+            # — is corruption of the archive itself, and it is NEVER a note:
+            # "stored no rows" makes a *parser* raise harmless, but it says
+            # nothing about whether the bytes on disk are still the bytes
+            # that were fetched.  The first spelling matched "sha256" in the
+            # exception text, which caught exactly one of the five ways
+            # RawStore.read can fail — FileNotFoundError, JSONDecodeError,
+            # and the version/field KeyErrors all raise *before* any hash
+            # check and were downgraded to log lines on zero-row sources, so
+            # a rotted archive replayed to PASS.
+            try:
+                raws = [raw_store.read(path) for path in paths]
+            except Exception as exc:  # noqa: BLE001
+                problems.append(
+                    f"{source_key}: stored bytes unreadable: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+                continue
             # Unscoped on purpose — see the note above.  Scoping happens after
             # reconciliation, because clustering needs every source's view of a
             # fixture to land on the same key the collector stored.
-            replayed.extend(source.parse(raws).quotes)
-        except Exception as exc:  # noqa: BLE001
-            message = f"{source_key}: replay raised {type(exc).__name__}: {exc}"
-            # A byte-integrity failure is NEVER a note: "stored no rows" makes
-            # a parser raise harmless, but a recorded sha256 that no longer
-            # matches its bytes is corruption of the archive itself, and
-            # downgrading it hides the one signal the verdict preamble tells
-            # the reader to trust.
-            if source_key in produced or "sha256" in str(exc):
-                problems.append(message)
-            else:
-                log.info("%s (it stored no rows on this run, so nothing is lost)", message)
+            try:
+                replayed.extend(source.parse(raws).quotes)
+            except Exception as exc:  # noqa: BLE001
+                message = f"{source_key}: replay raised {type(exc).__name__}: {exc}"
+                if source_key in produced:
+                    problems.append(message)
+                else:
+                    log.info(
+                        "%s (it stored no rows on this run, so nothing is lost)",
+                        message,
+                    )
         finally:
             source.close()
 

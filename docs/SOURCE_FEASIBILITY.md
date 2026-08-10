@@ -303,10 +303,17 @@ the mid-move guard is one: stored runs **14** (IL, 2026-08-03, vi_hardrock
 42→36), **19** (GLOBAL) and **20** (PA, both 2026-08-06, 56→50 each) now
 re-parse to fewer rows *by design* — the dropped legs are the mid-move
 pairings the guard exists to delete, including the 0.5167 moneyline pairing
-the coverage prose cites. Their bytes verify against their recorded sha256s;
-nothing is corrupted. `replay_run` now says this itself: a non-migrated FAIL
-whose bytes verify opens with "the current parser disagreeing with the parser
-that stored this run" and points here. Do not re-diagnose these three runs.
+the coverage prose cites. The same three problem lists also carry two
+*earlier* deliberate changes' fingerprints (measured 2026-08-09, offline):
+five cloudbet `first_5_innings` spread lost/invented **pairs** per run — the
+away leg's line respelled `'0'` → `'-0'` by the zero-line sign
+canonicalization — and DraftKings `decimal_odds`/`implied_probability`
+precision differences from the trueOdds change. All of it is recorded parser
+evolution; none of it is corruption. Their bytes verify against their
+recorded sha256s. `replay_run` says this itself: a non-migrated FAIL whose
+bytes verify opens with a preamble placing the differences "between the
+stored rows and the current parser's reading of those verified bytes" and
+points here. Do not re-diagnose these three runs.
 
 ### One stale board retired for vintage coherence — 2026-08-09
 

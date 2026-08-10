@@ -1134,6 +1134,29 @@ def _check_reachability_is_declared() -> None:
                 "drift from the registry stops being a statement about it"
             )
 
+    # The AN book-id table (src.jurisdictions._AN_BOOK_IDS) is a fetch
+    # promise: each key it names must have a descriptor for
+    # republished_sources_for_state to build.  This table sat outside the
+    # four buckets, so a key added there without registering passed every
+    # import check while its book graded SINGLE_SOURCE/MISSING forever, the
+    # coverage detail pointing at a feed that could never be fetched.
+    # (Found latent by an adversarial round 2026-08-09; no instance existed.)
+    ghost_republishers = sorted(STATE_LICENSED_REPUBLISHER_KEYS - base_keys)
+    if ghost_republishers:
+        raise RuntimeError(
+            f"src.jurisdictions._AN_BOOK_IDS names {ghost_republishers}, which "
+            "no source registers: a key in the id table without a registry "
+            "descriptor can never be built, so every book relying on it would "
+            "read MISSING with a detail naming a feed that does not exist"
+        )
+    unrepublished = sorted(STATE_LICENSED_REPUBLISHER_KEYS - REPUBLISHED_SOURCE_KEYS)
+    if unrepublished:
+        raise RuntimeError(
+            f"{unrepublished} are in the AN book-id table but not in "
+            "REPUBLISHED_SOURCE_KEYS: an entry in that table IS somebody "
+            "else's board, and any other classification contradicts it"
+        )
+
     nationwide_conflict = sorted(
         NATIONWIDE_SOURCE_KEYS
         & (RETAIL_SOURCE_KEYS | REPUBLISHED_SOURCE_KEYS | US_UNAVAILABLE_SOURCE_KEYS)

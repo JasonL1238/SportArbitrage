@@ -62,6 +62,27 @@ def test_tampered_raw_file_is_detected(tmp_path: Path) -> None:
         store.read(path)
 
 
+def test_sha_stripped_raw_file_is_refused(tmp_path: Path) -> None:
+    """Deleting the recorded hash must not delete the verification.
+
+    ``from_envelope`` skipped the check when the field was absent, so the
+    tamper above became undetectable the moment the tamperer also removed
+    the reference value it would have been caught against — rewrite the
+    body, drop ``sha256``, and the envelope read back clean.  Every envelope
+    this codebase has ever written records the hash (all 5,033 stored
+    envelopes measured 2026-08-09), so absence is itself the tamper signal.
+    """
+    store = RawStore(tmp_path)
+    path = store.write(make_raw('{"a": 1}'))
+    envelope = json.loads(path.read_text())
+    envelope["body"] = '{"a": 999}'
+    del envelope["sha256"]
+    path.write_text(json.dumps(envelope))
+
+    with pytest.raises(ValueError, match="sha256"):
+        store.read(path)
+
+
 def test_naive_fetched_at_is_rejected() -> None:
     with pytest.raises(ValueError):
         RawResponse(
@@ -1285,7 +1306,16 @@ def test_credential_like_headers_are_never_stored() -> None:
 
 def test_version_1_envelopes_remain_replayable(tmp_path: Path) -> None:
     """Old captures predate header storage; a parser upgrade must not orphan
-    them."""
+    them.
+
+    The sha256 is NOT part of what v1 lacks: every stored envelope of every
+    version records one (all 5,033 measured 2026-08-09), and ``from_envelope``
+    refuses an envelope without it — so this synthetic v1 carries the hash the
+    real ones do, and only headers/capture_id are absent.
+    """
+    import hashlib
+
+    body = '{"ok": true}'
     path = tmp_path / "old.json"
     path.write_text(json.dumps({
         "envelope_version": 1,
@@ -1296,7 +1326,8 @@ def test_version_1_envelopes_remain_replayable(tmp_path: Path) -> None:
         "content_type": "application/json",
         "fetched_at": "2026-07-28T07:00:00+00:00",
         "request_params": {},
-        "body": '{"ok": true}',
+        "sha256": hashlib.sha256(body.encode("utf-8")).hexdigest(),
+        "body": body,
     }))
     loaded = RawStore(tmp_path).read(path)
     assert loaded.json() == {"ok": True}

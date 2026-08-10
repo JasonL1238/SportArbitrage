@@ -180,7 +180,21 @@ class RawResponse:
             capture_id=envelope.get("capture_id") or "",
         )
         recorded = envelope.get("sha256")
-        if recorded and recorded != raw.sha256:
+        if not recorded:
+            # Skipping verification when the field is absent turned the check
+            # into one an attacker (or a disk fault) could remove along with
+            # the evidence: strip the key, rewrite the body, and the tampered
+            # envelope read back clean.  Every envelope this codebase has ever
+            # written records the hash — all 5,033 stored envelopes (382
+            # committed fixtures + 4,651 archive files) carry it, measured
+            # 2026-08-09 — so a missing field is a stripped or foreign
+            # envelope, never an older vintage.
+            raise ValueError(
+                f"raw envelope for {raw.ref} carries no recorded sha256, so its "
+                "body cannot be verified — the field is written on every "
+                "capture, and its absence means the envelope was altered"
+            )
+        if recorded != raw.sha256:
             raise ValueError(
                 f"raw body does not match recorded sha256 for {raw.ref}: "
                 f"stored {recorded[:12]}, computed {raw.sha256[:12]}"

@@ -1134,6 +1134,60 @@ def test_a_reachability_set_cannot_name_a_source_that_does_not_exist():
     assert "a_book_that_never_existed" in str(caught.value)
 
 
+def test_the_an_id_table_cannot_promise_a_feed_that_is_not_registered():
+    """A key in ``_AN_BOOK_IDS`` without a registry descriptor is a fetch
+    promise nothing can keep.
+
+    The id table sat outside the four reachability buckets, so a key added
+    there without registering passed every import check while
+    ``republished_sources_for_state`` could never build it: the book it was
+    meant to corroborate graded SINGLE_SOURCE or MISSING forever, its
+    coverage detail naming a feed that does not exist.  Found latent by an
+    adversarial round (2026-08-09) — no instance existed, and this keeps it
+    that way.
+    """
+    from src.sources import registry
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(
+            registry,
+            "STATE_LICENSED_REPUBLISHER_KEYS",
+            registry.STATE_LICENSED_REPUBLISHER_KEYS | {"an_ghost_book"},
+        )
+        with pytest.raises(RuntimeError) as caught:
+            registry._check_reachability_is_declared()
+    assert "an_ghost_book" in str(caught.value)
+    assert "_AN_BOOK_IDS" in str(caught.value)
+
+
+def test_an_id_table_key_must_be_classified_as_republished():
+    """An entry in the AN id table IS somebody else's board.
+
+    Any other classification contradicts the table: retail would make a
+    mirror placeable, nationwide would free a state-licensed book's copy
+    from its licence.  The key is parked in NATIONWIDE here because leaving
+    it unclassified trips the older cover check first — this pin is about
+    the contradiction, not the omission.
+    """
+    from src.sources import registry
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(
+            registry,
+            "REPUBLISHED_SOURCE_KEYS",
+            registry.REPUBLISHED_SOURCE_KEYS - {"an_fanduel"},
+        )
+        patch.setattr(
+            registry,
+            "NATIONWIDE_SOURCE_KEYS",
+            registry.NATIONWIDE_SOURCE_KEYS | {"an_fanduel"},
+        )
+        with pytest.raises(RuntimeError) as caught:
+            registry._check_reachability_is_declared()
+    assert "an_fanduel" in str(caught.value)
+    assert "id table" in str(caught.value)
+
+
 def test_the_nationwide_half_of_takeable_is_exactly_the_named_set():
     """What ``takeable_from_state`` adds beyond the state's licences.
 

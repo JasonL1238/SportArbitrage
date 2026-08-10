@@ -4103,8 +4103,9 @@ class TestReplayComparesTheWholeRow:
         preamble condition ("no 'sha256' anywhere, some marker somewhere")
         fired 'stored bytes verified against their recorded sha256s' above a
         JSONDecodeError it had just mislabeled as parser evolution.  The
-        preamble now requires EVERY problem to be a row comparison, which is
-        only true when every read succeeded.
+        preamble now requires EVERY problem to be a row comparison, and a
+        failure to read stored bytes is always a problem (never a log note),
+        so all-comparison genuinely means every read succeeded.
         """
         from src.collector import SOURCE_FACTORIES, collect_once, replay_run
         from src.raw_store import RawStore
@@ -4129,7 +4130,7 @@ class TestReplayComparesTheWholeRow:
                 else:
                     SOURCE_FACTORIES["book_a"] = saved
         assert not ok
-        assert any("replay raised" in p for p in problems), problems
+        assert any("stored bytes unreadable" in p for p in problems), problems
         assert not any("verified against their recorded sha256s" in p for p in problems), (
             problems
         )
@@ -4211,7 +4212,167 @@ class TestReplayComparesTheWholeRow:
         assert ok, problems
         assert not any("no adapter available" in p for p in problems), problems
 
-    def test_a_verified_byte_divergence_names_the_two_possible_causes(self, tmp_path) -> None:
+    def test_a_deleted_raw_file_fails_the_replay_even_for_a_zero_row_source(
+        self, tmp_path
+    ) -> None:
+        """Unreadable stored bytes are judged on provenance, not exception text.
+
+        The first guard matched "sha256" in the exception's spelling, which
+        caught exactly one of the ways ``RawStore.read`` fails: a
+        ``FileNotFoundError`` for a deleted archive file (or a
+        ``JSONDecodeError`` for a truncated one, or the version/field errors
+        of a mangled envelope) raises *before* any hash check, carries no
+        "sha256", and for a zero-row source was downgraded to a log line —
+        the run's DB lists the file (the read was attempted), the archive has
+        rotted, and replay reported PASS with no problems at all.
+        """
+        from src.collector import SOURCE_FACTORIES, collect_once, replay_run
+        from src.raw_store import RawStore
+        from src.store import Store
+
+        rigged = self._make_rigged()
+        raw_store = RawStore(tmp_path / "raw")
+        with Store(tmp_path / "db.sqlite3") as store:
+            result = collect_once(
+                [rigged()], raw_store=raw_store, store=store, as_of=FETCHED
+            )
+            assert result.quotes
+            # Zero-row: the excuse that downgraded the raise must be active.
+            store._conn.execute(
+                "DELETE FROM quote WHERE run_id = ?", (result.run_id,)
+            )
+            store._conn.commit()
+            next((tmp_path / "raw").rglob("*.json")).unlink()
+            saved = SOURCE_FACTORIES.get("book_a")
+            SOURCE_FACTORIES["book_a"] = rigged
+            try:
+                ok, problems = replay_run(result.run_id, store=store, raw_store=raw_store)
+            finally:
+                if saved is None:
+                    SOURCE_FACTORIES.pop("book_a", None)
+                else:
+                    SOURCE_FACTORIES["book_a"] = saved
+        assert not ok
+        assert any(
+            "book_a" in p and "stored bytes unreadable" in p for p in problems
+        ), problems
+
+    def test_a_siblings_truncated_file_starves_the_preamble(self, tmp_path) -> None:
+        """The preamble may not vouch over another source's unhashed bytes.
+
+        The all-comparison condition is only as strong as the downgrade path
+        feeding it: with a zero-row source's ``JSONDecodeError`` logged
+        rather than filed, a run holding one truncated archive file and one
+        comparison-shaped divergence elsewhere still printed "stored raw
+        bytes verified against their recorded sha256s" — over bytes that
+        raised before any hash was checked.  Unreadable bytes are now a
+        problem for every source, which both fails the replay and starves
+        the preamble's condition.
+        """
+        from src.collector import SOURCE_FACTORIES, collect_once, replay_run
+        from src.raw_store import RawStore
+        from src.sources.base import ParseOutcome
+        from src.store import Store
+
+        rigged = self._make_rigged()
+
+        class Bystander:
+            source_key = "book_b"
+            leagues = ("MLB",)
+
+            def fetch_raw(self):
+                return [_raw("book_b", "markets-01", {"markets": []})]
+
+            def parse(self, raws):
+                return ParseOutcome(quotes=[])
+
+            def close(self) -> None:
+                pass
+
+        raw_store = RawStore(tmp_path / "raw")
+        with Store(tmp_path / "db.sqlite3") as store:
+            result = collect_once(
+                [rigged(), Bystander()], raw_store=raw_store, store=store, as_of=FETCHED
+            )
+            assert result.quotes
+            # book_b stored bytes and no rows; its archive file rots.
+            b_path = next((tmp_path / "raw" / "book_b").rglob("*.json"))
+            b_path.write_text(b_path.read_text()[: len(b_path.read_text()) // 2])
+            # book_a diverges comparison-shaped, from the stored side: one
+            # row vanishes from the quote table, which replay reports as
+            # "row count differs / replay invented row".
+            store._conn.execute(
+                "DELETE FROM quote WHERE rowid = ("
+                "SELECT rowid FROM quote WHERE run_id = ? LIMIT 1)",
+                (result.run_id,),
+            )
+            store._conn.commit()
+            saved_a = SOURCE_FACTORIES.get("book_a")
+            saved_b = SOURCE_FACTORIES.get("book_b")
+            SOURCE_FACTORIES["book_a"] = rigged
+            SOURCE_FACTORIES["book_b"] = Bystander
+            try:
+                ok, problems = replay_run(result.run_id, store=store, raw_store=raw_store)
+            finally:
+                for key, saved in (("book_a", saved_a), ("book_b", saved_b)):
+                    if saved is None:
+                        SOURCE_FACTORIES.pop(key, None)
+                    else:
+                        SOURCE_FACTORIES[key] = saved
+        assert not ok
+        assert any(
+            "book_b" in p and "stored bytes unreadable" in p for p in problems
+        ), problems
+        assert not any(
+            "verified against their recorded sha256s" in p for p in problems
+        ), problems
+
+    def test_a_sha_stripped_envelope_cannot_pass_replay(self, tmp_path) -> None:
+        """Removing the recorded hash must not remove the verification.
+
+        ``from_envelope`` skipped the sha check when the field was absent, so
+        stripping the key while rewriting the body made the tamper
+        undetectable: the rigged parser reads nothing off the bytes, stored
+        and replayed rows matched, and the whole replay reported PASS over an
+        altered archive.  A missing sha256 is now itself a refusal — every
+        envelope ever written records one.
+        """
+        import json
+
+        from src.collector import SOURCE_FACTORIES, collect_once, replay_run
+        from src.raw_store import RawStore
+        from src.store import Store
+
+        rigged = self._make_rigged()
+        raw_store = RawStore(tmp_path / "raw")
+        with Store(tmp_path / "db.sqlite3") as store:
+            result = collect_once(
+                [rigged()], raw_store=raw_store, store=store, as_of=FETCHED
+            )
+            assert result.quotes
+            raw_path = next((tmp_path / "raw").rglob("*.json"))
+            envelope = json.loads(raw_path.read_text())
+            envelope["body"] = envelope["body"] + " "
+            del envelope["sha256"]
+            raw_path.write_text(json.dumps(envelope))
+            saved = SOURCE_FACTORIES.get("book_a")
+            SOURCE_FACTORIES["book_a"] = rigged
+            try:
+                ok, problems = replay_run(result.run_id, store=store, raw_store=raw_store)
+            finally:
+                if saved is None:
+                    SOURCE_FACTORIES.pop("book_a", None)
+                else:
+                    SOURCE_FACTORIES["book_a"] = saved
+        assert not ok
+        assert any(
+            "stored bytes unreadable" in p and "sha256" in p for p in problems
+        ), problems
+        assert not any(
+            "verified against their recorded sha256s" in p for p in problems
+        ), problems
+
+    def test_a_verified_byte_divergence_names_its_possible_causes(self, tmp_path) -> None:
         """A non-migrated FAIL whose bytes verify must say what kind of claim
         it is making.
 
@@ -4222,17 +4383,19 @@ class TestReplayComparesTheWholeRow:
         ("row count differs / replay lost row") and nothing saying why.  The
         verdict stays FAIL either way; the preamble is the difference between
         a reader re-diagnosing corruption and a reader checking the recorded
-        parser changes.
+        parser changes.  It must name BOTH sides of the diff — the parser's
+        reading of the verified bytes AND the stored rows — because an edited
+        quote table is comparison-shaped too and no sha256 covers it; the
+        first wording convicted the parser alone.
         """
         ok, problems = self._run(
             tmp_path, mutate=lambda q: q.model_copy(update={"american_odds": -9999})
         )
         assert not ok
-        assert problems[0].startswith(
-            "run "
-        ) and "current parser disagreeing with the parser that stored" in problems[0], (
-            problems
-        )
+        assert problems[0].startswith("run ") and (
+            "current parser's reading of those verified bytes" in problems[0]
+        ), problems
+        assert "edit to the stored rows" in problems[0], problems
         assert "sha256" in problems[0], problems
 
 

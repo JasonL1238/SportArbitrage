@@ -1834,6 +1834,14 @@ if (process.argv[3]) {
   if (teamTotals.size !== 2) {
     problems.push(`two team-total markets merged into ${teamTotals.size} group(s) — side no longer scopes the market`);
   }
+  // The stored vocabulary includes run_line as a supported legacy spelling of
+  // spread, and marketGroups' spread test rides the mkt() alias — a raw
+  // string comparison here left legacy tracker spreads keyed on the SIGNED
+  // line again, torn in half exactly like the defect this block pins.
+  const legacy = globalThis.__marketGroups([mk('run_line', -1.5, null), mk('run_line', 1.5, null)]);
+  if (legacy.size !== 1) {
+    problems.push(`a legacy run_line pair groups as ${legacy.size} — the id-less fallback dropped the mkt() alias`);
+  }
   console.log(problems.length ? 'MARKET GROUPING PARITY BROKEN: ' + problems.join('; ')
     : 'id-less spreads group whole and team-total sides stay separate');
   if (problems.length) process.exit(1);
@@ -1856,7 +1864,11 @@ if (process.argv[3]) {
   } else {
     const spreads = ((data.quotes && data.quotes.rows) || [])
       .filter((r) => r[COL.run_id] === currentId)
-      .filter((r) => data.strings[r[COL.market]] === 'spread')
+      // run_line is a supported stored spelling of spread; the page's own
+      // mkt() alias handles it, so the pin's inventory must too or a legacy
+      // page silently self-skips the whole check.
+      .filter((r) => data.strings[r[COL.market]] === 'spread'
+        || data.strings[r[COL.market]] === 'run_line')
       .filter((r) => {
         const i = r[COL.status];
         return i !== null && i !== undefined && i >= 0 && data.strings[i] === 'active';
@@ -1867,12 +1879,16 @@ if (process.argv[3]) {
       if (!byEvent.has(ev)) byEvent.set(ev, new Set());
       byEvent.get(ev).add(data.strings[r[COL.selection]]);
     }
-    const target = spreads.find((r) => byEvent.get(data.strings[r[COL.event_key]]).size >= 2);
+    // Prefer a non-zero line: a pick'em spread (line 0) mirrors to the SAME
+    // contract (-0 === 0), so the rung injection below would rightly rejoin
+    // the sibling group and this check would convict a correct page.
+    const eligible = spreads.filter((r) => byEvent.get(data.strings[r[COL.event_key]]).size >= 2);
+    const target = eligible.find((r) => r[COL.line] !== 0) || eligible[0];
     if (!target) {
       console.log('spread drill-down check skipped; no two-sided spread in the embedded run');
     } else {
       const key = [
-        data.strings[target[COL.event_key]], 'spread',
+        data.strings[target[COL.event_key]], data.strings[target[COL.market]],
         data.strings[target[COL.period]], '',
         target[COL.line], data.strings[target[COL.selection]], '0',
       ].join('~');
@@ -1894,52 +1910,61 @@ if (process.argv[3]) {
       // rung's label beside the other rung's price with a false "mispaired"
       // verdict.  Inject the mirrored rung under a sentinel source: the abs
       // rule pulls its column into the panel, the canonical rule keeps it out.
-      let rungIdx = data.strings.indexOf('parityrungbook');
-      if (rungIdx === -1) { data.strings.push('parityrungbook'); rungIdx = data.strings.length - 1; }
-      const targetPair = spreads.filter((r) =>
-        data.strings[r[COL.event_key]] === data.strings[target[COL.event_key]]
-        && r[COL.period] === target[COL.period]);
-      const injected = targetPair.slice(0, 2).map((r) => {
-        const row = r.slice();
-        row[COL.source] = rungIdx;
-        row[COL.line] = -r[COL.line];
-        return row;
-      });
-      // Two traps, each demonstrated by a mutation this check failed to kill
-      // before this spelling: the panel reads rowsByRun (built once at load),
-      // so rows pushed into data.quotes.rows render nothing; and
-      // showCurrentPanel memoises the drill-down by panel+subject
-      // (shownChild), so re-applying the SAME route returns before rendering
-      // and the check reads the stale pre-injection markup.  Rows go into
-      // rowsByRun, and the repaint is forced the way a reader forces one —
-      // hopping to the mirrored side's own key (the sibling row's go: link)
-      // and back, which changes the subject both times.
-      const other = targetPair.find((r) => r[COL.selection] !== target[COL.selection]);
-      if (!other) {
-        problems.push('no mirrored side found to hop through — the rung rule was not exercised');
+      if (target[COL.line] === 0) {
+        // A pick'em spread's mirror IS the same contract (-0 === 0): the
+        // canonical rule rightly includes the injected rung, so injecting
+        // here would accuse a correct page of abs-merging.  The non-zero
+        // preference above makes this reachable only on a board whose every
+        // two-sided spread sits at 0.
+        console.log("mirrored-rung check skipped; only pick'em spreads (line 0) on this board — a 0 mirror is the same contract");
       } else {
-        const runRows = globalThis.__rowsByRun.get(currentId);
-        runRows.push(...injected);
-        const otherKey = [
-          data.strings[target[COL.event_key]], 'spread',
-          data.strings[target[COL.period]], '',
-          other[COL.line], data.strings[other[COL.selection]], '0',
-        ].join('~');
-        globalThis.location.hash = '#bet/' + encodeURIComponent(otherKey);
-        globalThis.__applyRoute();
-        const flipped = nodes.get('bet-sides')?.innerHTML || '';
-        if (flipped === sides) {
-          problems.push('hopping to the mirrored side did not repaint the drill-down — this check is reading stale markup');
-        }
-        globalThis.location.hash = '#bet/' + encodeURIComponent(key);
-        globalThis.__applyRoute();
-        const sidesAfter = nodes.get('bet-sides')?.innerHTML || '';
-        runRows.length -= injected.length;
-        if (sidesAfter.includes('parityrungbook')) {
-          problems.push('the mirrored rung joined the sibling group — abs-merge is back');
-        }
-        if (!sidesAfter.includes('plain dim')) {
-          problems.push('the true mirror vanished while testing the rung');
+        let rungIdx = data.strings.indexOf('parityrungbook');
+        if (rungIdx === -1) { data.strings.push('parityrungbook'); rungIdx = data.strings.length - 1; }
+        const targetPair = spreads.filter((r) =>
+          data.strings[r[COL.event_key]] === data.strings[target[COL.event_key]]
+          && r[COL.period] === target[COL.period]);
+        const injected = targetPair.slice(0, 2).map((r) => {
+          const row = r.slice();
+          row[COL.source] = rungIdx;
+          row[COL.line] = -r[COL.line];
+          return row;
+        });
+        // Two traps, each demonstrated by a mutation this check failed to
+        // kill before this spelling: the panel reads rowsByRun (built once at
+        // load), so rows pushed into data.quotes.rows render nothing; and
+        // showCurrentPanel memoises the drill-down by panel+subject
+        // (shownChild), so re-applying the SAME route returns before
+        // rendering and the check reads the stale pre-injection markup.
+        // Rows go into rowsByRun, and the repaint is forced the way a reader
+        // forces one — hopping to the mirrored side's own key (the sibling
+        // row's go: link) and back, which changes the subject both times.
+        const other = targetPair.find((r) => r[COL.selection] !== target[COL.selection]);
+        if (!other) {
+          problems.push('no mirrored side found to hop through — the rung rule was not exercised');
+        } else {
+          const runRows = globalThis.__rowsByRun.get(currentId);
+          runRows.push(...injected);
+          const otherKey = [
+            data.strings[target[COL.event_key]], data.strings[target[COL.market]],
+            data.strings[target[COL.period]], '',
+            other[COL.line], data.strings[other[COL.selection]], '0',
+          ].join('~');
+          globalThis.location.hash = '#bet/' + encodeURIComponent(otherKey);
+          globalThis.__applyRoute();
+          const flipped = nodes.get('bet-sides')?.innerHTML || '';
+          if (flipped === sides) {
+            problems.push('hopping to the mirrored side did not repaint the drill-down — this check is reading stale markup');
+          }
+          globalThis.location.hash = '#bet/' + encodeURIComponent(key);
+          globalThis.__applyRoute();
+          const sidesAfter = nodes.get('bet-sides')?.innerHTML || '';
+          runRows.length -= injected.length;
+          if (sidesAfter.includes('parityrungbook')) {
+            problems.push('the mirrored rung joined the sibling group — abs-merge is back');
+          }
+          if (!sidesAfter.includes('plain dim')) {
+            problems.push('the true mirror vanished while testing the rung');
+          }
         }
       }
 

@@ -787,6 +787,77 @@ def test_the_page_script_runs_against_a_truncated_payload(
     assert "named on screen" in result.stdout
 
 
+def test_a_pickem_spread_does_not_false_fail_the_drill_down_harness(
+    populated: Store, tmp_path
+) -> None:
+    """The mirrored-rung check must not convict a correct page at line 0.
+
+    A pick'em spread's mirror carries the SAME line (``-0 === 0``), so the
+    injected rung legitimately belongs to the sibling group, and the first
+    spelling of the harness check read that as "abs-merge is back" — the
+    first committed fixture holding a pick'em spread would have hard-failed
+    every harness-driven test against a correct implementation.  The harness
+    now prefers a non-zero-line target and, when the whole board is pick'em,
+    says so and skips the injection instead of inventing a defect.  This
+    page's newest run holds ONLY line-0 spreads, which is the board that
+    used to false-fail.
+    """
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed; the dashboard's script cannot be executed here")
+
+    from src.sources.base import SourceHealth
+    from src.validation import ValidationReport
+
+    kickoff = datetime.now(UTC) + timedelta(hours=6)
+    rows = [
+        make_quote(source=source, selection=selection, decimal_odds=odds,
+                   market=Market.SPREAD, line=0.0, source_market_id="sp-pk",
+                   commence_time=kickoff)
+        for source, selection, odds in (
+            ("book_a", Selection.HOME, 1.95),
+            ("book_a", Selection.AWAY, 1.87),
+            ("book_b", Selection.HOME, 1.93),
+            ("book_b", Selection.AWAY, 1.89),
+            # The offshore-switch block requires the current run to hold an
+            # offshore row whenever the payload holds any; smarkets is this
+            # fixture's offshore venue, and its pair keeps the board pick'em.
+            ("smarkets", Selection.HOME, 1.96),
+            ("smarkets", Selection.AWAY, 1.90),
+        )
+    ]
+    started = datetime(2026, 7, 28, 8, 0, tzinfo=UTC)
+    run = populated.start_run(started)
+    populated.save_quotes_by_source(run, rows)
+    for source in ("book_a", "book_b", "smarkets"):
+        count = len([q for q in rows if q.source == source])
+        populated.save_health(
+            run,
+            SourceHealth(
+                source_key=source, ok=True, checked_at=started, request_count=1,
+                raw_bytes=1024, latency_ms=40.0, quote_count=count,
+                event_count=1, skipped_count=1,
+            ),
+        )
+    populated.save_skipped(run, "book_a", {"matchup_type:special": 1})
+    populated.finish_run(
+        run, finished_at=started + timedelta(seconds=1),
+        report=ValidationReport(quote_count=len(rows), event_count=1),
+        counterparties={},
+    )
+
+    page = tmp_path / "dashboard-pickem.html"
+    page.write_text(render_page(build_report(populated)), encoding="utf-8")
+    harness = Path(__file__).parent / "dashboard_smoke.mjs"
+    result = subprocess.run(
+        [node, str(harness), str(page)], capture_output=True, text=True, timeout=60
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "mirrored-rung check skipped; only pick'em spreads" in result.stdout, (
+        result.stdout
+    )
+
+
 def test_the_page_paints_the_locality_labels(populated: Store, tmp_path) -> None:
     """Execute the renderer against a run that actually carries a flagged position.
 
