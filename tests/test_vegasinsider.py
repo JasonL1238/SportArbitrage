@@ -11,18 +11,20 @@ from src.sources.vegasinsider import parse_vegasinsider
 
 
 #: The 2026-08-03 page carries 8 games × 3 markets × 2 sides = 48 rows per
-#: column.  ``vi_hardrock`` publishes four fewer, both drops mid-move pairings
-#: no book offered at once: its LAD@CHC total read ``o8.5 +110 / u8.5 −105``
-#: (implied sum 0.9884) and its WSH@PHI spread read ``home −1.5 +145 /
-#: away +1.5 −140`` (implied sum 0.9915 — the pair the first synthesized
-#: ``market_key`` tore in half and therefore never judged).
-#: ``refuse_mid_move_pairings`` drops all four legs and counts them.
+#: column.  ``vi_hardrock`` publishes eight fewer — four mid-move pairings no
+#: book hung at once, each dropped whole by ``refuse_mid_move_pairings``: the
+#: LAD@CHC total ``o8.5 +110 / u8.5 −105`` (implied sum 0.9884), the WSH@PHI
+#: spread ``home −1.5 +145 / away +1.5 −140`` (0.9915 — the pair the first
+#: synthesized ``market_key`` tore in half and never judged), and two
+#: **zero-vig** spreads, ``±1.5 −115/+115`` and ``±1.5 −170/+170`` (sum
+#: exactly 1.0) — a retail column's genuine pairs on this same capture carry
+#: 0.75–1.4% margin, so at-fair is as fabricated as below it.
 @pytest.mark.parametrize(
     ("source", "expected", "dropped"),
     [
         ("vi_draftkings", 48, 0),
         ("vi_caesars", 48, 0),
-        ("vi_hardrock", 44, 4),
+        ("vi_hardrock", 40, 8),
         ("vi_fanatics", 48, 0),
         ("vi_bet365", 48, 0),
     ],
@@ -41,6 +43,73 @@ def test_real_mlb_capture_produces_complete_game_lines(
     assert {quote.market for quote in outcome.quotes} == {
         Market.MONEYLINE, Market.SPREAD, Market.TOTAL,
     }
+
+
+def _pairing_outcome(*quotes):
+    from src.sources.base import ParseOutcome
+
+    outcome = ParseOutcome()
+    outcome.quotes.extend(quotes)
+    return outcome
+
+
+def _spread_leg(selection, line, decimal, american, **overrides):
+    from tests.conftest import make_quote
+
+    return make_quote(
+        market=Market.SPREAD, selection=selection, line=line,
+        decimal_odds=decimal, american_odds=american, source_market_id=None,
+        **overrides,
+    )
+
+
+def test_an_exactly_fair_tracker_pairing_is_dropped_whole() -> None:
+    """At-fair is as fabricated as below it on a retail tracker column.
+
+    Hard Rock's genuine pairs on the committed 2026-08-03 capture carry
+    0.75–1.4% margin; the same column's ``±1.5 −170/+170`` (implied sum
+    exactly 1.0) is a mid-move read the book never hung, and round 2 of the
+    adversarial loop measured it publishing with no finding anywhere — the
+    guard's old boundary kept anything ≥ fair, and the validation epsilon had
+    silenced the last check that fired on it.  A pairing is kept only when it
+    carries some margin.
+    """
+    from src.sources._common import refuse_mid_move_pairings
+
+    fair = _pairing_outcome(
+        _spread_leg(Selection.AWAY, 1.5, 1 + 100 / 170, -170),
+        _spread_leg(Selection.HOME, -1.5, 2.7, 170),
+    )
+    refuse_mid_move_pairings("vi_test", fair)
+    assert fair.quotes == []
+    assert dict(fair.skipped) == {"market_prices_the_book_to_lose": 2}
+
+    margined = _pairing_outcome(
+        _spread_leg(Selection.AWAY, 1.5, 1 + 100 / 140, -140),
+        _spread_leg(Selection.HOME, -1.5, 2.2, 120),
+    )
+    refuse_mid_move_pairings("vi_test", margined)
+    assert len(margined.quotes) == 2
+    assert dict(margined.skipped) == {}
+
+
+def test_two_disjoint_spread_offers_sharing_a_line_are_not_judged() -> None:
+    """home −1.5 and away −1.5 are two markets, not one market's two sides.
+
+    The unsigned ``market_key`` fallback cannot tell them apart, and the sum
+    of two disjoint outcomes is legitimately below 1.0 — deleting them as a
+    fabricated pairing would be the guard manufacturing the very row loss it
+    exists to prevent.  Judged only when the two signed lines are opposites.
+    """
+    from src.sources._common import refuse_mid_move_pairings
+
+    disjoint = _pairing_outcome(
+        _spread_leg(Selection.HOME, -1.5, 2.9, 190),
+        _spread_leg(Selection.AWAY, -1.5, 2.9, 190),
+    )
+    refuse_mid_move_pairings("vi_test", disjoint)
+    assert len(disjoint.quotes) == 2
+    assert dict(disjoint.skipped) == {}
 
 
 def test_line_direction_and_total_side_survive_html_parsing() -> None:

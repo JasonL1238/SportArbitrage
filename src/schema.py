@@ -279,6 +279,13 @@ class Quote(BaseModel):
         caught).  A spread therefore keys on the **unsigned** line with no
         side; ``is_alternate`` still separates a ladder's rungs from the main
         line, which is as much as can be reconstructed without the venue's id.
+        The residual ambiguity is owned, not hidden: two *distinct* id-less
+        spread offers sharing an absolute line (home −1.5 and away −1.5 as
+        separate markets, or a ladder holding both signs of one rung) would
+        share a key.  No id-less venue publishes that shape; if one ever does,
+        the failure is a loud false ``repeated_selection_within_market`` ERROR,
+        never silence, and ``refuse_mid_move_pairings`` refuses to judge a
+        spread group whose lines are not sign-opposed for the same reason.
         """
         if self.market is Market.SPREAD:
             side_part = ""

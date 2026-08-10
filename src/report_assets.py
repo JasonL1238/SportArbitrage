@@ -2703,12 +2703,24 @@ function betSentence(spec) {
 /* ── overview ────────────────────────────────────────────────────────────── */
 
 function marketGroups(rows) {
-  // Group by the sportsbook's own id for the bet, exactly as the pipeline does:
-  // grouping on a row's own number would tear a handicap bet in half.
+  // Group by the sportsbook's own id for the bet, exactly as the pipeline does.
+  // The id-less fallback mirrors Quote.market_key's rule precisely: a spread
+  // keys on the UNSIGNED line with no side — its two rows differ on exactly
+  // those fields (home -1.5 / away +1.5, side naming the team) — while every
+  // other market keeps its own line and side (a team total's side scopes the
+  // market).  The first version of this fallback used the signed line, so the
+  // page tore every tracker spread into two groups of one while the pipeline
+  // grouped them whole: the reader surface and the run disagreeing about the
+  // same collection, which is the exact class an earlier loop already fixed
+  // elsewhere.  If the Python rule changes, change this WITH it.
   const groups = new Map();
   for (const r of rows) {
+    const isSpread = str(r[COL.market]) === 'spread';
+    const lineVal = r[COL.line];
+    const fallbackLine = isSpread && lineVal != null ? Math.abs(lineVal) : lineVal;
+    const fallbackSide = isSpread ? '' : str(r[COL.side]);
     const key = [str(r[COL.source]), str(r[COL.source_event_id]), str(r[COL.source_market_id]) ||
-      [str(r[COL.market]), str(r[COL.period]), str(r[COL.side]), r[COL.line], r[COL.is_alternate]].join('|')].join('\x1f');
+      [str(r[COL.market]), str(r[COL.period]), fallbackSide, fallbackLine, r[COL.is_alternate]].join('|')].join('\x1f');
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(r);
   }

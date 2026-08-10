@@ -282,7 +282,12 @@ class TestValidationOnTheRealSlate:
                 rows[0].sport, rows[0].period
             ):
                 expected.discard(Selection.DRAW)
-            if {r.selection for r in rows} != expected:
+            # Superset, not exact-set — the same completeness rule as the other
+            # three judges of this question (the per-adapter contract test,
+            # refuse_mid_move_pairings, validation's overround gate).  The
+            # exact-set spelling silently skipped a group carrying a spurious
+            # extra selection, which is precisely a group worth judging.
+            if not expected <= {r.selection for r in rows}:
                 continue
             overround = sum(r.implied_probability for r in rows)
             assert overround >= 1.0 - 1e-9, f"{market_key} sums to {overround:.4f}"

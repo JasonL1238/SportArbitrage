@@ -153,7 +153,8 @@ and keep republished fallback feeds diagnostic-only.
   use them for an IL run.
 - Full `tests/` is documented red because genuine non-empty captures are missing
   for `an_fliff`, `an_circa`, and `an_superbook`. Do not synthesize captures or
-  unregister the sources.
+  unregister the sources. *(Superseded 2026-08-09: the operator approved
+  deregistering all three; the suite is fully green — see the banner above.)*
 
 ## Completed implementation
 
@@ -210,7 +211,10 @@ The offline suite cannot turn green until genuine, non-empty captured envelopes
 are committed for `an_fliff`, `an_circa`, and `an_superbook`. Do not synthesize
 fixtures or remove those source keys. If another session continues, start with
 those captures or matching-egress live probes; the code and focused tests for
-the multi-state batch are complete.
+the multi-state batch are complete. *(Superseded 2026-08-09: the deregistration
+happened with the operator's approval and the suite is fully green — do NOT
+start with those captures; see the banner at the top of this file and
+`docs/SOURCE_FEASIBILITY.md` for current state.)*
 
 ## Final dead-code cleanup
 

@@ -106,8 +106,11 @@ MAX_OVERROUND = 1.6
 #: 0.9999999999999998 in floats, and the strict ``< MIN_OVERROUND`` comparison
 #: produced an error whose own message refuted it: "sum to 1.0000 < 1.0".
 #: Breaking even is not "pricing itself to lose"; the tolerance is the same
-#: 1e-9 the source-contract suite and ``refuse_mid_move_pairings`` use, so the
-#: three judges of one question cannot disagree at the boundary.
+#: 1e-9 the source-contract suite uses, so the two judges of *that* question
+#: cannot disagree at the boundary.  ``refuse_mid_move_pairings`` deliberately
+#: asks a stricter one — an HTML tracker column must carry some margin to
+#: publish at all — which is why an at-fair tracker pairing never reaches
+#: this gate: the strict judge deleted it at parse.
 OVERROUND_FLOAT_TOLERANCE = 1e-9
 
 #: The same floor for an **order-driven** venue, where the reasoning above does

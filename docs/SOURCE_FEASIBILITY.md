@@ -269,6 +269,14 @@ Illinois's required-book table.
 is committed. Not the reverse — registering ahead of the capture is exactly
 what bought the 1617-error baseline the first time.
 
+**A pattern for the next deregistration:** removing a key from
+`REPUBLISHED_SOURCE_KEYS` also lifts view-only classification from any rows it
+left in run history — the dashboard would render them as an unknown,
+bettable-looking sportsbook. Safe this time only because the store was checked
+first and holds **zero quotes** for all three keys (180 raw responses, all
+parsing to nothing). Deregistering a republisher that *did* store quotes needs
+an answer for its historical rows before the key comes out.
+
 ### theScore Bet's Illinois id answers — 2026-08-10T01:05Z
 
 The first-ever request of Action Network id 4601 (`theScore Bet IL`,

@@ -839,7 +839,22 @@ def refuse_mid_move_pairings(source: str, outcome: Any) -> None:
 
     Only a **complete** market is judged, with the same completeness rule the
     source-contract suite applies: a three-way moneyline missing its draw leg
-    legitimately sums below 1.0 and is left alone.
+    legitimately sums below 1.0 and is left alone.  A spread group must also
+    be a genuine pair — exactly two rows whose signed lines are opposites —
+    because the unsigned ``market_key`` fallback cannot distinguish one market
+    from two distinct markets sharing an absolute line (home −1.5 and away
+    −1.5 as *separate* offers), and the sum of two disjoint outcomes is
+    legitimately below 1.0.  No id-less venue publishes that shape today; the
+    check is what makes reaching for this helper safe for one that does.
+
+    The bar is stricter than "priced to lose": a pairing is kept only when it
+    carries **some margin**, because a retail tracker column at exactly fair
+    is as fabricated as one below it — Hard Rock's genuine pairs on the same
+    2026-08-03 capture carry 0.75–1.4% margin, while the mid-move artifacts
+    read 0.9884, 0.9915, and twice exactly 1.0000 (±115/∓115, ±170/∓170).
+    Validation's ``negative_overround`` keeps its own looser boundary — break
+    even is not *losing* — so this guard is deliberately the strict judge of
+    the two, and the deletion is why the looser one stays quiet.
     """
     grouped: dict[tuple[str, str, str], list[Any]] = {}
     for quote in outcome.quotes:
@@ -856,10 +871,19 @@ def refuse_mid_move_pairings(source: str, outcome: Any) -> None:
                 needed = needed | {Selection.DRAW}
             if not needed <= present:
                 continue
+        elif rows[0].market is Market.SPREAD:
+            lines = [row.line for row in rows]
+            if (
+                len(rows) != 2
+                or None in lines
+                or abs(lines[0] + lines[1]) > 1e-9
+                or not SELECTIONS_BY_MARKET[Market.SPREAD] <= present
+            ):
+                continue
         elif not SELECTIONS_BY_MARKET[rows[0].market] <= present:
             continue
         overround = sum(row.implied_probability for row in rows)
-        if overround >= 1.0 - 1e-9:
+        if overround > 1.0 + 1e-9:
             continue
         doomed.add(market_key)
         outcome.skipped["market_prices_the_book_to_lose"] += len(rows)

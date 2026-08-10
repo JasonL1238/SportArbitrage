@@ -1798,6 +1798,46 @@ if (process.argv[3]) {
   if (problems.length) process.exit(1);
 }
 
+// The id-less fallback in marketGroups must mirror Quote.market_key exactly:
+// a spread keys on the UNSIGNED line with no side, so home -1.5 / away +1.5 is
+// ONE group — the first version used the signed line and the page tore every
+// tracker spread into two groups of one while the pipeline grouped them whole,
+// silently excluding them from "separate bets" and the margin analysis.  A
+// team total's side scopes its market, so its home and away books stay two.
+{
+  const COL = globalThis.__COL;
+  const data = globalThis.__DATA;
+  const idx = (s) => {
+    let i = data.strings.indexOf(s);
+    if (i === -1) { data.strings.push(s); i = data.strings.length - 1; }
+    return i;
+  };
+  const mk = (market, line, side) => {
+    const row = new Array(data.quotes.columns.length).fill(null);
+    row[COL.source] = idx('paritybook');
+    row[COL.source_event_id] = idx('parity-ev');
+    row[COL.source_market_id] = null;
+    row[COL.market] = idx(market);
+    row[COL.period] = idx('full_game');
+    row[COL.side] = side === null ? null : idx(side);
+    row[COL.line] = line;
+    row[COL.is_alternate] = false;
+    return row;
+  };
+  const problems = [];
+  const spread = globalThis.__marketGroups([mk('spread', -1.5, null), mk('spread', 1.5, null)]);
+  if (spread.size !== 1) {
+    problems.push(`an id-less spread pair groups as ${spread.size} — the page tears the handicap in half`);
+  }
+  const teamTotals = globalThis.__marketGroups([mk('team_total', 4.5, 'home'), mk('team_total', 4.5, 'away')]);
+  if (teamTotals.size !== 2) {
+    problems.push(`two team-total markets merged into ${teamTotals.size} group(s) — side no longer scopes the market`);
+  }
+  console.log(problems.length ? 'MARKET GROUPING PARITY BROKEN: ' + problems.join('; ')
+    : 'id-less spreads group whole and team-total sides stay separate');
+  if (problems.length) process.exit(1);
+}
+
 // "Separate bets — each with every side priced" must count only the groups that
 // actually have every side priced. Counting ``marketGroups.size`` made the
 // overview claim a larger number than the Checks panel's "bets fully priced"

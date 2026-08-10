@@ -22,6 +22,11 @@ class PromoParseOutcome:
 
     offers: list[PromoOffer] = field(default_factory=list)
     rejections: list[Rejection] = field(default_factory=list)
+    #: A plain Counter, deliberately outside the odds pipeline's ReasonCounter
+    #: guarantee: every promo skip site increments by a constant 1, so the
+    #: computed-zero door that class exists to close has no promo instance.
+    #: A promo parser that starts incrementing by a computed count should
+    #: switch this to ReasonCounter in the same change.
     skipped: Counter[str] = field(default_factory=Counter)
 
     def extend(self, other: "PromoParseOutcome") -> None:
