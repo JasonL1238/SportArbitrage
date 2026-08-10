@@ -214,6 +214,7 @@ try {
     globalThis.__sourceInfo = sourceInfo;
     globalThis.__SOURCE_INFO_BY_STATE = SOURCE_INFO_BY_STATE;
     globalThis.__runById = runById;
+    globalThis.__rowsByRun = rowsByRun;
     globalThis.__setCurrentRun = (id) => { currentRunId = id; };
     globalThis.__currentRun = () => currentRunId;
     globalThis.__showOffshore = () => showOffshore;
@@ -1885,8 +1886,65 @@ if (process.argv[3]) {
       if (!sides.includes('plain dim')) {
         problems.push('no dim sibling row rendered — the mirrored side was not found');
       }
+
+      // And the sibling rule must be the CANONICAL signed line, not Math.abs:
+      // home -1.5 / away +1.5 and the MIRRORED market home +1.5 / away -1.5
+      // are two different contracts (Pinnacle's ±0.25 Asian handicaps and
+      // Kambi's alternate run lines offer both), and an abs-merge printed one
+      // rung's label beside the other rung's price with a false "mispaired"
+      // verdict.  Inject the mirrored rung under a sentinel source: the abs
+      // rule pulls its column into the panel, the canonical rule keeps it out.
+      let rungIdx = data.strings.indexOf('parityrungbook');
+      if (rungIdx === -1) { data.strings.push('parityrungbook'); rungIdx = data.strings.length - 1; }
+      const targetPair = spreads.filter((r) =>
+        data.strings[r[COL.event_key]] === data.strings[target[COL.event_key]]
+        && r[COL.period] === target[COL.period]);
+      const injected = targetPair.slice(0, 2).map((r) => {
+        const row = r.slice();
+        row[COL.source] = rungIdx;
+        row[COL.line] = -r[COL.line];
+        return row;
+      });
+      // Two traps, each demonstrated by a mutation this check failed to kill
+      // before this spelling: the panel reads rowsByRun (built once at load),
+      // so rows pushed into data.quotes.rows render nothing; and
+      // showCurrentPanel memoises the drill-down by panel+subject
+      // (shownChild), so re-applying the SAME route returns before rendering
+      // and the check reads the stale pre-injection markup.  Rows go into
+      // rowsByRun, and the repaint is forced the way a reader forces one —
+      // hopping to the mirrored side's own key (the sibling row's go: link)
+      // and back, which changes the subject both times.
+      const other = targetPair.find((r) => r[COL.selection] !== target[COL.selection]);
+      if (!other) {
+        problems.push('no mirrored side found to hop through — the rung rule was not exercised');
+      } else {
+        const runRows = globalThis.__rowsByRun.get(currentId);
+        runRows.push(...injected);
+        const otherKey = [
+          data.strings[target[COL.event_key]], 'spread',
+          data.strings[target[COL.period]], '',
+          other[COL.line], data.strings[other[COL.selection]], '0',
+        ].join('~');
+        globalThis.location.hash = '#bet/' + encodeURIComponent(otherKey);
+        globalThis.__applyRoute();
+        const flipped = nodes.get('bet-sides')?.innerHTML || '';
+        if (flipped === sides) {
+          problems.push('hopping to the mirrored side did not repaint the drill-down — this check is reading stale markup');
+        }
+        globalThis.location.hash = '#bet/' + encodeURIComponent(key);
+        globalThis.__applyRoute();
+        const sidesAfter = nodes.get('bet-sides')?.innerHTML || '';
+        runRows.length -= injected.length;
+        if (sidesAfter.includes('parityrungbook')) {
+          problems.push('the mirrored rung joined the sibling group — abs-merge is back');
+        }
+        if (!sidesAfter.includes('plain dim')) {
+          problems.push('the true mirror vanished while testing the rung');
+        }
+      }
+
       console.log(problems.length ? 'SPREAD DRILL-DOWN TORN: ' + problems.join('; ')
-        : 'a spread drill-down lists both sides');
+        : 'a spread drill-down lists both sides and excludes the mirrored rung');
       if (problems.length) process.exit(1);
     }
   }

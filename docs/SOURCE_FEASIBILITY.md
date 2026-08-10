@@ -862,7 +862,11 @@ the same games (`{15, 30, 123}`, `{15, 30, 68, 69, 71, 75}`, `{15, 30, 69, 75}`)
 4623 have never been requested. So for these three the coverage table asserts a
 watcher that is not known to answer; if a live capture confirms the ids are
 wrong, the honest record is no working feed rather than a thin one. Until then
-they are `SINGLE_SOURCE` on paper and `MISSING` in practice.
+they are `SINGLE_SOURCE` on paper and `MISSING` in practice. *(Resolved
+2026-08-08: the recapture asked all three PA ids and every one answered —
+255 / 195 / 225 rows, § "The Pennsylvania recapture". The 4623 capture was
+later retired from the fixture store by the 2026-08-09 IL licence swap, its
+proof standing on record — § "theScore Bet's Illinois id answers".)*
 
 **The three new VegasInsider columns.** `vi_betmgm`, `vi_betrivers` and
 `vi_fanduel` are the opposite case — the adapters work and the captures are the

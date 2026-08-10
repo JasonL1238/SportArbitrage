@@ -17,6 +17,34 @@ def _quotes():
     return outcome.quotes
 
 
+def test_the_mid_move_guard_is_wired_into_this_parser(monkeypatch) -> None:
+    """The guard call in ``parse_vsin_circa`` is load-bearing and unpinnable
+    by fixture arithmetic alone.
+
+    The committed capture carries no sub-fair pairing — every multi-row market
+    sums ≥ +2.55% over fair — so the guard never fires on it, and an
+    adversarial probe demonstrated that deleting the call left the entire
+    suite green while Circa's Las Vegas column silently resumed publishing
+    mid-move pairings.  (Contrast the VegasInsider wire, which the vi_hardrock
+    40-rows/8-counted pin holds.)  This pin asserts the wiring itself: the
+    parser hands its finished outcome to ``refuse_mid_move_pairings`` before
+    returning.
+    """
+    import src.sources.vsin as vsin_mod
+
+    calls: list[tuple[str, int]] = []
+    real = vsin_mod.refuse_mid_move_pairings
+
+    def recorder(source, outcome):
+        calls.append((source, len(outcome.quotes)))
+        return real(source, outcome)
+
+    monkeypatch.setattr(vsin_mod, "refuse_mid_move_pairings", recorder)
+    quotes = _quotes()
+    assert calls == [("vsin_circa", 48)], calls
+    assert len(quotes) == 48
+
+
 def test_real_mlb_capture_produces_circa_game_lines() -> None:
     quotes = _quotes()
     assert len(quotes) == 48

@@ -243,10 +243,12 @@ def probe_registered(candidate: Candidate, *, state: str) -> tuple[str, str]:
         descriptor = descriptor_for_state(state, candidate.source_key)
     except (KeyError, RuntimeError) as exc:
         return "UNLICENSED", str(exc).strip('"')
-    # Caesars' currently pinned public competition ids cover NFL/NBA; the other
-    # state-sensitive adapters all have an MLB scope.  Probe a scope the real
-    # adapter declares instead of manufacturing a universal league.
-    league = "NFL" if candidate.source_key == "caesars" else "MLB"
+    # Probe a scope the real adapter declares instead of manufacturing a
+    # universal league.  Caesars' NFL special case predates 2026-08-09, when
+    # its competition table carried only NFL/NBA ids; the Illinois menu
+    # capture supplied MLB/NHL/WNBA, so the uniform MLB scope now works for
+    # every state-sensitive adapter.
+    league = "MLB"
     source = descriptor.build(leagues=(league,), timeout=TIMEOUT)
     try:
         raws = source.fetch_raw(tier=Tier.CORE)

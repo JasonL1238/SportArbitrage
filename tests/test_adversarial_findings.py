@@ -4070,20 +4070,10 @@ class TestReplayComparesTheWholeRow:
         assert any("lost row" in problem for problem in problems), problems
         assert any("invented row" in problem for problem in problems), problems
 
-    def test_replay_judges_no_adapter_by_stored_rows_not_by_health(self, tmp_path) -> None:
-        """"Stored rows" is the stored fact, so it comes off the quote table.
-
-        ``source_health.quote_count`` is what the adapter produced; the two
-        diverge exactly when the insert failed or a scope filter dropped
-        everything (``Store.stored_quote_counts``'s own docstring).  In that
-        divergence, judging by health files a deregistered source's missing
-        adapter as a *problem* — failing the replay over rows that were never
-        in the database and therefore cannot be lost.
-        """
-        from src.collector import SOURCE_FACTORIES, collect_once, replay_run
-        from src.raw_store import RawStore
+    @staticmethod
+    def _make_rigged():
+        """The minimal one-book source the archive-integrity pins collect."""
         from src.sources.base import ParseOutcome
-        from src.store import Store
 
         class Rigged:
             source_key = "book_a"
@@ -4103,10 +4093,105 @@ class TestReplayComparesTheWholeRow:
             def close(self) -> None:
                 pass
 
+        return Rigged
+
+    def test_corrupted_bytes_suppress_the_evolution_preamble(self, tmp_path) -> None:
+        """The preamble may only vouch for bytes that were actually hashed.
+
+        Corruption raises out of ``RawStore.read`` *before* the sha check —
+        ``json.loads`` on a truncated file — so the first spelling of the
+        preamble condition ("no 'sha256' anywhere, some marker somewhere")
+        fired 'stored bytes verified against their recorded sha256s' above a
+        JSONDecodeError it had just mislabeled as parser evolution.  The
+        preamble now requires EVERY problem to be a row comparison, which is
+        only true when every read succeeded.
+        """
+        from src.collector import SOURCE_FACTORIES, collect_once, replay_run
+        from src.raw_store import RawStore
+        from src.store import Store
+
+        rigged = self._make_rigged()
         raw_store = RawStore(tmp_path / "raw")
         with Store(tmp_path / "db.sqlite3") as store:
             result = collect_once(
-                [Rigged()], raw_store=raw_store, store=store, as_of=FETCHED
+                [rigged()], raw_store=raw_store, store=store, as_of=FETCHED
+            )
+            assert result.quotes
+            raw_path = next((tmp_path / "raw").rglob("*.json"))
+            raw_path.write_text(raw_path.read_text()[: len(raw_path.read_text()) // 2])
+            saved = SOURCE_FACTORIES.get("book_a")
+            SOURCE_FACTORIES["book_a"] = rigged
+            try:
+                ok, problems = replay_run(result.run_id, store=store, raw_store=raw_store)
+            finally:
+                if saved is None:
+                    SOURCE_FACTORIES.pop("book_a", None)
+                else:
+                    SOURCE_FACTORIES["book_a"] = saved
+        assert not ok
+        assert any("replay raised" in p for p in problems), problems
+        assert not any("verified against their recorded sha256s" in p for p in problems), (
+            problems
+        )
+
+    def test_a_sha_mismatch_is_never_downgraded_to_a_note(self, tmp_path) -> None:
+        """"Stored no rows" excuses a parser raise, not archive corruption.
+
+        A recorded sha256 that no longer matches its bytes is the one signal
+        the preamble tells the reader to trust; for a source with zero stored
+        rows the raise was downgraded to a log line, so the archive could rot
+        invisibly under a PASS verdict.
+        """
+        import json
+
+        from src.collector import SOURCE_FACTORIES, collect_once, replay_run
+        from src.raw_store import RawStore
+        from src.store import Store
+
+        raw_store = RawStore(tmp_path / "raw")
+        with Store(tmp_path / "db.sqlite3") as store:
+            result = collect_once(
+                [self._make_rigged()()], raw_store=raw_store, store=store, as_of=FETCHED
+            )
+            assert result.quotes
+            # The source "stored no rows" (insert wiped), and its archived
+            # body no longer matches the recorded sha.
+            store._conn.execute("DELETE FROM quote WHERE run_id = ?", (result.run_id,))
+            store._conn.commit()
+            raw_path = next((tmp_path / "raw").rglob("*.json"))
+            envelope = json.loads(raw_path.read_text())
+            envelope["body"] = envelope["body"] + " "
+            raw_path.write_text(json.dumps(envelope))
+            saved = SOURCE_FACTORIES.get("book_a")
+            SOURCE_FACTORIES["book_a"] = self._make_rigged()
+            try:
+                ok, problems = replay_run(result.run_id, store=store, raw_store=raw_store)
+            finally:
+                if saved is None:
+                    SOURCE_FACTORIES.pop("book_a", None)
+                else:
+                    SOURCE_FACTORIES["book_a"] = saved
+        assert not ok
+        assert any("sha256" in p for p in problems), problems
+
+    def test_replay_judges_no_adapter_by_stored_rows_not_by_health(self, tmp_path) -> None:
+        """"Stored rows" is the stored fact, so it comes off the quote table.
+
+        ``source_health.quote_count`` is what the adapter produced; the two
+        diverge exactly when the insert failed or a scope filter dropped
+        everything (``Store.stored_quote_counts``'s own docstring).  In that
+        divergence, judging by health files a deregistered source's missing
+        adapter as a *problem* — failing the replay over rows that were never
+        in the database and therefore cannot be lost.
+        """
+        from src.collector import SOURCE_FACTORIES, collect_once, replay_run
+        from src.raw_store import RawStore
+        from src.store import Store
+
+        raw_store = RawStore(tmp_path / "raw")
+        with Store(tmp_path / "db.sqlite3") as store:
+            result = collect_once(
+                [self._make_rigged()()], raw_store=raw_store, store=store, as_of=FETCHED
             )
             assert result.quotes
             # The insert-failed divergence: health says 2 produced, the quote

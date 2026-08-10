@@ -1916,12 +1916,9 @@ def replay_run(
                 "are still what was collected, and a sha mismatch (none unless "
                 "named below) is the only sign of changed bytes",
             )
-        elif (
-            problems
-            and not any("sha256" in problem for problem in problems)
-            and any(
+        elif problems and all(
+            any(
                 marker in problem
-                for problem in problems
                 for marker in (
                     "row count differs",
                     "replay lost row",
@@ -1929,6 +1926,7 @@ def replay_run(
                     "changed on replay",
                 )
             )
+            for problem in problems
         ):
             # The migration stamp was the only channel that admitted the parser
             # legitimately changes, so a deliberate change convicted every
@@ -1936,12 +1934,18 @@ def replay_run(
             # 2026-08-09 mid-move guard re-parses older line-tracker captures
             # to fewer rows *by design*, and an adversarial round found runs
             # whose replay read "row count differs / replay lost row" with
-            # nothing saying why.  Every stored byte carrying a recorded
-            # sha256 verified (a mismatch raises out of RawStore.read and is
-            # named above), so the differences below are the current parser
-            # disagreeing with the one that stored the run.  The verdict stays
-            # FAIL because replay cannot tell evolution from regression — but
-            # it now states which two things the reader must tell apart.
+            # nothing saying why.  The preamble fires only when EVERY problem
+            # is a row-comparison — the first spelling ("no 'sha256' anywhere,
+            # some marker somewhere") vouched for bytes it never saw, because
+            # corruption raises out of RawStore.read *before* the sha check
+            # (json.loads on a truncated file) and surfaces as a "replay
+            # raised" problem carrying no marker and no 'sha256'.  When every
+            # problem is a comparison, every read succeeded, so every recorded
+            # sha256 genuinely verified, and the differences below are the
+            # current parser disagreeing with the one that stored the run.
+            # The verdict stays FAIL because replay cannot tell evolution from
+            # regression — but it states which two things the reader must
+            # tell apart.
             problems.insert(
                 0,
                 f"run {run_id}'s stored bytes verified against their recorded "
@@ -2014,7 +2018,12 @@ def replay_run(
             replayed.extend(source.parse(raws).quotes)
         except Exception as exc:  # noqa: BLE001
             message = f"{source_key}: replay raised {type(exc).__name__}: {exc}"
-            if source_key in produced:
+            # A byte-integrity failure is NEVER a note: "stored no rows" makes
+            # a parser raise harmless, but a recorded sha256 that no longer
+            # matches its bytes is corruption of the archive itself, and
+            # downgrading it hides the one signal the verdict preamble tells
+            # the reader to trust.
+            if source_key in produced or "sha256" in str(exc):
                 problems.append(message)
             else:
                 log.info("%s (it stored no rows on this run, so nothing is lost)", message)

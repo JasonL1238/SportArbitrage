@@ -160,7 +160,12 @@ _AN_BOOK_IDS: Mapping[str, Mapping[str, int]] = MappingProxyType(
         # 195, no rejections.  74 and 4623 carry all three period windows; **246
         # publishes no first-inning market** — its board is full-game and
         # first-five only, so a missing F1 row for Unibet PA is that book's
-        # shelf, not a fetch defect.  Those captures are the committed fixtures.
+        # shelf, not a fetch defect.  The 74 and 246 captures are the committed
+        # fixtures; 4623's was retired 2026-08-09 when the Illinois campaign
+        # swapped ``an_thescore``'s single-licence store to its IL capture
+        # (4601) — the measurement above stands as record, the bytes return
+        # with the next PA-egress pass (docs/SOURCE_FEASIBILITY.md § "theScore
+        # Bet's Illinois id answers").
         #
         # Two things had to be true at once and neither was, which is why this
         # note used to be long.  The endpoint: the ids are on ``web/v2`` and the

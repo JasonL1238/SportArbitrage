@@ -2715,7 +2715,11 @@ function marketGroups(rows) {
   // elsewhere.  If the Python rule changes, change this WITH it.
   const groups = new Map();
   for (const r of rows) {
-    const isSpread = str(r[COL.market]) === 'spread';
+    // The spread test rides the same alias the rest of the page uses: a
+    // legacy database stores ``run_line``, and comparing the raw string to
+    // 'spread' would quietly reopen the signed-line tear for exactly the
+    // vocabulary the alias table exists to support.
+    const isSpread = mkt(str(r[COL.market])) === 'spread';
     const lineVal = r[COL.line];
     const fallbackLine = isSpread && lineVal != null ? Math.abs(lineVal) : lineVal;
     const fallbackSide = isSpread ? '' : str(r[COL.side]);
@@ -5243,23 +5247,42 @@ function renderBet(key) {
   // sides sitting in the same file.
   //
   // A spread's two sides carry OPPOSITE signed lines (home -1.5 / away +1.5)
-  // and no side field, so its siblings match on the unsigned line — the same
-  // rule as the detector's canonical_line, Quote.market_key, and marketGroups.
-  // Matching on the raw line meant no spread drill-down ever showed its other
-  // side, so the venue's cut — this panel's stated purpose — could never be
-  // computed for any spread, at any book, id'd or not.
-  const groupLine = (market, line) =>
-    (line === null || line === undefined ? '' : (market === 'spread' ? Math.abs(line) : line));
-  const groupOf = (r) => [str(r[COL.market]), str(r[COL.period]),
-    (str(r[COL.market]) === 'spread' ? '' : str(r[COL.side]) || ''),
-    groupLine(str(r[COL.market]), r[COL.line])].join('~');
-  const wanted = [spec.market, spec.period,
-    (spec.market === 'spread' ? '' : spec.side || ''),
-    groupLine(spec.market, spec.line)].join('~');
+  // and no side field, so its siblings match on the detector's rule — the
+  // CANONICAL home-oriented signed line (src/arb.py canonical_line): home rows
+  // at the canon, away rows at its negation.  Matching on the raw line meant
+  // no spread drill-down ever showed its other side; matching on Math.abs
+  // (round three's first attempt) over-merged instead, collapsing home -1.5 /
+  // away +1.5 with the MIRRORED market home +1.5 / away -1.5 — Pinnacle's
+  // ±0.25 Asian handicaps and Kambi's alternate run lines both offer the two
+  // as separate contracts, and the merge printed one rung's label beside the
+  // other rung's price with a false "mispaired" verdict under both.  Legacy
+  // vocabulary rides the same alias the rest of the page uses (run_line is a
+  // supported stored spelling of spread).
+  const specMarket = mkt(spec.market);
+  const specIsSpread = specMarket === 'spread';
+  const canon = !specIsSpread || spec.line === null || spec.line === undefined
+    ? null
+    : (spec.selection === 'home' ? spec.line : -spec.line);
+  const belongs = (r) => {
+    if (mkt(str(r[COL.market])) !== specMarket || str(r[COL.period]) !== spec.period) {
+      return false;
+    }
+    if (!specIsSpread) {
+      return (str(r[COL.side]) || '') === (spec.side || '')
+        && (r[COL.line] === null || r[COL.line] === undefined ? '' : r[COL.line])
+           === (spec.line === null || spec.line === undefined ? '' : spec.line);
+    }
+    const line = r[COL.line];
+    if (line === null || line === undefined || canon === null) return false;
+    const sel = str(r[COL.selection]);
+    if (sel === 'home') return line === canon;
+    if (sel === 'away') return line === -canon;
+    return false;
+  };
   const runRowsNow = rowsByRun.get(sample.run.id) || [];
   const siblings = new Map();
   for (const r of runRowsNow) {
-    if (str(r[COL.event_key]) !== spec.event || groupOf(r) !== wanted) continue;
+    if (str(r[COL.event_key]) !== spec.event || !belongs(r)) continue;
     const sel = str(r[COL.selection]);
     // Each side carries its OWN line (a spread's mirror is the negation), so
     // the sibling remembers it: the description, notation, and the go: link
@@ -5281,7 +5304,7 @@ function renderBet(key) {
     }
   }
   const sideSources = [...new Set(runRowsNow.filter((r) => str(r[COL.event_key]) === spec.event
-    && groupOf(r) === wanted).map((r) => str(r[COL.source])))].sort();
+    && belongs(r)).map((r) => str(r[COL.source])))].sort();
 
   table(el('bet-sides'), [
     { band: 'the side', label: 'The bet', cell: (s) => {
