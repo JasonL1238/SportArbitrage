@@ -4442,6 +4442,121 @@ class TestReplayComparesTheWholeRow:
         ), problems
         assert "verified against" in problems[0] and "sha256" in problems[0], problems
 
+    def test_a_marker_bearing_tamper_cannot_buy_the_preamble(self, tmp_path) -> None:
+        """``comparison_only`` is structural: no problem text can vote.
+
+        The substring gate was defeated by one tampered envelope field —
+        ``"envelope_version": "9 replay lost row"`` flows verbatim into the
+        unsupported-version ValueError, the "stored bytes unreadable"
+        wrapper inherits the marker, and the verdict printed "bytes
+        verified against their recorded sha256s" directly above the tamper
+        it was vouching away.  Classification now follows how each problem
+        was appended, so the same tamper earns the FAIL without the vouch.
+        """
+        import json
+
+        from src.collector import SOURCE_FACTORIES, collect_once, replay_run
+        from src.raw_store import RawStore
+        from src.store import Store
+
+        rigged = self._make_rigged()
+        raw_store = RawStore(tmp_path / "raw")
+        with Store(tmp_path / "db.sqlite3") as store:
+            result = collect_once(
+                [rigged()], raw_store=raw_store, store=store, as_of=FETCHED
+            )
+            assert result.quotes
+            raw_path = next((tmp_path / "raw").rglob("*.json"))
+            envelope = json.loads(raw_path.read_text())
+            envelope["envelope_version"] = "9 replay lost row"
+            raw_path.write_text(json.dumps(envelope))
+            saved = SOURCE_FACTORIES.get("book_a")
+            SOURCE_FACTORIES["book_a"] = rigged
+            try:
+                ok, problems = replay_run(result.run_id, store=store, raw_store=raw_store)
+            finally:
+                if saved is None:
+                    SOURCE_FACTORIES.pop("book_a", None)
+                else:
+                    SOURCE_FACTORIES["book_a"] = saved
+        assert not ok
+        assert any("stored bytes unreadable" in p for p in problems), problems
+        assert not any("verified against" in p for p in problems), problems
+
+    def test_the_field_diff_overflow_marker_states_an_exact_count(self, tmp_path) -> None:
+        """The listing may bound its length, and its disclosure must be a
+        measured fact.
+
+        The first stop marker said "more rows changed on replay than are
+        shown" whenever the problem count crossed 20 — provably false at
+        the boundary, where all 21 differences were already on screen.  The
+        scan now always completes and only the listing is capped, so the
+        marker's number is exact; and because the marker summarizes real
+        comparisons, the evolution preamble survives above it.
+        """
+        from src.collector import SOURCE_FACTORIES, collect_once, replay_run
+        from src.raw_store import RawStore
+        from src.sources.base import ParseOutcome
+        from src.store import Store
+
+        def rows():
+            out = []
+            for i in range(11):
+                line = 1.5 + i
+                for sel, signed in ((Selection.HOME, -line), (Selection.AWAY, line)):
+                    out.append(make_quote(
+                        source="book_a", selection=sel, market=Market.SPREAD,
+                        line=signed, decimal_odds=1.9 + i * 0.001,
+                        source_market_id=f"sp{i}",
+                    ))
+            return out
+
+        class Wide:
+            source_key = "book_a"
+            leagues = ("MLB",)
+
+            def fetch_raw(self):
+                return [_raw("book_a", "markets-01", {"markets": []})]
+
+            def parse(self, raws):
+                return ParseOutcome(quotes=rows())
+
+            def close(self) -> None:
+                pass
+
+        raw_store = RawStore(tmp_path / "raw")
+        with Store(tmp_path / "db.sqlite3") as store:
+            result = collect_once(
+                [Wide()], raw_store=raw_store, store=store, as_of=FETCHED
+            )
+            assert len(result.quotes) == 22
+            # Exactly 21 stored rows drift by more than the float tolerance:
+            # 20 are shown, and the marker must say "1 more", not guess.
+            store._conn.execute(
+                "UPDATE quote SET decimal_odds = decimal_odds + 0.01 "
+                "WHERE rowid IN (SELECT rowid FROM quote WHERE run_id = ? LIMIT 21)",
+                (result.run_id,),
+            )
+            store._conn.commit()
+            saved = SOURCE_FACTORIES.get("book_a")
+            SOURCE_FACTORIES["book_a"] = Wide
+            try:
+                ok, problems = replay_run(result.run_id, store=store, raw_store=raw_store)
+            finally:
+                if saved is None:
+                    SOURCE_FACTORIES.pop("book_a", None)
+                else:
+                    SOURCE_FACTORIES["book_a"] = saved
+        assert not ok
+        assert any(
+            "1 more field difference(s) changed on replay beyond the 20 shown" in p
+            for p in problems
+        ), problems
+        assert not any("more rows changed on replay than are shown" in p for p in problems), (
+            problems
+        )
+        assert "verified against" in problems[0], problems
+
     def test_a_verified_byte_divergence_names_its_possible_causes(self, tmp_path) -> None:
         """A non-migrated FAIL whose bytes verify must say what kind of claim
         it is making.
@@ -10679,8 +10794,58 @@ class TestAPreUpgradeScopedRunKeepsItsScope:
 
     def test_the_masthead_renders_evolution_as_differs(self) -> None:
         text = pathlib.Path("src/report.py").read_text()
-        assert '"can be parser evolution" in problems[0]' in text
+        assert "MIGRATED_EVOLUTION_NOTE in problems[0]" in text
         assert "DIFFERS ({len(problems) - 1})" in text
+
+    def test_the_masthead_verdicts_follow_the_archive_not_the_wording(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """Behavioral, because the source grep above cannot see which
+        collector wording carries the matched phrase: round 6 reworded the
+        preambles, moved the phrase from the benign migrated wording into
+        the non-vouching one, and the masthead inverted with the grep still
+        green — DIFFERS for a migrated run with a rotted archive, hard FAIL
+        for benign migrated evolution.  The phrase is now a shared constant
+        (``collector.MIGRATED_EVOLUTION_NOTE``); this drives both cases
+        through the real ``_replay_note``.
+        """
+        from src import settings
+        from src.collector import SOURCE_FACTORIES, collect_once
+        from src.raw_store import RawStore
+        from src.report import _replay_note
+        from src.store import Store
+
+        rigged = TestReplayComparesTheWholeRow._make_rigged()
+        raw_store = RawStore(tmp_path / "raw")
+        monkeypatch.setattr(settings, "RAW_DIR", tmp_path / "raw")
+        with Store(tmp_path / "db.sqlite3") as store:
+            result = collect_once(
+                [rigged()], raw_store=raw_store, store=store, as_of=FETCHED
+            )
+            assert result.quotes
+            store._conn.execute(
+                "DELETE FROM quote WHERE rowid = ("
+                "SELECT rowid FROM quote WHERE run_id = ? LIMIT 1)",
+                (result.run_id,),
+            )
+            store._conn.execute(
+                "UPDATE collection_run SET migrated_from = 3 WHERE id = ?",
+                (result.run_id,),
+            )
+            store._conn.commit()
+            saved = SOURCE_FACTORIES.get("book_a")
+            SOURCE_FACTORIES["book_a"] = rigged
+            try:
+                benign = _replay_note(store, result.run_id)
+                next((tmp_path / "raw").rglob("*.json")).unlink()
+                rotted = _replay_note(store, result.run_id)
+            finally:
+                if saved is None:
+                    SOURCE_FACTORIES.pop("book_a", None)
+                else:
+                    SOURCE_FACTORIES["book_a"] = saved
+        assert benign.startswith("DIFFERS"), benign
+        assert rotted.startswith("FAIL"), rotted
 
 
 class TestAFailedRunsPricesCarryTheVerdict:
@@ -13441,6 +13606,77 @@ class TestReAnalysisAppliesTheStoredRunsJurisdiction:
             ("pinnacle", Selection.AWAY, 2.10),
         ])
         assert "jurisdiction: PA" in out
+
+    def test_a_stored_key_the_registry_forgot_cannot_leg_a_position(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """Rows outlive registrations, and a ghost key is never a leg.
+
+        ``unibet_au`` left 68 real rows behind when it was deregistered, and
+        re-analysing those runs formed it into alert-eligible legs — a
+        counterparty with no commission schedule, no settlement rule and no
+        bet link.  ``_cmd_arb`` now folds the run's stored keys into
+        ``view_only_for_run``, so the ghost's rows are context, not a side
+        of a position.
+        """
+        out = self._run_arb(tmp_path, monkeypatch, capsys, [
+            ("unibet_au", Selection.HOME, 2.20),
+            ("fanduel", Selection.AWAY, 2.20),
+        ])
+        assert "unibet_au" not in out.split("jurisdiction:")[-1] or (
+            "0 opportunities" in out
+        ), out
+        assert "0 opportunities" in out, out
+
+    def test_include_started_never_reaches_the_notifier(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """A historical study must not text, even with alerts left on.
+
+        The command prints "a historical study, not positions anyone can
+        take" under ``--include-started`` — and then handed the same
+        opportunities to ``notify_opportunities``, whose body says "PLACE
+        BOTH NOW — prices move" about games that settled days earlier.  The
+        CLI now refuses to call the notifier at all under the flag (and
+        ``AlertBook.notify``'s own clock refuses started fixtures for every
+        other caller).
+        """
+        import src.collector
+        import src.settings
+
+        calls: list = []
+        monkeypatch.setattr(
+            src.collector, "notify_opportunities",
+            lambda *a, **k: calls.append(a) or [],
+        )
+        monkeypatch.setattr(src.settings, "DATA_DIR", tmp_path)
+        monkeypatch.setattr(src.settings, "RAW_DIR", tmp_path / "raw")
+        monkeypatch.setattr(src.settings, "DB_PATH", tmp_path / "db.sqlite3")
+        from src.store import Store
+        from src.validation import ValidationReport
+
+        started = datetime.now(UTC) - timedelta(hours=6)
+        rows = [
+            make_quote(source=source, selection=selection, decimal_odds=odds,
+                       source_market_id="m", commence_time=started)
+            for source, selection, odds in (
+                ("fanduel", Selection.HOME, 2.20),
+                ("pinnacle", Selection.AWAY, 2.20),
+            )
+        ]
+        with Store(tmp_path / "db.sqlite3") as store:
+            run = store.start_run(datetime.now(UTC), jurisdiction="PA")
+            store.save_quotes_by_source(run, rows)
+            store.finish_run(
+                run, finished_at=datetime.now(UTC),
+                report=ValidationReport(quote_count=len(rows), event_count=1),
+                counterparties={},
+            )
+        assert src.collector.main(["arb", "--include-started"]) == 0
+        out = capsys.readouterr().out
+        assert "historical study" in out, out
+        assert "alerts suppressed: --include-started" in out, out
+        assert calls == [], "the notifier was reached from a historical study"
 
     def test_an_arb_with_no_pennsylvania_leg_is_reported_flagged(
         self, tmp_path, monkeypatch, capsys

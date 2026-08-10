@@ -40,7 +40,7 @@ from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from functools import partial
 from inspect import signature
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from src import settings
 from src.commission import COMMISSIONS
@@ -262,8 +262,31 @@ def view_only_for_state(state: str) -> frozenset[str]:
     return REPUBLISHED_SOURCE_KEYS | jurisdiction(state).view_only_sources
 
 
-def view_only_for_run(state: str) -> frozenset[str]:
+def view_only_for_run(
+    state: str, stored_sources: Iterable[str] = ()
+) -> frozenset[str]:
     """Which sources are not a counterparty, for a run recorded under *state*.
+
+    *stored_sources* is the set of source keys actually present in the rows
+    being analyzed, and every key among them that the registry no longer
+    knows joins the view-only answer.  Rows outlive registrations —
+    ``unibet_au`` left 68 rows in runs 2–4 when it was dropped, and an
+    adversarial round showed them forming full alert-eligible legs on
+    re-analysis: a key with no descriptor has no commission schedule, no
+    settlement rule and no bet link, so nothing it appears in can be
+    staked, and on an empty-jurisdiction legacy run the resulting text
+    would have carried "PLACE BOTH NOW" with no locality label at all.
+
+    The parameter's scope is deliberate: the surfaces that form STAKEABLE
+    positions from stored rows pass their keys (the ``arb`` command, which
+    texts, and the page's arb payload), and the source badge folds the
+    same judgement in directly.  Pure display surfaces — the per-sport
+    grading, ``runs``/``health``/``lines``/``mirrors``, promo planning —
+    deliberately do not: the report is a view of stored rows tested with
+    synthetic sources (tests/test_report.py's module docstring), a ghost
+    row on a board is honest history, and only a leg or a text is a claim
+    someone could act on.  Live collection cannot produce an unknown key,
+    so its call sites pass nothing.
 
     One resolution of a mapping that had grown four hand-written copies —
     ``collect_once``, ``_cmd_arb``, ``report._arb_payload`` and
@@ -290,9 +313,15 @@ def view_only_for_run(state: str) -> frozenset[str]:
     exact about a state nobody recorded.
     """
     normalized = (state or "").strip().upper()
-    if normalized in JURISDICTIONS:
-        return view_only_for_state(normalized)
-    return REPUBLISHED_SOURCE_KEYS
+    base = (
+        view_only_for_state(normalized)
+        if normalized in JURISDICTIONS
+        else REPUBLISHED_SOURCE_KEYS
+    )
+    ghosts = frozenset(
+        key for key in stored_sources if key not in BY_BASE_KEY
+    )
+    return base | ghosts if ghosts else base
 
 
 def is_view_only(key: str) -> bool:

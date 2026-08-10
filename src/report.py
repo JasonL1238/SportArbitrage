@@ -1747,8 +1747,10 @@ def _arb_payload(
         # ``None`` no longer appears here: it meant "the detector's own default",
         # which is the ambient ``VIEW_ONLY_SOURCES``, and that is the leak this
         # helper closes.  ``view_only_for_run`` returns the same fallback set
-        # explicitly for a run with no recognisable jurisdiction.
-        view_only = view_only_for_run(state)
+        # explicitly for a run with no recognisable jurisdiction.  Stored keys
+        # the registry has since forgotten join the set (ghost keys are never
+        # counterparties), which is why the rows' own sources ride along.
+        view_only = view_only_for_run(state, {q.source for q in everything})
         # The gate re-measures with the same set the legs are formed under —
         # the comment above closes the leak for legs, and closing it there
         # while measuring pairs with the ambient set reopened it one line down.
@@ -2282,6 +2284,7 @@ def _source_entry(key: str, *, state: str | None = None) -> dict[str, Any]:
     terms the pipeline does not price it in.
     """
     from src.sources.registry import (
+        BY_BASE_KEY,
         BY_KEY,
         REPUBLISHED_SOURCE_KEYS,
         RETAIL_SOURCE_KEYS,
@@ -2312,7 +2315,10 @@ def _source_entry(key: str, *, state: str | None = None) -> dict[str, Any]:
     # a counterparty on an IL-built one — while the same page's arb payload,
     # resolved from the run, kept showing the hardrock-legged position beside
     # the badge that disowned it.  Two reviewers found this independently.
-    entry["view_only"] = (
+    # A key the registry no longer knows is view-only under EVERY state:
+    # rows outlive registrations, and a ghost key has no commission schedule,
+    # no settlement rule and no bet link, so it cannot be a counterparty.
+    entry["view_only"] = key not in BY_BASE_KEY or (
         key in REPUBLISHED_SOURCE_KEYS
         if state == "GLOBAL"
         else key in view_only_for_state(state)
@@ -2483,7 +2489,7 @@ def _replay_note(store: Store, run_id: int) -> str:
     Imported lazily: the report itself must stay usable without the adapters.
     """
     try:
-        from src.collector import replay_run
+        from src.collector import MIGRATED_EVOLUTION_NOTE, replay_run
         from src.raw_store import RawStore
 
         ok, problems = replay_run(run_id, store=store, raw_store=RawStore(settings.RAW_DIR))
@@ -2493,7 +2499,13 @@ def _replay_note(store: Store, run_id: int) -> str:
         # corruption, and ``replay_run`` says so in an explanatory first line —
         # which this count was including, so the masthead read "FAIL (2)" with
         # one real difference and the explanation reached no surface at all.
-        if problems and "can be parser evolution" in problems[0]:
+        # The phrase is IMPORTED, not retyped: this check matched a literal
+        # string while round 6 moved that string from the benign migrated
+        # wording into the non-vouching one, and the masthead silently
+        # inverted — DIFFERS for a migrated run with a rotted archive, hard
+        # FAIL for benign migrated evolution.  The constant lives in the
+        # wording itself, so the two can no longer drift apart.
+        if problems and MIGRATED_EVOLUTION_NOTE in problems[0]:
             return (
                 f"DIFFERS ({len(problems) - 1}) — run predates the current "
                 "parser; can be evolution rather than corruption"

@@ -1160,6 +1160,58 @@ def test_the_an_id_table_cannot_promise_a_feed_that_is_not_registered():
     assert "_AN_BOOK_IDS" in str(caught.value)
 
 
+def test_a_stored_key_the_registry_forgot_is_view_only_for_its_run():
+    """Rows outlive registrations, and a ghost key is never a counterparty.
+
+    ``unibet_au`` left 68 rows in runs 2–4 when it was dropped; re-analysing
+    those runs formed it into full alert-eligible legs — unlabelled ones,
+    because the runs predate the jurisdiction column — with no commission
+    schedule, no settlement rule and no bet link behind them.  Stored-row
+    call sites now pass their keys, and ``view_only_for_run`` folds every
+    key the registry no longer knows into the view-only answer, under
+    governed and ungoverned states alike.
+    """
+    from src.sources import registry
+
+    legacy = registry.view_only_for_run("", ("unibet_au", "fanduel", "kalshi"))
+    assert "unibet_au" in legacy
+    assert "fanduel" not in legacy
+    assert "kalshi" not in legacy
+    assert "unibet_au" in registry.view_only_for_run("IL", ("unibet_au",))
+
+
+def test_a_ghost_key_reads_view_only_on_the_source_badge():
+    """The dashboard's source badge agrees with the leg rule on every state."""
+    from src.report import _source_entry
+
+    for state in ("GLOBAL", "IL", "PA", ""):
+        assert _source_entry("unibet_au", state=state)["view_only"], state
+    assert not _source_entry("fanduel", state="IL")["view_only"]
+
+
+def test_every_required_book_feed_combination_is_declared_redundant():
+    """Rule 8, enforced by enumeration instead of checklist prose.
+
+    Every pair of feeds declared for one required book must be in
+    ``REDUNDANT_PAIRS`` — re-registering a feed (the ``an_circa`` /
+    ``vsin_circa`` pair died with the 2026-08-09 deregistration) without
+    re-declaring its pairs would otherwise be caught by nothing mechanical.
+    """
+    from itertools import combinations
+
+    from src.coverage import REQUIRED_BOOKS
+    from src.redundancy import is_redundant_pair
+
+    missing = []
+    for state, books in REQUIRED_BOOKS.items():
+        for book in books:
+            feeds = ([book.direct] if book.direct else []) + list(book.republishers)
+            for a, b in combinations(sorted(feeds), 2):
+                if not is_redundant_pair(a, b):
+                    missing.append((state, book.book, a, b))
+    assert not missing, missing
+
+
 def test_an_id_table_key_must_be_classified_as_republished():
     """An entry in the AN id table IS somebody else's board.
 

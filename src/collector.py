@@ -1851,6 +1851,20 @@ def _report_sport_coverage(
 # ── replay ───────────────────────────────────────────────────────────────────
 
 
+#: The phrase the dashboard masthead keys on (``src.report._replay_note``):
+#: present ONLY in the migrated benign-evolution preamble, so the masthead can
+#: distinguish "predates the current parser, every difference comparison-shaped
+#: over verified bytes" (rendered DIFFERS) from every other FAIL.  The report
+#: imports this constant rather than retyping the phrase — round 6 reworded the
+#: preambles and moved the previously-matched phrase from the benign wording
+#: into the non-vouching one, silently inverting the masthead for migrated
+#: runs: the rotted-archive case rendered as the soft DIFFERS verdict and the
+#: benign case as a hard FAIL, and the only test on the surface grepped
+#: report.py's source text, which cannot see which collector wording carries
+#: the phrase.
+MIGRATED_EVOLUTION_NOTE = "which is what parser evolution looks like"
+
+
 def replay_run(
     run_id: int,
     *,
@@ -1886,6 +1900,11 @@ def replay_run(
     ones stored.
     """
     problems: list[str] = []
+    # Structural classification for the verdict preambles: every append to
+    # ``problems`` that is NOT a stored-vs-replayed row comparison bumps this,
+    # and ``comparison_only`` is derived from it — never from the problem
+    # text, which can carry attacker- or payload-controlled substrings.
+    noncomparison = 0
     # The run's **own recorded scope** is applied to the replayed side whatever
     # the command asks for.  A scope-collected run stores fewer rows than its
     # raws parse *by design* — the filter's drops are counted, not lost — and
@@ -1915,18 +1934,21 @@ def replay_run(
     run_row = store.run_row(run_id)
     migrated_from = run_row["migrated_from"] if run_row is not None else None
 
-    _COMPARISON_MARKERS = (
-        "row count differs",
-        "replay lost row",
-        "replay invented row",
-        "changed on replay",
-    )
-
-    def _judged(problems: list[str]) -> tuple[bool, list[str]]:
-        comparison_only = bool(problems) and all(
-            any(marker in problem for marker in _COMPARISON_MARKERS)
-            for problem in problems
-        )
+    # ``comparison_only`` arrives as a parameter computed from HOW each
+    # problem was appended, never from the problem text.  The first gate
+    # matched four marker substrings over the rendered prose, and an
+    # adversarial round defeated it with one tampered envelope field:
+    # ``"envelope_version": "9 replay lost row"`` flows verbatim into the
+    # unsupported-version ValueError, the "stored bytes unreadable" wrapper
+    # inherits the marker, and the verdict printed "bytes verified against
+    # their recorded sha256s" directly above the tamper it was vouching
+    # away.  Adapter raises quoting remote payload text had the same door.
+    # Classification is structural now: each append site declares which
+    # kind it is, and no string that flows through a problem message can
+    # change the verdict's claim.
+    def _judged(
+        problems: list[str], *, comparison_only: bool
+    ) -> tuple[bool, list[str]]:
         if problems and migrated_from is not None:
             if comparison_only:
                 problems.insert(
@@ -1935,8 +1957,8 @@ def replay_run(
                     "and migrated: the parser has changed since, and every "
                     "stored raw byte verified against its recorded sha256 — "
                     "the differences below lie between the stored rows and the "
-                    "current parser's reading of those verified bytes, which "
-                    "is what parser evolution looks like; an edit to the "
+                    "current parser's reading of those verified bytes, "
+                    f"{MIGRATED_EVOLUTION_NOTE}; an edit to the "
                     "stored rows themselves, which no sha256 covers, would "
                     "look the same",
                 )
@@ -1948,8 +1970,9 @@ def replay_run(
                     "row-comparison difference below can be parser evolution "
                     "rather than corruption. A problem that is not a row "
                     "comparison — unreadable stored bytes, a replay raise, "
-                    "absent raw responses — is not explained by the migration "
-                    "stamp, and nothing here vouches for the archive's bytes",
+                    "absent raw responses, or a missing replay adapter — is "
+                    "not explained by the migration stamp, and nothing here "
+                    "vouches for the archive's bytes",
                 )
         elif comparison_only:
             # The migration stamp was the only channel that admitted the parser
@@ -1990,7 +2013,9 @@ def replay_run(
         by_source_paths.setdefault(source_key, []).append(path)
 
     if not by_source_paths:
-        return _judged([f"run {run_id} has no stored raw responses"])
+        return _judged(
+            [f"run {run_id} has no stored raw responses"], comparison_only=False
+        )
 
     # Which sources actually contributed rows.  A source whose *fetch* failed
     # still has bytes on disk — the refusal that explains the failure is
@@ -2035,6 +2060,7 @@ def replay_run(
             message = f"{source_key}: no adapter available to replay this source"
             if source_key in produced:
                 problems.append(message)
+                noncomparison += 1
             else:
                 log.info("%s (it stored no rows on this run, so nothing is lost)", message)
             continue
@@ -2065,6 +2091,7 @@ def replay_run(
                     f"{source_key}: stored bytes unreadable: "
                     f"{type(exc).__name__}: {exc}"
                 )
+                noncomparison += 1
                 continue
             # Unscoped on purpose — see the note above.  Scoping happens after
             # reconciliation, because clustering needs every source's view of a
@@ -2075,6 +2102,7 @@ def replay_run(
                 message = f"{source_key}: replay raised {type(exc).__name__}: {exc}"
                 if source_key in produced:
                     problems.append(message)
+                    noncomparison += 1
                 else:
                     log.info(
                         "%s (it stored no rows on this run, so nothing is lost)",
@@ -2101,15 +2129,17 @@ def replay_run(
     if len(stored) != len(replayed):
         problems.append(f"row count differs: stored {len(stored)}, replayed {len(replayed)}")
 
-    # Truncation is disclosed, never silent: run 1's replay is a 627-row net
+    # Truncation is disclosed, never silent, and every disclosure states an
+    # EXACT count it has actually measured: run 1's replay is a 627-row net
     # delta that printed as five lost and five invented rows with nothing
-    # saying more existed — the one surface able to show a divergence's scale
-    # understated it (the same standard the arb output holds; see the note
-    # rejecting a silent [:10] slice).  Each marker deliberately CONTAINS its
-    # category's comparison phrase ("replay lost row" / "replay invented row"
-    # / "changed on replay") so a truncated listing still counts as
-    # comparison-shaped and does not rob a genuine evolution FAIL of its
-    # verdict preamble.
+    # saying more existed (the same standard the arb output holds; see the
+    # note rejecting a silent [:10] slice).  The first stop marker asserted
+    # "more rows changed than are shown" whenever the problem count crossed
+    # 20 — provably false at the boundary, where all 21 diffs were already
+    # on screen.  Now the scan always completes and only the *listing* is
+    # capped, so the overflow marker's number is a fact, not a guess.  These
+    # marker lines are row-comparison problems for preamble purposes: they
+    # summarize comparisons that were made and found to differ.
     missing = set(stored_map) - set(replay_map)
     added = set(replay_map) - set(stored_map)
     for key in sorted(missing)[:5]:
@@ -2125,18 +2155,27 @@ def replay_run(
             f"replay invented rows: {len(added) - 5} more beyond the 5 shown"
         )
 
+    shown = 0
+    overflow = 0
     for key in sorted(set(stored_map) & set(replay_map)):
         before, after = stored_map[key], replay_map[key]
         for field, was, now in _row_differences(before, after):
-            problems.append(f"{field} changed on replay for {key}: {was!r} -> {now!r}")
-        if len(problems) > 20:
-            problems.append(
-                "more rows changed on replay than are shown: the field "
-                "comparison stopped at this point"
-            )
-            break
+            if shown < 20:
+                problems.append(
+                    f"{field} changed on replay for {key}: {was!r} -> {now!r}"
+                )
+                shown += 1
+            else:
+                overflow += 1
+    if overflow:
+        problems.append(
+            f"{overflow} more field difference(s) changed on replay beyond "
+            "the 20 shown"
+        )
 
-    return _judged(problems)
+    return _judged(
+        problems, comparison_only=bool(problems) and noncomparison == 0
+    )
 
 
 #: Prices are floats and have been through SQLite, so they are compared to a
@@ -2908,12 +2947,18 @@ def _cmd_arb(args: argparse.Namespace) -> int:
         run_row = store.run_row(run_id)
         run_state = (run_row["jurisdiction"] if run_row is not None else "") or ""
         run_state = run_state.strip().upper()
+        # A stored key the registry no longer knows is never a counterparty
+        # and never a leg: ``unibet_au`` left 68 rows behind when it was
+        # dropped, and re-analysing runs 2–4 formed it into alert-eligible
+        # legs — unlabelled ones, on these empty-jurisdiction legacy runs.
+        arb_stored_keys = {q.source for q in everything}
         recorded = store.recorded_counterparty_groups(run_id)
         measured_counterparties = merge_counterparty_groups(
             {}
             if recorded
             else counterparty_groups(
-                everything, view_only=registry.view_only_for_run(run_state)
+                everything,
+                view_only=registry.view_only_for_run(run_state, arb_stored_keys),
             ),
             recorded,
         )
@@ -2929,7 +2974,7 @@ def _cmd_arb(args: argparse.Namespace) -> int:
             # was live on one invocation and historical on the next.
             as_of=None if args.include_started else datetime.now(UTC),
             one_counterparty=measured_counterparties,
-            view_only_sources=registry.view_only_for_run(run_state),
+            view_only_sources=registry.view_only_for_run(run_state, arb_stored_keys),
         )
         # And the exact-state leg marking, for the same reason.  Without it
         # this command printed — and texted — a "PA" arbitrage whose every leg
@@ -2981,7 +3026,18 @@ def _cmd_arb(args: argparse.Namespace) -> int:
                 for diagnostic in report.diagnostics:
                     print(f"  [{diagnostic.code}] {diagnostic.event_key} "
                           f"{diagnostic.market.value}/{diagnostic.period.value}: {diagnostic.detail}")
-        if report.opportunities and not args.no_alert:
+        # ``--include-started`` is a historical study by this command's own
+        # words two screens up — so it must never reach a phone.  The belt
+        # here is doubled by braces in ``AlertBook.notify`` itself, which
+        # refuses any opportunity whose kickoff has passed: this guard keeps
+        # the study honest even for its still-pregame stragglers, and the
+        # notify clock keeps every OTHER caller honest about settled games.
+        if report.opportunities and not args.no_alert and args.include_started:
+            print(
+                "\nalerts suppressed: --include-started is a historical "
+                "study; re-run without it to text live positions"
+            )
+        elif report.opportunities and not args.no_alert:
             notified = notify_opportunities(report.opportunities, marking=arb_marking)
             if notified:
                 print(

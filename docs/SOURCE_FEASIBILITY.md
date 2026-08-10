@@ -319,21 +319,32 @@ by replaying **all 35 stored runs**, is twenty:
   17:06Z) is DraftKings-only: the trueOdds change went live between run 28
   and run 29 (17:11Z, commit 5832927), so 28 is the last run stored under
   the old readings.
-- **FAIL — pre-campaign legacy**: **1, 2, 3, 4, 7, 8, 9, 10** (the
-  2026-07-30 era) fail with larger diffs from the many parser evolutions
-  since — run 1 replays stored 2,680 → replayed 3,307 (+627 net: lost
-  `an_bet365` first-5-innings moneylines, invented cloudbet full-game
-  moneylines, and more; the listing now discloses its own truncation). No
-  section enumerates every legacy delta and none is planned: the preamble
-  and this paragraph are the diagnosis.
+- **FAIL — pre-campaign legacy, comparison-shaped**: **1, 7, 8, 9, 10**
+  (the 2026-07-30 era) fail under the verified-bytes preamble with larger
+  diffs from the many parser evolutions since — run 1 replays stored
+  2,680 → replayed 3,307 (+627 net: lost `an_bet365` first-5-innings
+  moneylines, invented cloudbet full-game moneylines, and more; the
+  listing discloses its own truncation with exact counts). No section
+  enumerates every legacy delta and none is planned: the preamble and
+  this paragraph are the diagnosis.
+- **FAIL — pre-campaign legacy, NOT comparison-shaped**: **2, 3, 4** open
+  with `onexbet: replay raised FormatChangeError: … unknown sport endpoint
+  'linefeed-american-football'` and `unibet_au: no adapter available to
+  replay this source`, then the row-count diff.  They carry **no preamble,
+  by design**: onexbet's bytes read and sha-verify but the current parser
+  refuses that era's payload shape, and `unibet_au` stored rows and was
+  later deregistered, so its rows are genuinely irreproducible — and its
+  raw files are skipped unread, so nothing vouches for them.  These three
+  are recorded here as permanently irreproducible legacy runs; that is
+  the diagnosis, not corruption.
 
-Every one of the twenty verifies its bytes against the recorded sha256s;
-none of it is corruption. `replay_run` says this itself: a FAIL whose bytes
-verify opens with a preamble placing the differences "between the stored
-rows and the current parser's reading of those verified bytes" and points
-here. Do not re-diagnose any run on this list while its problems stay
-comparison-shaped under that preamble. A FAIL **outside** this list, a
-"stored bytes unreadable" problem, or a sha256 mismatch is a real alarm.
+Seventeen of the twenty (all but 2/3/4) open with the verified-bytes
+preamble placing the differences "between the stored rows and the current
+parser's reading of those verified bytes"; `replay_run` says it itself and
+points here. Do not re-diagnose any run on this list while its output
+matches what this section records. A FAIL **outside** this list, an
+unexpected "stored bytes unreadable" problem, or a sha256 mismatch is a
+real alarm.
 
 ### One stale board retired for vintage coherence — 2026-08-09
 

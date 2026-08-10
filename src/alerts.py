@@ -93,9 +93,20 @@ def unready_reason() -> str:
 
 
 def opportunity_alert_key(opportunity: Opportunity) -> str:
-    """Stable id for dedupe: same books, selections, and prices → one text."""
+    """Stable id for dedupe: same books, selections, and prices → one text.
+
+    Stakes are deliberately NOT part of the key.  They are an output of
+    whatever bankroll the command was asked to size for, not part of the
+    arb's identity — with them in the key, ``arb --run N --stake 200``
+    re-minted every already-claimed position under a fresh key and the
+    ledger waved it through, quietly scoping "at most one text per arb
+    ever" to "per arb per bankroll".  Keys already claimed under the old
+    stake-bearing spelling stay claimed but can never match again; a
+    position still live across that upgrade may text once more, which is
+    the acceptable direction of the error.
+    """
     legs = "|".join(
-        f"{leg.source}:{leg.selection.value}:{leg.decimal_odds:.4f}:{leg.stake:.2f}"
+        f"{leg.source}:{leg.selection.value}:{leg.decimal_odds:.4f}"
         for leg in opportunity.legs
     )
     line = "" if opportunity.line is None else f"{opportunity.line:g}"
@@ -430,7 +441,26 @@ class AlertBook:
             return []
 
         sent: list[Opportunity] = []
+        # The one clock on the alert path, deliberately here rather than in
+        # any caller: ``arb --run N`` reads an old run as history (the
+        # MAX_PRICE_AGE gate is explicitly bypassed) and prints "a
+        # historical study, not positions anyone can take" — then handed
+        # the same opportunities to this method, which texted "PLACE BOTH
+        # NOW — prices move" about games that had settled days earlier.
+        # Every caller that can reach a phone goes through here, so the
+        # fixture-has-started judgement lives here and no caller can
+        # forget it.
+        now = datetime.now(timezone.utc)
         for opportunity in opportunities:
+            if opportunity.commence_time <= now:
+                log.info(
+                    "arb alert suppressed for %s: kickoff %s has passed — a "
+                    "call to action about a started or settled fixture is "
+                    "never actionable",
+                    opportunity.event_key,
+                    opportunity.commence_time.isoformat(),
+                )
+                continue
             if not qualifies(opportunity, min_roi=min_roi):
                 continue
             key = opportunity_alert_key(opportunity)

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import os
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
@@ -26,10 +26,18 @@ def _opportunity(
     stake=100.0,
     sources=("fanduel", "pinnacle"),
     teams=("Miami Marlins", "Philadelphia Phillies"),
+    commence_time: datetime | None = None,
 ) -> Opportunity:
     """Synthetic two-way MLB moneyline sized so arithmetic is obvious.
 
     Equal prices of 2.2 → sum implied 1/2.2 * 2 ≈ 0.909 → ROI ≈ 10%.
+
+    The default kickoff is a FIXED past instant, deliberately: the format
+    tests pin the rendered "Kickoff 2026-07-28 …" line byte-for-byte.
+    ``AlertBook.notify`` refuses a started fixture (its one clock), so
+    every test that expects a text to actually go out must pass a future
+    ``commence_time`` — a send expectation on the default is asserting the
+    settled-game-texting bug the clock exists to prevent.
     """
     home = make_quote(
         source=sources[0],
@@ -59,7 +67,11 @@ def _opportunity(
         sport=Sport.BASEBALL,
         home_team=teams[0],
         away_team=teams[1],
-        commence_time=datetime(2026, 7, 28, 22, 41, tzinfo=UTC),
+        commence_time=(
+            datetime(2026, 7, 28, 22, 41, tzinfo=UTC)
+            if commence_time is None
+            else commence_time
+        ),
         market=Market.MONEYLINE,
         period=Period.FULL_GAME,
         side=None,
@@ -68,6 +80,17 @@ def _opportunity(
         total_stake=stake,
         outcome_profits=(("home", profit), ("away", profit)),
         max_total_stake=None,
+    )
+
+
+def _pregame(**overrides) -> Opportunity:
+    """An opportunity whose kickoff is still ahead — the only kind
+    ``AlertBook.notify`` may text.  Every test expecting a send (or
+    exercising the ledger through real sends) builds with this; using the
+    helper's fixed past default there would test nothing, because the
+    notify clock suppresses it before the ledger is ever consulted."""
+    return _opportunity(
+        commence_time=datetime.now(UTC) + timedelta(hours=4), **overrides
     )
 
 
@@ -106,6 +129,62 @@ class TestQualifies:
             max_total_stake=None,
         )
         assert not qualifies(bad)
+
+
+class TestTheClockOnTheAlertPath:
+    """``notify`` owns the one wall-clock judgement on the alert path.
+
+    ``arb --run N`` reads an old run as history (the MAX_PRICE_AGE gate is
+    deliberately bypassed) and prints "a historical study, not positions
+    anyone can take" — then handed the same opportunities to ``notify``,
+    which texted "PLACE BOTH NOW — prices move" about games settled days
+    earlier.  The clock lives in ``notify`` itself so no caller can forget
+    it, and the CLI additionally refuses to alert at all under
+    ``--include-started``.
+    """
+
+    def _ready_book(self, monkeypatch: pytest.MonkeyPatch):
+        import src.settings as settings_mod
+
+        monkeypatch.setattr(settings_mod, "ALERT_TRANSPORT", "twilio")
+        monkeypatch.setattr(settings_mod, "TWILIO_ACCOUNT_SID", "ACxxxx")
+        monkeypatch.setattr(settings_mod, "TWILIO_AUTH_TOKEN", "token")
+        monkeypatch.setattr(settings_mod, "TWILIO_FROM_NUMBER", "+15551234567")
+        monkeypatch.setattr(settings_mod, "ALERT_TO", "+15550000000")
+        sent: list[str] = []
+        return AlertBook(send=lambda body: sent.append(body) or "SM"), sent
+
+    def test_a_started_fixture_is_never_texted(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        book, sent = self._ready_book(monkeypatch)
+        opp = _opportunity()  # the helper's fixed 2026-07-28 kickoff — long past
+        assert book.notify([opp]) == []
+        assert sent == []
+        # Not even claimed: a suppressed study must not spend the arb's one
+        # ledger slot, or the same position live later would be swallowed.
+        assert opportunity_alert_key(opp) not in book.sent_keys
+
+    def test_the_same_position_pregame_still_texts(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        book, sent = self._ready_book(monkeypatch)
+        assert len(book.notify([_pregame()])) == 1
+        assert len(sent) == 1
+
+
+def test_the_alert_key_ignores_stakes() -> None:
+    """Same books, selections and prices → one key, whatever the bankroll.
+
+    The key embedded ``{stake:.2f}`` per leg while its docstring promised
+    price-identity, so ``arb --run N --stake 200`` re-minted every claimed
+    position under a fresh key and the ledger waved the second text
+    through — "at most one text per arb ever" quietly became "per arb per
+    bankroll".
+    """
+    assert opportunity_alert_key(_opportunity(stake=100.0)) == opportunity_alert_key(
+        _opportunity(stake=200.0)
+    )
 
 
 class TestFormat:
@@ -247,7 +326,7 @@ class TestDedupeAndSend:
         monkeypatch.setattr(settings_mod, "TWILIO_FROM_NUMBER", "+15551234567")
         monkeypatch.setattr(settings_mod, "ALERT_TO", "+15550000000")
         assert alert_ready()
-        opp = _opportunity()
+        opp = _pregame()
         assert book.notify([opp]) == [opp]
         assert book.notify([opp]) == []
         assert len(sent) == 1
@@ -335,7 +414,7 @@ class TestDedupeAndSend:
         first = AlertBook(send=lambda body: first_sent.append(body) or "S1", path=ledger)
         second = AlertBook(send=lambda body: second_sent.append(body) or "S2", path=ledger)
 
-        opp = _opportunity()
+        opp = _pregame()
         assert first.notify([opp]) == [opp]
         assert second.notify([opp]) == [], (
             "a fresh process must see the ledger, not start from nothing"
@@ -359,7 +438,7 @@ class TestDedupeAndSend:
             raise RuntimeError("carrier down")
 
         crashed = AlertBook(send=_explode, path=ledger)
-        opp = _opportunity()
+        opp = _pregame()
         assert crashed.notify([opp]) == []
 
         revived_sent: list[str] = []
@@ -379,7 +458,7 @@ class TestDedupeAndSend:
             send=lambda body: sent.append(body) or "S",
             path=blocked / "alerts.sqlite3",
         )
-        opp = _opportunity()
+        opp = _pregame()
         assert book.notify([opp]) == [opp], "the text still goes out"
         assert book.notify([opp]) == [], "and the in-process half still dedupes"
         assert len(sent) == 1
@@ -650,7 +729,7 @@ class TestOneArbIsOneText:
         monkeypatch.setattr(settings_mod, "ALERT_TO", "+15550001111")
         monkeypatch.setattr("src.alerts.messages_ready", lambda: True)
         book, calls = self._book(fail_first=True)
-        opp = _opportunity()
+        opp = _pregame()
         # Pass one: the GLOBAL run. Pass two: the state run, same cached prices.
         assert book.notify([opp]) == []
         assert book.notify([opp]) == []
@@ -665,7 +744,7 @@ class TestOneArbIsOneText:
         monkeypatch.setattr(settings_mod, "ALERT_TO", "+15550001111")
         monkeypatch.setattr("src.alerts.messages_ready", lambda: True)
         book, calls = self._book(fail_first=False)
-        opp = _opportunity()
+        opp = _pregame()
         book.notify([opp])
         book.notify([opp])
         book.notify([opp])
