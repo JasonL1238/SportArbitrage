@@ -69,7 +69,12 @@ server exposes the same-origin endpoints used to log, edit, settle, and delete.
 - One run has one jurisdiction and route scope; related runs share a batch id.
   State tenants are constructor configuration, never new source/counterparty identities.
 - Global sources are fetched once per batch. Direct global venues remain
-  actionable; republished global observations are diagnostic-only.
+  actionable; republished global observations are diagnostic-only. That
+  distinction is a filter the reader can apply: the Games and All-prices panels
+  each carry a feed picker (first-party / republished) reading the payload's
+  `diagnostic_only`, which `_source_entry` sets from
+  `registry.REPUBLISHED_SOURCE_KEYS` — the same set the detector refuses as a
+  leg, never the `an_`/`vi_` key prefix.
 - Whether a venue can be *bet from the US* is a separate axis from view-only, held
   in `registry.US_UNAVAILABLE_SOURCE_KEYS`. Those venues stay collected and stored
   — they carry the sharpest lines — but the dashboard defaults to a US-only view

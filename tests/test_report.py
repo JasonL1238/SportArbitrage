@@ -1904,6 +1904,68 @@ def test_the_page_builds_promo_plans_behind_a_counterparty_gate(tmp_path, monkey
 # other, which is an unhedged bet rather than a slightly optimistic margin.
 
 
+def test_the_feed_filter_reads_the_registry_rather_than_the_key_prefix() -> None:
+    """First-party versus republished is one classification, off the registry.
+
+    The prefixes ``an_`` and ``vi_`` are a naming convention, and a page filter
+    built on the spelling would mis-sort the first republisher that did not
+    follow it — into the first-party half, which is the direction that matters,
+    because a mirror is not a counterparty. The payload already carries the
+    answer as ``diagnostic_only``, and the filter reads that.
+    """
+    from src.report import _source_entry
+    from src.sources.registry import REPUBLISHED_SOURCE_KEYS, keys
+
+    for key in keys():
+        entry = _source_entry(key)
+        assert entry["diagnostic_only"] == (key in REPUBLISHED_SOURCE_KEYS), key
+
+    assert _source_entry("an_fanduel")["diagnostic_only"] is True
+    assert _source_entry("vsin_circa")["diagnostic_only"] is True, (
+        "a republisher whose key carries no an_/vi_ prefix must still sort as one"
+    )
+    assert _source_entry("fanduel")["diagnostic_only"] is False
+
+
+def test_both_boards_can_be_narrowed_to_one_kind_of_feed() -> None:
+    """The two pickers exist, are wired, and filter off the shared predicate.
+
+    The page is handwritten, so a control can ship rendered-but-inert: the
+    element sits in the markup, nothing listens to it, and the reader picks
+    "first-party only" and watches a republished board not change.
+    """
+    from src.report_assets import BODY, JS
+
+    for node_id in ("f-feed", "events-feed"):
+        assert f'id="{node_id}"' in BODY, node_id
+        assert f"'{node_id}'" in JS, f"{node_id} is rendered but nothing reads it"
+        for value in ('value="first"', 'value="republished"'):
+            assert value in BODY
+
+    # One predicate behind both, rather than each panel spelling the test.
+    assert "const feedKind = (key) =>" in JS
+    assert JS.count("feedKind(str(r[COL.source]))") >= 2
+
+    # Both are in the refresh wiring, beside the filters that already worked.
+    assert "'f-feed', 'f-source'" in JS
+    assert "el('events-feed').addEventListener" in JS
+
+
+def test_the_game_search_is_labelled_on_both_boards() -> None:
+    """An unlabelled search box beside three labelled selects reads as decoration.
+
+    Both boxes worked; the operator did not find either, and asked for a search
+    that already existed. The label is the fix.
+    """
+    from src.report_assets import BODY
+
+    for node_id in ("q", "events-q"):
+        assert f'<label class="eyebrow" for="{node_id}">Search</label>' in BODY, node_id
+    assert BODY.count("Search a team to find one\n        game") + BODY.count(
+        "Search a team to find one game"
+    ) == 2, "both panels should name the search in their own copy"
+
+
 def test_every_venue_says_whether_it_can_be_bet_from_the_us() -> None:
     """The flag is read off the registry, not restated in the report layer.
 

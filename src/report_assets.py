@@ -1298,13 +1298,23 @@ BODY = """
       <header>
         <h2>Games</h2>
         <p>Click a game for every market side by side. Prefer Odds for the full board.
-        Sport lives in the sidebar; use the filters below to narrow the slate.</p>
+        Sport lives in the sidebar. <b>Search a team to find one game</b> &mdash; type
+        &ldquo;Dodgers&rdquo; and only their games remain &mdash; or narrow by league,
+        feed and book.</p>
       </header>
       <div class="screen-toolbar" id="events-toolbar">
-        <input type="search" id="events-q" placeholder="team or game&hellip;" aria-label="Filter games by team" />
+        <label class="eyebrow" for="events-q">Search</label>
+        <input type="search" id="events-q" placeholder="team or game&hellip;" aria-label="Search games by team" />
         <label class="eyebrow" for="events-league">League</label>
         <select id="events-league" aria-label="Filter games by league">
           <option value="">every league</option>
+        </select>
+        <label class="eyebrow" for="events-feed">Feed</label>
+        <select id="events-feed" aria-label="Filter games by feed type"
+                title="First-party is the venue's own feed. Republished is somebody else's board — a copy, never a counterparty.">
+          <option value="">every feed</option>
+          <option value="first">first-party only</option>
+          <option value="republished">republished only</option>
         </select>
         <label class="eyebrow" for="events-book">Book</label>
         <select id="events-book" aria-label="Filter games by book">
@@ -1392,13 +1402,21 @@ BODY = """
     <section id="odds">
       <header>
         <h2>All prices</h2>
-        <p>Every price from this scrape in one searchable table. Start with Today&rsquo;s
-        games if you just want one matchup.</p>
+        <p>Every price from this scrape in one table. <b>Search a team to find one
+        game</b> &mdash; the box below matches team, fixture, league and kind of bet
+        &mdash; or use Games if you want one matchup laid out side by side.</p>
       </header>
       <div class="card">
         <div class="card-head">
           <div class="controls">
-            <input type="search" id="q" placeholder="team, game, kind of bet&hellip;" aria-label="Filter prices" />
+            <label class="eyebrow" for="q">Search</label>
+            <input type="search" id="q" placeholder="team, game, kind of bet&hellip;" aria-label="Search prices by team, game or kind of bet" />
+            <select id="f-feed" aria-label="Filter prices by feed type"
+                    title="First-party is the venue's own feed. Republished is somebody else's board — a copy, never a counterparty.">
+              <option value="">every feed</option>
+              <option value="first">first-party only</option>
+              <option value="republished">republished only</option>
+            </select>
             <select id="f-source"><option value="">every venue</option></select>
             <select id="f-league"><option value="">every league</option></select>
             <select id="f-market"><option value="">every kind of bet</option></select>
@@ -1667,6 +1685,19 @@ const isViewOnly = (key) => Boolean(sourceInfo(key).view_only);
  *  is the sharpest line on the page and worth reading even when it cannot be
  *  bet, so the page filters on this rather than dropping it. */
 const isUsUnavailable = (key) => Boolean(sourceInfo(key).us_unavailable);
+/** Whether these rows are a copy of somebody else's board rather than the
+ *  venue's own feed.
+ *
+ *  Read off the payload's `diagnostic_only`, which the server sets from
+ *  `registry.REPUBLISHED_SOURCE_KEYS` — the same set the arbitrage detector
+ *  refuses as a leg — so the filter and the detector cannot disagree about what
+ *  counts as first-party. Not the same question as view-only or US-unavailable,
+ *  and deliberately not inferred from the key's prefix: `an_`/`vi_` is a naming
+ *  convention, and a filter built on one would quietly mis-sort the first
+ *  republisher that did not follow it. */
+const isRepublished = (key) => Boolean(sourceInfo(key).diagnostic_only);
+/** `"first"` or `"republished"` — the values the two feed pickers use. */
+const feedKind = (key) => (isRepublished(key) ? 'republished' : 'first');
 /** Whether the venue's rows exist only because somebody offered liquidity — an
  *  exchange or a prediction market, as the source registry defines it. A sportsbook
  *  quotes both sides itself, so its two sides summing below 1.0 means the rows are
@@ -4824,9 +4855,23 @@ function eventSummaries(rows) {
     (a.commence < b.commence ? -1 : a.commence > b.commence ? 1 : a.key < b.key ? -1 : 1));
 }
 
-/** Games on the Games tab after search / league / book filters. */
+/** This run's rows, narrowed to the chosen feed type.
+ *
+ *  Applied before the games are summarised rather than after, so a game whose
+ *  only prices are republished disappears under "first-party only" instead of
+ *  surviving with an empty book list — and so the book counts on each card
+ *  describe the feeds actually being shown. */
+function feedFilteredRows() {
+  const node = el('events-feed');
+  const want = (node && node.value) || '';
+  const rows = currentRows();
+  if (!want) return rows;
+  return rows.filter((r) => feedKind(str(r[COL.source])) === want);
+}
+
+/** Games on the Games tab after search / league / feed / book filters. */
 function filteredGameEvents() {
-  const all = eventSummaries(currentRows());
+  const all = eventSummaries(feedFilteredRows());
   const qNode = el('events-q');
   const bookNode = el('events-book');
   const q = ((qNode && qNode.value) || '').trim().toLowerCase();
@@ -4845,7 +4890,11 @@ function filteredGameEvents() {
 
 function buildEventsFilters() {
   buildLeaguePicker();
-  const rows = currentRows();
+  // Off the feed-filtered rows, so the two pickers compose: under "first-party
+  // only" the book list holds first-party books, and a republished book left
+  // selected from before cannot silently empty the panel with nothing saying
+  // why. ``fillSelect`` drops a selection its new list does not contain.
+  const rows = feedFilteredRows();
   const bookNode = el('events-book');
   if (bookNode) {
     fillSelect(bookNode,
@@ -4862,7 +4911,11 @@ function renderEvents() {
   el('nav-events').textContent = events.length;
   const note = el('events-filter-note');
   if (note) {
+    // The feed picker belongs in this test for the same reason the other three
+    // do: it can hide games, and a count that says "41" over a list of four is
+    // the one thing this note exists to prevent.
     const narrowing = currentLeague || (el('events-book') && el('events-book').value)
+      || (el('events-feed') && el('events-feed').value)
       || ((el('events-q') && el('events-q').value.trim()));
     note.textContent = narrowing && all.length
       ? `showing ${events.length} of ${all.length}`
@@ -5640,7 +5693,14 @@ function haystack(r) {
 
 function renderOdds() {
   const rows = currentRows();
-  fillSelect(el('f-source'), [...new Set(rows.map((r) => str(r[COL.source])))].sort(), 'every sportsbook', book);
+  const fFeed = el('f-feed').value;
+  // The venue list follows the feed pick, so the two compose rather than
+  // silently contradicting: choosing "first-party only" and then a republished
+  // venue would otherwise match nothing and say only "0 of 10,074".
+  const sourcePool = fFeed
+    ? rows.filter((r) => feedKind(str(r[COL.source])) === fFeed)
+    : rows;
+  fillSelect(el('f-source'), [...new Set(sourcePool.map((r) => str(r[COL.source])))].sort(), 'every sportsbook', book);
   fillSelect(el('f-market'), [...new Set(rows.map((r) => str(r[COL.market])))].sort(), 'every kind of bet', (v) => marketOf(v, currentSport).plain);
   fillSelect(el('f-period'), [...new Set(rows.map((r) => str(r[COL.period])))].sort(), 'any part of the game', (v) => periodOf(v).plain);
   fillSelect(el('f-league'), [...new Set(rows.map((r) => str(r[COL.league])))].sort(), 'every league', leagueLabel);
@@ -5651,6 +5711,7 @@ function renderOdds() {
   const fLeague = el('f-league').value;
 
   let filtered = rows.filter((r) => {
+    if (fFeed && feedKind(str(r[COL.source])) !== fFeed) return false;
     if (fSource && str(r[COL.source]) !== fSource) return false;
     if (fMarket && str(r[COL.market]) !== fMarket) return false;
     if (fPeriod && str(r[COL.period]) !== fPeriod) return false;
@@ -6580,11 +6641,12 @@ const refreshOdds = () => refreshPanel('odds');
 const refreshEvents = () => refreshPanel('events');
 const refilterOdds = afterTyping(refreshOdds);
 el('q').addEventListener('input', refilterOdds);
-['f-source', 'f-league', 'f-market', 'f-period', 'f-alt'].forEach((id) => {
+['f-feed', 'f-source', 'f-league', 'f-market', 'f-period', 'f-alt'].forEach((id) => {
   el(id).addEventListener('input', refreshOdds);
 });
 const refilterEvents = afterTyping(refreshEvents);
 el('events-q').addEventListener('input', refilterEvents);
+el('events-feed').addEventListener('input', refreshEvents);
 el('events-book').addEventListener('input', refreshEvents);
 el('cov-mode').addEventListener('change', refreshEvents);
 el('move-source').addEventListener('change', () => refreshPanel('movement'));
