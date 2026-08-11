@@ -44,7 +44,7 @@ from src.betlinks import link_payload
 from src.betlog import BetLog, BetLogError, empty_payload as empty_bet_payload
 from src.betlog import slip_from_payload
 from src.commission import commission_for, net_decimal_odds
-from src.coverage import LocalityMarking, locality_marking
+from src.coverage import LegOrigin, LocalityMarking, locality_marking
 from src.egress import is_recent, load_detection
 from src.events import reconcile_event_keys
 from src.jurisdictions import JURISDICTIONS, route_warnings, source_host
@@ -967,6 +967,16 @@ def _blank_arb_bundle(total_stake: float) -> dict[str, Any]:
     return {**empty, "with_offshore": dict(empty)}
 
 
+def _leg_origin_payload(origin: LegOrigin) -> dict[str, Any]:
+    """One leg's origin, flattened into the leg object the page reads."""
+    return {
+        "origin": origin.kind,
+        "origin_label": origin.label,
+        "origin_detail": origin.detail,
+        "origin_local": origin.local,
+    }
+
+
 def _opportunity_entry(
     opportunity: Opportunity, marking: LocalityMarking
 ) -> dict[str, Any]:
@@ -1009,6 +1019,13 @@ def _opportunity_entry(
                 "non_local_label": (
                     "" if marking.leg_is_local(leg.source) else marking.label()
                 ),
+                # Where the venue is, not merely whether it is here.  One bit made
+                # a book one state over, a federally regulated venue and an
+                # offshore exchange read identically, and they are three different
+                # reasons to discount a price.  Composed in ``coverage`` for the
+                # same reason the label above is composed here rather than in the
+                # JS: one vocabulary, whichever surface says it.
+                **_leg_origin_payload(marking.leg_origin(leg.source)),
                 "selection": leg.selection.value,
                 "line": leg.quote.line,
                 "american_odds": leg.quote.american_odds,

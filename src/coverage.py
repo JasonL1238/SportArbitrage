@@ -913,6 +913,42 @@ def locality_applies(state: str | None, route_scope: str) -> bool:
 
 
 @dataclass(frozen=True)
+class LegOrigin:
+    """Where one leg's venue sits relative to the run's jurisdiction.
+
+    :class:`LocalityMarking` answers one bit — reachable from here or not — and
+    that bit is what the money rule needs.  It is not what a reader needs: "not
+    reachable from IL" reads the same for a book licensed one state over, a
+    federally regulated venue, and an offshore exchange no US customer can open an
+    account with, and those are three different reasons to ignore a price.
+
+    So this states the *kind* and, where the repository already knows it, the
+    place.  Nothing here is a new claim about a venue: :attr:`kind` is read off
+    the four reachability sets the registry already refuses to let a source skip,
+    and ``other_states`` names states out of the same per-jurisdiction route
+    tables that decide the collection itself.  A venue's country is deliberately
+    **not** guessed — ``offshore`` is exactly what ``US_UNAVAILABLE_SOURCE_KEYS``
+    asserts and no more.
+    """
+
+    kind: str
+    """``in_state``, ``national``, ``other_states``, ``offshore``, ``republished``
+    or ``unknown``."""
+
+    label: str
+    """Short enough for a pill beside the price: ``"IL"``, ``"national"``,
+    ``"NJ, PA"``, ``"offshore"``."""
+
+    detail: str
+    """One sentence, for a tooltip or a CLI line."""
+
+    local: bool
+    """Whether this leg is takeable from the run's state — the same answer
+    :meth:`LocalityMarking.leg_is_local` gives, carried alongside so a surface
+    reads one object rather than joining two."""
+
+
+@dataclass(frozen=True)
 class LocalityMarking:
     """Which legs of a run's positions are reachable from its jurisdiction.
 
@@ -945,9 +981,102 @@ class LocalityMarking:
     state: str  #: normalized; "" when the rule does not govern
     reachable: frozenset[str] | None  #: None => rule (a) does not govern this run
 
+    licences: tuple[tuple[str, frozenset[str]], ...] = ()
+    """Every jurisdiction's retail licences, as ``(state, keys)`` pairs.
+
+    Carried rather than looked up per leg because ``state_licensed_keys`` builds
+    descriptors on each call, and :meth:`leg_origin` runs once per leg per
+    position.  A tuple rather than a mapping so the dataclass stays hashable.
+    Empty on a marking built before this field existed, which :meth:`leg_origin`
+    reads as "no licence table" and reports as ``unknown`` rather than as an
+    absence of licences.
+    """
+
     @property
     def marking(self) -> bool:
         return self.reachable is not None
+
+    def leg_origin(self, source: str) -> LegOrigin:
+        """Where *source* is, relative to this run's state.
+
+        Ordered by what beats what.  Nationwide is tested before the state's own
+        licence list because Kalshi is reachable everywhere *without* holding one,
+        and calling it "IL" would state a licence that does not exist.  Offshore
+        is tested before the other-states search so a republished mirror of an
+        offshore book — the one overlap the registry's cover check permits —
+        reports the reason its price is unusable rather than the reason it is
+        second-hand.
+
+        Works on an ungoverned run too (a ``GLOBAL`` scope, or a jurisdiction this
+        build does not know).  There is no state to be inside, so ``in_state``
+        cannot be the answer, but "national" and "offshore" are facts about the
+        venue and stay true with nothing to compare them against.
+        """
+        from src.sources import registry
+
+        local = self.leg_is_local(source)
+        if source in registry.NATIONWIDE_SOURCE_KEYS:
+            return LegOrigin(
+                kind="national",
+                label="national",
+                detail=(
+                    "Federally regulated and reachable from every state, holding "
+                    "no state sportsbook licence."
+                ),
+                local=local,
+            )
+        licences = dict(self.licences)
+        if self.state and source in licences.get(self.state, frozenset()):
+            return LegOrigin(
+                kind="in_state",
+                label=self.state,
+                detail=f"Licensed in {self.state}; this is {self.state}'s own price.",
+                local=local,
+            )
+        if source in registry.US_UNAVAILABLE_SOURCE_KEYS:
+            return LegOrigin(
+                kind="offshore",
+                label="offshore",
+                detail=(
+                    "No US access — the price is real, but not one a US customer "
+                    "can take."
+                ),
+                local=local,
+            )
+        elsewhere = tuple(
+            state for state, keys in self.licences
+            if source in keys and state != self.state
+        )
+        if elsewhere:
+            joined = ", ".join(elsewhere)
+            return LegOrigin(
+                kind="other_states",
+                label=joined,
+                detail=(
+                    f"A US book licensed in {joined}"
+                    + (f", not in {self.state}." if self.state else ".")
+                ),
+                local=local,
+            )
+        if source in registry.REPUBLISHED_SOURCE_KEYS:
+            return LegOrigin(
+                kind="republished",
+                label="republished",
+                detail=(
+                    "Somebody else's board rather than a venue — no counterparty "
+                    "to take the other side."
+                ),
+                local=local,
+            )
+        return LegOrigin(
+            kind="unknown",
+            label="unplaced",
+            detail=(
+                "This build's registry does not classify this venue, so where it "
+                "can be reached from is unstated rather than known to be nowhere."
+            ),
+            local=local,
+        )
 
     def leg_is_local(self, source: str) -> bool:
         return self.reachable is None or source in self.reachable
@@ -995,13 +1124,24 @@ def locality_marking(state: str | None, *, route_scope: str) -> LocalityMarking:
     leg is foreign, which is the same sentence the general case says.  In practice
     the nationwide venues are in every state's set.
     """
-    if not locality_applies(state, route_scope):
-        return LocalityMarking(state="", reachable=None)
     from src.sources import registry
+
+    # Built for both answers.  A run the rule does not govern still renders legs,
+    # and ``leg_origin`` can say "national" or "offshore" about a venue with no
+    # jurisdiction to compare it against — so the licence table is not part of
+    # what ``locality_applies`` decides.
+    licences = tuple(
+        (state_key, registry.state_licensed_keys(state_key))
+        for state_key in JURISDICTIONS
+    )
+    if not locality_applies(state, route_scope):
+        return LocalityMarking(state="", reachable=None, licences=licences)
 
     normalized = normalize_state(state or "")
     return LocalityMarking(
-        state=normalized, reachable=registry.takeable_from_state(normalized)
+        state=normalized,
+        reachable=registry.takeable_from_state(normalized),
+        licences=licences,
     )
 
 
@@ -1009,6 +1149,7 @@ __all__ = [
     "Access",
     "BookCoverage",
     "Corroboration",
+    "LegOrigin",
     "LocalityMarking",
     "REQUIRED_BOOKS",
     "RequiredBook",

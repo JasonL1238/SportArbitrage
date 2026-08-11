@@ -657,6 +657,9 @@ SKIP_NOTES: list[tuple[str, str]] = [
      "A game entry that was not a JSON object."),
     ("missing_home_away",
      "The fixture did not state both participants."),
+    ("ambiguous_home_away_order",
+     "The event name named both sides but not which one is at home, in a sport "
+     "where that decides the fixture. Skipped rather than guessed."),
     ("bad_price_row",
      "A price row missing a usable type or coefficient."),
     ("bad_spread_line",

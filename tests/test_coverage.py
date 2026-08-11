@@ -928,6 +928,70 @@ def test_the_label_names_the_state_and_reachability():
     assert marking.label() == "not reachable from PA"
 
 
+def test_leg_origin_separates_the_three_ways_a_leg_can_be_foreign():
+    """"Not reachable from PA" is one phrase over three different situations.
+
+    A book licensed one state over, a federally regulated venue reachable from
+    everywhere, and an exchange no US customer can open an account with are not
+    the same news, and the reachability bit alone cannot tell them apart.
+    """
+    marking = locality_marking("PA", route_scope="state")
+
+    here = marking.leg_origin("fanduel")
+    assert (here.kind, here.label, here.local) == ("in_state", "PA", True)
+
+    # Reachable but *not* licensed here, and saying "PA" would state a licence
+    # that does not exist.
+    national = marking.leg_origin("kalshi")
+    assert (national.kind, national.label, national.local) == (
+        "national", "national", True,
+    )
+
+    elsewhere = marking.leg_origin("hardrock")
+    assert elsewhere.kind == "other_states"
+    assert elsewhere.label == "IL, NJ"
+    assert elsewhere.local is False
+
+    offshore = marking.leg_origin("pinnacle")
+    assert (offshore.kind, offshore.label, offshore.local) == (
+        "offshore", "offshore", False,
+    )
+
+    # A mirror is not a counterparty at all, and its reason differs again.
+    assert marking.leg_origin("an_fanduel").kind == "republished"
+
+
+def test_leg_origin_never_contradicts_the_reachability_bit():
+    """The pill and the position-level flag are computed from one answer.
+
+    Two derivations of "can I take this leg" is how a page ends up labelling a
+    leg reachable inside a position it has already counted as unreachable.
+    """
+    from src.sources import registry
+
+    marking = locality_marking("IL", route_scope="state")
+    for source in sorted(registry.keys()):
+        assert marking.leg_origin(source).local == marking.leg_is_local(source)
+
+
+def test_leg_origin_still_places_a_venue_on_an_ungoverned_run():
+    """A ``GLOBAL`` run has no state to be inside, and venues still have places.
+
+    ``locality_applies`` is about whether a *state's* claim is being made. Where
+    Pinnacle can be reached from does not depend on that, so the origin stays
+    answerable — it simply never says ``in_state``.
+    """
+    marking = locality_marking("GLOBAL", route_scope="global")
+    assert marking.reachable is None
+    assert marking.leg_origin("pinnacle").kind == "offshore"
+    assert marking.leg_origin("kalshi").kind == "national"
+    assert marking.leg_origin("fanduel").kind == "other_states"
+    assert all(
+        marking.leg_origin(source).kind != "in_state"
+        for source in ("fanduel", "kalshi", "pinnacle")
+    )
+
+
 def test_a_state_with_no_licence_at_all_flags_rather_than_skipping(monkeypatch):
     """An empty licensed set means "nothing here is takeable", never "no marking".
 

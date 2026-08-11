@@ -250,6 +250,62 @@ def test_current_hardrock_il_capture_replays_offline_without_rejections() -> Non
     assert len(outcome.quotes) >= 100
 
 
+def test_hardrock_reads_the_vs_template_home_first() -> None:
+    """Hard Rock's current titles are ``"Home vs Away"``, not ``"Away @ Home"``.
+
+    The venue changed template mid-season: the committed 2026-07-31 capture reads
+    ``"New York Yankees @ Boston Red Sox"`` and this 2026-08-04 one reads
+    ``"Astros vs Blue Jays"`` — the other order, with nothing in the payload
+    stating orientation.  Read away-first, every Hard Rock row carried an inverted
+    event key, formed its own fixture and joined nothing; the 2026-08-11 IL slate
+    put it against the other 33 feeds on 25 of 25 shared MLB fixtures.
+    """
+    raws = list(RawStore(LIVE_REGRESSIONS).iter_responses("hardrock"))
+    events = next(raw for raw in raws if raw.endpoint == "events-BASEBALL")
+    titles = {
+        event["name"]
+        for event in events.json()["data"]["betSync"]["events"]["data"]
+    }
+    assert "Astros vs Blue Jays" in titles, "fixture no longer carries the vs template"
+
+    outcome = parse_hardrock(raws)
+    oriented = {
+        (quote.away_participant, quote.home_participant) for quote in outcome.quotes
+    }
+    assert ("MLB-TOR", "MLB-HOU") in oriented
+    assert ("MLB-HOU", "MLB-TOR") not in oriented
+
+
+def test_hardrock_skips_an_event_name_whose_order_it_cannot_read() -> None:
+    """An unverified separator is a skip, never a guessed orientation.
+
+    Guessing costs an inverted event key, which is silent: the rows parse, price
+    plausibly, and quietly stop joining every other book.  A counted skip is the
+    loud version of the same gap.
+    """
+    raws = list(RawStore(LIVE_REGRESSIONS).iter_responses("hardrock"))
+    events = next(raw for raw in raws if raw.endpoint == "events-BASEBALL")
+    payload = events.json()
+    for event in payload["data"]["betSync"]["events"]["data"]:
+        event["name"] = event["name"].replace(" vs ", " - ")
+    rewritten = RawResponse(
+        source=events.source,
+        endpoint=events.endpoint,
+        url=events.url,
+        status_code=events.status_code,
+        body=json.dumps(payload),
+        fetched_at=events.fetched_at,
+        content_type=events.content_type,
+        request_params=events.request_params,
+        headers=events.headers,
+    )
+    others = [raw for raw in raws if raw.endpoint != "events-BASEBALL"]
+    outcome = parse_hardrock([*others, rewritten])
+    assert not outcome.quotes
+    assert not outcome.rejections
+    assert outcome.skipped["ambiguous_home_away_order"] > 0
+
+
 def test_caesars_parses_bar_wrapped_names() -> None:
     raw = _load("caesars__*_event_*.json")
     raw = RawResponse(

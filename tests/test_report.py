@@ -2152,6 +2152,39 @@ def test_the_dashboard_keeps_positions_that_do_have_one(tmp_path) -> None:
     assert labels["pinnacle"] == "not reachable from PA"
 
 
+def test_every_leg_states_where_its_venue_is(tmp_path) -> None:
+    """Each leg carries an origin, not only the foreign ones a warning covers.
+
+    ``non_local_label`` is one bit, and one bit made a book licensed one state
+    over, a federally regulated venue and an offshore exchange read identically
+    on the page. A local leg carried no mark at all, so "reachable" was an
+    inference from an absence.
+    """
+    from src.report import _arb_payload
+
+    path, run_ids = _pa_state_run(tmp_path, [
+        ("fanduel", Selection.HOME, 2.20),
+        ("pinnacle", Selection.AWAY, 2.20),
+    ])
+    with Store(path) as opened:
+        payload = _arb_payload(opened, run_ids, as_of=datetime.now(UTC))
+
+    legs = {
+        leg["source"]: leg
+        for leg in payload[str(run_ids[0])]["with_offshore"]["opportunities"][0]["legs"]
+    }
+    assert legs["fanduel"]["origin"] == "in_state"
+    assert legs["fanduel"]["origin_label"] == "PA"
+    assert legs["fanduel"]["origin_local"] is True
+    assert legs["pinnacle"]["origin"] == "offshore"
+    assert legs["pinnacle"]["origin_label"] == "offshore"
+    assert legs["pinnacle"]["origin_local"] is False
+    # The shorter phrase the CLI and the SMS print is unchanged beside it, so the
+    # page cannot say something those two contradict.
+    assert legs["pinnacle"]["non_local_label"] == "not reachable from PA"
+    assert legs["fanduel"]["non_local_label"] == ""
+
+
 def test_the_us_only_bundle_answers_from_the_same_marking(tmp_path) -> None:
     """Both views of one run are built over one marking, and each stays honest.
 

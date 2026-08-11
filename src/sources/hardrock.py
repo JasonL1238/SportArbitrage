@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import re
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Mapping, Sequence
 
@@ -360,8 +361,8 @@ def parse_hardrock(raws: Sequence[RawResponse]) -> ParseOutcome:
     if ladder is None:
         return outcome
 
-    fixtures: dict[str, Fixture] = {}
-    work: list[tuple[RawResponse, Mapping[str, Any], Fixture]] = []
+    fixtures: dict[str, _Fixture] = {}
+    work: list[tuple[RawResponse, Mapping[str, Any], _Fixture]] = []
 
     for raw in latest:
         if not raw.endpoint.startswith("events-"):
@@ -442,12 +443,36 @@ def _load_ladder(
     return None
 
 
+@dataclass(frozen=True, kw_only=True)
+class _Fixture(Fixture):
+    """Adds the competitor named **first** in the Amelco event title.
+
+    Amelco's ``A``/``B`` selection types are positional — ``A`` is the first name
+    in ``event.name``, ``B`` the second — and which of those the book calls home
+    depends on the title's separator (:data:`_SEPARATORS`).  Those were the same
+    fact while every title read ``"Away @ Home"``, so the fallback mapped ``A`` to
+    :attr:`Fixture.book_away`; under ``"Home vs Away"`` they are opposites, and a
+    mapping through ``book_home`` would name the wrong side exactly when the
+    selection name failed to resolve.  Position is what Amelco states, so position
+    is what this carries.
+    """
+
+    title_first_key: str
+
+    @property
+    def title_second_key(self) -> str:
+        """The competitor named second — whichever of ours the first one is not."""
+        return (
+            self.away.key if self.title_first_key == self.home.key else self.home.key
+        )
+
+
 def _accept_event(
     event: Mapping[str, Any],
     source: str,
     captured_at: datetime,
     outcome: ParseOutcome,
-) -> Fixture | None:
+) -> _Fixture | None:
     if event.get("inplay") or event.get("outright"):
         outcome.skipped["inplay_or_outright"] += 1
         return None
@@ -467,21 +492,29 @@ def _accept_event(
     competition = league_registry.league(league_key)
 
     name = str(event.get("name") or "")
-    away_name, home_name = _split_event_name(name)
-    if not away_name or not home_name:
+    split = _split_event_name(name)
+    if split is None:
         outcome.skipped["missing_home_away"] += 1
         return None
-    if any(is_pairing(part, competition.sport) for part in (home_name, away_name)):
+    first_name, second_name, home_first = split
+    if home_first is None and competition.has_home_away:
+        # The separator carries no orientation this adapter has verified, and in a
+        # league with a real home side guessing one is a wrong price rather than a
+        # missing row: it inverts the event key, so the rows form their own fixture
+        # and join nothing.  Skipped and counted instead — a loud gap.
+        outcome.skipped["ambiguous_home_away_order"] += 1
+        return None
+    if any(is_pairing(part, competition.sport) for part in (first_name, second_name)):
         outcome.skipped["doubles_or_team_pairing"] += 1
         return None
 
-    home = canonical_participant(home_name, competition)
-    away = canonical_participant(away_name, competition)
-    if home is None or away is None or home.key == away.key:
+    first = canonical_participant(first_name, competition)
+    second = canonical_participant(second_name, competition)
+    if first is None or second is None or first.key == second.key:
         outcome.reject(
             source,
             "unresolved_participants",
-            f"event {event_id}: {away_name!r}/{home_name!r}",
+            f"event {event_id}: {first_name!r}/{second_name!r}",
             event_id=event_id,
         )
         return None
@@ -499,37 +532,66 @@ def _accept_event(
         outcome.skipped["event_already_started"] += 1
         return None
 
-    away_side, home_side = orient(
-        away, home, competition, home=home if competition.has_home_away else None
-    )
-    return Fixture(
+    book_home = (first if home_first else second) if competition.has_home_away else None
+    away_side, home_side = orient(first, second, competition, home=book_home)
+    return _Fixture(
         event_id=event_id,
         sport=competition.sport,
         competition=competition,
         home=home_side,
         away=away_side,
-        book_home_key=home.key,
+        book_home_key=book_home.key if book_home is not None else None,
+        title_first_key=first.key,
         commence_time=commence_time,
         base_key=build_event_key(away_side.key, home_side.key, commence_time, competition),
     )
 
 
-def _split_event_name(name: str) -> tuple[str, str]:
-    """Return (away_or_first, home_or_second) for identity; tennis has no home.
+#: Event-name separator → whether the name lists the **home** side first.
+#:
+#: ``None`` means this adapter has not established an orientation for that
+#: separator, which :func:`_accept_event` refuses to guess at in a league with a
+#: real home side.
+#:
+#: Hard Rock changed template mid-season and the change was silent, because both
+#: templates parse: the committed 2026-07-31 capture reads
+#: ``"New York Yankees @ Boston Red Sox"`` and every capture from 2026-08-04
+#: reads ``"Astros vs Blue Jays"`` — short names, new separator, **and the other
+#: order**.  Read away-first, the 2026-08-11 IL slate put Hard Rock against the
+#: other 33 feeds on 25 of 25 shared MLB fixtures and 15 of 15 where the pair
+#: could be matched; validation's ``home_away_disagreement`` is what caught it.
+#: Its rows had inverted event keys, so they formed their own fixtures and joined
+#: nothing — Hard Rock silently stopped being comparable rather than pricing
+#: anything wrong.
+#:
+#: ``" vs "`` meaning home-first is the same reading :mod:`src.sources.matchbook`
+#: verified against Bovada's own ``competitors[].home`` flag.
+_SEPARATORS: tuple[tuple[str, bool | None], ...] = (
+    (" @ ", False),  # away first — the template served until 2026-08-01
+    (" vs ", True),  # home first — the current template
+    (" v ", None),   # unverified; tennis only, where orientation is imposed
+    (" - ", None),   # unverified
+)
 
-    ``A @ B`` is Away @ Home.  ``A vs B`` is used for tennis (and some soccer);
-    those leagues set ``has_home_away=False`` so :func:`orient` reorders by
-    participant key rather than trusting book home.
+
+def _split_event_name(name: str) -> tuple[str, str, bool | None] | None:
+    """``(first, second, home_first)`` for a two-sided event name, or ``None``.
+
+    *home_first* is ``None`` when the separator carries no orientation this
+    adapter has verified.  That is harmless in tennis — those leagues set
+    ``has_home_away=False`` and :func:`orient` reorders by participant key rather
+    than trusting the book — and is refused everywhere else.
     """
-    if " @ " in name:
-        away, home = name.split(" @ ", 1)
-        return away.strip(), home.strip()
     lower = name.casefold()
-    for sep in (" vs ", " v ", " - "):
-        if sep in lower:
-            idx = lower.index(sep)
-            return name[:idx].strip(), name[idx + len(sep):].strip()
-    return "", ""
+    for separator, home_first in _SEPARATORS:
+        if separator in lower:
+            idx = lower.index(separator)
+            first = name[:idx].strip()
+            second = name[idx + len(separator):].strip()
+            if not first or not second:
+                return None
+            return first, second, home_first
+    return None
 
 
 def _competition_league(comp_name: str) -> str | None:
@@ -549,7 +611,7 @@ def _emit_markets(
     markets: Sequence[Any],
     raw: RawResponse,
     source: str,
-    fixture: Fixture,
+    fixture: _Fixture,
     event_key: str,
     ladder: Mapping[int, float],
     outcome: ParseOutcome,
@@ -688,7 +750,7 @@ def _named_line(name: str) -> float | None:
 def _selection_for(
     sel: Mapping[str, Any],
     market_kind: Market,
-    fixture: Fixture,
+    fixture: _Fixture,
     outcome: ParseOutcome,
     source: str,
 ) -> Selection | None:
@@ -716,11 +778,16 @@ def _selection_for(
     if name.casefold() in {"draw", "tie", "x"}:
         return Selection.DRAW
 
-    # Amelco A/B only when the name did not resolve.  A = first name in the
-    # event title (pre-orient away), B = second (pre-orient home).  After
-    # orient() those may swap for tennis — map via book_home_key.
+    # Amelco A/B only when the name did not resolve.  A = first name in the event
+    # title, B = second — a statement about position and nothing else, which is
+    # why this maps through ``title_first_key`` rather than through the book's
+    # home side.  The two agree only under the ``"Away @ Home"`` template; under
+    # ``"Home vs Away"`` they are opposites, and orient() swaps them again for
+    # tennis, where the book's ordering is not ours.
     if sel_type in {"A", "B"}:
-        target = fixture.book_away if sel_type == "A" else fixture.book_home
+        target = (
+            fixture.title_first_key if sel_type == "A" else fixture.title_second_key
+        )
         if target == fixture.home.key:
             return Selection.HOME
         if target == fixture.away.key:

@@ -3867,6 +3867,37 @@ function renderArb() {
   }
 }
 
+/** Where one leg's venue is, as a pill beside the book name.
+ *
+ *  Every leg gets one, reachable or not. The old pill appeared only on foreign
+ *  legs, which left the reader to infer that an unmarked book was local — true,
+ *  but an inference from an absence, and the same absence covers a leg on a run
+ *  the locality rule does not govern at all. Saying it on every leg costs one
+ *  pill and removes the inference.
+ *
+ *  The text is the payload's, never rebuilt here: `origin_label` and
+ *  `origin_detail` are composed in `src.coverage`, beside the one phrase
+ *  `collector arb`, `lines` and the SMS print for a foreign leg — so the extra
+ *  detail this page shows can never contradict the shorter thing they say.
+ *  Those surfaces keep their one-line tag; only the tab was asked to say more.
+ *  `non_local_label` is the fallback for a payload written before origins
+ *  existed. */
+function originPill(leg) {
+  const label = leg.origin_label || leg.non_local_label;
+  if (!label) return '';
+  // `origin_local` is the same answer the position-level flag is computed from,
+  // so a pill can never read "reachable" on a leg the headline counted as not.
+  const local = leg.origin_local !== undefined
+    ? leg.origin_local
+    : !leg.non_local_label;
+  const suffix = local || !leg.non_local_label
+    ? ''
+    : ` · ${leg.non_local_label}`;
+  const title = leg.origin_detail ? ` title="${escapeHtml(leg.origin_detail)}"` : '';
+  return ` <span class="pill ${local ? '' : 'warn'}"${title}>${
+    escapeHtml(label + suffix)}</span>`;
+}
+
 function arbCard(o, index) {
   const away = nick(o.away_participant || o.away_team);
   const home = nick(o.home_participant || o.home_team);
@@ -3882,11 +3913,8 @@ function arbCard(o, index) {
     const net = Math.abs((leg.net_decimal_odds || 0) - (leg.decimal_odds || 0)) > 1e-9
       ? ` <span class="dim">net ${Number(leg.net_decimal_odds).toFixed(3)}</span>`
       : '';
-    const nonLocal = leg.non_local_label
-      ? ` <span class="pill warn">${escapeHtml(leg.non_local_label)}</span>`
-      : '';
     return `<tr>
-      <td><b>${escapeHtml(book(leg.source))}</b>${nonLocal}</td>
+      <td><b>${escapeHtml(book(leg.source))}</b>${originPill(leg)}</td>
       <td>${escapeHtml(leg.selection)}${escapeHtml(selLine)}</td>
       <td class="num">${escapeHtml(fmtAmerican(leg.american_odds))}${net}</td>
       <td class="num">$${Number(leg.stake).toFixed(2)}</td>

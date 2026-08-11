@@ -107,7 +107,13 @@ server exposes the same-origin endpoints used to log, edit, settle, and delete.
   are shown, never withheld: a leg the operator cannot reach is labelled "not
   reachable from {ST}" on every surface, and a position with no reachable leg at
   all is additionally marked informational — somewhere else's prices, not the
-  state's. The classifier reads `registry.takeable_from_state`: the state's
+  state's. The dashboard's arbitrage tab says more than that one phrase without
+  contradicting it: `coverage.LocalityMarking.leg_origin` classifies every leg —
+  reachable or not — as `in_state`, `national`, `other_states`, `offshore`,
+  `republished` or `unknown`, off the same four registry sets and per-state route
+  tables, so a book licensed one state over reads differently from an offshore
+  exchange. `collector arb`, `lines` and the SMS keep the single phrase.
+  The classifier reads `registry.takeable_from_state`: the state's
   retail licences **plus** the nationwide first-party venues that hold no state
   sportsbook licence to begin with. Not `state_licensed_keys` — building it on
   the licences alone called Kalshi and Polymarket out-of-state in every
