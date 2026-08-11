@@ -148,10 +148,6 @@ RESEARCH_CANDIDATES: tuple[Candidate, ...] = (
               note="registered as onexbet"),
 
     # ── reopen candidates (blocked under plain httpx; try impersonation) ────
-    Candidate("blocked", "draftkings",
-              "https://sportsbook-nash.draftkings.com/sites/US-IL-SB/api/v5/eventgroups/84240",
-              {"format": "json"},
-              note="registered as draftkings; Akamai 403 from CA without ODDS_HTTP_PROXY"),
     Candidate("blocked", "draftkings-sportscontent",
               "https://sportsbook-nash.draftkings.com/sites/US-SB/api/sportscontent/"
               "controldata/client/desktop/visit/locale/en-us/"
