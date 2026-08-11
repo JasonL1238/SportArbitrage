@@ -222,7 +222,7 @@ NATIONWIDE_SOURCE_KEYS: frozenset[str] = frozenset({"kalshi"})
 #: :func:`keys` today, and this set names them so registering later is a
 #: *decision* with a complete checklist rather than a drift.  Registration
 #: takes all of the following — the list is deliberately identical to the one
-#: in ``docs/SOURCE_FEASIBILITY.md``, and a step missing from either copy is
+#: in ``docs/evidence/exchanges-and-mirrors.md``, and a step missing from either copy is
 #: a defect, because the suite enforces most of these and the report renders
 #: the rest:
 #:
@@ -237,10 +237,10 @@ NATIONWIDE_SOURCE_KEYS: frozenset[str] = frozenset({"kalshi"})
 #:    intentional failover pair declared in ``src.redundancy``;
 #: 5. a ``src.betlinks`` entry — ``tests/test_betlinks.py`` asserts every
 #:    registered non-consensus key resolves to a link;
-#: 6. a ``src.report.SOURCE_NOTES`` entry with ``kind`` set to
+#: 6. a ``src.report_copy.SOURCE_NOTES`` entry with ``kind`` set to
 #:    ``exchange`` — without one the sources page renders the venue as an
 #:    unknown *sportsbook*, which for these two is affirmatively wrong;
-#: 7. a ``src.report.SKIP_NOTES`` entry for every skip reason the adapter can
+#: 7. a ``src.report_copy.SKIP_NOTES`` entry for every skip reason the adapter can
 #:    emit that no existing note already covers —
 #:    ``tests/test_report.py::test_every_real_skip_reason_has_an_explanation``
 #:    is parametrised off the registry and goes red on an unexplained reason,
@@ -597,7 +597,7 @@ _BASE_SOURCES: tuple[SourceDescriptor, ...] = (
     # — the whole shared source contract included — errored at setup instead of
     # running.  The operator approved deregistration on 2026-08-09.
     # Re-registration requires Action Network restoring the tenant **and** a
-    # genuine non-empty capture, in that order — see docs/SOURCE_FEASIBILITY.md.
+    # genuine non-empty capture, in that order — see docs/evidence/action-network.md.
     # (Circa's only remaining feed is ``vsin_circa``, the Las Vegas line
     # tracker, which is cross-licence context rather than any state's price.)
     SourceDescriptor(
@@ -982,9 +982,9 @@ def descriptor_for_state(state: str, key: str) -> SourceDescriptor:
     can enumerate the stable set, and fills the gaps with base descriptors —
     which for an unlicensed state means another state's configuration:
 
-        sources_for_state("DC")["betrivers_kambi"] → operator rsiusil, US-IL
-        sources_for_state("PA")["hardrock"]        → {} → DEFAULT_SEGMENT "nj"
-        sources_for_state("IL")["an_parx"]         → book_id 1929 (New Jersey)
+        replay_descriptor_for_state("DC", "betrivers_kambi") → rsiusil, US-IL
+        replay_descriptor_for_state("PA", "hardrock")        → {} → segment "nj"
+        replay_descriptor_for_state("IL", "an_parx")         → book_id 1929 (NJ)
 
     That is right for replay — :func:`replay_descriptor_for_state`, which is where
     that behaviour now says its own name — and wrong for a caller about to open a

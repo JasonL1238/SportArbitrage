@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Mapping, Sequence
 
@@ -25,16 +24,16 @@ import httpx
 
 from src import leagues as league_registry
 from src.events import build_event_key, orient, resolve_doubleheaders
-from src.leagues import League
 from src.normalize import (
     decimal_to_american,
     implied_probability,
     is_plausible_decimal_odds,
 )
-from src.participants import Participant, canonical_participant, is_pairing
+from src.participants import canonical_participant, is_pairing
 from src.raw_store import RawResponse
-from src.schema import Market, Period, Quote, QuoteStatus, Selection, Sport
+from src.schema import Market, Period, QuoteStatus, Selection, Sport
 from src.sources._common import (
+    Fixture,
     ScopeTally,
     SourceClient,
     Tier,
@@ -44,6 +43,7 @@ from src.sources._common import (
     latest_per_endpoint,
     parse_epoch_time,
     parse_iso_time,
+    priced_quote,
 )
 from src.sources.base import ParseOutcome
 from src.sources.guards import FormatChangeError, SourceError
@@ -173,18 +173,6 @@ query betSync(
   }
 }
 """.strip()
-
-
-@dataclass(frozen=True)
-class _Fixture:
-    event_id: str
-    sport: Sport
-    competition: League
-    home: Participant
-    away: Participant
-    book_home_key: str
-    commence_time: datetime
-    base_key: str
 
 
 class HardRockAdapter:
@@ -372,8 +360,8 @@ def parse_hardrock(raws: Sequence[RawResponse]) -> ParseOutcome:
     if ladder is None:
         return outcome
 
-    fixtures: dict[str, _Fixture] = {}
-    work: list[tuple[RawResponse, Mapping[str, Any], _Fixture]] = []
+    fixtures: dict[str, Fixture] = {}
+    work: list[tuple[RawResponse, Mapping[str, Any], Fixture]] = []
 
     for raw in latest:
         if not raw.endpoint.startswith("events-"):
@@ -459,7 +447,7 @@ def _accept_event(
     source: str,
     captured_at: datetime,
     outcome: ParseOutcome,
-) -> _Fixture | None:
+) -> Fixture | None:
     if event.get("inplay") or event.get("outright"):
         outcome.skipped["inplay_or_outright"] += 1
         return None
@@ -514,7 +502,7 @@ def _accept_event(
     away_side, home_side = orient(
         away, home, competition, home=home if competition.has_home_away else None
     )
-    return _Fixture(
+    return Fixture(
         event_id=event_id,
         sport=competition.sport,
         competition=competition,
@@ -561,7 +549,7 @@ def _emit_markets(
     markets: Sequence[Any],
     raw: RawResponse,
     source: str,
-    fixture: _Fixture,
+    fixture: Fixture,
     event_key: str,
     ladder: Mapping[int, float],
     outcome: ParseOutcome,
@@ -643,19 +631,11 @@ def _emit_markets(
 
             try:
                 outcome.quotes.append(
-                    Quote(
+                    priced_quote(
+                        fixture,
                         source=source,
-                        observed_at=raw.fetched_at,
-                        raw_ref=raw.ref,
-                        sport=fixture.sport,
-                        league=fixture.competition.key,
+                        raw=raw,
                         event_key=event_key,
-                        source_event_id=fixture.event_id,
-                        home_participant=fixture.home.key,
-                        away_participant=fixture.away.key,
-                        home_team=fixture.home.name,
-                        away_team=fixture.away.name,
-                        commence_time=fixture.commence_time,
                         market=market_kind,
                         period=period,
                         selection=selection,
@@ -708,7 +688,7 @@ def _named_line(name: str) -> float | None:
 def _selection_for(
     sel: Mapping[str, Any],
     market_kind: Market,
-    fixture: _Fixture,
+    fixture: Fixture,
     outcome: ParseOutcome,
     source: str,
 ) -> Selection | None:
@@ -740,13 +720,7 @@ def _selection_for(
     # event title (pre-orient away), B = second (pre-orient home).  After
     # orient() those may swap for tennis — map via book_home_key.
     if sel_type in {"A", "B"}:
-        pre_orient_home = fixture.book_home_key
-        pre_orient_away = (
-            fixture.away.key
-            if fixture.away.key != pre_orient_home
-            else fixture.home.key
-        )
-        target = pre_orient_away if sel_type == "A" else pre_orient_home
+        target = fixture.book_away if sel_type == "A" else fixture.book_home
         if target == fixture.home.key:
             return Selection.HOME
         if target == fixture.away.key:

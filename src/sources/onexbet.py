@@ -11,7 +11,6 @@ Clear types only: ``T=1/2/3`` moneyline (home/draw/away), ``T=7/8`` handicap,
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Mapping, Sequence
 
@@ -19,16 +18,16 @@ import httpx
 
 from src import leagues as league_registry
 from src.events import build_event_key, orient, resolve_doubleheaders
-from src.leagues import League
 from src.normalize import (
     decimal_to_american,
     implied_probability,
     is_plausible_decimal_odds,
 )
-from src.participants import Participant, canonical_participant, is_pairing
+from src.participants import canonical_participant, is_pairing
 from src.raw_store import RawResponse
 from src.schema import Market, Period, Quote, QuoteStatus, Selection, Sport, draw_is_priced
 from src.sources._common import (
+    Fixture,
     ScopeTally,
     SourceClient,
     Tier,
@@ -37,6 +36,7 @@ from src.sources._common import (
     envelope_source,
     latest_per_endpoint,
     parse_epoch_time,
+    priced_quote,
 )
 from src.sources.base import ParseOutcome
 from src.sources.guards import FormatChangeError, SourceError
@@ -124,18 +124,6 @@ MARKETS_BY_SPORT: dict[Sport, frozenset[Market]] = {
 }
 
 LINE_PARAMS = {"lng": "en", "tf": "2200000", "tz": "0", "mode": "4", "country": "1"}
-
-
-@dataclass(frozen=True)
-class _Fixture:
-    event_id: str
-    sport: Sport
-    competition: League
-    home: Participant
-    away: Participant
-    book_home_key: str
-    commence_time: datetime
-    base_key: str
 
 
 class OneXBetAdapter:
@@ -312,8 +300,8 @@ def parse_onexbet(raws: Sequence[RawResponse]) -> ParseOutcome:
     """Pure: no network, no clock, no filesystem.  Source from the envelope."""
     outcome = ParseOutcome()
     source = envelope_source(raws, fallback=SOURCE_KEY)
-    fixtures: dict[str, _Fixture] = {}
-    work: list[tuple[RawResponse, Mapping[str, Any], _Fixture]] = []
+    fixtures: dict[str, Fixture] = {}
+    work: list[tuple[RawResponse, Mapping[str, Any], Fixture]] = []
 
     for raw in latest_per_endpoint(raws):
         sport = _sport_of_endpoint(raw.endpoint)
@@ -386,7 +374,7 @@ def _accept(
     source: str,
     captured_at: datetime,
     outcome: ParseOutcome,
-) -> _Fixture | None:
+) -> Fixture | None:
     event_id = str(event.get("I") or "")
     if not event_id:
         outcome.skipped["missing_event_id"] += 1
@@ -432,7 +420,7 @@ def _accept(
     away_side, home_side = orient(
         away, home, competition, home=home if competition.has_home_away else None
     )
-    return _Fixture(
+    return Fixture(
         event_id=event_id,
         sport=competition.sport,
         competition=competition,
@@ -448,7 +436,7 @@ def _build_quote(
     row: Mapping[str, Any],
     raw: RawResponse,
     source: str,
-    fixture: _Fixture,
+    fixture: Fixture,
     event_key: str,
     outcome: ParseOutcome,
 ) -> Quote | None:
@@ -486,16 +474,7 @@ def _build_quote(
         return None
 
     if selection in (Selection.HOME, Selection.AWAY):
-        priced = (
-            fixture.book_home_key
-            if selection is Selection.HOME
-            else (
-                fixture.away.key
-                if fixture.book_home_key == fixture.home.key
-                else fixture.home.key
-            )
-        )
-        selection = Selection.HOME if priced == fixture.home.key else Selection.AWAY
+        selection = fixture.our_side(selection)
     if selection is Selection.DRAW and not draw_is_priced(fixture.sport, Period.FULL_GAME):
         outcome.skipped["draw_not_priced"] += 1
         return None
@@ -535,19 +514,11 @@ def _build_quote(
         market_id = f"ML:G{group}"
 
     try:
-        return Quote(
+        return priced_quote(
+            fixture,
             source=source,
-            observed_at=raw.fetched_at,
-            raw_ref=raw.ref,
-            sport=fixture.sport,
-            league=fixture.competition.key,
+            raw=raw,
             event_key=event_key,
-            source_event_id=fixture.event_id,
-            home_participant=fixture.home.key,
-            away_participant=fixture.away.key,
-            home_team=fixture.home.name,
-            away_team=fixture.away.name,
-            commence_time=fixture.commence_time,
             market=market,
             period=Period.FULL_GAME,
             selection=selection,

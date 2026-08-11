@@ -8,7 +8,7 @@ pipeline per market collected.
 
 Offshore rather than US-licensed, which is why it answers at all — every
 US-licensed book left is behind Akamai, Cloudflare or a CloudFront WAF (see
-``docs/SOURCE_FEASIBILITY.md``).
+``docs/evidence/venues.md``, "Original California blocks").
 
 Almost everything here is a structured field, which is unusual and welcome:
 
@@ -54,7 +54,6 @@ import httpx
 
 from src import leagues as league_registry
 from src.events import build_event_key, orient, resolve_doubleheaders
-from src.leagues import League
 from src.normalize import (
     MIN_DECIMAL_ODDS,
     american_to_decimal,
@@ -63,7 +62,6 @@ from src.normalize import (
     is_plausible_decimal_odds,
 )
 from src.participants import (
-    Participant,
     canonical_participant,
     is_pairing,
     is_statistic,
@@ -80,6 +78,7 @@ from src.schema import (
     draw_is_priced,
 )
 from src.sources._common import (
+    Fixture,
     ScopeTally,
     SourceClient,
     Tier,
@@ -88,6 +87,7 @@ from src.sources._common import (
     envelope_source,
     latest_per_endpoint,
     parse_epoch_time,
+    priced_quote,
 )
 from src.sources.base import ParseOutcome
 from src.sources.guards import FormatChangeError, SourceError
@@ -349,30 +349,19 @@ def _event_count(raw: RawResponse) -> int:
 # ── parsing (pure) ───────────────────────────────────────────────────────────
 
 
-@dataclass(frozen=True)
-class _Fixture:
-    event_id: str
-    sport: Sport
-    competition: League
-    home: Participant
-    away: Participant
-    book_home_key: str
-    """Key of the competitor **Bovada** flagged ``home: true``.
-
-    Not always :attr:`home`.  Where a league has no real home side — tennis —
-    :func:`src.events.orient` imposes its own ordering by participant key, and it
-    disagrees with the book's arbitrary ordering about half the time.  An
-    ``outcomes[].type`` of ``H`` means *Bovada's* home side, so translating it
-    needs this and not :attr:`home`.
-
-    Getting it wrong is not a missing row, it is a price attached to the wrong
-    player: two books' prices for one match end up mirrored, both legs of a
-    "position" back the same competitor, and the report shows a guaranteed profit
-    on two perfectly ordinary prices.  Caught here by
-    ``test_books_sharing_an_event_agree_on_the_favourite``, which is exactly the
-    fault it was written for after the same thing happened to Pinnacle."""
-    commence_time: datetime
-    base_key: str
+#: ``book_home_key`` on the fixtures below is the competitor **Bovada** flagged
+#: ``home: true`` — not always ``home``.  Where a league has no real home side —
+#: tennis — :func:`src.events.orient` imposes its own ordering by participant key,
+#: and it disagrees with the book's arbitrary ordering about half the time.  An
+#: ``outcomes[].type`` of ``H`` means *Bovada's* home side, so translating it needs
+#: that field and not ``home``.
+#:
+#: Getting it wrong is not a missing row, it is a price attached to the wrong
+#: player: two books' prices for one match end up mirrored, both legs of a
+#: "position" back the same competitor, and the report shows a guaranteed profit on
+#: two perfectly ordinary prices.  Caught by
+#: ``test_books_sharing_an_event_agree_on_the_favourite``, which is exactly the
+#: fault it was written for after the same thing happened to Pinnacle.
 
 
 def parse_bovada(raws: Sequence[RawResponse]) -> ParseOutcome:
@@ -383,8 +372,8 @@ def parse_bovada(raws: Sequence[RawResponse]) -> ParseOutcome:
     outcome = ParseOutcome()
     source = envelope_source(raws, fallback=SOURCE_KEY)
 
-    fixtures: dict[str, _Fixture] = {}
-    work: list[tuple[RawResponse, Mapping[str, Any], _Fixture]] = []
+    fixtures: dict[str, Fixture] = {}
+    work: list[tuple[RawResponse, Mapping[str, Any], Fixture]] = []
     for raw in latest_per_endpoint(raws):
         entry = PATHS.get(_path_of(raw.endpoint))
         if entry is None:
@@ -459,7 +448,7 @@ def _accept_event(
     source: str,
     captured_at: datetime,
     outcome: ParseOutcome,
-) -> _Fixture | None:
+) -> Fixture | None:
     event_id = str(event.get("id"))
     competition = league_registry.league(entry.league)
 
@@ -517,7 +506,7 @@ def _accept_event(
     away_side, home_side = orient(
         away, home, competition, home=home if competition.has_home_away else None
     )
-    return _Fixture(
+    return Fixture(
         event_id=event_id,
         sport=entry.sport,
         competition=competition,
@@ -527,11 +516,6 @@ def _accept_event(
         commence_time=commence_time,
         base_key=build_event_key(away_side.key, home_side.key, commence_time, competition),
     )
-
-
-def _other_key(fixture: _Fixture) -> str:
-    """The competitor Bovada flagged ``home: false`` — whichever of ours that is."""
-    return fixture.away.key if fixture.book_home_key == fixture.home.key else fixture.home.key
 
 
 def _competitors(event: Mapping[str, Any]) -> tuple[str, str] | None:
@@ -569,7 +553,7 @@ def _parse_market(
     market: Mapping[str, Any],
     raw: RawResponse,
     source: str,
-    fixture: _Fixture,
+    fixture: Fixture,
     event_key: str,
     outcome: ParseOutcome,
 ) -> None:
@@ -618,7 +602,7 @@ def _build_quote(
     entry: Mapping[str, Any],
     raw: RawResponse,
     source: str,
-    fixture: _Fixture,
+    fixture: Fixture,
     event_key: str,
     rule: MarketRule,
     market_id: str,
@@ -628,13 +612,9 @@ def _build_quote(
 ) -> Quote | None:
     selection = OUTCOME_TYPES.get(str(entry.get("type") or ""))
     if selection in (Selection.HOME, Selection.AWAY):
-        # Translate the book's own side label through the orientation this row
-        # actually uses.  ``H`` means the competitor *Bovada* flagged as home,
-        # which is our home side only when the league has one; in tennis
-        # src.events.orient imposes an ordering by participant key and the book
-        # orders the two names however it likes.
-        priced = fixture.book_home_key if selection is Selection.HOME else _other_key(fixture)
-        selection = Selection.HOME if priced == fixture.home.key else Selection.AWAY
+        # ``H`` is the competitor *Bovada* flagged ``home: true``, which is our home
+        # side only where the league has one — see ``Fixture.our_side``.
+        selection = fixture.our_side(selection)
     if selection is None:
         outcome.reject(
             source,
@@ -772,19 +752,11 @@ def _build_quote(
 
     outcome_open = str(entry.get("status") or _OPEN) == _OPEN
     try:
-        return Quote(
+        return priced_quote(
+            fixture,
             source=source,
-            observed_at=raw.fetched_at,
-            raw_ref=raw.ref,
-            sport=fixture.sport,
-            league=fixture.competition.key,
+            raw=raw,
             event_key=event_key,
-            source_event_id=fixture.event_id,
-            home_participant=fixture.home.key,
-            away_participant=fixture.away.key,
-            home_team=fixture.home.name,
-            away_team=fixture.away.name,
-            commence_time=fixture.commence_time,
             market=rule.market,
             period=rule.period,
             selection=selection,

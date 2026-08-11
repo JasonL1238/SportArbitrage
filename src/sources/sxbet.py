@@ -45,11 +45,9 @@ import httpx
 
 from src import leagues as league_registry
 from src.events import build_event_key, orient, resolve_doubleheaders
-from src.leagues import League
 from src.normalize import decimal_to_american, implied_probability, is_plausible_decimal_odds
 from src.participants import (
     with_marker,
-    Participant,
     canonical_participant,
     competition_marker,
     is_pairing,
@@ -59,12 +57,12 @@ from src.schema import (
     MARKETS_REQUIRING_LINE,
     Market,
     Period,
-    Quote,
     QuoteStatus,
     Selection,
     Sport,
 )
 from src.sources._common import (
+    Fixture,
     ScopeTally,
     SourceClient,
     Tier,
@@ -74,6 +72,7 @@ from src.sources._common import (
     latest_capture,
     latest_per_endpoint,
     parse_epoch_time,
+    priced_quote,
 )
 from src.sources.base import ParseOutcome
 from src.sources.guards import CoverageCappedError, FormatChangeError, SourceError, require_mapping
@@ -605,34 +604,6 @@ def _markets_in(raw: RawResponse) -> list[Mapping[str, Any]]:
 
 
 @dataclass(frozen=True)
-class _Fixture:
-    event_id: str
-    sport: Sport
-    competition: League
-    home: Participant
-    away: Participant
-    book_one_key: str
-    """Key of the competitor SX names ``teamOneName``, which every outcome index
-    is stated against.
-
-    Not always :attr:`home`.  For a team sport it is — ``teamOneName`` is the
-    home side, 16 of 16 NFL fixtures agreeing with Bovada's explicit flag.  For
-    **tennis** there is no home player, so :func:`src.events.orient` imposes an
-    ordering by participant key and SX's ordering is its own: the two disagree on
-    about half of all matches.
-
-    Reading outcome one as "home" there does not lose a row, it attaches the
-    price to the wrong player — and nothing downstream can see it.  The two books
-    agree on the participants, so the fixture check is silent; each source's own
-    overround is normal, so the self-pricing check is silent; and validation
-    deliberately does not compare home/away orientation for tennis because there
-    is nothing to compare.  What comes out is a position whose two legs back the
-    same player, reported as a guaranteed profit."""
-    commence_time: datetime
-    base_key: str
-
-
-@dataclass(frozen=True)
 class _Offer:
     """The best price a taker can get on one outcome of one market."""
 
@@ -647,7 +618,7 @@ class _Offer:
     all" — so ``raw_ref`` pointed at bytes the price is not in, and
     ``observed_at`` was the metadata fetch, systematically early by the whole
     metadata-to-orders gap of a 135-request pass.  That timestamp feeds the
-    stale-leg gate and the observation window.""" 
+    stale-leg gate and the observation window."""
 
 
 def parse_sxbet(raws: Sequence[RawResponse]) -> ParseOutcome:
@@ -719,7 +690,7 @@ def parse_sxbet(raws: Sequence[RawResponse]) -> ParseOutcome:
 
     # Pass 1: fixtures, from the market metadata (every market of a game repeats
     # the same two team names, so any one of them establishes the fixture).
-    fixtures: dict[str, _Fixture] = {}
+    fixtures: dict[str, Fixture] = {}
     captured_at = min(raw.fetched_at for raw in selected)
     for market in markets.values():
         event_id = str(market.get("sportXeventId") or "")
@@ -820,7 +791,7 @@ def _accept_fixture(
     source: str,
     captured_at: datetime,
     outcome: ParseOutcome,
-) -> _Fixture | None:
+) -> Fixture | None:
     event_id = str(market.get("sportXeventId") or "")
     sport = SPORT_BY_ID.get(market.get("sportId"))
     if sport is None:
@@ -871,18 +842,30 @@ def _accept_fixture(
         outcome.skipped["event_already_started"] += 1
         return None
 
-    # ``teamOneName`` is the home side — 16 of 16 NFL fixtures agreed with
-    # Bovada's explicit home flag, with no disagreements.
+    # ``teamOneName`` is the competitor every outcome index is stated against, so it
+    # is what ``book_home_key`` carries below — and it is not always our ``home``.
+    # For a team sport it is: 16 of 16 NFL fixtures agreed with Bovada's explicit
+    # home flag, with no disagreements.  For **tennis** there is no home player, so
+    # orient() imposes an ordering by participant key and SX's ordering is its own;
+    # the two disagree on about half of all matches.
+    #
+    # Reading outcome one as "home" there does not lose a row, it attaches the price
+    # to the wrong player — and nothing downstream can see it.  The two books agree
+    # on the participants, so the fixture check is silent; each source's own overround
+    # is normal, so the self-pricing check is silent; and validation deliberately does
+    # not compare home/away orientation for tennis because there is nothing to
+    # compare.  What comes out is a position whose two legs back the same player,
+    # reported as a guaranteed profit.  ``Fixture.our_side`` is the translation.
     away_side, home_side = orient(
         away, home, competition, home=home if competition.has_home_away else None
     )
-    return _Fixture(
+    return Fixture(
         event_id=event_id,
         sport=sport,
         competition=competition,
         home=home_side,
         away=away_side,
-        book_one_key=home.key,
+        book_home_key=home.key,
         commence_time=commence_time,
         base_key=build_event_key(away_side.key, home_side.key, commence_time, competition),
     )
@@ -917,7 +900,7 @@ def _parse_market(
     identity_raw: RawResponse,
     truncated: bool,
     source: str,
-    fixture: _Fixture,
+    fixture: Fixture,
     event_key: str,
     outcome: ParseOutcome,
 ) -> None:
@@ -964,8 +947,8 @@ def _parse_market(
     if rule.market is Market.TOTAL:
         sides = [(1, Selection.OVER, line), (2, Selection.UNDER, line)]
     else:
-        one = Selection.HOME if fixture.book_one_key == fixture.home.key else Selection.AWAY
-        two = Selection.AWAY if one is Selection.HOME else Selection.HOME
+        one = fixture.our_side(Selection.HOME)
+        two = fixture.our_side(Selection.AWAY)
         sides = [
             (1, one, line),
             (2, two, None if line is None else -line),
@@ -1018,20 +1001,12 @@ def _parse_market(
             continue
         try:
             outcome.quotes.append(
-                Quote(
+                priced_quote(
+                    fixture,
                     source=source,
-                    observed_at=price_raw.fetched_at,
-                    raw_ref=price_raw.ref,
-                    identity_raw_ref=identity_raw.ref,
-                    sport=fixture.sport,
-                    league=fixture.competition.key,
+                    raw=price_raw,
                     event_key=event_key,
-                    source_event_id=fixture.event_id,
-                    home_participant=fixture.home.key,
-                    away_participant=fixture.away.key,
-                    home_team=fixture.home.name,
-                    away_team=fixture.away.name,
-                    commence_time=fixture.commence_time,
+                    identity_raw_ref=identity_raw.ref,
                     market=rule.market,
                     period=rule.period,
                     selection=selection,

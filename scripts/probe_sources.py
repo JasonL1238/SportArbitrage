@@ -32,12 +32,12 @@ import httpx
 # `python -m`, and a recon tool that needs its own incantation does not get used.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src import settings  # noqa: E402
-from src.egress import is_recent, load_detection  # noqa: E402
-from src.jurisdictions import RouteStatus, jurisdiction  # noqa: E402
-from src.probe_cache import ProbeCache, ProbeStatus  # noqa: E402
-from src.sources._common import USER_AGENT  # noqa: E402
-from src.sources.transport import proxy_url  # noqa: E402
+from src import settings
+from src.egress import is_recent, load_detection
+from src.jurisdictions import RouteStatus, jurisdiction
+from src.probe_cache import ProbeCache, ProbeStatus
+from src.sources._common import USER_AGENT
+from src.sources.transport import proxy_url
 
 TIMEOUT = 25.0
 
@@ -266,7 +266,7 @@ def probe_registered(candidate: Candidate, *, state: str) -> tuple[str, str]:
         if callable(close):
             try:
                 close()
-            except Exception:
+            except Exception:  # noqa: BLE001 - one source's close must not end the sweep
                 pass
     if outcome.rejections:
         first = outcome.rejections[0]
@@ -319,7 +319,7 @@ def probe(
             status = response.status_code
             body = response.text
             content_type = response.headers.get("content-type")
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - any failure is a reachability result
         return "UNREACHABLE", f"{type(exc).__name__}: {exc}"
 
     if status != 200:

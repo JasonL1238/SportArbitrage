@@ -79,7 +79,6 @@ from src.normalize import (
     is_plausible_decimal_odds,
 )
 from src.participants import (
-    Participant,
     canonical_participant,
     competition_marker,
     is_pairing,
@@ -90,13 +89,13 @@ from src.raw_store import RawResponse
 from src.schema import (
     Market,
     Period,
-    Quote,
     QuoteStatus,
     Selection,
     Sport,
     draw_is_priced,
 )
 from src.sources._common import (
+    Fixture,
     ScopeTally,
     SourceClient,
     Tier,
@@ -105,6 +104,7 @@ from src.sources._common import (
     envelope_source,
     latest_per_endpoint,
     parse_iso_time,
+    priced_quote,
 )
 from src.sources.base import ParseOutcome
 from src.sources.guards import FormatChangeError, SourceError
@@ -383,18 +383,6 @@ def _game_count(raw: RawResponse) -> int:
     return len(games) if isinstance(games, list) else 0
 
 
-@dataclass(frozen=True)
-class _Fixture:
-    event_id: str
-    sport: Sport
-    competition: League
-    home: Participant
-    away: Participant
-    book_home_key: str
-    commence_time: datetime
-    base_key: str
-
-
 def parse_actionnetwork(raws: Sequence[RawResponse]) -> ParseOutcome:
     """Turn captured Action Network scoreboard responses into normalized rows.
 
@@ -407,8 +395,8 @@ def parse_actionnetwork(raws: Sequence[RawResponse]) -> ParseOutcome:
     ordered = latest_per_endpoint(raws)
     _require_one_book(ordered, source)
 
-    fixtures: dict[str, _Fixture] = {}
-    work: list[tuple[RawResponse, Mapping[str, Any], _Fixture, int, str]] = []
+    fixtures: dict[str, Fixture] = {}
+    work: list[tuple[RawResponse, Mapping[str, Any], Fixture, int, str]] = []
     for raw in ordered:
         book_id, path = _book_and_path(raw.endpoint)
         entry = PATHS.get(path)
@@ -493,7 +481,7 @@ def _parse_v2_markets(
     book_id: int,
     raw: RawResponse,
     source: str,
-    fixture: _Fixture,
+    fixture: Fixture,
     event_key: str,
     outcome: ParseOutcome,
 ) -> None:
@@ -575,7 +563,7 @@ def _emit_v2_market(
     period: Period,
     raw: RawResponse,
     source: str,
-    fixture: _Fixture,
+    fixture: Fixture,
     event_key: str,
     outcome: ParseOutcome,
 ) -> None:
@@ -717,7 +705,7 @@ def _accept_game(
     source: str,
     captured_at: datetime,
     outcome: ParseOutcome,
-) -> _Fixture | None:
+) -> Fixture | None:
     event_id = str(game.get("id"))
     status = str(game.get("status") or "").strip().lower()
     if status in _DONE_STATUSES:
@@ -783,7 +771,7 @@ def _accept_game(
     away_side, home_side = orient(
         away, home, competition, home=home if competition.has_home_away else None
     )
-    return _Fixture(
+    return Fixture(
         event_id=event_id,
         sport=entry.sport,
         competition=competition,
@@ -855,7 +843,7 @@ def _parse_odds(
     odds: Mapping[str, Any],
     raw: RawResponse,
     source: str,
-    fixture: _Fixture,
+    fixture: Fixture,
     event_key: str,
     outcome: ParseOutcome,
 ) -> None:
@@ -937,7 +925,7 @@ def _parse_odds(
 def _emit(
     raw: RawResponse,
     source: str,
-    fixture: _Fixture,
+    fixture: Fixture,
     event_key: str,
     outcome: ParseOutcome,
     market: Market,
@@ -984,19 +972,11 @@ def _emit(
         open_line = line_status.get(status_key) in (0, None)
         try:
             outcome.quotes.append(
-                Quote(
+                priced_quote(
+                    fixture,
                     source=source,
-                    observed_at=raw.fetched_at,
-                    raw_ref=raw.ref,
-                    sport=fixture.sport,
-                    league=fixture.competition.key,
+                    raw=raw,
                     event_key=event_key,
-                    source_event_id=fixture.event_id,
-                    home_participant=fixture.home.key,
-                    away_participant=fixture.away.key,
-                    home_team=fixture.home.name,
-                    away_team=fixture.away.name,
-                    commence_time=fixture.commence_time,
                     market=market,
                     period=period,
                     selection=selection,
@@ -1020,16 +1000,7 @@ def _emit(
             )
 
 
-def _orient_selection(selection: Selection, fixture: _Fixture) -> Selection:
+def _orient_selection(selection: Selection, fixture: Fixture) -> Selection:
     if selection not in (Selection.HOME, Selection.AWAY):
         return selection
-    priced = (
-        fixture.book_home_key
-        if selection is Selection.HOME
-        else (
-            fixture.away.key
-            if fixture.book_home_key == fixture.home.key
-            else fixture.home.key
-        )
-    )
-    return Selection.HOME if priced == fixture.home.key else Selection.AWAY
+    return fixture.our_side(selection)

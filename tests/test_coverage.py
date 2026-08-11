@@ -109,7 +109,7 @@ def test_two_agreeing_local_republishers_satisfy_the_rule(two_local_feeds):
 
     Declared through a substitute table because no PA book currently has two
     same-licence feeds — which is itself the finding recorded in
-    ``docs/SOURCE_FEASIBILITY.md``, not a reason to weaken the rule here.
+    ``docs/evidence/state-routing.md``, not a reason to weaken the rule here.
     """
     quotes = [*_book("an_caesars"), *_book("an_fanatics")]
     measured = _find(coverage_for_state(quotes, "PA"), "TwoLocalFeeds")
@@ -591,7 +591,7 @@ def test_the_shipped_table_satisfies_the_invariant():
 def test_no_pa_book_yet_has_two_same_licence_feeds():
     """Guards the written record, not the rule.
 
-    ``docs/SOURCE_FEASIBILITY.md`` records that the two-feed path is currently
+    ``docs/evidence/state-routing.md`` records that the two-feed path is currently
     unreachable for every Pennsylvania book — one Action Network id each, and
     VegasInsider's Las Vegas column is a different licence.  ``two_local_feeds``
     exists as a substitute table precisely because of that.
@@ -612,7 +612,7 @@ def test_no_pa_book_yet_has_two_same_licence_feeds():
     with_two = {book: feeds for book, feeds in doubled.items() if len(feeds) >= 2}
     assert not with_two, (
         "a PA book now has two same-licence feeds: update the Pennsylvania "
-        "section of docs/SOURCE_FEASIBILITY.md and reconsider whether the "
+        "section of docs/evidence/state-routing.md and reconsider whether the "
         f"two_local_feeds substitute table is still needed — {with_two}"
     )
 

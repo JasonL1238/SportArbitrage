@@ -54,11 +54,9 @@ import httpx
 
 from src import leagues as league_registry
 from src.events import build_event_key, orient, resolve_doubleheaders
-from src.leagues import League
 from src.normalize import decimal_to_american, implied_probability, is_plausible_decimal_odds
 from src.participants import (
     with_marker,
-    Participant,
     canonical_participant,
     competition_marker,
     is_pairing,
@@ -68,13 +66,13 @@ from src.schema import (
     MARKETS_REQUIRING_LINE,
     Market,
     Period,
-    Quote,
     QuoteStatus,
     Selection,
     Sport,
     draw_is_priced,
 )
 from src.sources._common import (
+    Fixture,
     ScopeTally,
     SourceClient,
     Tier,
@@ -84,6 +82,7 @@ from src.sources._common import (
     latest_capture,
     latest_per_endpoint,
     parse_iso_time,
+    priced_quote,
 )
 from src.sources.base import ParseOutcome
 from src.sources.guards import CoverageCappedError, FormatChangeError, SourceError, require_mapping
@@ -611,26 +610,14 @@ def _market_ids(raws: Iterable[RawResponse], wanted: Any, sport: Sport | None = 
 # ── parsing (pure) ───────────────────────────────────────────────────────────
 
 
-@dataclass(frozen=True)
-class _Fixture:
-    event_id: str
-    sport: Sport
-    competition: League
-    home: Participant
-    away: Participant
-    book_home_key: str
-    """Key of the competitor Smarkets calls ``HOME`` — its first-named side.
-
-    Not always :attr:`home`.  For **tennis** there is no home player, so
-    :func:`src.events.orient` imposes an ordering by participant key while
-    Smarkets orders by its event name, and the two disagree on about half of all
-    matches.  Reading a ``HOME`` contract as our home side there attaches the
-    price to the wrong player, which no downstream check can see: the two books
-    agree on the participants, each book's own overround is normal, and
-    validation deliberately does not compare orientation for a sport that has
-    none."""
-    commence_time: datetime
-    base_key: str
+#: ``book_home_key`` on the fixtures below is the competitor Smarkets calls
+#: ``HOME`` — its first-named side, not always ``home``.  For **tennis** there is no
+#: home player, so :func:`src.events.orient` imposes an ordering by participant key
+#: while Smarkets orders by its event name, and the two disagree on about half of all
+#: matches.  Reading a ``HOME`` contract as our home side there attaches the price to
+#: the wrong player, which no downstream check can see: the two books agree on the
+#: participants, each book's own overround is normal, and validation deliberately
+#: does not compare orientation for a sport that has none.
 
 
 def parse_smarkets(raws: Sequence[RawResponse]) -> ParseOutcome:
@@ -686,7 +673,7 @@ def parse_smarkets(raws: Sequence[RawResponse]) -> ParseOutcome:
         return outcome
 
     captured_at = min(raw.fetched_at for raw in selected)
-    fixtures: dict[str, _Fixture] = {}
+    fixtures: dict[str, Fixture] = {}
     for event_id, event in events.items():
         fixture = _accept_event(event, event_id, source, captured_at, outcome)
         if fixture is not None:
@@ -726,7 +713,7 @@ def _accept_event(
     source: str,
     captured_at: datetime,
     outcome: ParseOutcome,
-) -> _Fixture | None:
+) -> Fixture | None:
     if str(event.get("state") or "") != "upcoming":
         outcome.skipped[f"event_state:{event.get('state')}"] += 1
         return None
@@ -798,7 +785,7 @@ def _accept_event(
     away_side, home_side = orient(
         away, home, competition, home=home if competition.has_home_away else None
     )
-    return _Fixture(
+    return Fixture(
         event_id=event_id,
         sport=sport,
         competition=competition,
@@ -808,11 +795,6 @@ def _accept_event(
         commence_time=commence_time,
         base_key=build_event_key(away_side.key, home_side.key, commence_time, competition),
     )
-
-
-def _other_key(fixture: _Fixture) -> str:
-    """The competitor Smarkets calls ``AWAY`` — whichever of ours that is."""
-    return fixture.away.key if fixture.book_home_key == fixture.home.key else fixture.home.key
 
 
 def _competition_slug(full_slug: str) -> str:
@@ -885,7 +867,7 @@ def _parse_market(
     provenance: Mapping[str, RawResponse],
     fallback_raw: RawResponse,
     source: str,
-    fixture: _Fixture,
+    fixture: Fixture,
     event_key: str,
     outcome: ParseOutcome,
 ) -> None:
@@ -938,17 +920,9 @@ def _parse_market(
             str((contract.get("contract_type") or {}).get("name") or "")
         )
         if selection in (Selection.HOME, Selection.AWAY):
-            # Translate the venue's own side label through the orientation this
-            # row actually uses.  ``HOME`` means the competitor *Smarkets* named
-            # first, which is our home side only where the league has one.
-            priced = (
-                fixture.book_home_key
-                if selection is Selection.HOME
-                else _other_key(fixture)
-            )
-            selection = (
-                Selection.HOME if priced == fixture.home.key else Selection.AWAY
-            )
+            # ``HOME`` is the competitor *Smarkets* named first, which is our home
+            # side only where the league has one — see ``Fixture.our_side``.
+            selection = fixture.our_side(selection)
         if selection is None:
             outcome.skipped[
                 f"contract_type_out_of_scope:"
@@ -1010,19 +984,11 @@ def _parse_market(
             continue
         try:
             outcome.quotes.append(
-                Quote(
+                priced_quote(
+                    fixture,
                     source=source,
-                    observed_at=raw.fetched_at,
-                    raw_ref=raw.ref,
-                    sport=fixture.sport,
-                    league=fixture.competition.key,
+                    raw=raw,
                     event_key=event_key,
-                    source_event_id=fixture.event_id,
-                    home_participant=fixture.home.key,
-                    away_participant=fixture.away.key,
-                    home_team=fixture.home.name,
-                    away_team=fixture.away.name,
-                    commence_time=fixture.commence_time,
                     market=rule.market,
                     period=rule.period,
                     selection=selection,

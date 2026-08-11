@@ -498,7 +498,7 @@ class AlertBook:
                 continue
             try:
                 sid = self.send(body)
-            except Exception:  # noqa: BLE001 — watch loop must not die on SMS
+            except Exception:  # watch loop must not die on SMS
                 log.exception(
                     "failed to send arb alert for %s (roi %.1f%%); not retried, "
                     "because a send that fails after delivering would double-text",

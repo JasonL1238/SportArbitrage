@@ -36,9 +36,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src import settings  # noqa: E402
-from src.betlinks import EVENT_URL, MIRROR_BOOK, team_slug  # noqa: E402
-from src.sources._common import USER_AGENT  # noqa: E402
+from src import settings
+from src.betlinks import EVENT_URL, MIRROR_BOOK, team_slug
+from src.sources._common import USER_AGENT
 
 TIMEOUT = 25.0
 

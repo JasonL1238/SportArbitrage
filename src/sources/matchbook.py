@@ -7,7 +7,7 @@ which makes it the cheapest source in the pipeline per market collected.
 
     (``apiclient.matchbook.com`` is the documented host and answers 530 from
     here; ``www.matchbook.com`` serves the same paths.  Recorded in
-    ``docs/SOURCE_FEASIBILITY.md`` so it is not rediscovered.)
+    ``docs/evidence/venues.md`` so it is not rediscovered.)
 
 An exchange price is not a sportsbook price, and three differences matter enough
 to be structural rather than noted:
@@ -79,7 +79,6 @@ from src.leagues import League
 from src.normalize import decimal_to_american, implied_probability, is_plausible_decimal_odds
 from src.participants import (
     with_marker,
-    Participant,
     canonical_participant,
     competition_marker,
     is_pairing,
@@ -96,6 +95,7 @@ from src.schema import (
     draw_is_priced,
 )
 from src.sources._common import (
+    Fixture,
     ScopeTally,
     SourceClient,
     Tier,
@@ -105,6 +105,7 @@ from src.sources._common import (
     latest_capture,
     latest_per_endpoint,
     parse_iso_time,
+    priced_quote,
 )
 from src.sources.base import ParseOutcome
 from src.sources.guards import CoverageCappedError, FormatChangeError, SourceError, require_mapping
@@ -571,14 +572,7 @@ def _event_count(raw: RawResponse) -> int:
 
 
 @dataclass(frozen=True)
-class _Fixture:
-    event_id: str
-    sport: Sport
-    competition: League
-    home: Participant
-    away: Participant
-    commence_time: datetime
-    base_key: str
+class _Fixture(Fixture):
     marker: str | None = None
     """The competition's identity marker, carried so the **priced side** is
     resolved the same way the fixture was.
@@ -1125,19 +1119,11 @@ def _build_quote(
 
     runner_open = str(runner.get("status") or _OPEN) == _OPEN
     try:
-        return Quote(
+        return priced_quote(
+            fixture,
             source=source,
-            observed_at=raw.fetched_at,
-            raw_ref=raw.ref,
-            sport=fixture.sport,
-            league=fixture.competition.key,
+            raw=raw,
             event_key=event_key,
-            source_event_id=fixture.event_id,
-            home_participant=fixture.home.key,
-            away_participant=fixture.away.key,
-            home_team=fixture.home.name,
-            away_team=fixture.away.name,
-            commence_time=fixture.commence_time,
             market=rule.market,
             period=rule.period,
             selection=selection,

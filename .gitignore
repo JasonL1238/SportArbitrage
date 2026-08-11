@@ -4,6 +4,7 @@ data/
 *.db
 __pycache__/
 .pytest_cache/
+.ruff_cache/
 .streamlit/secrets.toml
 *.pyc
 .venv/

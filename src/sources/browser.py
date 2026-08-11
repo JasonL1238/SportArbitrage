@@ -234,7 +234,7 @@ class BrowserSession:
                 return
             try:
                 body = response.text()
-            except Exception:
+            except Exception:  # noqa: BLE001 - an unreadable body is recorded as empty
                 body = ""
             responses.append(
                 PageObservation(

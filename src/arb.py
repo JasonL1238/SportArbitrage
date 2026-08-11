@@ -1959,7 +1959,7 @@ def _examine_group(
         refusals: list[tuple[str, str]] = []
 
         def _refuse(code: str, detail: str) -> None:
-            refusals.append((code, detail))
+            refusals.append((code, detail))  # noqa: B023 - called in this iteration, never stored
 
         for (_chosen, sum_implied), legs_quotes in ranked:
             margin = 1.0 - sum_implied
@@ -2070,8 +2070,8 @@ def _examine_group(
                         period=period,
                         side=side,
                         line=line,
-                        shape=shape,
-                        legs_quotes=legs_quotes,
+                        shape=shape,  # noqa: B023 - called in this iteration, never stored
+                        legs_quotes=legs_quotes,  # noqa: B023 - called in this iteration, never stored
                         total_stake=size,
                         stake_increment=stake_increment,
                         commissions=commissions,

@@ -244,7 +244,14 @@ class TestScale:
         report = find_opportunities(quotes)
         elapsed = time.perf_counter() - began
         assert report.comparable_group_count == 700
-        assert elapsed < 1.0, f"{elapsed:.2f}s for 700 three-way markets at 30 sources"
+        # A tripwire for an order-of-magnitude regression, not a benchmark.  The
+        # budget was 1.0s, written when this measured 0.58s on a developer's Mac;
+        # detection has since grown ~47% heavier and the headroom went with it.  On
+        # the 4-vCPU `ubuntu-latest` runner the same case measures 2.11s (CI run
+        # 31232635917), so the assertion failed on every CI run while passing on
+        # every desk — a clock that reports the runner, not the code.  Five seconds
+        # still catches the accidental quadratic this exists to catch.
+        assert elapsed < 5.0, f"{elapsed:.2f}s for 700 three-way markets at 30 sources"
 
 
 class TestOneBadSourceDoesNotRefuseTheMarket:

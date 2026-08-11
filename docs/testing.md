@@ -38,7 +38,7 @@ Use `.venv/bin/python` below when the virtual environment is not activated.
 | Tests | Configured | `python -m pytest <focused paths> -q` |
 | Syntax/import compilation | Configured | `python -m compileall -q src scripts` |
 | Agent-document drift | Configured and run in CI | `python scripts/check_agent_docs.py` |
-| Lint | Not configured | Do not claim lint success or invent a command |
+| Lint | Configured and run in CI | `ruff check src scripts tests` |
 | Static types | Not configured | Do not claim type-check success or invent a command |
 | Package build | No build artifact | Use focused tests and `compileall`; the dashboard is runtime output |
 
@@ -73,11 +73,17 @@ After focused tests pass, run checks for every affected boundary:
 python -m pytest tests/test_source_contract.py tests/test_pipeline.py tests/test_integration.py -q
 python -m pytest tests/test_promos.py tests/test_promo_planner.py -q
 python -m pytest tests/test_report.py -q
+ruff check src scripts tests
 python -m compileall -q src scripts
 python scripts/check_agent_docs.py
 ```
 
-`compileall` is a syntax/import-compilation check, not a static type checker. This repository does not currently configure a linter or static type checker; do not claim lint or type-check success. If either is introduced, add it to `requirements-dev.txt`, configure it explicitly, make the baseline pass, and update this document and CI in the same change.
+`compileall` is a syntax/import-compilation check, not a static type checker. Lint is
+Ruff, configured in `pyproject.toml` and expected to report **All checks passed**; the
+selected rules are correctness-only, and every exemption there carries the reason it is
+exempt. No static type checker is configured; do not claim type-check success. If one is
+introduced, add it to `requirements-dev.txt`, configure it explicitly, make the baseline
+pass, and update this document and CI in the same change.
 
 ## Full validation
 
@@ -85,6 +91,7 @@ Run before completion when a change crosses boundaries, changes shared contracts
 
 ```bash
 python -m pytest tests/ -q
+ruff check src scripts tests
 python -m compileall -q src scripts
 python scripts/check_agent_docs.py
 ```
@@ -97,7 +104,8 @@ The suite is expected fully green. The long-standing blocker — registered
 `an_fliff`, `an_circa`, and `an_superbook` with no genuine non-empty captures,
 which errored ~1600 session-scoped fixture-dependent cases — ended on
 2026-08-09 when the operator approved deregistering all three (measurements
-and the re-registration condition are in `docs/SOURCE_FEASIBILITY.md`). The
+and the re-registration condition are in `docs/evidence/action-network.md`
+§ "Three registered ids carry no odds on either endpoint"). The
 rule that produced the blocker still stands: never synthesize a fixture, and
 never unregister a source *to hide* a failure — this removal was a recorded
 operator decision about feeds Action Network had dropped, not a cleanup of red

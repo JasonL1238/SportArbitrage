@@ -115,11 +115,6 @@ a { color: var(--accent); }
 .nav-more[open] > summary::before { content: '▾ '; }
 .nav-more > summary:hover { color: var(--ink-2); background: var(--surface-2); }
 .nav-more .nav { margin-top: 2px; }
-.nav-gap {
-  display: block; margin: 10px 6px 3px; padding-top: 8px;
-  border-top: 1px solid var(--line-soft);
-  font: 500 11px/1.2 var(--sans); color: var(--muted);
-}
 .fold {
   margin-top: 14px; border: 1px solid var(--line); border-radius: var(--radius);
   background: var(--surface); overflow: hidden;
@@ -545,20 +540,6 @@ a.game-card .cta { margin-top: auto; font: 500 11.5px/1.3 var(--sans); color: va
 .brief em { font-style: normal; font-weight: 550; color: var(--ink); }
 .brief.solo { border: 1px solid var(--line); border-radius: var(--radius); margin-bottom: 12px; }
 
-/* The page's own contents: each part paired with the question it answers. */
-.toc { display: grid; gap: 0; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
-.toc a {
-  display: grid; grid-template-columns: 2.5ch minmax(110px, 176px) 1fr; gap: 4px 12px;
-  align-items: baseline; padding: 7px 12px; background: var(--surface);
-  color: var(--ink); text-decoration: none; font-size: 12.5px;
-  border-bottom: 1px solid var(--line-soft);
-}
-.toc a:last-child { border-bottom: 0; }
-.toc a:hover { background: var(--surface-2); }
-.toc i { font: 500 11px/1.5 var(--mono); font-style: normal; color: var(--muted); }
-.toc b { font-weight: 550; }
-.toc span { color: var(--muted); }
-
 /* ── numbers ───────────────────────────────────────────────────────────── */
 
 .stats {
@@ -809,11 +790,6 @@ td.wrap { white-space: normal; min-width: 22ch; }
   .rail { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--line); }
   .nav { flex-direction: row; flex-wrap: wrap; }
   main { padding: 0 14px 56px; }
-}
-
-@media (max-width: 620px) {
-  .toc a { grid-template-columns: 2.5ch 1fr; }
-  .toc span { grid-column: 2; }
 }
 """
 BODY = """
@@ -6957,4 +6933,108 @@ const refilterPromos = afterTyping(refreshPromos);
   if (!node) return;
   node.addEventListener('input', id === 'promo-q' ? refilterPromos : refreshPromos);
 });
+"""
+
+
+#: The whole page shown when there is nothing to show yet: a wiped database still
+#: has to be able to scrape from the UI.  Handwritten here beside ``CSS``/``BODY``/
+#: ``JS`` rather than inside :mod:`src.report`, which builds payloads and serves
+#: them.  Its palette is still its own and it still declares `color-scheme: dark`
+#: where `CSS` carries both schemes — moving it changed which file it lives in, not
+#: that, so a light-mode operator still gets a dark shell on an empty database.
+EMPTY_SHELL = """<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Line shop — scrape to begin</title>
+<style>
+  :root { color-scheme: dark; --ground:#141414; --surface:#1a1a1a; --ink:#ecece8;
+    --muted:#8a8a82; --line:#333; }
+  body { margin:0; min-height:100vh; display:grid; place-items:center;
+    background:var(--ground); color:var(--ink);
+    font:400 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .card { width:min(400px, 92vw); padding:22px; border:1px solid var(--line);
+    border-radius:4px; background:var(--surface); }
+  h1 { margin:0 0 6px; font:600 18px/1.25 system-ui; }
+  p { margin:0 0 14px; color:var(--muted); font-size:13px; }
+  select, button { width:100%; padding:8px 10px; border-radius:3px; border:1px solid var(--line);
+    font:500 13px/1.2 system-ui; margin-top:6px; background:var(--surface); color:var(--ink); }
+  button { background:#222; cursor:pointer; }
+  button:hover { border-color:var(--muted); }
+  button:disabled { opacity:0.55; cursor:wait; }
+  #status { margin-top:10px; font:400 12px/1.4 ui-monospace, monospace; color:var(--muted); }
+  .bar { margin-top:10px; height:4px; border-radius:2px; background:#2a2a2a; overflow:hidden; display:none; }
+  .bar.on { display:block; }
+  .bar > i { display:block; height:100%; width:0%; background:#7aa3c9; transition:width .25s ease; }
+</style></head><body>
+<div class="card">
+  <h1>Line shop</h1>
+  <p>No scrapes yet. Pull live prices, then this page reloads as the odds board.</p>
+  <label for="scope" style="font-size:12px;color:var(--muted)">Scope</label>
+  <select id="scope">
+    <option value="league:MLB" selected>MLB baseball (fast)</option>
+    <option value="sport:baseball">All baseball</option>
+    <option value="all">Everything (slower)</option>
+  </select>
+  <button type="button" id="go">Scrape now</button>
+  <div class="bar" id="bar"><i id="fill"></i></div>
+  <div id="status">Ready.</div>
+</div>
+<script>
+const btn = document.getElementById('go');
+const status = document.getElementById('status');
+const scope = document.getElementById('scope');
+const bar = document.getElementById('bar');
+const fill = document.getElementById('fill');
+let poll = null;
+function payload() {
+  const v = scope.value || 'league:MLB';
+  if (v === 'all') return { tier: 'core' };
+  if (v.startsWith('sport:')) return { tier: 'core', sport: v.slice(6) };
+  if (v.startsWith('league:')) return { tier: 'core', league: v.slice(7) };
+  return { tier: 'core', league: 'MLB' };
+}
+function paint(p) {
+  if (!p) return;
+  bar.classList.add('on');
+  status.textContent = p.message || 'Scraping…';
+  const done = Number(p.done) || 0, total = Number(p.total) || 0;
+  if (total > 0) fill.style.width = Math.max(4, Math.round(done / total * 100)) + '%';
+}
+function startPoll() {
+  if (poll) clearInterval(poll);
+  poll = setInterval(async () => {
+    try {
+      const r = await fetch('/api/status', { cache: 'no-store' });
+      const b = await r.json();
+      if (b.progress) paint(b.progress);
+    } catch (_) {}
+  }, 500);
+}
+btn.addEventListener('click', async () => {
+  btn.disabled = true;
+  status.textContent = 'Scraping…';
+  bar.classList.add('on');
+  startPoll();
+  try {
+    const res = await fetch('/api/collect', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload()),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (poll) clearInterval(poll);
+    if (!res.ok || !body.ok) {
+      status.textContent = 'Failed: ' + (body.error || res.statusText || res.status);
+      btn.disabled = false;
+      return;
+    }
+    status.textContent = 'Got ' + ((body.collect && body.collect.quote_count) || 0) + ' prices — reloading…';
+    fill.style.width = '100%';
+    location.reload();
+  } catch (err) {
+    if (poll) clearInterval(poll);
+    status.textContent = 'Failed: ' + (err && err.message ? err.message : err);
+    btn.disabled = false;
+  }
+});
+</script></body></html>
 """

@@ -320,7 +320,7 @@ def test_the_unproven_books_are_captured_on_their_own_id_and_parse(
     2026-08-08 Pennsylvania captures (74, 246).  ``an_thescore`` holds its
     2026-08-10 Illinois capture (4601, the id's first-ever request — 74 soccer
     rows), taken for the Illinois campaign; the 4623 Pennsylvania proof (225
-    rows) is recorded in ``docs/SOURCE_FEASIBILITY.md`` and its store returns
+    rows) is recorded in ``docs/evidence/action-network.md`` and its store returns
     with the next PA-egress recapture.
 
     The properties held per key: the fixture asks the key's own id, rides v2,
@@ -335,7 +335,7 @@ def test_the_unproven_books_are_captured_on_their_own_id_and_parse(
     assert all(f":{book_id}:" in raw.endpoint for raw in raws), (
         f"{source} must be captured on its own id {book_id}"
     )
-    assert all(f"/web/v2/" in raw.url for raw in raws), "captured on v2"
+    assert all("/web/v2/" in raw.url for raw in raws), "captured on v2"
     assert all("periods=" in raw.url for raw in raws), (
         "the capture has to have asked, or full-game-only is all it can hold"
     )
@@ -435,7 +435,7 @@ def test_asking_for_baseball_windows_does_not_empty_another_sports_board() -> No
     be for a sport that has no innings).  The evidence used to be the betPARX
     Pennsylvania NFL board; that file was retired 2026-08-09 when its stale
     preseason line clashed with the fresh-vintage fixture pool — see
-    ``docs/SOURCE_FEASIBILITY.md`` § "One stale board retired".
+    ``docs/evidence/action-network.md`` § "One stale board retired".
     """
     store = RawStore(FIXTURE_RAW_DIR)
     paths = sorted(FIXTURE_RAW_DIR.glob("an_thescore__*-soccer_*.json"))

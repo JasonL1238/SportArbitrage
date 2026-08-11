@@ -70,20 +70,21 @@ from src.normalize import (
 )
 from src.participants import Participant, resolve_roster
 from src.raw_store import RawResponse
-from src.schema import Market, Period, Quote, QuoteStatus, Selection
+from src.schema import Market, Period, QuoteStatus, Selection
 from src.sources._common import (
     ScopeTally,
     SourceClient,
     Tier,
     capabilities_from,
     drop_duplicate_selections,
-    refuse_one_sided_market,
     envelope_source,
     latest_capture,
     latest_per_endpoint,
     market_label_text,
     mentions_a_sub_period,
     parse_iso_time,
+    priced_quote,
+    refuse_one_sided_market,
     resolve_over_under,
     signed_handicap,
     within_schedule_horizon,
@@ -328,7 +329,7 @@ class ProphetXAdapter:
                 headers={"Content-Type": "application/json"},
                 json={"access_key": access_key, "secret_key": secret_key},
             )
-        except Exception as exc:  # noqa: BLE001 - transport stacks vary
+        except Exception as exc:  # transport stacks vary
             # AssertionError is re-raised alongside the interrupt pair: it is
             # how a test proves no socket was opened, and how a programming
             # error announces itself — neither may be laundered into a
@@ -579,7 +580,7 @@ def parse_prophetx(raws: Sequence[RawResponse]) -> ParseOutcome:
                 per_league=per_league_events.setdefault(league_key, {}),
             )
 
-    for league_key, events in per_league_events.items():
+    for _league_key, events in per_league_events.items():
         for event_id, final_key in resolve_doubleheaders(events).items():
             fixtures[event_id].event_key = final_key
 
@@ -937,25 +938,18 @@ def _parse_selection(
     # currency, the reference does not say.  Publishing it as a stake ceiling
     # under the wrong reading would overstate every ProphetX limit, so no
     # ``limit_amount`` is published until the first credentialed session
-    # settles the semantics (recorded in SOURCE_FEASIBILITY).
+    # settles the semantics (recorded in docs/evidence/exchanges-and-mirrors.md).
     selection_id = selection.get("outcome_id")
     line_id = selection.get("line_id")
     try:
         outcome.quotes.append(
-            Quote(
+            priced_quote(
+                fixture,
                 source=source,
-                observed_at=raw.fetched_at,
-                raw_ref=raw.ref,
-                identity_raw_ref=fixture.identity_ref,
-                sport=fixture.competition.sport,
-                league=fixture.competition.key,
+                raw=raw,
                 event_key=fixture.event_key,
-                source_event_id=fixture.event_id,
-                home_participant=fixture.home.key,
-                away_participant=fixture.away.key,
-                home_team=fixture.home.name,
-                away_team=fixture.away.name,
-                commence_time=fixture.commence_time,
+                sport=fixture.competition.sport,
+                identity_raw_ref=fixture.identity_ref,
                 market=our_market,
                 period=Period.FULL_GAME,
                 selection=our_selection,

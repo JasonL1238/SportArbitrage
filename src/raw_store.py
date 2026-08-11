@@ -123,12 +123,6 @@ class RawResponse:
         }
 
     @property
-    def cache_hints(self) -> dict[str, str]:
-        """Whatever the response said about caching, for freshness auditing."""
-        keys = ("age", "cache-control", "x-cache", "cf-cache-status", "date", "expires", "etag")
-        return {key: self.headers[key] for key in keys if key in self.headers}
-
-    @property
     def sha256(self) -> str:
         return hashlib.sha256(self.body.encode("utf-8")).hexdigest()
 

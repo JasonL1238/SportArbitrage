@@ -1476,7 +1476,7 @@ def _plan_for_offer(
                 "same selection — a parser fault, not a quiet book; no game can "
                 "be named until it is fixed"
             )
-        elif dropped.get("no_active_price") and len(dropped) == 1:  # noqa: SIM114
+        elif dropped.get("no_active_price") and len(dropped) == 1:
             count = dropped["no_active_price"]
             out["skipped"] = dict(sorted(dropped.items()))
             out["caveats"].append(

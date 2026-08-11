@@ -809,8 +809,13 @@ class TestOneArbIsOneText:
 
         def build(keys=None, *, state=None, route_scope="all", **kwargs):
             class _Fake:
-                def __init__(self, key): self.source_key = key; self.leagues = ("MLB",)
-                def close(self): pass
+                def __init__(self, key):
+                    self.source_key = key
+                    self.leagues = ("MLB",)
+
+                def close(self):
+                    pass
+
             return [_Fake("pinnacle" if route_scope == "global" else f"retail-{state}")]
 
         monkeypatch.setattr(collector, "build_sources", build)

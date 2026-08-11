@@ -44,28 +44,6 @@ keys into collected odds, so pruning or re-scraping odds cannot rewrite history.
 A static dashboard embeds the current ledger read-only; the localhost report
 server exposes the same-origin endpoints used to log, edit, settle, and delete.
 
-## Major components
-
-| Component | Responsibility |
-| --- | --- |
-| `src/schema.py`, `src/vocab.py` | Closed normalized quote model, sports, markets, periods, and settlement facts |
-| `src/leagues.py`, `src/rosters.py`, `src/participants.py` | Competition metadata and participant identity |
-| `src/sources/` | Venue-specific fetch and parse adapters plus shared transport guards |
-| `src/sources/research.py` | Sanitized, ignored first-party browser/XHR/WebSocket discovery artifacts; never runtime odds |
-| `src/raw_store.py` | Versioned raw-response envelopes and offline replay inputs |
-| `src/events.py` | Cross-source event reconciliation |
-| `src/validation.py`, `src/distinctness.py`, `src/redundancy.py` | Slate correctness and counterparty independence |
-| `src/commission.py`, `src/settlement.py`, `src/arb.py` | Net pricing, settlement compatibility, and opportunity detection |
-| `src/store.py` | Odds persistence and migrations |
-| `src/jurisdictions.py`, `src/state_selection.py` | Typed IL/PA/NJ/DC routing and detected batch selection |
-| `src/egress.py`, `src/probe_cache.py` | Privacy-reduced explicit detection and separate live-probe cache |
-| `src/promos/` | Promo collection, normalization, persistence, and planning |
-| `src/betlog.py` | Placed-bet persistence, validation, settlement, and bankroll totals |
-| `src/report.py`, `src/report_assets.py` | Dashboard data construction, serving, and handwritten inline assets |
-| `scripts/` | Manual diagnostics and repository checks; not an application dependency |
-| `tests/fixtures/raw/` | Versioned captured inputs for deterministic parser and replay tests |
-| `tests/fixtures/live_regressions/` | Small dated genuine captures for current live-shape regressions |
-
 ## Entry points
 
 - `python -m src` and `python -m src.collector`: odds collector and operational CLI;
@@ -150,7 +128,18 @@ server exposes the same-origin endpoints used to log, edit, settle, and delete.
 - Promotions may reuse settings, raw storage, and transport guards, but its schema, registry, and database remain separate.
 - The bet ledger has a separate schema and lifecycle from both collected odds and promotions; collection never writes or deletes it.
 - The report layer may read and combine all three domains. Only its localhost control plane writes the bet ledger; collection/domain modules must not depend on report rendering.
-- `src/report_assets.py` is handwritten presentation source (`CSS`, `BODY`, and `JS`), not generated output. Generated dashboards and runtime captures belong under ignored `data/` paths.
+- `src/report_assets.py` is handwritten presentation source (`CSS`, `BODY`, `JS`, and
+  `EMPTY_SHELL` — the standalone page a wiped database shows so it can still scrape),
+  not generated output. Generated dashboards and runtime captures belong under ignored `data/` paths.
+- `src/report_copy.py` holds the page's words — what each venue is, what a skip reason
+  meant, what a term means. It is literals only and imports nothing from `src/`, so the
+  registry's completeness checks can read the same words the page shows without
+  importing the report layer.
+- Adapters share the *identity* half of a row and never the vocabulary half.
+  `_common.Fixture` is the resolved event every venue needs, and `_common.priced_quote`
+  builds a `Quote` from one fixture plus that venue's own pricing keywords. Which market
+  a label means, how a line is signed, and what a period number covers stay in the
+  adapter, where a per-book trap can be documented next to the code it bites.
 - The dashboard builds one panel at a time. A panel is rendered on arrival, marked
   stale when the run or sport changes, and unloaded when it leaves the screen; only
   the masthead chrome and the nav counts are computed for panels that are not on

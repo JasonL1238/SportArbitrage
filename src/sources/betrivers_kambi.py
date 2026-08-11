@@ -95,7 +95,6 @@ from src.normalize import (
 )
 from src.participants import (
     with_marker,
-    Participant,
     canonical_participant,
     competition_marker,
     is_pairing,
@@ -114,12 +113,14 @@ from src.schema import (
     Sport,
 )
 from src.sources._common import (
+    Fixture,
     ScopeTally,
     SourceClient,
     Tier,
     capabilities_from,
     envelope_source,
     parse_iso_time,
+    priced_quote,
     response_order,
 )
 from src.sources.base import ParseOutcome
@@ -849,16 +850,9 @@ def _missing_events(payload: dict[str, Any], requested: Sequence[str]) -> list[s
 
 
 @dataclass(frozen=True)
-class _Fixture:
+class _Fixture(Fixture):
     """One accepted pregame event, resolved onto canonical identities."""
 
-    event_id: str
-    sport: Sport
-    competition: League
-    home: Participant
-    away: Participant
-    commence_time: datetime
-    base_key: str
     marker: str | None = None
     """The competition's identity marker, carried so the **priced side** is
     resolved the same way the fixture was.
@@ -1422,19 +1416,11 @@ def _build_quote(
 
     american = _american_odds(raw_outcome, decimal_odds, outcome)
     try:
-        return Quote(
+        return priced_quote(
+            fixture,
             source=source,
-            observed_at=raw.fetched_at,
-            raw_ref=raw.ref,
-            sport=fixture.sport,
-            league=fixture.competition.key,
+            raw=raw,
             event_key=event_key,
-            source_event_id=fixture.event_id,
-            home_participant=fixture.home.key,
-            away_participant=fixture.away.key,
-            home_team=fixture.home.name,
-            away_team=fixture.away.name,
-            commence_time=fixture.commence_time,
             market=rule.market,
             period=rule.period,
             selection=selection,

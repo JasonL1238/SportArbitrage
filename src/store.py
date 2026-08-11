@@ -626,7 +626,7 @@ def migrate_database(path: str | Path, *, backup: bool = True) -> Migration:
         _rollback(conn)
         conn.close()
         raise
-    except Exception as exc:  # noqa: BLE001 - every failure must leave v3 intact
+    except Exception as exc:  # every failure must leave v3 intact
         _rollback(conn)
         conn.close()
         if committed:

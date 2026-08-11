@@ -1,8 +1,9 @@
 # Multi-sport odds collector
 
 A local pipeline that continuously collects real pregame betting data for **six
-sports** from **eleven venues** — six sportsbooks, three betting exchanges and two
-prediction markets — and normalizes it into one validated schema.
+sports** from **40 registered sources** — 16 venues read first-party (11 sportsbooks,
+3 betting exchanges, 2 prediction markets) plus 24 republished feeds that watch a
+book from outside it — and normalizes it into one validated schema.
 
 Every source is a **public endpoint of the venue's own website**. The goal is
 coverage: scrape whatever answers. The default HTTP stack is **Chrome TLS
@@ -21,7 +22,8 @@ byte-identical prices — licences of one book. Counting two of them as two sour
 would let the engine report an "arbitrage" between BetRivers and BetRivers.
 Distinctness is therefore *measured* against a live slate (`src/distinctness.py`)
 before a source is registered, and the rejected tenants are recorded with the
-source they mirror in [`docs/SOURCE_FEASIBILITY.md`](docs/SOURCE_FEASIBILITY.md).
+source they mirror in
+[`docs/evidence/exchanges-and-mirrors.md`](docs/evidence/exchanges-and-mirrors.md).
 
 It is measured **per competition**, because that is what the data turned out to
 be. BetRivers and LeoVegas agree on 64% of prices overall — comfortably distinct
@@ -52,7 +54,7 @@ containers only and produces no rows until October. See **Support status**.
 
 ## Sources
 
-Eleven registered venues, of three kinds. The kind is not decoration: a sportsbook
+Sixteen venues read first-party, of three kinds. The kind is not decoration: a sportsbook
 posts a price it will take the other side of, an exchange shows you somebody
 else's order with a size and a commission, and a prediction market shows a
 contract price with an entry fee. The arbitrage engine prices all three
@@ -74,9 +76,14 @@ disappears and what is left is a one-sided bet for the whole stake.
 | `fanduel` | sportsbook | `content-managed-page?page=CUSTOM&customPageId=…` per US league; `page=SPORT&eventTypeId=1\|2` for soccer/tennis; `event-page?eventId=…&tab=popular` for soccer detail |
 | `pinnacle` | sportsbook | `guest.api.arcadia.pinnacle.com/0.1/{leagues/{id}\|sports/{id}}/{matchups,markets/straight}` |
 | `betrivers_kambi` | sportsbook | `eu-offering-api.kambicdn.com/offering/v2018/rsiusil/{listView,betoffer}` |
-| `leovegas_kambi` | sportsbook | the same Kambi API under operator `leo` — a different book on one platform, [verified distinct](docs/SOURCE_FEASIBILITY.md) |
+| `leovegas_kambi` | sportsbook | the same Kambi API under operator `leo` — a different book on one platform, [verified distinct](docs/evidence/exchanges-and-mirrors.md) |
 | `bovada` | sportsbook | `www.bovada.lv/services/sports/event/coupon/events/A/description/{path}` — one request per league, states `competitors[].home` |
 | `betmgm` | sportsbook | `www.il.betmgm.com/cds-api/bettingoffer/fixtures` — public `x-bwin-accessid`, one paged request per sport |
+| `draftkings` | sportsbook | `sportsbook-nash.draftkings.com/sites/US-IL-SB/api/v5` — the site path *is* the state licence |
+| `caesars` | sportsbook | `api.americanwagering.com/regions/us/locations/il/brands/czr/sb/v3` — likewise, the location segment |
+| `hardrock` | sportsbook | `api.hardrocksportsbook.com` — an Amelco platform; its `A`/`B` selection labels are positional, not home/away |
+| `cloudbet` | sportsbook | `www.cloudbet.com/sports-api/c/v6` — offshore; every market keyed by sport (`baseball.moneyline`) |
+| `onexbet` | sportsbook | `1xbet.com/service-api/LineFeed` — offshore |
 | `matchbook` | exchange | `www.matchbook.com/edge/rest/{navigation,events}` — moneyline, totals and handicaps in one call, **with the money behind each price** |
 | `smarkets` | exchange | `api.smarkets.com/v3/{events,markets,contracts,quotes}` — fully typed; moneyline only, within the venue's 20/min limit |
 | `sxbet` | exchange | `api.sx.bet/{markets/active,orders}` — a resting order book; every price is one counterparty's offer, with its own size |
@@ -111,6 +118,9 @@ python -m src.collector collect --tier core --watch   # poll forever (default ev
 # A text when a risk-free arb clears 3% ROI.  On by default via the local
 # Messages app — no account, but only while this Mac is awake and signed in.
 # The first send raises a one-time Automation prompt; approve it once.
+# Anything that is not you running this deliberately — a script, a scheduled
+# job, a coding agent — passes --no-alert to collect and arb.  A review agent
+# once texted this number by running arb to look at the data.
 #   export ODDS_ALERT_TO=+18479070871      # optional; this is the default
 #   export ODDS_ALERT_MIN_ROI=0.03         # optional; this is the default
 # To send from anywhere instead, switch transports and add Twilio credentials:
@@ -428,42 +438,21 @@ across runs, validation findings, the raw-capture ledger, and the schema itself.
 
 ## Repository layout
 
-```
-src/
-  collector.py     pipeline + CLI
-  vocab.py         closed enums + the per-(sport, period) settlement facts
-  leagues.py       league registry: calendars, horizons, tolerances, total ranges
-  rosters.py       closed membership lists, written from live payloads
-  participants.py  participant identity, per league
-  schema.py        the one normalized row
-  events.py        event keys + global cross-source reconciliation
-  validation.py    graded, sport-aware correctness checks
-  arb.py           cross-book arbitrage, settlement modelling, stake sizing
-  commission.py    what each venue takes out of a winning bet
-  settlement.py    what each venue does with a game that is not played
-  distinctness.py  measures whether two sources are one counterparty
-  raw_store.py     raw-response envelopes and replay
-  store.py         sqlite persistence + versioned migration
-  normalize.py     odds conversions
-  report.py        dashboard: queries the store, renders one standalone HTML file
-  report_assets.py the dashboard front end — CSS and JS, inlined into that file
-  sources/
-    base.py        the source protocol: fetch_raw() + pure parse()
-    guards.py      empty / blocked / CAPTCHA / login / format-change detection
-    registry.py    which sources exist, and how to build one
-    _common.py     shared fetch layer: pacing, retries, capture, scope tallies
-    fanduel.py  pinnacle.py  betrivers_kambi.py  bovada.py  betmgm.py
-    matchbook.py  smarkets.py  sxbet.py  kalshi.py  polymarket.py
-docs/
-  INPUT_CONTRACT.md      what a scraper must deliver, executable as a test
-  SOURCE_FEASIBILITY.md  what each venue actually serves, and what was measured
-tests/
-  fixtures/raw/               real captured responses, all six sports
-  test_source_contract.py     the input contract, enforced per adapter
-  test_fixture_replay.py      the whole slate replayed offline, cross-book
-  test_integration.py         pipeline end to end, incl. the CLI
-  test_validation_adversarial.py   deliberately corrupted input
-```
+One map, kept in one place: [`AGENTS.md`](AGENTS.md) § *Where things live* lists the
+modules with their responsibilities, and § *Where a change belongs* says which file a
+given kind of change goes in. It is the same file every coding agent reads, so this
+document does not keep a second copy to drift from it.
+
+The documents behind it:
+
+| Document | What it answers |
+| --- | --- |
+| [`AGENTS.md`](AGENTS.md) | The rules, the map, and the commands — the entry point |
+| [`docs/architecture.md`](docs/architecture.md) | How the pipelines fit together and which boundary owns what |
+| [`docs/INPUT_CONTRACT.md`](docs/INPUT_CONTRACT.md) | What a scraper must deliver, executable as a test |
+| [`docs/SOURCE_FEASIBILITY.md`](docs/SOURCE_FEASIBILITY.md) | Index into `docs/evidence/`: what each venue actually served, measured and dated |
+| [`docs/MULTI_STATE.md`](docs/MULTI_STATE.md) | State routing, licences, and how a route gets promoted |
+| [`docs/testing.md`](docs/testing.md) | What to run, in what order, and how to report it |
 
 ## Scope
 

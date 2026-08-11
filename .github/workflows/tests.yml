@@ -23,4 +23,6 @@ jobs:
           cache: pip
       - run: pip install -r requirements-dev.txt
       - run: python scripts/check_agent_docs.py
+      - run: ruff check src scripts tests
+      - run: python -m compileall -q src scripts
       - run: python -m pytest tests/ -q

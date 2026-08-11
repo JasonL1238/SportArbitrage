@@ -48,21 +48,20 @@ import httpx
 
 from src import leagues as league_registry
 from src.events import build_event_key, orient, resolve_doubleheaders
-from src.leagues import League
 from src.normalize import decimal_to_american, implied_probability, is_plausible_decimal_odds
-from src.participants import Participant, canonical_participant, is_pairing
+from src.participants import canonical_participant, is_pairing
 from src.raw_store import RawResponse
 from src.schema import (
     MARKETS_REQUIRING_LINE,
     Market,
     Period,
-    Quote,
     QuoteStatus,
     Selection,
     Sport,
     draw_is_priced,
 )
 from src.sources._common import (
+    Fixture,
     ScopeTally,
     SourceClient,
     Tier,
@@ -72,6 +71,7 @@ from src.sources._common import (
     latest_capture,
     latest_per_endpoint,
     parse_iso_time,
+    priced_quote,
     within_schedule_horizon,
 )
 from src.sources.base import ParseOutcome
@@ -390,17 +390,6 @@ def _event_count(raw: RawResponse) -> int:
 # ── parsing (pure) ───────────────────────────────────────────────────────────
 
 
-@dataclass(frozen=True)
-class _Fixture:
-    event_id: str
-    sport: Sport
-    competition: League
-    home: Participant
-    away: Participant
-    commence_time: datetime
-    base_key: str
-
-
 def _stated_league(event: Mapping[str, Any]) -> TagRoute | None:
     """The competition the payload itself names, as a route, or ``None``.
 
@@ -443,8 +432,8 @@ def parse_polymarket(raws: Sequence[RawResponse]) -> ParseOutcome:
     outcome = ParseOutcome()
     source = envelope_source(raws, fallback=SOURCE_KEY)
 
-    fixtures: dict[str, _Fixture] = {}
-    work: list[tuple[RawResponse, Mapping[str, Any], _Fixture]] = []
+    fixtures: dict[str, Fixture] = {}
+    work: list[tuple[RawResponse, Mapping[str, Any], Fixture]] = []
     for raw in latest_per_endpoint(latest_capture(raws)):
         route = ROUTE_BY_SLUG.get(_slug_of(raw.endpoint))
         if route is None:
@@ -528,7 +517,7 @@ def _accept_event(
     source: str,
     captured_at: datetime,
     outcome: ParseOutcome,
-) -> _Fixture | None:
+) -> Fixture | None:
     event_id = str(event.get("id") or event.get("slug"))
     competition = league_registry.league(route.league)
 
@@ -586,7 +575,7 @@ def _accept_event(
     away_side, home_side = orient(
         away, home, competition, home=home if competition.has_home_away else None
     )
-    return _Fixture(
+    return Fixture(
         event_id=event_id,
         sport=route.sport,
         competition=competition,
@@ -642,7 +631,7 @@ def _price(market: Mapping[str, Any], field: str) -> float | None:
     return price if 0.0 < price < 1.0 else None
 
 
-def _selection_for(label: str, fixture: _Fixture) -> Selection | None:
+def _selection_for(label: str, fixture: Fixture) -> Selection | None:
     text = label.strip()
     lowered = text.lower()
     if lowered in ("over", "under"):
@@ -668,7 +657,7 @@ def _parse_market(
     market: Mapping[str, Any],
     raw: RawResponse,
     source: str,
-    fixture: _Fixture,
+    fixture: Fixture,
     event_key: str,
     outcome: ParseOutcome,
 ) -> None:
@@ -792,19 +781,11 @@ def _parse_market(
             continue
         try:
             outcome.quotes.append(
-                Quote(
+                priced_quote(
+                    fixture,
                     source=source,
-                    observed_at=raw.fetched_at,
-                    raw_ref=raw.ref,
-                    sport=fixture.sport,
-                    league=fixture.competition.key,
+                    raw=raw,
                     event_key=event_key,
-                    source_event_id=fixture.event_id,
-                    home_participant=fixture.home.key,
-                    away_participant=fixture.away.key,
-                    home_team=fixture.home.name,
-                    away_team=fixture.away.name,
-                    commence_time=fixture.commence_time,
                     market=rule.market,
                     period=rule.period,
                     selection=selection,

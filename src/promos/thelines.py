@@ -153,7 +153,11 @@ class TheLinesPromoAdapter:
             body=body,
             fetched_at=datetime.now(UTC),
             content_type=response.headers.get("content-type"),
-            headers={k: v for k, v in response.headers.items() if k.lower() != "set-cookie"},
+            # The shared cleaner, not a local copy of it: this used to filter
+            # ``set-cookie`` alone, which is one of the seven names on the denylist,
+            # so an ``authorization`` or ``x-api-key`` echoed back by the origin was
+            # written to a promo envelope on disk.
+            headers=RawResponse.clean_headers(response.headers),
         )
         _PAGE_CACHE[self.url] = (now, raw)
         return [raw]

@@ -2,3 +2,7 @@
 -r requirements.txt
 
 pytest>=8.0,<9.0     # MIT: test runner
+ruff==0.15.*         # MIT: linter; rules and exemptions live in pyproject.toml.
+                     # Pinned to a minor: CI gates on a clean report, and a new
+                     # rule under a selected prefix would fail a build nobody
+                     # changed. Bump deliberately, with the fixes in the same commit.

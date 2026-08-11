@@ -801,7 +801,7 @@ class TestThePlanCommand:
         self._seed(tmp_path, monkeypatch, market="push")
         assert self._run(["plan"]) == 0
         out = capsys.readouterr().out
-        line = next(l for l in out.splitlines() if "worst " in l)
+        line = next(line for line in out.splitlines() if "worst " in line)
         import re as _re
         worst, settles = _re.search(
             r"worst ([+-][\d.]+), settles ([+-][\d.]+)", line
@@ -1140,10 +1140,10 @@ class TestThePlanCommand:
         """
         assert self._run(["plan"]) == 0
         out = capsys.readouterr().out
-        header = next(l for l in out.splitlines() if " at " in l and "—" in l)
+        header = next(line for line in out.splitlines() if " at " in line and "—" in line)
         away_team = header.split(" at ")[0].strip()
         assert away_team == "Philadelphia Phillies", header
-        promo = next(l for l in out.splitlines()
-                     if l.startswith("    promo ") and "@" in l)
+        promo = next(line for line in out.splitlines()
+                     if line.startswith("    promo ") and "@" in line)
         assert " away " in promo, promo
         assert "3.000" in promo, promo

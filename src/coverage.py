@@ -259,7 +259,8 @@ def _required(
 #: application (:mod:`src.sources.research`), not more guesses.
 #:
 #: Illinois's list is the ten online operators on the IGB's authorized-sportsbook
-#: page (recorded 2026-08-03 in ``docs/SOURCE_FEASIBILITY.md``).  All nine Action
+#: page (recorded 2026-08-03 in ``docs/evidence/state-routing.md`` § "Illinois
+#: re-probe").  All nine Action
 #: Network ids were confirmed by name against the 2026-08-08 catalogue capture —
 #: 3915 ``'bet365 IL'``, 282 ``'BetMGM IL'``, 262 ``'BetRivers IL'``, 279
 #: ``'Caesars IL'``/``williamhillil``, 1538 ``'DK IL'``, 270 ``'FanDuel IL'``,
@@ -280,7 +281,8 @@ def _required(
 #: * ``theScore Bet`` is watched through id 4601, **proven** on 2026-08-10: the
 #:   first request from Illinois returned 74 soccer rows across 11 fixtures
 #:   (run 35, replay PASS, capture committed as ``an_thescore`` contract
-#:   evidence — SOURCE_FEASIBILITY § "theScore Bet's Illinois id answers").
+#:   evidence — docs/evidence/action-network.md § "theScore Bet's Illinois id
+#:   answers").
 #:   So ``SINGLE_SOURCE`` here is observed, not on-paper.  The first-party
 #:   ``us-il`` GraphQL surface answered anonymous probes on 2026-08-04 and is
 #:   the Phase 2 adapter that would upgrade the grade to ``DIRECT``.

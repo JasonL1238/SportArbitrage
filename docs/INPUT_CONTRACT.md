@@ -48,8 +48,9 @@ another.
 **A source must be *distinct*, not merely differently named.** Before registering
 one, screen it against every registered source with `src.distinctness`: a venue
 whose prices are ~100% identical to an existing one is the same counterparty, and
-an "arbitrage" between the two is a position nobody can hold. See
-[`SOURCE_FEASIBILITY.md`](SOURCE_FEASIBILITY.md).
+an "arbitrage" between the two is a position nobody can hold. The tenants already
+screened out, and what each mirrors, are in
+[`evidence/exchanges-and-mirrors.md`](evidence/exchanges-and-mirrors.md).
 
 **`parse` must be a pure function of the bytes it is given.** No network, no
 filesystem, no `datetime.now()`, no randomness, no mutable adapter state that
@@ -369,10 +370,13 @@ Violating any of these breaks the pipeline rather than degrading it.
 ```bash
 python3 -m pytest tests/test_source_contract.py -q     # the contract itself
 python3 -m pytest -q                                   # everything
-python3 -m src.collector collect --source <key>        # one live run
+python3 -m src.collector collect --source <key> --no-alert   # one live run
 python3 -m src.collector replay                        # re-parse stored bytes
-python3 -m src.collector arb --verbose                 # what was comparable, and why not
+python3 -m src.collector arb --verbose --no-alert      # what was comparable, and why not
 ```
+
+`--no-alert` on both: alerting is on by default and sends a real text to the operator's
+phone. Bringing up a source is the worst moment to trust the number in it.
 
 A source is integrated for a sport when `collect` reports it healthy, `replay`
 passes, `arb` counts its markets in `comparable_group_count`, **and it has cleared

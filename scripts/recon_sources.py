@@ -201,7 +201,7 @@ def main(argv: list[str] | None = None) -> int:
         if session is not None:
             try:
                 session.close()
-            except Exception:
+            except Exception:  # noqa: BLE001 - research output is already written
                 pass
 
     manifest = write_observations(

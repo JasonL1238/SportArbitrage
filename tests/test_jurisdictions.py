@@ -514,3 +514,29 @@ def test_the_per_state_book_id_question_is_not_the_state_scoped_question() -> No
         assert not files_per_state_book_id(key), key
     routes = jurisdiction("PA").routes
     assert routes["fanduel"].host != jurisdiction("IL").routes["fanduel"].host
+
+
+class TestAddingAStateReachesTheCommandLine:
+    """A state exists once the jurisdiction table names it — everywhere.
+
+    Adding one used to mean finding every place the four were spelled out by hand.
+    The two command lines now read the table, so a new ``Jurisdiction`` is accepted
+    by ``collect --state`` the moment it is declared; this fails if a second list
+    reappears.  The dashboard's checkboxes are still written out in
+    ``src/report_assets.py`` and are the one remaining site.
+    """
+
+    @pytest.mark.parametrize("module", ["src.collector", "src.promos.collector"])
+    def test_the_command_line_offers_exactly_the_declared_jurisdictions(
+        self, module: str, capsys
+    ) -> None:
+        import importlib
+
+        entry = importlib.import_module(module)
+        with pytest.raises(SystemExit):
+            entry.main(["collect", "--state", "ZZ"])
+
+        refusal = capsys.readouterr().err
+        assert "invalid choice: 'ZZ'" in refusal, refusal
+        for state in JURISDICTIONS:
+            assert state in refusal, f"{state} missing from {refusal}"

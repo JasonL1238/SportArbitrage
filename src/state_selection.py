@@ -70,7 +70,7 @@ def detect_and_select(
     try:
         client = client_factory(timeout=settings.HTTP_TIMEOUT)
         detection, provider = detect_egress(client, urls=DEFAULT_DETECTION_URLS)
-    except Exception as exc:  # noqa: BLE001 - converted to one CLI/UI refusal
+    except Exception as exc:  # converted to one CLI/UI refusal
         raise StateSelectionError(
             f"automatic state detection failed: {type(exc).__name__}: {exc}"
         ) from exc
@@ -78,7 +78,7 @@ def detect_and_select(
         if client is not None:
             try:
                 client.close()
-            except Exception:
+            except Exception:  # noqa: BLE001 - a close failure must not mask the detection
                 pass
     states = select_states(detection.state, requested)
     save_detection(settings.EGRESS_STATE_PATH, detection)

@@ -21,16 +21,16 @@ import httpx
 
 from src import leagues as league_registry
 from src.events import build_event_key, orient, resolve_doubleheaders
-from src.leagues import League
 from src.normalize import (
     decimal_to_american,
     implied_probability,
     is_plausible_decimal_odds,
 )
-from src.participants import Participant, canonical_participant, is_pairing
+from src.participants import canonical_participant, is_pairing
 from src.raw_store import RawResponse
-from src.schema import Market, Period, Quote, QuoteStatus, Selection, Sport, draw_is_priced
+from src.schema import Market, Period, QuoteStatus, Selection, Sport, draw_is_priced
 from src.sources._common import (
+    Fixture,
     ScopeTally,
     SourceClient,
     Tier,
@@ -39,6 +39,7 @@ from src.sources._common import (
     envelope_source,
     latest_per_endpoint,
     parse_iso_time,
+    priced_quote,
 )
 from src.sources.base import ParseOutcome
 from src.sources.guards import FormatChangeError, SourceError
@@ -105,16 +106,12 @@ MARKETS_BY_SPORT: dict[Sport, frozenset[Market]] = {
 
 
 @dataclass(frozen=True)
-class _Fixture:
-    event_id: str
-    sport: Sport
-    competition: League
-    home: Participant
-    away: Participant
-    book_home_key: str
-    commence_time: datetime
-    base_key: str
+class _Fixture(Fixture):
+    """The shared fixture plus the market namespace this sport is priced under."""
+
     market_prefix: str
+    """Cloudbet keys every market by sport — ``baseball.moneyline`` — so the
+    prefix resolved with the fixture is what the priced side is read against."""
 
 
 class CloudbetAdapter:
@@ -474,16 +471,7 @@ def _emit_selection(
         "draw": Selection.DRAW,
     }.get(outcome_name)
     if selection in (Selection.HOME, Selection.AWAY):
-        priced = (
-            fixture.book_home_key
-            if selection is Selection.HOME
-            else (
-                fixture.away.key
-                if fixture.book_home_key == fixture.home.key
-                else fixture.home.key
-            )
-        )
-        selection = Selection.HOME if priced == fixture.home.key else Selection.AWAY
+        selection = fixture.our_side(selection)
     if selection is None:
         outcome.skipped[f"outcome:{outcome_name or 'missing'}"] += 1
         return
@@ -547,19 +535,11 @@ def _emit_selection(
 
     try:
         outcome.quotes.append(
-            Quote(
+            priced_quote(
+                fixture,
                 source=source,
-                observed_at=raw.fetched_at,
-                raw_ref=raw.ref,
-                sport=fixture.sport,
-                league=fixture.competition.key,
+                raw=raw,
                 event_key=event_key,
-                source_event_id=fixture.event_id,
-                home_participant=fixture.home.key,
-                away_participant=fixture.away.key,
-                home_team=fixture.home.name,
-                away_team=fixture.away.name,
-                commence_time=fixture.commence_time,
                 market=market,
                 period=period,
                 selection=selection,

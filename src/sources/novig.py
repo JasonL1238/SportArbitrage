@@ -71,22 +71,23 @@ from src.normalize import (
 )
 from src.participants import Participant, resolve_roster
 from src.raw_store import RawResponse
-from src.schema import Market, Period, Quote, QuoteStatus, Selection
+from src.schema import Market, Period, QuoteStatus, Selection
 from src.sources._common import (
     ScopeTally,
     SourceClient,
     Tier,
     capabilities_from,
     drop_duplicate_selections,
-    refuse_one_sided_market,
     envelope_source,
     latest_capture,
     latest_per_endpoint,
     market_label_text,
     mentions_a_sub_period,
+    parse_iso_time,
+    priced_quote,
+    refuse_one_sided_market,
     resolve_over_under,
     signed_handicap,
-    parse_iso_time,
     within_schedule_horizon,
 )
 from src.sources.base import ParseOutcome
@@ -429,7 +430,7 @@ class NovigAdapter:
                     }
                 ),
             )
-        except Exception as exc:  # noqa: BLE001 - transport stacks vary
+        except Exception as exc:  # transport stacks vary
             # AssertionError re-raised alongside the interrupt pair: it is how
             # a test proves no socket was opened, and how a programming error
             # announces itself — neither may be laundered into a "credentials
@@ -597,7 +598,7 @@ def parse_novig(raws: Sequence[RawResponse]) -> ParseOutcome:
                 per_league=per_league_events.setdefault(league_key, {}),
             )
 
-    for league_key, events in per_league_events.items():
+    for _league_key, events in per_league_events.items():
         for event_id, final_key in resolve_doubleheaders(events).items():
             fixtures[event_id].event_key = final_key
 
@@ -975,20 +976,13 @@ def _parse_outcome(
 
     try:
         outcome.quotes.append(
-            Quote(
+            priced_quote(
+                fixture,
                 source=source,
-                observed_at=raw.fetched_at,
-                raw_ref=raw.ref,
-                identity_raw_ref=fixture.identity_ref,
-                sport=fixture.competition.sport,
-                league=fixture.competition.key,
+                raw=raw,
                 event_key=fixture.event_key,
-                source_event_id=fixture.event_id,
-                home_participant=fixture.home.key,
-                away_participant=fixture.away.key,
-                home_team=fixture.home.name,
-                away_team=fixture.away.name,
-                commence_time=fixture.commence_time,
+                sport=fixture.competition.sport,
+                identity_raw_ref=fixture.identity_ref,
                 market=market.our_market,
                 period=Period.FULL_GAME,
                 selection=our_selection,

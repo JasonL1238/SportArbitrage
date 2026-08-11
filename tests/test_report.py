@@ -21,12 +21,11 @@ from src.collector import SOURCE_FACTORIES
 from src.report import (
     MIN_BOOKS_FOR_COMPARISON,
     QUOTE_COLUMNS,
-    SCHEMA_FIELDS,
-    SKIP_NOTES,
     build_report,
     render_fragment,
     render_page,
 )
+from src.report_copy import SCHEMA_FIELDS, SKIP_NOTES
 from src.schema import Market, Period, Quote, QuoteStatus, Selection, Side, Sport
 from src.store import Store
 from tests.conftest import make_quote

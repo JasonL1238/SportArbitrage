@@ -7,7 +7,8 @@ same class of credential as FanDuel's ``_ak``), not a user session.
 
 Reachability is host- and identity-sensitive.  From California the Illinois and
 West Virginia hosts answer; New Jersey may refuse the Illinois access id.  The
-collector defaults to Chrome TLS impersonation — see ``docs/SOURCE_FEASIBILITY.md``.
+collector defaults to Chrome TLS impersonation — see ``docs/evidence/venues.md``,
+"Previously blocked under plain ``httpx``".
 
 Two payload shapes carry prices on the same fixture:
 
@@ -44,7 +45,6 @@ from src.normalize import (
     is_plausible_decimal_odds,
 )
 from src.participants import (
-    Participant,
     canonical_participant,
     is_pairing,
     is_statistic,
@@ -61,6 +61,7 @@ from src.schema import (
     draw_is_priced,
 )
 from src.sources._common import (
+    Fixture,
     ScopeTally,
     SourceClient,
     Tier,
@@ -68,6 +69,7 @@ from src.sources._common import (
     drop_duplicate_selections,
     envelope_source,
     latest_per_endpoint,
+    priced_quote,
 )
 from src.sources.base import ParseOutcome
 from src.sources.guards import FormatChangeError, SourceError
@@ -369,15 +371,9 @@ def _fixture_count(raw: RawResponse) -> int:
 
 
 @dataclass(frozen=True)
-class _Fixture:
-    event_id: str
-    sport: Sport
-    competition: League
-    home: Participant
-    away: Participant
-    book_home_key: str
-    commence_time: datetime
-    base_key: str
+class _Fixture(Fixture):
+    """The shared fixture plus the one thing BetMGM's payload needs remembered."""
+
     participant_ids: Mapping[int, str]
     """BetMGM ``participantId`` -> canonical participant key."""
 
@@ -932,19 +928,11 @@ def _build_quote(
         outcome.skipped["implausible_price"] += 1
         return None
 
-    return Quote(
+    return priced_quote(
+        fixture,
         source=source,
-        observed_at=raw.fetched_at,
-        raw_ref=raw.ref,
-        sport=fixture.sport,
-        league=fixture.competition.key,
+        raw=raw,
         event_key=event_key,
-        source_event_id=fixture.event_id,
-        home_participant=fixture.home.key,
-        away_participant=fixture.away.key,
-        home_team=fixture.home.name,
-        away_team=fixture.away.name,
-        commence_time=fixture.commence_time,
         market=rule.market,
         period=rule.period,
         selection=selection,

@@ -24,7 +24,8 @@ from src.promos.redundancy import brand_coverage, prefer_primary_offers
 from src.promos.schema import PromoOffer
 from src.promos.store import PromoStore
 from src.promos.strategy import apply_usage_guidance
-from src.raw_store import RawStore
+from src.jurisdictions import JURISDICTIONS
+from src.raw_store import RawResponse, RawStore
 from src.sources.guards import SourceError
 
 log = logging.getLogger("promos")
@@ -283,7 +284,7 @@ def _collect_source(
             for raw in raws:
                 try:
                     raw_store.write(raw)
-                except Exception:  # noqa: BLE001
+                except Exception:
                     log.exception("raw write failed for %s failure capture", source.source_key)
         health = PromoSourceHealth(
             source_key=source.source_key,
@@ -296,7 +297,7 @@ def _collect_source(
             error_message=str(exc),
         )
         return PromoParseOutcome(), health, raws
-    except Exception as exc:  # noqa: BLE001 — isolate one bad adapter
+    except Exception as exc:  # isolate one bad adapter
         log.exception("promo fetch failed for %s", source.source_key)
         health = PromoSourceHealth(
             source_key=source.source_key,
@@ -312,12 +313,12 @@ def _collect_source(
         for raw in raws:
             try:
                 raw_store.write(raw)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 log.exception("raw write failed for %s", source.source_key)
 
     try:
         outcome = source.parse(raws)
-    except Exception as exc:  # noqa: BLE001 — isolate one bad parser
+    except Exception as exc:  # isolate one bad parser
         log.exception("promo parse failed for %s", source.source_key)
         health = PromoSourceHealth(
             source_key=source.source_key,
@@ -417,7 +418,7 @@ def collect_promos_once(
                 health_rows.append(health)
                 offers.extend(outcome.offers)
                 log.info("%s", health.summary())
-            except Exception as exc:  # noqa: BLE001 — never abort the slate
+            except Exception as exc:  # never abort the slate
                 log.exception("unexpected promo failure for %s", source.source_key)
                 health_rows.append(
                     PromoSourceHealth(
@@ -487,7 +488,7 @@ def collect_promos_once(
                         f"for {run_state} was not affirmatively confirmed"
                     ),
                 )
-            except Exception:  # noqa: BLE001
+            except Exception:
                 log.exception("failed to persist promo run %s", run_id)
                 ok = False
     finally:
@@ -815,7 +816,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--state",
         action="append",
         type=lambda value: value.strip().upper(),
-        choices=["IL", "PA", "NJ", "DC"],
+        # From the jurisdiction table, never a second list: adding a state should
+        # not mean finding every place the old four were spelled out.
+        choices=sorted(JURISDICTIONS),
         help="additional state; repeatable (detected state is always included)",
     )
     collect.add_argument("--no-store", action="store_true")

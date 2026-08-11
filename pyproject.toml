@@ -1,0 +1,31 @@
+# Tool configuration. There is no build step: this is a local application run from
+# the checkout, so nothing here declares a package.
+
+[tool.ruff]
+target-version = "py313"
+
+[tool.ruff.lint]
+# Correctness rules only. Style is not enforced, because a formatting sweep across
+# a repository this size buries the review diff that matters.
+# RUF100 keeps the exemptions honest: a `# noqa` that no longer suppresses
+# anything is a claim about the code that stopped being true, and now that lint
+# gates CI those are worth catching.
+select = ["E", "F", "W", "B", "BLE", "RUF100"]
+ignore = [
+    # Long lines are wrapped by hand around the prose and tables that explain why a
+    # rule exists; the explanations are the point and reflowing them costs more than
+    # it returns.
+    "E501",
+    # zip() pairs here are equal-length by construction (a row and its own columns,
+    # a leg and its own quote). strict=True would turn that into a runtime raise on
+    # a path that has never been wrong, so the pairing is asserted by tests instead.
+    "B905",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# A few tests assert that *something* raises before narrowing the type is possible,
+# which is the case B017 exists to discourage in production code.
+"tests/**" = ["B017"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

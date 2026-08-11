@@ -164,8 +164,8 @@ _AN_BOOK_IDS: Mapping[str, Mapping[str, int]] = MappingProxyType(
         # fixtures; 4623's was retired 2026-08-09 when the Illinois campaign
         # swapped ``an_thescore``'s single-licence store to its IL capture
         # (4601) — the measurement above stands as record, the bytes return
-        # with the next PA-egress pass (docs/SOURCE_FEASIBILITY.md § "theScore
-        # Bet's Illinois id answers").
+        # with the next PA-egress pass (docs/evidence/action-network.md
+        # § "theScore Bet's Illinois id answers").
         #
         # Two things had to be true at once and neither was, which is why this
         # note used to be long.  The endpoint: the ids are on ``web/v2`` and the

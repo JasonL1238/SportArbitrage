@@ -25,7 +25,8 @@ BetMGM, DraftKings, Caesars, Hard Rock, and their promo landings.
   `rsiuspa`, `rsiusnj`, … are usually one counterparty wearing different
   licences. Swap the *active* operator for the user’s stakeable state; do not
   add `betrivers_pa` beside `betrivers_kambi` unless `src/distinctness.py`
-  proves they disagree. See [`SOURCE_FEASIBILITY.md`](SOURCE_FEASIBILITY.md).
+  proves they disagree. See
+  [`evidence/exchanges-and-mirrors.md`](evidence/exchanges-and-mirrors.md).
 - **Do not remove a working state template** when adding another.
 - **One state per child run.** Each route must be tagged for that exact state;
   a failure is never replaced by another state's route.
@@ -97,7 +98,7 @@ The public exit IP is necessarily disclosed to the provider but is reduced to a
 SHA-256 fingerprint before local persistence.
 
 ```bash
-python -m src.collector collect --tier core --state PA --state NJ
+python -m src.collector collect --tier core --state PA --state NJ --no-alert
 ```
 
 Collection accepts only IL/PA/NJ/DC and fails closed otherwise. Watch mode
@@ -192,14 +193,20 @@ For each failing **retail** source:
    later.
 5. Re-probe that source only until `ok`.
 6. Update promos landings / region headers for the same state.
-7. Note the change in [`SOURCE_FEASIBILITY.md`](SOURCE_FEASIBILITY.md) (date,
+7. Note the change in the `docs/evidence/` file that
+   [`SOURCE_FEASIBILITY.md`](SOURCE_FEASIBILITY.md) names for it — for a state
+   route that is [`evidence/state-routing.md`](evidence/state-routing.md) (date,
    state, egress, result).
 
 ### Step 4 — Collector smoke
 
 ```bash
-python -m src.collector collect --tier core
+python -m src.collector collect --tier core --no-alert
 ```
+
+`--no-alert` because this is a smoke run, and a run without it texts the operator's
+phone the moment a position clears the ROI floor. A bringing-up-a-state run is exactly
+when that number is least worth trusting.
 
 Confirm retail books produce rows, redundancy/distinctness still sane, and
 reports do not hardcode `.il.` when primary is PA.
@@ -240,7 +247,7 @@ Use this when Step 2 fails for a venue.
   template-only probes.
 - Done 2026-08-08: PA egress runs produced parser-clean quotes and FanDuel,
   BetRivers and DraftKings were promoted to `validated` (evidence in
-  `SOURCE_FEASIBILITY.md` § "Pennsylvania first-party routes promoted").
+  `evidence/state-routing.md` § "Pennsylvania first-party routes promoted").
   BetMGM and Caesars remain `template` — access id and CDN block respectively.
 - Resolved 2026-08-09: the three retained Action Network source keys
   (`an_fliff`, `an_circa`, `an_superbook`) that carried ids with no odds on

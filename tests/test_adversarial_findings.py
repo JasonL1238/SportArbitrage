@@ -3943,7 +3943,7 @@ class TestOneBookIsOneCounterpartyInEveryLeague:
         rows = self._tenants(thin_league_rows=9)
         report = find_opportunities(rows, one_counterparty=counterparty_groups(rows))
         assert report.opportunities == [], [
-            f"{o.market.value} {o.margin:.2%} " + " / ".join(l.source for l in o.legs)
+            f"{o.market.value} {o.margin:.2%} " + " / ".join(leg.source for leg in o.legs)
             for o in report.opportunities
         ]
 
@@ -6912,7 +6912,7 @@ class TestARefusedBookStaysRefused:
         ]
         report = self._report(rows)
         assert report.opportunities == [], [
-            f"{o.margin:.2%} " + "/".join(l.source for l in o.legs)
+            f"{o.margin:.2%} " + "/".join(leg.source for leg in o.legs)
             for o in report.opportunities
         ]
         assert report.diagnostics, "and it must say why"
@@ -6950,7 +6950,7 @@ class TestARefusedBookStaysRefused:
             self._q("bovada", Selection.AWAY, 2.10),
         ])
         assert len(report.opportunities) == 1
-        assert {l.source for l in report.opportunities[0].legs} == {"pinnacle", "bovada"}
+        assert {leg.source for leg in report.opportunities[0].legs} == {"pinnacle", "bovada"}
 
 
 class TestASpreadsTwoHalvesAreOneMarket:
@@ -7485,7 +7485,7 @@ class TestAScopeFilterCannotReopenTheCounterpartyGate:
         wta = [q for q in rows if q.league == "WTA"]  # what a scoped command sees
         report = find_opportunities(wta, as_of=self.AS_OF, one_counterparty=measured)
         assert report.opportunities == [], [
-            "/".join(l.source for l in o.legs) for o in report.opportunities
+            "/".join(leg.source for leg in o.legs) for o in report.opportunities
         ]
 
     def test_the_collector_measures_before_it_narrows(self, tmp_path) -> None:
@@ -7526,7 +7526,7 @@ class TestAScopeFilterCannotReopenTheCounterpartyGate:
             )
         assert result.arb is not None
         assert result.arb.opportunities == [], [
-            "/".join(l.source for l in o.legs) for o in result.arb.opportunities
+            "/".join(leg.source for leg in o.legs) for o in result.arb.opportunities
         ]
 
     def test_measuring_from_the_narrowed_rows_is_what_opened_it(self) -> None:
@@ -7576,7 +7576,7 @@ class TestARefusalNarrowsToTheBestRemainingPosition:
             self._q("betrivers_kambi", Selection.AWAY, 1.534),
         ], commissions={})
         assert len(report.opportunities) == 1, [d.code for d in report.diagnostics]
-        assert {l.source for l in report.opportunities[0].legs} == {"bovada", "pinnacle"}
+        assert {leg.source for leg in report.opportunities[0].legs} == {"bovada", "pinnacle"}
 
     def test_the_narrowing_does_not_re_select_the_fault(self) -> None:
         """Taking the *largest* surviving margin re-selects it: with an inverted
@@ -7602,7 +7602,7 @@ class TestARefusalNarrowsToTheBestRemainingPosition:
             (d.code, d.detail) for d in report.diagnostics
         ]
         for opportunity in report.opportunities:
-            assert "fanduel" not in {l.source for l in opportunity.legs}, (
+            assert "fanduel" not in {leg.source for leg in opportunity.legs}, (
                 opportunity.describe()
             )
 
@@ -7636,7 +7636,7 @@ class TestARefusalNarrowsToTheBestRemainingPosition:
             self._q("bookC", Selection.AWAY, 1.93),
         ], commissions={})
         assert len(report.opportunities) == 1
-        assert {l.source for l in report.opportunities[0].legs} == {"bookA", "bookC"}
+        assert {leg.source for leg in report.opportunities[0].legs} == {"bookA", "bookC"}
 
     def test_a_market_deleted_for_an_impossible_edge_is_never_silent(self) -> None:
         """"0 rejected" on a market where a mapping fault was seen and the
@@ -7659,9 +7659,9 @@ class TestARefusalNarrowsToTheBestRemainingPosition:
         ], commissions={})
         assert len(report.opportunities) == 1, [d.code for d in report.diagnostics]
         legs = report.opportunities[0].legs
-        assert {l.source for l in legs} == {"pinnacle", "betrivers_kambi"}
-        spread = max(l.quote.observed_at for l in legs) - min(
-            l.quote.observed_at for l in legs
+        assert {leg.source for leg in legs} == {"pinnacle", "betrivers_kambi"}
+        spread = max(leg.quote.observed_at for leg in legs) - min(
+            leg.quote.observed_at for leg in legs
         )
         assert spread == timedelta(0)
 
@@ -7862,7 +7862,7 @@ class TestASkipNoteNeverContradictsTheMarket:
         )
 
     def test_the_new_reason_has_a_note(self) -> None:
-        from src.report import SKIP_NOTES
+        from src.report_copy import SKIP_NOTES
 
         prefixes = {prefix for prefix, _ in SKIP_NOTES}
         assert "market_in_scope_but_not_fetched" in prefixes
@@ -8208,7 +8208,7 @@ class TestTheGatesAreSearchedTogetherNotInSequence:
         ]
         report = self._report(rows)
         assert len(report.opportunities) == 1, [d.code for d in report.diagnostics]
-        assert {l.source for l in report.opportunities[0].legs} == {"pinnacle", "bovada"}
+        assert {leg.source for leg in report.opportunities[0].legs} == {"pinnacle", "bovada"}
 
     def test_an_earlier_window_is_reachable_after_the_late_one_fails(self) -> None:
         """The late window scores higher *before* settlement is considered and
@@ -8229,9 +8229,9 @@ class TestTheGatesAreSearchedTogetherNotInSequence:
         report = self._report(rows)
         assert len(report.opportunities) == 1, [d.code for d in report.diagnostics]
         legs = report.opportunities[0].legs
-        assert {l.source for l in legs} == {"matchbook", "smarkets"}
-        spread = max(l.quote.observed_at for l in legs) - min(
-            l.quote.observed_at for l in legs
+        assert {leg.source for leg in legs} == {"matchbook", "smarkets"}
+        spread = max(leg.quote.observed_at for leg in legs) - min(
+            leg.quote.observed_at for leg in legs
         )
         assert spread <= timedelta(seconds=180)
 
@@ -8279,7 +8279,7 @@ class TestAThinStatedSizeDoesNotCostTheMarket:
     def test_an_unplaceable_leg_falls_through_to_the_position_underneath(self) -> None:
         report = self._report(0.60)
         assert len(report.opportunities) == 1, [d.code for d in report.diagnostics]
-        assert {l.source for l in report.opportunities[0].legs} == {"pinnacle", "fanduel"}
+        assert {leg.source for leg in report.opportunities[0].legs} == {"pinnacle", "fanduel"}
 
     def test_the_candidate_that_pays_more_wins_even_at_a_lower_margin(self) -> None:
         """Margin is not money: 3.60% capped at 12 pays +0.30, 2.44% on 100 pays
@@ -8288,11 +8288,11 @@ class TestAThinStatedSizeDoesNotCostTheMarket:
         assert len(report.opportunities) == 1
         opportunity = report.opportunities[0]
         assert opportunity.guaranteed_profit > 2.0, opportunity.describe()
-        assert {l.source for l in opportunity.legs} == {"pinnacle", "fanduel"}
+        assert {leg.source for leg in opportunity.legs} == {"pinnacle", "fanduel"}
 
     def test_an_unlimited_venue_still_wins_on_price(self) -> None:
         report = self._report(None)
-        assert {l.source for l in report.opportunities[0].legs} == {"matchbook", "fanduel"}
+        assert {leg.source for leg in report.opportunities[0].legs} == {"matchbook", "fanduel"}
 
 
 class TestOneRecordIsCountedOnce:
@@ -8469,7 +8469,7 @@ class TestABindingSizeMovesTheLegNotTheVenue:
         assert len(report.opportunities) == 1, [d.code for d in report.diagnostics]
         opportunity = report.opportunities[0]
         assert opportunity.guaranteed_profit > 1.5, opportunity.describe()
-        assert {l.source for l in opportunity.legs} == {"bovada", "fanduel"}
+        assert {leg.source for leg in opportunity.legs} == {"bovada", "fanduel"}
 
     def test_a_venue_holding_two_best_prices_keeps_the_good_leg(self) -> None:
         """Removing the venue removes the good leg too, and the drop-candidate
@@ -8735,7 +8735,7 @@ class TestBlockingOneLegRevealsTheNext:
         assert len(report.opportunities) == 1, [d.code for d in report.diagnostics]
         opportunity = report.opportunities[0]
         assert opportunity.guaranteed_profit > 2.0, opportunity.describe()
-        assert {l.source for l in opportunity.legs} == {"pinnacle", "bovada"}
+        assert {leg.source for leg in opportunity.legs} == {"pinnacle", "bovada"}
 
     def test_a_cheaper_unlimited_leg_can_raise_the_cap(self) -> None:
         """``max_total_stake`` is ``min(limit · S · d)``, so it rises when the
@@ -8833,7 +8833,7 @@ class TestAnUnusedStalePriceDoesNotHideItsSource:
             self._q("bovada", Selection.AWAY, 2.05),
         ])
         assert len(report.opportunities) == 1, [d.code for d in report.diagnostics]
-        assert {l.source for l in report.opportunities[0].legs} == {"pinnacle", "bovada"}
+        assert {leg.source for leg in report.opportunities[0].legs} == {"pinnacle", "bovada"}
 
     def test_legs_that_actually_straddle_are_still_refused(self) -> None:
         report = self._report([
@@ -8912,7 +8912,7 @@ class TestTheAssignmentSearchIsExhaustiveNotBounded:
         report = find_opportunities(rows, as_of=self.AS_OF, commissions={})
         assert len(report.opportunities) == 1, [d.code for d in report.diagnostics]
         assert report.opportunities[0].guaranteed_profit > 2.5
-        assert {l.source for l in report.opportunities[0].legs} == {"pinnacle", "bovada"}
+        assert {leg.source for leg in report.opportunities[0].legs} == {"pinnacle", "bovada"}
 
     def test_the_published_profit_is_the_best_any_pairing_can_pay(self) -> None:
         """Seven venues a side, nearly all stating a size.  The bounded walk
@@ -9152,7 +9152,7 @@ class TestTheGatesOnEachAssignmentAreLoadBearing:
         report = find_opportunities(rows, as_of=self.AS_OF, commissions={},
                                     one_counterparty=mirrors)
         assert len(report.opportunities) == 1, [d.code for d in report.diagnostics]
-        legs = {l.source for l in report.opportunities[0].legs}
+        legs = {leg.source for leg in report.opportunities[0].legs}
         assert legs != {"betrivers_kambi", "leovegas_kambi"}, "one book against itself"
         assert len({mirrors[EVERY_LEAGUE][0] if s in mirrors[EVERY_LEAGUE][0] else s
                     for s in legs}) == 2
@@ -9160,7 +9160,7 @@ class TestTheGatesOnEachAssignmentAreLoadBearing:
         # Without the mapping the same rows really are two books, and the bigger
         # edge is the right answer.
         unmapped = find_opportunities(rows, as_of=self.AS_OF, commissions={})
-        assert {l.source for l in unmapped.opportunities[0].legs} == {
+        assert {leg.source for leg in unmapped.opportunities[0].legs} == {
             "betrivers_kambi", "leovegas_kambi"
         }
 
@@ -10489,7 +10489,8 @@ class TestOperatorFacingSentencesAreTrueOnANewBook:
         assert "->3348" not in text and "-> 3348" not in text
 
     def test_the_lede_names_every_book_from_source_notes(self) -> None:
-        from src.report import SOURCE_NOTES, _lede
+        from src.report import _lede
+        from src.report_copy import SOURCE_NOTES
 
         latest = {
             "quote_count": 4,
@@ -10512,7 +10513,7 @@ class TestOperatorFacingSentencesAreTrueOnANewBook:
         keys were missing when this pin landed — draftkings, hardrock, caesars
         and the three vi_ book columns — so the claim was false and every one
         of them rendered as "No description recorded"."""
-        from src.report import SOURCE_NOTES
+        from src.report_copy import SOURCE_NOTES
         from src.sources import registry
 
         missing = sorted(set(registry.keys()) - set(SOURCE_NOTES))
@@ -11334,7 +11335,7 @@ class TestTheDocsSayWhatTheCodeDoes:
         """It said a draw is backable "in soccer — and in hockey over regulation
         time only", while the captured slate holds 38 baseball first-inning draw
         rows and ``PERIOD_RULES`` prices a draw in eight windows."""
-        from src.report import GLOSSARY
+        from src.report_copy import GLOSSARY
 
         entry = next(e for e in GLOSSARY if e["term"] == "Who wins")
         assert "in hockey over regulation time only" not in entry["plain"]
@@ -11344,7 +11345,7 @@ class TestTheDocsSayWhatTheCodeDoes:
         which is the opposite of a contract fee charged on entry — it makes the
         losing leg of a Kalshi hedge look free."""
         from src.commission import ContractFeeCommission
-        from src.report import GLOSSARY
+        from src.report_copy import GLOSSARY
 
         entry = next(e for e in GLOSSARY if e["term"] == "Commission")
         assert "when you enter" in entry["plain"]

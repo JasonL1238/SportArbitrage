@@ -70,6 +70,7 @@ from src.events import reconcile_event_keys
 from src.leagues import LEAGUES, LEAGUES_BY_SPORT, is_known
 from src.leagues import league as get_league
 from src.normalize import decimal_to_american
+from src.jurisdictions import JURISDICTIONS
 from src.raw_store import RawResponse, RawStore
 from src.schema import Market, Quote, QuoteStatus, Sport
 from src.sources import registry
@@ -1067,7 +1068,7 @@ def collect_once(
         # reported fault and a lost slate.
         try:
             _, failures = store.save_quotes_by_source(run_id, all_quotes)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             log.exception("failed to persist quotes for run %s", run_id)
             report.add(
                 Severity.ERROR,
@@ -1161,8 +1162,8 @@ def _check_distinctness(
                 "sources_are_one_counterparty",
                 f"{pair.summary()}. Two licences of one book, not two books: a position "
                 "across them cannot be held, and nothing else in the pipeline can see "
-                "the difference. Remove one from src.sources.registry and record it in "
-                "docs/SOURCE_FEASIBILITY.md with the source it mirrors",
+                "the difference. Remove one from src.sources.registry and record it "
+                "in docs/evidence/exchanges-and-mirrors.md with the source it mirrors",
                 source=pair.source_b,
             )
             continue
@@ -1293,7 +1294,7 @@ def _collect_source(
                     run_id=run_id,
                     capture_id=capture_id,
                 )
-            except Exception:  # noqa: BLE001
+            except Exception:
                 log.exception(
                     "failed to persist %s's refusal payload; the refusal itself "
                     "is still recorded",
@@ -1312,7 +1313,7 @@ def _collect_source(
             ),
             ParseOutcome(),
         )
-    except Exception as exc:  # noqa: BLE001 - one bad source must not stop the run
+    except Exception as exc:  # one bad source must not stop the run
         log.exception("unexpected failure fetching %s", source.source_key)
         return (
             SourceHealth(
@@ -1360,7 +1361,7 @@ def _collect_source(
                 capture_id=capture_id,
             )
             unchanged_payloads += int(unchanged)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         log.exception("failed to persist %s's raw bytes", source.source_key)
         return (
             SourceHealth(
@@ -1385,7 +1386,7 @@ def _collect_source(
 
     try:
         outcome = source.parse(raws)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         log.exception("unexpected failure parsing %s", source.source_key)
         return (
             SourceHealth(
@@ -1789,7 +1790,7 @@ def _check_source_health(
         return
     try:
         previously = store.sources_that_have_produced(run_id)
-    except Exception:  # noqa: BLE001 - history is a nicety; the run is not
+    except Exception:  # history is a nicety; the run is not
         log.exception("could not read source history")
         return
     regressed = sorted(set(silent) & previously)
@@ -2009,7 +2010,7 @@ def replay_run(
                 "recorded sha256s, so the differences below lie between the "
                 "stored rows and the current parser's reading of those "
                 f"verified bytes. {NATIVE_EVOLUTION_NOTE} (deliberate ones "
-                "are recorded in docs/SOURCE_FEASIBILITY.md); so would an "
+                "are recorded in docs/evidence/action-network.md); so would an "
                 "edit to the stored rows themselves, which no sha256 covers; "
                 "corrupted raw bytes would be named as a sha256 mismatch "
                 "instead",
@@ -2402,7 +2403,7 @@ def _cmd_collect(args: argparse.Namespace) -> int:
                     tier=tier,
                     alert=not args.no_alert,
                 )
-            except Exception:  # noqa: BLE001
+            except Exception:
                 # Unattended operation is a requirement, and only the quote
                 # insert used to be protected: a locked database, a disk error
                 # writing a raw capture, or a bug in one adapter's own
@@ -3607,7 +3608,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--state",
         action="append",
         type=lambda value: value.strip().upper(),
-        choices=["IL", "PA", "NJ", "DC"],
+        # From the jurisdiction table, never a second list: adding a state should
+        # not mean finding every place the old four were spelled out.
+        choices=sorted(JURISDICTIONS),
         help="additional state to scrape; repeatable (detected state is always included)",
     )
     collect.add_argument(

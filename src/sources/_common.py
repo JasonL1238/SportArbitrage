@@ -5,8 +5,12 @@ already drifted: only one of them paced its requests, none of them retried, none
 sent a User-Agent, and each had its own spelling of "an empty league is an off
 day but an empty book is a failure".  Ten sources would have been ten copies.
 
-What is shared here is the *mechanics* — a session, pacing, retry, capture, and
-the empty-scope policy.  What is deliberately **not** shared is the vocabulary:
+Two things are shared here.  The *mechanics* — a session, pacing, retry, capture,
+and the empty-scope policy — and the *identity half of a row*: :class:`Fixture`, the
+resolved event every venue needs before it can price anything, and
+:func:`priced_quote`, which builds a :class:`~src.schema.Quote` from one of those
+plus that venue's own pricing keywords.  What is deliberately **not** shared is the
+vocabulary:
 the declarative market tables and ``_build_quote`` differ in kind between books
 (FanDuel states a line two incompatible ways, Pinnacle's periods are numbers
 whose meaning depends on the sport, Kambi scales odds *and* lines by 1000), and
@@ -24,15 +28,19 @@ import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from enum import Enum
-from typing import Any, Callable, Iterable, Mapping, Sequence
+from typing import Any, Callable, Iterable, Mapping, Protocol, Sequence
 from urllib.parse import urlsplit
 
+from src.leagues import League
+from src.participants import Participant
 from src.raw_store import RawResponse
 from src.schema import (
     SELECTIONS_BY_MARKET,
     Market,
+    Quote,
     QuoteStatus,
     Selection,
+    Sport,
     draw_is_priced,
 )
 from src.sources.guards import (
@@ -1063,6 +1071,185 @@ def latest_capture(
         for raw in raws
         if not raw.capture_id and newest.fetched_at - raw.fetched_at <= separation
     ]
+
+
+# ── the identity half of a row ───────────────────────────────────────────────
+#
+# The vocabulary half — which market a label means, how a line is signed, what a
+# period number covers — stays in the venue adapter, for the reasons in this
+# module's own docstring.  The *identity* half is the opposite case: every venue
+# answers the same six questions about a game, and every adapter was restating
+# the same twelve assignments to say so.  Twelve chances, per venue, to read the
+# home side into ``away_team``.
+
+
+# ``kw_only`` so a venue may add a field without inheriting an ordering constraint:
+# a subclass's own required field would otherwise have to precede any defaulted one
+# here, which is a rule about declaration order masquerading as a rule about venues.
+@dataclass(frozen=True, kw_only=True)
+class Fixture:
+    """One accepted pregame event, resolved onto this repository's identities.
+
+    Shared because it was written seven times identically.  A venue that needs
+    to remember something extra — which competitor *the book* called home, the
+    prefix its markets hang under — subclasses this and documents that field
+    where the venue's own vocabulary lives, rather than growing this one.
+    """
+
+    event_id: str
+    sport: Sport
+    competition: League
+    home: Participant
+    away: Participant
+    commence_time: datetime
+    base_key: str
+    book_home_key: str | None = None
+    """Key of the competitor *the book* called home, where the book says.
+
+    Optional because not every venue states one: an event-contract market names a
+    contract rather than a side (polymarket), and an exchange or a sportsbook may
+    simply publish the pair (matchbook, betrivers_kambi).  Requiring it here is what
+    kept those three restating this class instead of using it.  Where a venue does
+    state one, it is not always :attr:`home` — see the venue's own note, because a
+    league with no real home side (tennis) has :func:`src.events.orient` impose an
+    ordering the book disagrees with about half the time.
+
+    Read it through :attr:`book_home` wherever a selection depends on it.  This was
+    a required field, and making it optional turned "the venue never set it" from a
+    ``TypeError`` at construction into a silent comparison against ``None`` — which
+    resolves to the *home* competitor and attaches the price to the wrong player,
+    the one fault these venue notes exist to prevent."""
+
+    @property
+    def book_home(self) -> str:
+        """:attr:`book_home_key`, refusing rather than guessing when it is absent."""
+        if self.book_home_key is None:
+            raise ValueError(
+                f"{self.event_id}: this venue states its selections against the side "
+                "the book called home, and the fixture carries none"
+            )
+        return self.book_home_key
+
+    @property
+    def book_away(self) -> str:
+        """The competitor the book did *not* call home — whichever of ours that is."""
+        return self.away.key if self.book_home == self.home.key else self.home.key
+
+    def our_side(self, selection: Selection) -> Selection:
+        """*selection*, stated against the book's own two sides, restated against ours.
+
+        A venue names its sides its own way — Bovada's ``H``/``A``, Cloudbet's
+        ``home``/``away``, Hard Rock's Amelco ``A``/``B``, SX's outcome ``1``/``2`` —
+        and what every one of them means is *the book's* home side, which is our
+        :attr:`home` only where the league has one.  In tennis
+        :func:`src.events.orient` imposes an ordering by participant key and the book
+        orders the two names however it likes, so the two disagree about half the time.
+
+        Seven adapters had written this translation out by hand in six different
+        spellings.  Getting it wrong is not a missing row but a price on the wrong
+        player: two books' prices for one match come out mirrored, both legs of a
+        "position" back the same competitor, and the report shows a guaranteed profit on
+        two perfectly ordinary prices.  Which *label* means the book's home side stays
+        in the adapter — that is the venue's vocabulary — and only the translation is
+        shared.
+        """
+        priced = self.book_home if selection is Selection.HOME else self.book_away
+        return Selection.HOME if priced == self.home.key else Selection.AWAY
+
+
+class FixtureIdentity(Protocol):
+    """What :func:`priced_quote` needs of a fixture, whoever declared it.
+
+    Structural on purpose: several venues keep their own struct — an exchange whose
+    events carry a resolved ``event_key``, a venue that resolves the sport per page —
+    and the point is that these five facts came from one resolved event rather than
+    being re-derived per price, not that they came from one class.  A venue that
+    spells its identifier something other than ``event_id`` (Pinnacle's ``matchup_id``,
+    Kalshi's ``game_id``) does not satisfy this and builds its rows longhand.
+    """
+
+    event_id: str
+    competition: League
+    home: Participant
+    away: Participant
+    commence_time: datetime
+
+
+#: The fields :func:`priced_quote` fills from the fixture and can therefore only
+#: receive through ``**priced``.  Named so that passing one there is refused loudly
+#: instead of colliding inside ``Quote(**identity, **priced)``, where the
+#: ``TypeError`` would be caught by the adapters' own ``except (TypeError,
+#: ValueError)`` and filed as a single rejected row — a whole venue rejecting itself
+#: quietly.
+#:
+#: ``source``, ``event_key`` and ``sport`` are deliberately absent: they are named
+#: parameters, so a value for them binds to the parameter and never reaches
+#: ``**priced``.  Passing one twice is Python's own duplicate-argument ``TypeError``
+#: at the call site, which is a syntax-level mistake rather than a silent one.
+_IDENTITY_FIELDS = frozenset(
+    {
+        "observed_at",
+        "raw_ref",
+        "league",
+        "source_event_id",
+        "home_participant",
+        "away_participant",
+        "home_team",
+        "away_team",
+        "commence_time",
+    }
+)
+
+
+def priced_quote(
+    fixture: FixtureIdentity,
+    *,
+    source: str,
+    raw: RawResponse,
+    event_key: str,
+    sport: Sport | None = None,
+    **priced: Any,
+) -> Quote:
+    """A row whose identity comes from the fixture and whose price comes from you.
+
+    ``fixture`` is anything carrying ``event_id``, ``competition``, ``home``,
+    ``away`` and ``commence_time`` — the shared :class:`Fixture` or a venue's own
+    struct, since what matters is that those five facts came from one resolved
+    event rather than being re-derived per price.
+
+    Pass ``sport`` only where the fixture does not carry one itself (an exchange
+    whose competition knows the sport, a venue that resolves it per page). Every
+    remaining keyword is the venue's own pricing vocabulary and goes to
+    :class:`~src.schema.Quote` untouched, so a misspelled one still fails at
+    construction exactly as it did when this was written out longhand.
+    """
+    collisions = _IDENTITY_FIELDS & priced.keys()
+    if collisions:
+        # Written out longhand, naming a field twice was a SyntaxError that
+        # ``compileall`` caught in CI.  Through ``**priced`` it would be a
+        # ``TypeError`` at call time, which every adapter catches and files as one
+        # ``invalid_quote`` row — a whole venue rejecting itself quietly.  Raise
+        # something their handlers do not catch.
+        raise RuntimeError(
+            f"{source}: {', '.join(sorted(collisions))} is the fixture's to fill, "
+            "not the price's — pass it by changing the fixture or the arguments "
+            "above, never through the pricing keywords"
+        )
+    return Quote(
+        source=source,
+        observed_at=raw.fetched_at,
+        raw_ref=raw.ref,
+        sport=fixture.sport if sport is None else sport,
+        league=fixture.competition.key,
+        event_key=event_key,
+        source_event_id=fixture.event_id,
+        home_participant=fixture.home.key,
+        away_participant=fixture.away.key,
+        home_team=fixture.home.name,
+        away_team=fixture.away.name,
+        commence_time=fixture.commence_time,
+        **priced,
+    )
 
 
 # ── which instance produced these bytes ──────────────────────────────────────

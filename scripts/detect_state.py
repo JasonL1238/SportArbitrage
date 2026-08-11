@@ -49,7 +49,7 @@ def main(argv: list[str] | None = None) -> int:
         if client is not None:
             try:
                 client.close()
-            except Exception:
+            except Exception:  # noqa: BLE001 - a close failure must not mask the reading
                 pass
 
     if not args.no_store:

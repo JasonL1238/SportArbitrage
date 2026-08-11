@@ -830,9 +830,13 @@ def test_migrating_a_database_that_is_not_migratable_says_so(tmp_path: Path) -> 
 
 
 def test_the_real_database_in_this_repo_is_handled_deliberately() -> None:
-    """The repository ships ``data/collector.sqlite3`` holding real baseball rows
-    under the old schema.  Whatever its version, opening it must either work or
-    fail with an actionable message — never silently write into it.
+    """A developer's own ``data/collector.sqlite3`` must open or refuse, never be
+    silently written into.  Whatever its version, opening it either works or fails
+    with an actionable message.
+
+    ``data/`` is gitignored runtime output, so this exercises a real accumulated
+    database where one exists and skips in a fresh checkout — which is every CI run.
+    It is a local safety net, not coverage.
     """
     path = Path("data/collector.sqlite3")
     if not path.exists():
@@ -1438,14 +1442,63 @@ def test_a_duplicate_row_costs_its_own_source_and_no_other(
 
 
 def test_response_headers_are_stored_for_freshness_auditing(tmp_path: Path) -> None:
+    """Freshness headers survive the round trip, and a cleaned dict stays cleaned.
+
+    Two separate facts, and this proves the second: :meth:`RawResponse.clean_headers`
+    drops the cookie, and the store writes back exactly what it was handed.  It does
+    **not** prove that a dirty dict is caught, because :meth:`RawStore.write` does not
+    strip — the stripping is every capture path's job, which is what
+    ``test_every_capture_path_cleans_its_headers`` holds them to.
+    """
     store = RawStore(tmp_path)
     raw = RawResponse(
         source="testbook", endpoint="odds", url="https://example.invalid/odds",
         status_code=200, body="{}", fetched_at=datetime(2026, 7, 28, 7, 0, tzinfo=UTC),
-        headers={"age": "42", "x-cache": "HIT", "set-cookie": "secret=1"},
+        headers=RawResponse.clean_headers(
+            {"age": "42", "x-cache": "HIT", "set-cookie": "secret=1"}
+        ),
     )
     loaded = store.read(store.write(raw))
-    assert loaded.cache_hints == {"age": "42", "x-cache": "HIT"}
+    assert loaded.headers == {"age": "42", "x-cache": "HIT"}
+
+
+def test_every_capture_path_cleans_its_headers() -> None:
+    """The store writes back what it is handed, so cleaning is the caller's job.
+
+    A promo adapter had its own copy of the rule that filtered ``set-cookie`` and
+    nothing else, leaving six of the seven denied names — ``authorization`` and
+    ``x-api-key`` among them — to be written to an envelope on disk.  Read as syntax
+    so that a seventh capture path cannot be added with a hand-rolled eighth copy.
+    """
+    import ast
+
+    root = Path(__file__).resolve().parents[1] / "src"
+    offenders = []
+    for path in sorted(root.rglob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if not (isinstance(node, ast.Call) and getattr(node.func, "id", "") == "RawResponse"):
+                continue
+            for keyword in node.keywords:
+                if keyword.arg != "headers":
+                    continue
+                value = keyword.value
+                # The shared cleaner; a value handed in already cleaned; or a copy of
+                # an envelope's own headers, which were cleaned when it was captured.
+                # Anything else — a comprehension over a live response in particular —
+                # is a second copy of the rule, and the copies are what go stale.
+                ok = (
+                    (isinstance(value, ast.Call)
+                     and getattr(value.func, "attr", "") == "clean_headers")
+                    or isinstance(value, (ast.Name, ast.Subscript))
+                    or (isinstance(value, ast.Call)
+                        and getattr(value.func, "id", "") == "dict"
+                        and len(value.args) == 1
+                        and getattr(value.args[0], "attr", "") == "headers")
+                )
+                if not ok:
+                    offenders.append(f"{path.relative_to(root.parent)}:{value.lineno}")
+
+    assert offenders == []
 
 
 def test_credential_like_headers_are_never_stored() -> None:
