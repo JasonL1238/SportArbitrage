@@ -283,10 +283,20 @@ def test_batch_state_detection_includes_requested_states_with_reduced_record(
     assert "203.0.113.12" not in state_selection.settings.EGRESS_STATE_PATH.read_text()
 
 
-def test_auto_state_compatibility_flag_is_not_accepted_by_read_commands() -> None:
-    import src.collector as collector
+def test_retired_auto_state_flag_is_rejected_by_every_command() -> None:
+    """``--auto-state`` is gone, and gone loudly rather than silently ignored.
+
+    It survived as a no-op on ``collect`` after live collection started detecting
+    state on its own.  A flag that parses and does nothing is worse than one that
+    does not parse: a caller still passing it believes it is asking for
+    something.  ``runs`` never accepted it; now neither does ``collect``, so the
+    caller finds out at argument-parse time.
+    """
     import pytest
 
-    with pytest.raises(SystemExit) as caught:
-        collector.main(["runs", "--auto-state"])
-    assert caught.value.code == 2
+    import src.collector as collector
+
+    for argv in (["runs", "--auto-state"], ["collect", "--auto-state"]):
+        with pytest.raises(SystemExit) as caught:
+            collector.main(argv)
+        assert caught.value.code == 2

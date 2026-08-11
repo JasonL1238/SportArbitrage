@@ -3,19 +3,29 @@
 Credentialed exchanges, prediction markets, and the venues that turned out to
 be front-ends of an order book already registered.
 
-## ProphetX and Novig: credentialed exchanges, adapters ahead of keys — 2026-08-09
+## ProphetX and Novig: credentialed exchanges, API read — 2026-08-09 (adapters removed 2026-08-11)
 
 Both venues' official documentation was read (not probed — neither has an
-anonymous surface to probe) and both adapters were written against it:
-`src/sources/prophetx.py` and `src/sources/novig.py`, **deliberately
-unregistered** per the operator's decision until keys are supplied and a
-genuine capture exists. The keys are reserved in
-`registry.CREDENTIALED_SOURCE_KEYS`; credentials are environment-only
-(`ODDS_PROPHETX_ACCESS_KEY` / `ODDS_PROPHETX_SECRET_KEY`,
-`ODDS_NOVIG_CLIENT_ID` / `ODDS_NOVIG_CLIENT_SECRET`); construction succeeds
-without them and `fetch_raw` refuses as `login_required` before any socket.
-The login/token responses are never captured — the body is the secret — and
-the bearer token travels in a request header, which envelopes do not persist.
+anonymous surface to probe) and both adapters were written against it, then
+**removed on 2026-08-11** on the operator's decision: keys had not arrived, and
+2,106 lines reachable from no production path were carrying maintenance cost
+against a session that had not been scheduled. `git log -- src/sources/novig.py
+src/sources/prophetx.py` restores them; the last version to hold both is
+`9ba9c9a`. Nothing else about the venues changed, which is why the reading below
+stays: it is what the documentation said, and re-reading it is the expensive
+part, not retyping the adapter.
+
+Whoever writes the next version starts from the notes below plus
+`docs/INPUT_CONTRACT.md`, and should keep the properties the removed adapters
+had established, none of which are obvious from the venue's own docs:
+credentials environment-only via `src.settings` (`ODDS_PROPHETX_ACCESS_KEY` /
+`ODDS_PROPHETX_SECRET_KEY`, `ODDS_NOVIG_CLIENT_ID` /
+`ODDS_NOVIG_CLIENT_SECRET`), never in a committed `SourceDescriptor.config` and
+never as a query parameter; construction succeeding without them so an
+unconfigured venue is importable, with `fetch_raw` refusing as `login_required`
+before any socket; and login/token responses never captured — the body is the
+secret — with the bearer token travelling in a request header, which envelopes
+do not persist.
 
 **ProphetX** (docs.prophetx.co, read 2026-08-09):
 
@@ -99,30 +109,44 @@ the bearer token travels in a request header, which envelopes do not persist.
   pregame-zero rather than the live coefficient. Makers pay nothing in both
   regimes.
 
-Registration checklist when keys arrive, for either venue — deliberately
-identical to the copy on `CREDENTIALED_SOURCE_KEYS` in
-`src/sources/registry.py`, because a step missing from either copy is how an
-operator registers per instructions and still fails the suite or ships a
-wrong page:
+### Registration checklist
 
-1. descriptor in `_BASE_SOURCES`, classified in the four reachability sets;
-2. `COMMISSIONS` and `SETTLEMENT` entries (Novig's commission must encode
-   pregame-zero, per the fees measurement above);
-3. a genuine capture committed under `tests/fixtures/raw/`;
+This list used to live twice — here and on `registry.CREDENTIALED_SOURCE_KEYS` —
+with a note on each copy that a step missing from either was a defect. The
+constant went with the adapters, so this is now the only copy, and
+`AGENTS.md` routes new-venue work here. It is written for a **credentialed
+exchange**, which is the hardest case; a public sportsbook skips the
+credential-shaped steps and needs everything else. The suite enforces most of
+it and the report renders the rest, so a step skipped shows up as a red test or
+a wrong page rather than as nothing:
+
+1. descriptor in `_BASE_SOURCES`, classified in the four reachability sets —
+   `_check_reachability_is_declared` refuses anything less, because a source
+   left unclassified used to inherit nationwide reach by omission;
+2. `COMMISSIONS` and `SETTLEMENT` entries — `_check_registry` refuses their
+   absence (Novig's commission must encode pregame-zero, per the fees
+   measurement above);
+3. a genuine capture committed under `tests/fixtures/raw/` — `conftest` demands
+   one per registered key;
 4. distinctness against every registered source, plus `src/redundancy.py`
    for any intentional failover pair;
 5. a `src/betlinks.py` entry — `tests/test_betlinks.py` asserts every
    registered non-consensus key resolves to a link;
-6. a `SOURCE_NOTES` entry in `src/report_copy.py` with `kind: exchange` — without
-   one the sources page renders the venue as an unknown sportsbook;
+6. a `SOURCE_NOTES` entry in `src/report_copy.py` with the right `kind` — for an
+   exchange, `kind: exchange`; without one the sources page renders the venue as
+   an unknown sportsbook, which for an exchange is affirmatively wrong;
 7. a `SKIP_NOTES` entry there for every skip reason the adapter emits
    that no existing note covers —
    `test_every_real_skip_reason_has_an_explanation` is parametrised off the
    registry and goes red on an unexplained reason. Prefer an existing
-   spelling to a new one;
-8. flip the stays-unregistered pin in `tests/test_prophetx_novig.py`;
-9. the full acceptance bar in the plan (healthy collect, replay PASS,
-   counted in `comparable_group_count`).
+   spelling to a new one: both removed adapters were rewritten onto the
+   established vocabulary rather than keeping the names they were born with;
+8. the four per-venue lists in `tests/test_adversarial_findings.py` that
+   enumerate every registered key by hand — they are test-local constants with
+   no production symbol to search for, so `grep '"vsin_circa"'` is how to find
+   them;
+9. the full acceptance bar (healthy collect, replay PASS, counted in
+   `comparable_group_count`).
 
 If a response body carries a partner or account identifier, there is no
 sanctioned path to a committed fixture — that would be the finding.

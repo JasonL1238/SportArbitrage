@@ -624,6 +624,11 @@ def capabilities_from(
 #: market published as full-game corrupts the comparison silently — it joins
 #: real full-game rows at the same line and prices a different bet.
 #:
+#: Those two adapters were removed unregistered on 2026-08-11 (see
+#: ``docs/evidence/exchanges-and-mirrors.md``), which does **not** make the
+#: sharing vestigial: every adapter that screens a label reads this list, and the
+#: drift it prevents is between any two of them, not between those two.
+#:
 #: Includes the compact spellings (``1H``, ``H1``, ``Q1``, ``F5``) because a
 #: word-only list reads "1H Moneyline" as a full game.  Deliberately **not**
 #: here: ``OT`` and ``overtime``, which mark whether extra time *counts toward*

@@ -203,12 +203,12 @@ written, and the grep is what is true now.
   focused adapter tests, an evidence entry, and a committed genuine capture. The
   full bar is longer than these five: `docs/INPUT_CONTRACT.md` states what the adapter
   must deliver and what makes a venue a *distinct* counterparty rather than a second
-  name for one already registered. Read the `CREDENTIALED_SOURCE_KEYS` docstring
-  in `src/sources/registry.py` too — it is written for credentialed exchanges, so
-  read past the exchange-only steps — and then grep an existing key in
-  `tests/test_adversarial_findings.py` (`grep '"vsin_circa"'` finds exactly the four):
-  four per-venue lists there enumerate every registered key by hand, and they are
-  test-local constants with no production symbol to search for.
+  name for one already registered, and the **Registration checklist** in
+  `docs/evidence/exchanges-and-mirrors.md` enumerates the nine places a new key has
+  to appear — it is written for credentialed exchanges, so read past the
+  credential-shaped steps. Its step 8 is the one with no production symbol to search
+  for: four per-venue lists in `tests/test_adversarial_findings.py` enumerate every
+  registered key by hand, and `grep '"vsin_circa"'` finds exactly those four.
 - **Shared fetching behavior** → `src/sources/_common.py`, `src/sources/transport.py`, or
   `src/sources/guards.py`.
 - **Anonymous first-party investigation** → reusable capture/redaction in

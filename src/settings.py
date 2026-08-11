@@ -2,22 +2,20 @@
 
 Everything the collector writes stays inside one directory so a run leaves no
 trace elsewhere and can be inspected or deleted wholesale.  Odds sources are
-public endpoints of each venue's own website — no book credentials — with two
-named exceptions: the credentialed exchanges ProphetX and Novig
-(``ODDS_PROPHETX_*`` / ``ODDS_NOVIG_*``), whose adapters exist ahead of their
-registration and refuse at fetch time when the variables are unset.  Optional
+public endpoints of each venue's own website — no book credentials.  Optional
 SMS alerts use Twilio (``ODDS_TWILIO_*``); without those variables the pipeline
 still collects and simply skips texting.
 
-Configuration is read from ``ODDS_*`` environment variables.  The names used to
-be ``MLB_*``, which stopped being true the moment the pipeline collected a
-second sport: an operator reading ``MLB_DB_PATH`` on a database full of tennis
-prices learns something false.  The old names still work — they are looked up as
-deprecated aliases and each one that is actually used is recorded in
-:data:`DEPRECATED_ENV_USED` so the CLI can say so out loud rather than honouring
-them in silence.  A misleading name that still works is a smaller problem than a
-run that silently writes to the default path because the variable it was told to
-read was renamed underneath it.
+Configuration is read from ``ODDS_*`` environment variables, and only those.
+The names were once ``MLB_*``, which stopped being true the moment the pipeline
+collected a second sport — an operator reading ``MLB_DB_PATH`` on a database
+full of tennis prices learns something false — and the old spellings were
+honoured as deprecated aliases for a while afterwards.  That alias path is gone:
+nothing in the repository, its documentation, or the operator's environment
+still names one, and a fallback that is never taken cannot warn anybody.  An
+``MLB_*`` variable is now simply unread, so a run that depends on one writes to
+the default path.  Anything that must survive a rename belongs in
+:data:`ENV_NAMES`, which records the one name each setting answers to.
 """
 from __future__ import annotations
 
@@ -27,33 +25,24 @@ from pathlib import Path
 
 from src.jurisdictions import JURISDICTIONS, normalize_state
 
-#: Prefix for the current variable names.
+#: Prefix for every variable name this module reads.
 ENV_PREFIX = "ODDS"
 
-#: Prefix kept working for compatibility.  Reading one of these is not an error;
-#: it is reported.
-DEPRECATED_ENV_PREFIX = "MLB"
-
-#: ``(deprecated_name, current_name)`` for every alias actually found in the
-#: environment of this process, in lookup order.  The CLI prints these; nothing
-#: depends on the list being empty.
-DEPRECATED_ENV_USED: list[tuple[str, str]] = []
-
-#: Every setting this module reads, as ``suffix -> (current, deprecated)``.
-ENV_NAMES: dict[str, tuple[str, str]] = {}
+#: Every setting this module reads, as ``suffix -> full variable name``.
+#:
+#: Populated by :func:`_lookup` as each setting is resolved, so it is a record of
+#: what was actually read rather than a second list to keep in step.  Error
+#: messages quote it instead of re-spelling ``ODDS_`` themselves — a message
+#: naming a variable that does not exist is worse than no message.
+ENV_NAMES: dict[str, str] = {}
 
 
 def _lookup(suffix: str, default: str) -> str:
-    """Read one setting, preferring the current name over the deprecated alias."""
+    """Read one setting by its ``ODDS_`` name, or return *default*."""
     current = f"{ENV_PREFIX}_{suffix}"
-    deprecated = f"{DEPRECATED_ENV_PREFIX}_{suffix}"
-    ENV_NAMES[suffix] = (current, deprecated)
+    ENV_NAMES[suffix] = current
     value = os.environ.get(current)
     if value is not None:
-        return value
-    value = os.environ.get(deprecated)
-    if value is not None:
-        DEPRECATED_ENV_USED.append((deprecated, current))
         return value
     return default
 
@@ -108,7 +97,7 @@ def _state(default: str = "IL") -> str:
     value = normalize_state(raw)
     if value in JURISDICTIONS:
         return value
-    current, _ = ENV_NAMES["STATE"]
+    current = ENV_NAMES["STATE"]
     BAD_SETTINGS.append(
         f"{current}={raw!r} is unknown; configured states: {', '.join(JURISDICTIONS)}"
     )
@@ -146,7 +135,7 @@ def _number(suffix: str, default: str, *, whole: bool, minimum: float):
     bare ``ValueError: could not convert string to float: 'abc'`` from an import
     that never named the variable.
     """
-    current, _ = ENV_NAMES.get(suffix, (f"{ENV_PREFIX}_{suffix}", ""))
+    current = ENV_NAMES.get(suffix, f"{ENV_PREFIX}_{suffix}")
     text = _lookup(suffix, default)
 
     def _refuse(why: str):
@@ -210,7 +199,7 @@ def _transport() -> str:
     raw = _lookup("ALERT_TRANSPORT", "messages").strip().lower()
     if raw in ALERT_TRANSPORTS:
         return raw
-    current, _ = ENV_NAMES["ALERT_TRANSPORT"]
+    current = ENV_NAMES["ALERT_TRANSPORT"]
     BAD_SETTINGS.append(
         f"{current}={raw!r} is unknown; use one of: {', '.join(ALERT_TRANSPORTS)}"
     )
@@ -226,18 +215,6 @@ TWILIO_ACCOUNT_SID = _lookup("TWILIO_ACCOUNT_SID", "")
 TWILIO_AUTH_TOKEN = _lookup("TWILIO_AUTH_TOKEN", "")
 TWILIO_FROM_NUMBER = _lookup("TWILIO_FROM_NUMBER", "")
 
-#: Credentialed-exchange API keys — empty means the venue's adapter refuses at
-#: fetch time with ``login_required`` rather than probing an API that has
-#: already said access is by arrangement.  Environment-only on purpose: a
-#: credential in ``SourceDescriptor.config`` would be committed, and one in a
-#: query parameter would be stored in every envelope's final URL.  Neither
-#: venue is registered until keys and a genuine capture exist, so an empty
-#: value here is the expected state, not a bad setting.
-PROPHETX_ACCESS_KEY = _lookup("PROPHETX_ACCESS_KEY", "")
-PROPHETX_SECRET_KEY = _lookup("PROPHETX_SECRET_KEY", "")
-NOVIG_CLIENT_ID = _lookup("NOVIG_CLIENT_ID", "")
-NOVIG_CLIENT_SECRET = _lookup("NOVIG_CLIENT_SECRET", "")
-
 
 def refuse_bad_settings() -> int | None:
     """Print every unhonourable ``ODDS_*`` value and return an exit code, or
@@ -249,11 +226,3 @@ def refuse_bad_settings() -> int | None:
     for line in BAD_SETTINGS:
         print(f"error: {line}", file=sys.stderr)
     return 2
-
-
-def deprecation_notice() -> str | None:
-    """A line naming every deprecated variable this process honoured, or ``None``."""
-    if not DEPRECATED_ENV_USED:
-        return None
-    pairs = ", ".join(f"{old} (use {new})" for old, new in DEPRECATED_ENV_USED)
-    return f"deprecated environment variable(s) in use: {pairs}"

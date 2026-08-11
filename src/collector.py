@@ -3582,9 +3582,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)-7s %(name)s: %(message)s"
     )
-    notice = settings.deprecation_notice()
-    if notice:
-        log.warning("%s", notice)
 
     parser = argparse.ArgumentParser(
         prog="python -m src.collector",
@@ -3598,11 +3595,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     collect = subparsers.add_parser("collect", help="run one collection pass (default)")
     collect.add_argument(
         "--source", action="append", choices=sorted(SOURCE_FACTORIES), help="repeatable"
-    )
-    collect.add_argument(
-        "--auto-state",
-        action="store_true",
-        help="deprecated compatibility flag; live collection now always detects state",
     )
     collect.add_argument(
         "--state",

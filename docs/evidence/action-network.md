@@ -387,6 +387,8 @@ pinned separately by
 `test_the_nationwide_half_of_takeable_is_exactly_the_named_set`.
 
 The advice above still stands for the sources ahead: theScore Bet belongs in
-`RETAIL_SOURCE_KEYS` with per-state routes, and ProphetX and Novig must be
-classified explicitly before they can be registered — that is now enforced rather
-than remembered.
+`RETAIL_SOURCE_KEYS` with per-state routes, and any stakeable exchange must be
+classified explicitly before it can be registered — that is now enforced rather
+than remembered. (The ProphetX and Novig adapters named above were removed
+unregistered on 2026-08-11; see `exchanges-and-mirrors.md`. The
+enforcement is what outlives them.)

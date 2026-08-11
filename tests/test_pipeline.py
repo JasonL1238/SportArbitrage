@@ -856,48 +856,46 @@ def test_the_real_database_in_this_repo_is_handled_deliberately() -> None:
 
 
 def test_the_sport_neutral_env_names_are_read(monkeypatch, tmp_path: Path) -> None:
-    """``MLB_DB_PATH`` was a lie the moment a second sport was collected, but a
-    rename that silently ignored the old name would send a configured run to the
-    default path instead."""
+    """``ODDS_*`` is the whole surface, and every name is recorded as it is read.
+
+    ``ENV_NAMES`` is what error messages quote, so it has to be populated by the
+    lookup rather than maintained beside it.
+    """
     import importlib
 
     monkeypatch.setenv("ODDS_DATA_DIR", str(tmp_path / "odds"))
-    monkeypatch.delenv("MLB_DATA_DIR", raising=False)
     settings = importlib.reload(importlib.import_module("src.settings"))
     try:
         assert settings.DATA_DIR == tmp_path / "odds"
         assert settings.DB_PATH == tmp_path / "odds" / "collector.sqlite3"
-        assert settings.DEPRECATED_ENV_USED == []
-        assert settings.deprecation_notice() is None
+        assert settings.ENV_NAMES["DATA_DIR"] == "ODDS_DATA_DIR"
+        assert all(name.startswith("ODDS_") for name in settings.ENV_NAMES.values())
     finally:
         importlib.reload(settings)
 
 
-def test_the_old_mlb_names_still_work_and_are_reported(monkeypatch, tmp_path: Path) -> None:
+def test_the_retired_mlb_names_are_not_read_at_all(monkeypatch, tmp_path: Path) -> None:
+    """The ``MLB_*`` aliases are gone, and a leftover one is inert.
+
+    They were honoured-and-reported for as long as anything plausibly still set
+    one.  Nothing does — not the repository, not its documentation, not the
+    operator's environment — and an alias branch that is never taken cannot warn
+    anybody, so it was carrying only the cost of existing.  This pins the
+    consequence rather than leaving it implied: a stale ``MLB_DATA_DIR`` does
+    not redirect the run, it is simply unread, and the run lands on the default
+    path.  Anyone who finds that surprising is looking at the right test.
+    """
     import importlib
 
     monkeypatch.delenv("ODDS_DATA_DIR", raising=False)
-    monkeypatch.setenv("MLB_DATA_DIR", str(tmp_path / "legacy"))
+    monkeypatch.setenv("MLB_DATA_DIR", str(tmp_path / "retired"))
     monkeypatch.setenv("MLB_HTTP_TIMEOUT", "7.5")
     settings = importlib.reload(importlib.import_module("src.settings"))
     try:
-        assert settings.DATA_DIR == tmp_path / "legacy"
-        assert settings.HTTP_TIMEOUT == 7.5
-        assert ("MLB_DATA_DIR", "ODDS_DATA_DIR") in settings.DEPRECATED_ENV_USED
-        notice = settings.deprecation_notice()
-        assert notice is not None and "MLB_DATA_DIR" in notice and "ODDS_DATA_DIR" in notice
-    finally:
-        importlib.reload(settings)
-
-
-def test_the_new_name_wins_over_the_deprecated_one(monkeypatch, tmp_path: Path) -> None:
-    import importlib
-
-    monkeypatch.setenv("ODDS_DB_PATH", str(tmp_path / "new.sqlite3"))
-    monkeypatch.setenv("MLB_DB_PATH", str(tmp_path / "old.sqlite3"))
-    settings = importlib.reload(importlib.import_module("src.settings"))
-    try:
-        assert settings.DB_PATH == tmp_path / "new.sqlite3"
+        assert settings.DATA_DIR == Path("data")
+        assert settings.HTTP_TIMEOUT != 7.5
+        assert not hasattr(settings, "DEPRECATED_ENV_USED")
+        assert not hasattr(settings, "deprecation_notice")
     finally:
         importlib.reload(settings)
 

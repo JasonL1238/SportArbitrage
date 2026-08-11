@@ -169,8 +169,9 @@ normalized rows in `data/collector.sqlite3`, placed bets in the separate
 `data/egress_state.json`, and route results in `data/probe_cache.sqlite3`.
 Override with `ODDS_DATA_DIR`, `ODDS_RAW_DIR`, `ODDS_DB_PATH`,
 `ODDS_BET_DB_PATH`, `ODDS_STATE`,
-`ODDS_INTERVAL_SECONDS`, `ODDS_HTTP_TIMEOUT`, or `ODDS_PROBE_TTL_DAYS` (the older
-`MLB_*` names still work and log a deprecation).
+`ODDS_INTERVAL_SECONDS`, `ODDS_HTTP_TIMEOUT`, or `ODDS_PROBE_TTL_DAYS`. The
+`ODDS_` prefix is the only one read; the retired `MLB_*` aliases are ignored
+outright rather than honoured with a warning.
 
 ### Illinois, Pennsylvania, New Jersey, and DC
 

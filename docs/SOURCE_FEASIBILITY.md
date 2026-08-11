@@ -54,7 +54,8 @@ python scripts/probe_sources.py --state IL
   coverage · Pennsylvania: no book reaches the two-feed bar · First-party endpoint
   findings
 - **`evidence/exchanges-and-mirrors.md`** — ProphetX and Novig: credentialed exchanges,
-  adapters ahead of keys (2026-08-09) · Polymarket US and Crypto.com Sports: both walls,
+  API read (2026-08-09), adapters removed unregistered (2026-08-11) · Registration
+  checklist: the nine places a new key has to appear · Polymarket US and Crypto.com Sports: both walls,
   measured (2026-08-09) · Polymarket: two venues share the brand (2026-08-08) · Mirrors:
   the trap that looks like progress · Front-ends of an order book already registered
   (2026-08-08)
