@@ -91,11 +91,55 @@ theScore's vocabulary, and it is why `Market.type` needs `_common.mentions_a_sub
 over `Market.name` as a **second witness**, and why a moneyline whose selection
 names are not participants must be rejected rather than reinterpreted.
 
-**One more trap, and it is the DraftKings `trueOdds` trap again.** `Odds` carries
-both `formattedOdds: "+260"` and an unrounded `numeratorLong` /
-`denominatorLong` pair — `13515/3751 = 3.603039`, i.e. **American +260.3, not
-+260**. The display string is rounded and an adapter that reads it understates
-every price. Use the long pair.
+**Soccer's draw is not missing — it is a different market type.** Baseball's board
+shows no `DRAW` selection, which raised the question of whether theScore drops the
+draw leg from a three-way (the failure that makes a 3-way byte-identical to a
+2-way). It does not. MLS, captured the same day, serves
+`Market.type = "THREE_WAY_MONEYLINE"` named **"Match Result"** with selections
+`HOME_MONEYLINE` / **`DRAW`** / `AWAY_MONEYLINE` — 15 of them, and nothing else on
+the lines tab. So the three-way is its own type, and a *plain* two-way `MONEYLINE`
+appearing on a soccer fixture would be a different product that must be skipped
+rather than merged, exactly as Hard Rock refuses `FT:ML` beside `1X2`.
+
+English Premier League, by contrast, had no fixtures posted at all — only a
+`LIST` outright, "Top Goalscorer", 58 selections. Its page issues
+`CompetitionDrawerContent` and `CompetitionPageSectionOtherTabsNode` instead of a
+lines tab. **An out-of-season competition is not a refusal**, and an adapter must
+not read one as a geo-empty board.
+
+**The full market vocabulary, from three boards.** `MONEYLINE` ("Moneyline",
+two-way, teams), `SPREAD` ("Game Spread"), `TOTAL` ("Total Points"),
+`THREE_WAY_MONEYLINE` ("Match Result", soccer), and `LIST` (player props and
+outrights — selections named "10+", "12+", "20+", or a player name; not a
+two-sided market and out of scope). `Market.type` is `null` on some prop markets
+whose name still reads as a prop, so a null type is a skip, not a default.
+
+**Lines come signed per selection, so no sign convention is needed.**
+`MarketSelection.points.decimalPoints` is already `-10.5` on the favourite and
+`+10.5` on the underdog, and identical on both legs of a total (`173.5`/`173.5`).
+This is simpler than Hard Rock, where the adapter must apply `abs`/`-abs` itself —
+but the mirror invariant (`home.line == -away.line`) should still be asserted
+rather than assumed. Note the selection's `fullName` **embeds the line**
+("ATL Dream -10.5", "Over 173.5"), so a participant lookup has to strip a trailing
+signed number first, as `hardrock._selection_for` already does.
+
+**Prices: read the long pair, not the display string — but the reason is narrower
+than it first looked.** `Odds` carries `formattedOdds` beside a `numeratorLong` /
+`denominatorLong` pair, and the pair is the **exact decimal odds as a rational**
+(`18/5 = 3.6` → American `+260`; `3/2 = 1.5` → `-200`).
+
+An earlier draft of this section claimed `formattedOdds` is rounded and cited
+`13515/3751 = 3.603039` shown as `+260`. **That sample came from the parlay
+carousel, not the board**, and the generalisation was wrong: across all 85 board
+selections carrying a long pair, `formattedOdds` is exact in **85 of 85**.
+Rounding appears only where the venue *computes* a price — the parlay above, and
+`13387/2000 = 6.6935` shown as `+569`.
+
+The rule still stands, for two reasons that survive the correction: a display
+string is a formatting decision the venue may change without notice, and the
+computed cases prove it already rounds when it needs to. Use
+`numeratorLong / denominatorLong`. It just is not true that every board price
+today is being understated.
 
 Vocabulary for the adapter: `Market.type` (`MONEYLINE`), `Market.status`
 (`OPEN`), `Market.updatedAtTime`, `MarketSelection.points`,
