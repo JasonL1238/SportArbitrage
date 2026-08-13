@@ -61,7 +61,37 @@ retired.** `MarketSelection.type` is literally `AWAY_MONEYLINE` / home twin, and
 independent witnesses, so the rule is "require agreement, reject on
 disagreement" rather than any separator parsing.
 
-**One trap, and it is the DraftKings `trueOdds` trap again.** `Odds` carries
+**The lines call, and its arguments.** A deep link straight to
+`/sport/baseball/organization/united-states/competition/mlb` (read from
+`SportsMenu`, which publishes 208 competition deep links) issues
+`CompetitionPage` with `{"canonicalUrl": "/sport/baseball/…/mlb"}` and then
+`CompetitionPageSectionLinesTabNode` (271 KB) with the `Section:` id that
+returned, plus `"oddsFormat":"AMERICAN"` and a dozen feature-flag booleans.
+That payload held **58 `StandardEvent`, 86 `Market`, 180 `MarketSelection`,
+214 `Odds`** and 42 `Points`. Deep-linking beats `--click-text`: the click on
+"Baseball" timed out, and the capture survived only because a missed selector is
+now recorded rather than thrown away.
+
+Vocabulary: `Market.type` ∈ {`MONEYLINE`, `SPREAD`, `TOTAL`, `LIST`, null} and
+`MarketSelection.type` ∈ {`HOME_MONEYLINE`, `AWAY_MONEYLINE`, `HOME_SPREAD`,
+`AWAY_SPREAD`, `OVER`, `UNDER`, `LIST`}. **`Segment` is not a betting period** —
+it is boxscore state (`{"number":5,"shortName":"5th","homeScore":0}`), and
+reading it as one would invent sub-period markets that are not there.
+
+**The trap that would price a fabricated moneyline.** One market on the MLB board
+is `type: "MONEYLINE"`, named **"Run In The 1st Inning - Enhanced Odds"**, whose
+selections are typed `AWAY_MONEYLINE` and `HOME_MONEYLINE` — and whose selection
+names are **"Yes" (-110) and "No" (Even)**. So the strongest orientation signal
+on this venue, `MarketSelection.type`, is *wrong here in both directions at once*:
+the market is not full-game, and the sides are not teams. An adapter trusting the
+type pair would publish a first-inning yes/no proposition as the game moneyline
+with "Yes" as the away team, at a price plausible enough to sit beside a real
+line and produce a phantom arbitrage. This is hardrock's `FTEI` / `FT:RR` trap in
+theScore's vocabulary, and it is why `Market.type` needs `_common.mentions_a_sub_period`
+over `Market.name` as a **second witness**, and why a moneyline whose selection
+names are not participants must be rejected rather than reinterpreted.
+
+**One more trap, and it is the DraftKings `trueOdds` trap again.** `Odds` carries
 both `formattedOdds: "+260"` and an unrounded `numeratorLong` /
 `denominatorLong` pair — `13515/3751 = 3.603039`, i.e. **American +260.3, not
 +260**. The display string is rounded and an adapter that reads it understates
