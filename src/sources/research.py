@@ -38,6 +38,19 @@ _SENSITIVE_KEYS = frozenset(
         "api_key",
         "apikey",
         "auth",
+        # ``auth`` alone does not reach these: the rule matches a name's
+        # *trailing* words, so ``auth_key`` offers ``authkey`` and ``key``, and
+        # ``key`` is deliberately not a sensitive word (``source_key``,
+        # ``book_key`` and ``market_key`` are this repository's vocabulary).
+        # A leading-word rule would catch them and would also swallow
+        # ``token_count``, so the literal is added instead — which is what the
+        # note above says to do whenever a venue coins a name.
+        "auth_key",
+        # Measured, not anticipated: theScore Bet's ``env.js`` ships
+        # ``NEXT_PUBLIC_GEOCOMPLY_PRECHECK_SECONDARY_KEY`` beside the
+        # ``…_API_KEY`` that *was* redacted, so on 2026-08-13 a live recon
+        # manifest recorded one of the pair in cleartext.
+        "secondary_key",
         "authorization",
         "api_secret",
         "bearer",
@@ -114,6 +127,18 @@ _SAFE_REQUEST_HEADERS = frozenset(
         "x-requested-with",
     }
 )
+#: Characters that end an unquoted value in free text.
+#:
+#: ``\s`` already covers ``\x09``-``\x0d`` and ``\x1c``-``\x1f``; the control
+#: ranges spelled out here are the gaps it leaves.  They matter because a wire
+#: protocol delimits with them: bet365's pull-pod frames are built from ``;``
+#: and C0 controls, and while the value class stopped only at ``&``, whitespace,
+#: ``,`` and ``}``, one sensitive-looking field code swallowed the whole rest of
+#: the record — ``PA;ID=1;UID=44;OD=5/6;`` sanitized to
+#: ``PA;ID=1;UID=[redacted]``, deleting three prices.  A manifest redacted that
+#: way says "these frames carry no odds" about frames that carried odds.
+_VALUE_STOP = r"&\s,};\x00-\x08\x0e-\x1b\x7f"
+
 _SECRET_TEXT = re.compile(
     r'(?i)("?(?:_h|access_key|access_token|api_key|apikey|atsgeotoken|'
     r'authorization|client_id|client_secret|cookie|deviceid|password|private_key|'
@@ -122,19 +147,43 @@ _SECRET_TEXT = re.compile(
     # ``secret_key`` produces identical output.  Ordering them anyway keeps the
     # next reader from having to work that out.
     r'refresh_token|secret_key|secret|session_id|sessionid|sessiontoken|sst|token|'
-    r'uid)"?\s*[:=]\s*)' r'("[^"\r\n]*"|[^&\s,}]+)'
+    r'uid)"?\s*[:=]\s*)' rf'("[^"\r\n]*"|[^{_VALUE_STOP}]+)'
 )
 _SECRET_QUERY_TEXT = re.compile(
     r"(?i)([?&](?:_h|access_key|api_key|apikey|client_id|client_secret|"
-    r"secret_key|token|uid)=)[^&\"'\s]+"
+    rf"secret_key|token|uid)=)[^{_VALUE_STOP}\"']+"
+)
+
+#: Any ``key=value`` / ``key: value`` pair in free text whose *key* is sensitive.
+#:
+#: **This is what pays for narrowing the value class above, and it is not
+#: optional.**  ``_SECRET_TEXT`` names 22 keys; :data:`_SENSITIVE_KEYS` — which
+#: the JSON walker consults through :func:`_is_sensitive_key` — knows many more,
+#: including ``auth``, ``sid``, ``phpsessid``, ``session_key``, ``signature`` and
+#: ``hmac``.  In free text those sixteen were never matched by anything.  Their
+#: only protection was *accidental*: the old value class ran past ``;`` and the
+#: control characters, so once any covered key appeared earlier in the record,
+#: everything after it was eaten by that match.
+#:
+#: Stopping the value at the real delimiters takes that accident away, and it
+#: does so precisely in the shapes this repository captures — a cookie jar
+#: written without spaces (``sid=…;auth=…;PHPSESSID=…``) and a pull-pod frame
+#: (``token=…\x01sid=…\x02authkey=…``) both went from fully redacted to two or
+#: three credentials in cleartext.  So the free-text path is made to ask the
+#: *same predicate* the structured path asks, rather than a hand-kept subset of
+#: it.  The two drifting apart is the failure mode :func:`_sanitize_json` already
+#: records having been fixed once.
+_FREE_TEXT_PAIR = re.compile(
+    rf'([A-Za-z_][A-Za-z0-9_.-]*)(\s*[:=]\s*)("[^"\r\n]*"|[^{_VALUE_STOP}]+)'
 )
 _FRAME_TOPIC_TOKEN = re.compile(r"(?<![A-Za-z0-9])(?:A_|S_)[A-Za-z0-9+/=_-]{16,}")
 _LONG_BASE64 = re.compile(r"(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{96,}={0,2}")
 
 #: A bearer credential and the token after it, as a *scheme plus value* pair.
 #:
-#: ``_SECRET_TEXT`` cannot reach this one: its value group stops at whitespace, so
-#: on ``Authorization: Bearer eyJ…`` it matches the word ``Bearer`` and leaves the
+#: ``_SECRET_TEXT`` cannot reach this one: its value group stops at every
+#: delimiter in :data:`_VALUE_STOP`, whitespace among them, so on
+#: ``Authorization: Bearer eyJ…`` it matches the word ``Bearer`` and leaves the
 #: token — redacting the scheme and stamping ``[redacted]`` beside the secret,
 #: which reads as sanitized and is worse than leaving it plainly alone.
 _BEARER_TOKEN = re.compile(r"(?i)\b((?:bearer|basic|token)\s+)[A-Za-z0-9._~+/=-]{8,}")
@@ -211,14 +260,53 @@ PROFILES: Mapping[str, ResearchProfile] = {
     "fanatics": ResearchProfile(
         source="fanatics",
         states=frozenset({"IL", "PA", "NJ", "DC"}),
-        app_url="https://sportsbook.fanatics.com/",
-        api_hosts=("fanatics.com",),
+        # ``sportsbook.fanatics.com`` redirects to the marketing site and is not
+        # a board; sending the next agent there is how the "no host exists"
+        # reading survived.  The real per-state pattern, measured by DNS on
+        # 2026-08-13, is ``sportsbook.1{state}.betfanatics.com`` — and it tracks
+        # *licensure*, which is what makes it a route rather than a guess:
+        # ``1il``, ``1pa``, ``1nj``, ``1dc`` and ``1oh`` all resolve, while
+        # ``1ca`` (no legal sports betting), ``1zz``, a nonsense control, the
+        # unprefixed ``il`` and the reindexed ``2il`` are all NXDOMAIN.
+        #
+        # **A resolving host is not a board.** The earlier ``404`` readings from
+        # ``sportsbook.1il.betfanatics.com`` were taken from third-party egress
+        # and never re-measured from Illinois, so what this host serves from
+        # matching egress is still unmeasured — that is the question this
+        # profile now lets somebody ask.
+        app_url="https://sportsbook.1{state}.betfanatics.com/",
+        api_hosts=("fanatics.com", "betfanatics.com"),
     ),
     "bet365": ResearchProfile(
         source="bet365",
         states=frozenset({"IL", "PA", "NJ"}),
-        app_url="https://www.bet365.com/",
+        # The stateless origin is **known wrong** for this venue and was what
+        # every failed probe used.  On 2026-08-04 a normal browser on Illinois
+        # egress showed a full anonymous Illinois slate on the *state* host,
+        # while the stateless one does not serve a board.  ``profile()``
+        # formats the placeholder, and 2026-08-13 DNS confirms the hosts are
+        # real and per-state rather than a wildcard: ``www.il.bet365.com``,
+        # ``www.pa.bet365.com`` and ``www.nj.bet365.com`` all resolve while
+        # ``www.zz.bet365.com`` and a nonsense control are NXDOMAIN.
+        app_url="https://www.{state}.bet365.com/",
         api_hosts=("bet365.com", "bet365.us"),
+        unavailable_states=frozenset({"DC"}),
+    ),
+    "thescore": ResearchProfile(
+        source="thescore",
+        # Licences catalogued by Action Network as per-state theScore Bet ids:
+        # IL 4601, PA 4623, NJ 4620 (``jurisdictions.py`` republished table).
+        # There is no DC id there, while BetMGM, Caesars and Fanatics all have
+        # one, so DC is recorded as no-licence rather than as unmeasured.
+        states=frozenset({"IL", "PA", "NJ"}),
+        # **No ``{state}`` placeholder, deliberately.**  theScore routes by
+        # *edge redirect*, not by path segment the way Caesars does
+        # (``/us/{state}/bet/``).  The redirect target is the measurement — on
+        # 2026-08-03 this default host redirected Illinois egress to
+        # ``sportsbook.us-il.thescore.bet`` — so formatting a state in here
+        # would assert the answer instead of asking the question.
+        app_url="https://sportsbook.thescore.bet/",
+        api_hosts=("thescore.bet", "thescorebet.com"),
         unavailable_states=frozenset({"DC"}),
     ),
 }
@@ -347,7 +435,27 @@ def _redact_value(text: str) -> str:
     redacted = _JWT.sub(_REDACTED, redacted)
     redacted = _SECRET_QUERY_TEXT.sub(rf"\1{_REDACTED}", redacted)
     redacted = _SECRET_TEXT.sub(rf"\1{_REDACTED}", redacted)
+    redacted = _redact_free_text_pairs(redacted)
     return _LONG_BASE64.sub(_REDACTED, redacted)
+
+
+def _redact_free_text_pairs(text: str) -> str:
+    """Redact every ``key=value`` in free text whose key is sensitive.
+
+    Runs after :data:`_SECRET_TEXT` and asks :func:`_is_sensitive_key`, so the
+    free-text path covers exactly the names the structured path covers instead
+    of a hand-kept subset that silently falls behind it.  See
+    :data:`_FREE_TEXT_PAIR` for why the value class cannot be widened again
+    instead.
+    """
+
+    def replace(match: re.Match[str]) -> str:
+        key, separator, value = match.groups()
+        if not _is_sensitive_key(key):
+            return match.group(0)
+        return f"{key}{separator}{_REDACTED}"
+
+    return _FREE_TEXT_PAIR.sub(replace, text)
 
 
 def sanitize_body(body: str | None) -> str | None:

@@ -226,6 +226,28 @@ class BrowserSession:
                 return include(request_url, resource_type)
             return resource_type in {"xhr", "fetch"}
 
+        def diagnostic(
+            method: str, url: str, resource_type: str, detail: str
+        ) -> PageObservation:
+            """A non-response event, in the shape the manifest already stores.
+
+            ``status_code=0`` is what marks these apart from a real response:
+            no HTTP exchange completed, so there is no status to report.  Using
+            :class:`PageObservation` rather than a new type is deliberate —
+            ``write_observations`` serializes whatever it is handed, so these
+            reach the manifest with no schema change on either side.
+            """
+            return PageObservation(
+                method=method,
+                url=sanitize_url(url),
+                status_code=0,
+                resource_type=resource_type,
+                request_headers={},
+                response_headers={},
+                request_body=None,
+                response_body=sanitize_body(detail) or "",
+            )
+
         def on_response(response: Any) -> None:
             request = response.request
             resource_type = str(request.resource_type)
@@ -259,6 +281,47 @@ class BrowserSession:
                 )
             )
 
+        def on_request_failed(request: Any) -> None:
+            """Record a request that never completed.
+
+            Without this a page whose preloader stalls *waiting on a resource
+            that failed* produces no evidence at all: the ``response`` handler
+            only ever sees exchanges that finished, so the manifest of a stalled
+            session and the manifest of a session that simply had nothing to
+            fetch are indistinguishable.  The failure reason names the cause.
+            """
+            try:
+                failure = str(request.failure or "")
+            except Exception:  # noqa: BLE001 - the reason is best-effort evidence
+                failure = ""
+            responses.append(
+                diagnostic(
+                    "FAILED",
+                    str(request.url),
+                    str(request.resource_type),
+                    failure or "request failed with no reason reported",
+                )
+            )
+
+        def on_console(message: Any) -> None:
+            """Record console errors and warnings, sanitized.
+
+            An application that refuses to boot usually says why here first.
+            Only error and warning levels are kept: ``log``/``debug`` on a
+            sportsbook shell is high-volume telemetry, and the point is a
+            manifest a human can read.
+            """
+            try:
+                level = str(message.type)
+                if level not in {"error", "warning"}:
+                    return
+                text = str(message.text)
+                location = message.location or {}
+                url = str(location.get("url", "")) if location else ""
+            except Exception:  # noqa: BLE001 - a malformed message is not fatal
+                return
+            responses.append(diagnostic("CONSOLE", url, level, text))
+
         def on_websocket(socket: Any) -> None:
             record: dict[str, Any] = {
                 "url": sanitize_url(str(socket.url)),
@@ -279,18 +342,53 @@ class BrowserSession:
                 ),
             )
 
-        self._page.on("response", on_response)
-        self._page.on("websocket", on_websocket)
-        self._page.goto(url, wait_until="domcontentloaded", timeout=self._timeout_ms)
-        remaining = max(0, wait_ms)
-        if click_text:
-            before_click = min(4_000, remaining // 3)
-            self._page.wait_for_timeout(before_click)
-            remaining -= before_click
-            self._page.get_by_text(click_text, exact=False).first.click(
-                timeout=self._timeout_ms
+        handlers = (
+            ("response", on_response),
+            ("requestfailed", on_request_failed),
+            ("console", on_console),
+            ("websocket", on_websocket),
+        )
+        for event, handler in handlers:
+            self._page.on(event, handler)
+        try:
+            self._page.goto(
+                url, wait_until="domcontentloaded", timeout=self._timeout_ms
             )
-        self._page.wait_for_timeout(remaining)
+            remaining = max(0, wait_ms)
+            if click_text:
+                before_click = min(4_000, remaining // 3)
+                self._page.wait_for_timeout(before_click)
+                remaining -= before_click
+                try:
+                    self._page.get_by_text(click_text, exact=False).first.click(
+                        timeout=self._timeout_ms
+                    )
+                except Exception as exc:  # noqa: BLE001 - a missed selector is a
+                    # *finding*, not a reason to discard the session.  Letting it
+                    # propagate returned before the caller wrote anything, so a
+                    # three-minute capture was thrown away because one piece of
+                    # navigation text did not match — and the whole point of this
+                    # primitive is trial and error on navigation text.  Record
+                    # which text missed and keep waiting: the traffic captured
+                    # before the click is still evidence.
+                    responses.append(
+                        diagnostic(
+                            "CLICK",
+                            url,
+                            "click",
+                            f"{click_text!r} not found: "
+                            f"{type(exc).__name__}: {exc}",
+                        )
+                    )
+            self._page.wait_for_timeout(remaining)
+        finally:
+            # Handlers are per-call, so a session observed twice would otherwise
+            # count every response of the second pass once per previous call.
+            for event, handler in handlers:
+                try:
+                    self._page.remove_listener(event, handler)
+                except Exception:  # noqa: BLE001 - removal is best-effort cleanup
+                    pass
         websocket_observations = [
             WebSocketObservation(
                 url=record["url"],

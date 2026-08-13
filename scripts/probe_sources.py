@@ -236,8 +236,21 @@ def state_candidates(state: str) -> tuple[Candidate, ...]:
             url = f"{config['base_url']}/sports"
         elif key == "hardrock":
             url = "https://api.hardrocksportsbook.com/sportsbook/api/public/events/tree"
-        else:  # pragma: no cover - map is closed and tested
-            continue
+        else:
+            # A route with no branch here used to be dropped silently, and
+            # nothing downstream would have said so: it never reaches
+            # ``candidates``, so it produces no table row, is not counted in
+            # the "N of M candidate(s) answered" line, and writes no probe-cache
+            # row.  The only other loop that prints route keys filters to
+            # ``UNAVAILABLE``, so a new VALIDATED route would simply be invisible
+            # — a book the operator believes is being probed and is not.  The
+            # chain is a hand-kept duplicate of the retail key set with no test
+            # binding the two, which is exactly the shape that goes stale.
+            raise SystemExit(
+                f"{configured.state} route {key!r} has no probe URL in "
+                "state_candidates(); add a branch for it rather than letting "
+                "the probe skip it silently"
+            )
         candidates.append(
             Candidate(
                 "retail",

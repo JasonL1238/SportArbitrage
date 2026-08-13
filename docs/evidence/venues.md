@@ -57,7 +57,7 @@ Neither opened odds JSON without a licensed-state exit IP:
 |---|---|---|---|
 | DraftKings | `403` Akamai | HTML shell loads; `sportsbook-nash` API still `403`; no odds XHR | `ODDS_HTTP_PROXY` to IL/NJ residential, then adapter |
 | Caesars | `403` CloudFront | `403` | same — licensed-state proxy |
-| Fanatics | NXDOMAIN | NXDOMAIN | find current host |
+| Fanatics | NXDOMAIN | NXDOMAIN | ~~find current host~~ — **found 2026-08-13**: `sportsbook.1{state}.betfanatics.com`, licence-shaped and DNS-confirmed with controls (`state-routing.md` § "Three first-party host maps"). The NXDOMAIN pair above was measured against a host that is not the board. Next lever is an HTTP request from IL/PA egress |
 | bet365 | `403` Cloudflare | `403` | anonymous application observation only; never bypass a challenge |
 | Betway / Bally / Fliff / Hard Rock | no simple public GET | — | reverse runtime/XHR or mobile |
 | ESPN BET | discontinued | — | skip |

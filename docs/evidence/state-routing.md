@@ -3,6 +3,141 @@
 Per-state route evidence: what a licensed host returned from matching egress,
 which routes were promoted on it, and which feeds cover which book.
 
+## theScore Bet: the anonymous surface, measured end to end — 2026-08-13
+
+From the operator's **Illinois** egress (fingerprint `34e56847c7ec`), with
+`python scripts/recon_sources.py thescore --state IL` in `--mode http` and then
+`--mode chrome --include-all --capture-dom --wait-ms 45000`. Three manifests
+under `data/research/thescore/IL/`, stamped 20260813T204836Z, 20260813T204855Z
+and 20260813T205527Z — 163 responses and 3 websockets on the last. (That tree is
+ignored runtime output and is wiped periodically; the findings are recorded here
+because the manifests are not durable.) **This supersedes "Parser/capture work
+remains" with the actual shape of the work.**
+
+**The host chain, no longer inferred.** `sportsbook.thescore.bet` serves a
+Next.js shell (200, 3,501 B, empty `__next`). `/env.js` publishes
+`NEXT_PUBLIC_SPORTSBOOK_API_URL = https://sportsbook.us-default.thescore.bet/graphql`
+and a websocket twin at `…/graphql/websocket`. The "edge redirect" the 2026-08-03
+note described is a **302 on the API, not on the page**: `Startup` is issued to
+the *default* edge and answers `302` to the `us-il` one, after which all 19
+subsequent operations go to `sportsbook.us-il.thescore.bet`.
+
+**Persisted queries are `GET`, not `POST`**, at
+`/graphql/persisted_queries/{sha256Hash}?operationName=…&variables=…&extensions=…`.
+
+**But the endpoint does not require them.** A plain
+`POST {"query":"{__typename}"}` to the default edge returned
+`{"data":{"__typename":"RootQueryType"}}` — **200, anonymous, no hash, no token**.
+Introspection is disabled (`"GraphQL introspection is disabled."`). So the hash
+map is how the *client* talks, not a gate: an adapter may send query documents
+directly, which removes the rotating-hash failure mode, the bundle fetch that
+precedes it, and the `connectToken` that the persisted-query URL carries in its
+`variables` parameter. **The query text still has to be learned from what the
+application issues** — introspection being off means the schema cannot be asked
+for, and inventing a query is inventing an endpoint.
+
+**Twelve anonymous operations, all 200, from the home page alone**: `Startup`
+(17 KB), `SportsMenu` (95 KB), `FeaturedMarketsCarouselNode` (130 KB),
+`MarketplaceShelves` (93 KB), `PromotionsCarouselNode`, `ChipsCarouselNode`,
+`DeconstructedMarketplace`, `Betslip`, `AccountMenu`, `LiveEventsCount`,
+`CasinoMenu`, `ReferralTrackerCardNode`. `CompetitionPage` and
+`CompetitionPageSectionLinesTabNode` need a click into a league and are not yet
+captured. A live subscription runs on
+`wss://sportsbook.us-il.thescore.bet/graphql/websocket` — 8 frames sent, 42
+received — so prices also push, which no adapter here consumes today.
+
+**The exit IP is real and its field is named.**
+`data.startup.regionalMetadata.ipAddress` carries it. It reached the manifest as
+`[redacted]` only because `_IPV4` catches it *by shape* — `ipAddress` is not in
+`_SENSITIVE_KEYS`, so nothing keyed on the name would have saved it. Beside it:
+`currentRegionCode: "US-IL"`, `ipAddressShortRegionCode: "IL"`,
+`ipAddressCity: "Chicago"`, `validRegion: true`, and an `anonymousToken` (which
+*was* caught by name). Those region fields are the cross-check that catches a
+correct host reached from the wrong egress.
+
+**Orientation is stated, not inferred — the highest risk in the adapter is
+retired.** `MarketSelection.type` is literally `AWAY_MONEYLINE` / home twin, and
+`LiveApiBaseballEvent` carries explicit `homeTeam` / `awayTeam` objects. Two
+independent witnesses, so the rule is "require agreement, reject on
+disagreement" rather than any separator parsing.
+
+**One trap, and it is the DraftKings `trueOdds` trap again.** `Odds` carries
+both `formattedOdds: "+260"` and an unrounded `numeratorLong` /
+`denominatorLong` pair — `13515/3751 = 3.603039`, i.e. **American +260.3, not
++260**. The display string is rounded and an adapter that reads it understates
+every price. Use the long pair.
+
+Vocabulary for the adapter: `Market.type` (`MONEYLINE`), `Market.status`
+(`OPEN`), `Market.updatedAtTime`, `MarketSelection.points`,
+`Competition.slug` (`nfl-preseason`), `Organization.slug` (`united-states`),
+`Participant.abbreviation` / `fullName` / `resourceUri`, and `TsbDeepLink.webUrl`
+(`/sport/baseball/organization/…`) which is what a `betlinks` event URL would be
+built from.
+
+**Pennsylvania is still unmeasured over HTTP.** Its edge exists (below), but
+nothing has asked it anything, and DNS is not a route.
+
+## Three first-party host maps, measured by DNS with negative controls — 2026-08-13
+
+Egress-independent: DNS resolution does not depend on which state the query
+comes from, so these were taken from the operator's default egress and are
+reproducible anywhere. **A resolving host is not a board** — none of this says
+what any of these hosts serves, only which ones exist. What makes it evidence
+rather than trivia is the *controls*: each pattern was probed with a name that
+should not exist, and every one of those refused.
+
+| host | result |
+| --- | --- |
+| `sportsbook.thescore.bet` | resolves (Cloudflare `104.17.242-246.50`) |
+| `sportsbook.us-il.thescore.bet` | resolves — confirms the 2026-08-03 redirect target |
+| **`sportsbook.us-pa.thescore.bet`** | **resolves** |
+| `sportsbook.us-nj.thescore.bet` | resolves |
+| `sportsbook.us-zz.thescore.bet` | **NXDOMAIN** ← control |
+| `nonsense-control-xyz.thescore.bet` | **NXDOMAIN** ← control |
+
+The `us-zz` control is the load-bearing one: it rules out a wildcard *inside the
+`us-XX` pattern*, so Pennsylvania's edge is a real per-state host rather than an
+artifact of asking. That retires the "PA edge hostname is unmeasured, do not put
+it in `jurisdictions.py`" caveat **at the DNS layer only** — what it answers from
+Pennsylvania egress is still unmeasured, and that is what a route needs.
+
+**Fanatics: the "no host exists" reading was wrong, and `venues.md` said so.**
+That table recorded `NXDOMAIN` under both transports with next lever "find
+current host". The current host was found:
+
+| host | result |
+| --- | --- |
+| `sportsbook.fanatics.com` | resolves (Akamai) — but redirects to marketing, per 2026-08-12 |
+| `sportsbook.betfanatics.com` | resolves |
+| **`sportsbook.1il.betfanatics.com`** | **resolves** |
+| **`sportsbook.1pa.betfanatics.com`** | **resolves** |
+| `sportsbook.1nj.` / `1dc.` / `1oh.betfanatics.com` | resolve |
+| `sportsbook.1ca.betfanatics.com` | **NXDOMAIN** ← control |
+| `sportsbook.1zz.betfanatics.com` | **NXDOMAIN** ← control |
+| `sportsbook.il.betfanatics.com` (no prefix) | **NXDOMAIN** ← control |
+| `sportsbook.2il.betfanatics.com` (reindexed) | **NXDOMAIN** ← control |
+| `nonsense-control-xyz.betfanatics.com` | **NXDOMAIN** ← control |
+| `api.betfanatics.com` | NXDOMAIN |
+
+The pattern is exactly `sportsbook.1{state}.betfanatics.com`, the `1` is a
+constant rather than an index, and **the map tracks licensure**: `1oh` resolves
+and `1ca` does not, which is the difference between a state where Fanatics is
+licensed and one with no legal sports betting at all. `1dc` resolving matches
+`an_fanatics`' DC id 3679.
+
+This does **not** overturn the 2026-08-12 closure below, which rests on the
+operator checking the *app* and finding the board behind a login. It overturns
+one premise of it — that there is no web host to find. The `404` readings from
+`sportsbook.1il.betfanatics.com` that the closure note called moot were taken
+from third-party egress; from Illinois egress this host has never been asked.
+`src/sources/research.py` now points there instead of at the marketing redirect.
+
+**bet365**, for completeness, re-confirming the 2026-08-13 measurement already
+relied on: `www.il.bet365.com`, `www.pa.bet365.com` and `www.nj.bet365.com`
+resolve via Cloudflare; `www.zz.bet365.com` and `nonsense-control.bet365.com`
+are NXDOMAIN. The research profile's stateless `https://www.bet365.com/` — the
+origin every failed probe used — is corrected to the per-state host.
+
 ## Caesars is gated by an AWS WAF token, not by egress — and its odds are not on REST at all — 2026-08-12
 
 Captured with `python scripts/recon_sources.py caesars --state IL --mode chrome
@@ -478,7 +613,7 @@ built there.
 | Fanatics | sportsbook web host redirects to marketing; first-party discovery remains native-app work |
 | Bally Kambi | `429 No access` |
 | Circa | official site says the complete real-time menu is in its mobile app; no public first-party web odds surface found. Its site explicitly lists VSiN and WagerTalk as aggregators, so `vsin_circa` is the independent fallback. |
-| theScore Bet | **first party verified**: `env.js` exposes the public GraphQL host; the default edge redirects this Illinois egress to `sportsbook.us-il.thescore.bet`. Anonymous `Startup`, persisted `CompetitionPage`, and `CompetitionPageSectionLinesTabNode` calls all returned `200`. The MLB lines payload contained 47 event nodes, 55 markets, and 147 selections with structured American odds. Parser/capture work remains. |
+| theScore Bet | **first party verified**: `env.js` exposes the public GraphQL host; the default edge redirects this Illinois egress to `sportsbook.us-il.thescore.bet`. Anonymous `Startup`, persisted `CompetitionPage`, and `CompetitionPageSectionLinesTabNode` calls all returned `200`. The MLB lines payload contained 47 event nodes, 55 markets, and 147 selections with structured American odds. Parser/capture work remains. *(2026-08-13: superseded — re-measured end to end, and two details here are wrong. The redirect is a `302` **on the API**, not on the page; and the persisted queries are `GET`s that the endpoint does not require at all, since a plain anonymous `POST` of a query document answers `200`. See § "theScore Bet: the anonymous surface, measured end to end".)* |
 
 The theScore request sequence is state-sensitive and should be implemented as
 one adapter rather than hard-coded curl calls: fetch the official public bundle

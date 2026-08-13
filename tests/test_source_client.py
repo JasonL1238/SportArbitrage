@@ -12,6 +12,8 @@ asking.
 """
 from __future__ import annotations
 
+import json
+
 import httpx
 import pytest
 
@@ -29,6 +31,7 @@ from src.sources.guards import (
     GeoRestrictedError,
     RateLimitedError,
     ServerError,
+    SourceError,
     TransportError,
 )
 
@@ -43,13 +46,16 @@ class _Recorder:
         self.slept.append(seconds)
 
 
-def _client(handler, *, sleep=None, retry=None, min_interval=0.0) -> SourceClient:
+def _client(
+    handler, *, sleep=None, retry=None, min_interval=0.0, body_filter=None
+) -> SourceClient:
     return SourceClient(
         "testbook",
         client=httpx.Client(transport=httpx.MockTransport(handler)),
         sleep=sleep or _Recorder(),
         retry=retry or RetryPolicy(),
         min_request_interval=min_interval,
+        body_filter=body_filter,
     )
 
 
@@ -205,6 +211,81 @@ class TestIdentificationAndCapture:
         )
         assert sent["_ak"] == "secret"
         assert raw.request_params == {"page": "SPORT"}
+
+
+class TestABodyCanBeFilteredBeforeItIsStored:
+    """Some payloads carry something that must not be persisted at all.
+
+    theScore Bet's ``Startup`` echoes the caller's raw exit IP, which would
+    otherwise reach ``data/raw/`` and — once a capture is promoted — the
+    repository, since ``RawStore`` stores bodies verbatim and its only
+    sanitizer is header-scoped.
+    """
+
+    def test_the_stored_body_is_the_filtered_one_and_the_hash_matches_it(
+        self,
+    ) -> None:
+        """The filter runs before the capture exists, which is the whole point.
+
+        ``sha256`` and ``ref`` are derived from the body, so redacting a
+        constructed capture would leave every row's ``raw_ref`` naming bytes
+        that were never written.
+        """
+        import hashlib
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={"region": "IL", "ip": "203.0.113.9"})
+
+        raw = _client(
+            handler, body_filter=lambda text: text.replace("203.0.113.9", "[redacted]")
+        ).get("https://example.invalid/startup", endpoint="startup")
+
+        assert "203.0.113.9" not in raw.body
+        assert raw.json()["region"] == "IL"
+        assert raw.sha256 == hashlib.sha256(raw.body.encode("utf-8")).hexdigest()
+        assert "203.0.113.9" not in json.dumps(raw.to_envelope())
+
+    def test_no_filter_leaves_the_body_byte_for_byte(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, text='{"ip": "203.0.113.9"}')
+
+        raw = _client(handler).get("https://example.invalid/x", endpoint="x")
+        assert raw.body == '{"ip": "203.0.113.9"}'
+
+    def test_a_refusal_is_still_refused_after_filtering(self) -> None:
+        """The guard reads the *filtered* body, so a filter can hide a block page.
+
+        ``check_http_response`` is handed ``raw.body`` rather than the live
+        response, so a filter broad enough to rewrite a refusal's markers would
+        turn a block page into an apparently-good 200 and hand it to a parser.
+        A filter must be narrow; this is the test that says so out loud.
+        """
+        blocked = "<html>Access Denied. Request blocked by CloudFront.</html>"
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(403, text=blocked)
+
+        with pytest.raises(SourceError) as caught:
+            _client(
+                handler,
+                body_filter=lambda text: text.replace("203.0.113.9", "[redacted]"),
+            ).get("https://example.invalid/odds", endpoint="odds")
+        # And the refusal still carries its own capture, filtered.
+        assert caught.value.raw is not None
+        assert "CloudFront" in caught.value.raw.body
+
+    def test_the_refusal_capture_is_filtered_too(self) -> None:
+        """A refusal body can carry the address as readily as a success one."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(403, text="denied for 203.0.113.9")
+
+        with pytest.raises(SourceError) as caught:
+            _client(
+                handler,
+                body_filter=lambda text: text.replace("203.0.113.9", "[redacted]"),
+            ).get("https://example.invalid/odds", endpoint="odds")
+        assert "203.0.113.9" not in caught.value.raw.body
 
 
 class TestPacing:

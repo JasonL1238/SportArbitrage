@@ -300,3 +300,50 @@ def test_retired_auto_state_flag_is_rejected_by_every_command() -> None:
         with pytest.raises(SystemExit) as caught:
             collector.main(argv)
         assert caught.value.code == 2
+
+
+def test_a_route_with_no_probe_url_is_loud_rather_than_skipped(monkeypatch) -> None:
+    """An unbranched route key used to vanish from the probe with no error.
+
+    ``state_candidates`` hand-duplicates the retail key set as an ``if/elif``
+    chain, and its tail was ``continue``.  A route added to a jurisdiction
+    without a matching branch produced no table row, no count, and no cache
+    entry — and the only other loop that prints route keys filters to
+    ``UNAVAILABLE``, so nothing anywhere reported it.  The operator would read
+    "6 of 6 candidate(s) answered" for a state holding seven routes.
+    """
+    import pytest
+
+    from scripts import probe_sources
+    from src.jurisdictions import RouteStatus
+
+    configured = probe_sources.jurisdiction("IL")
+    borrowed = configured.routes["hardrock"]
+    invented = type(borrowed)(
+        **{
+            **{
+                field: getattr(borrowed, field)
+                for field in borrowed.__dataclass_fields__
+            },
+            "status": RouteStatus.TEMPLATE,
+        }
+    )
+    patched = {**configured.routes, "thescore": invented}
+    monkeypatch.setattr(
+        probe_sources,
+        "jurisdiction",
+        lambda state: type(configured)(
+            **{
+                **{
+                    field: getattr(configured, field)
+                    for field in configured.__dataclass_fields__
+                },
+                "routes": patched,
+            }
+        ),
+    )
+
+    with pytest.raises(SystemExit) as caught:
+        probe_sources.state_candidates("IL")
+    assert "thescore" in str(caught.value)
+    assert "no probe URL" in str(caught.value)

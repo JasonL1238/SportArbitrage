@@ -175,6 +175,7 @@ class SourceClient:
         host_interval: float = 0.0,
         proxy_state: str | None = None,
         sleep: Callable[[float], None] = time.sleep,
+        body_filter: Callable[[str], str] | None = None,
     ) -> None:
         from src.sources.transport import build_default_client
 
@@ -182,6 +183,7 @@ class SourceClient:
         self.retry = retry or RetryPolicy()
         self.host_interval = host_interval
         self._sleep = sleep
+        self._body_filter = body_filter
         if pacer is not None:
             self._pacer = pacer
         elif min_request_interval is not None:
@@ -337,12 +339,25 @@ class SourceClient:
                     "body_sha256": hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16],
                 }
 
+            # The one place a venue may rewrite its own bytes before they are
+            # stored, for a payload that carries something that must not be
+            # persisted at all — theScore's ``Startup`` echoes the raw exit IP.
+            # It has to happen *here*, not in the adapter afterwards:
+            # ``RawResponse.sha256``/``ref`` are computed from the body, so
+            # redacting a constructed capture would leave every row's
+            # ``raw_ref`` naming bytes that were never written, and
+            # ``from_envelope`` would refuse the envelope ``to_envelope`` had
+            # just produced.  Filtering here also keeps ``parse()`` pure over
+            # exactly the bytes on disk, so replay reproduces collection.
+            body = response.text
+            if self._body_filter is not None:
+                body = self._body_filter(body)
             raw = RawResponse(
                 source=self.source_key,
                 endpoint=endpoint,
                 url=str(response.request.url),
                 status_code=response.status_code,
-                body=response.text,
+                body=body,
                 fetched_at=datetime.now(UTC),
                 content_type=response.headers.get("content-type"),
                 headers=RawResponse.clean_headers(response.headers),

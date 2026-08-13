@@ -237,6 +237,76 @@ def test_the_websocket_and_ip_paths_are_unchanged() -> None:
     }
 
 
+def test_a_sensitive_field_does_not_swallow_the_prices_after_it() -> None:
+    """The unquoted-value rule has to stop at every delimiter, not just JSON's.
+
+    bet365's pull-pod frames are ``;``-and-control-character delimited.  The
+    rule stopped only at ``&``, whitespace, ``,`` and ``}``, so one
+    sensitive-looking field code deleted the whole rest of the record: the
+    frame below sanitized to ``PA;ID=1;UID=[redacted]`` and took three prices
+    with it.  A manifest redacted that way says "these frames carry no odds"
+    about frames that carried odds, which is why this is pinned rather than
+    left to the regex's shape.
+    """
+    assert safe_websocket_frame("PA;ID=1;UID=44;OD=5/6;") == (
+        "PA;ID=1;UID=[redacted];OD=5/6;"
+    )
+    assert safe_websocket_frame("MA;TOKEN=abc;OD=1/1;") == (
+        "MA;TOKEN=[redacted];OD=1/1;"
+    )
+    # A record with nothing sensitive in it is still passed through untouched.
+    assert safe_websocket_frame("\x08PA;ID=99;NA=New York Yankees;OD=5/6;") == (
+        "\x08PA;ID=99;NA=New York Yankees;OD=5/6;"
+    )
+    assert sanitize_body("token=LIVE1;next=2") == "token=[redacted];next=2"
+    assert json.loads(sanitize_body('{"token":"LIVE;WITH;SEMIS"}')) == {
+        "token": "[redacted]"
+    }
+
+
+def test_narrowing_the_value_did_not_narrow_what_gets_redacted() -> None:
+    """The price fix had to be paid for, and this is the payment.
+
+    Stopping the value at ``;`` and the control characters took away an
+    *accidental* protection.  ``_SECRET_TEXT`` names 22 keys while the JSON
+    walker's ``_is_sensitive_key`` knows many more, and in free text the extra
+    ones were only ever covered by the old rule running past the delimiter and
+    swallowing them.  Both shapes below are ones this repository actually
+    captures, and both regressed to cleartext before the free-text path was
+    made to ask the same predicate the structured path asks.
+
+    Every assertion here fails against the delimiter fix alone.
+    """
+    # A cookie jar written without spaces after the semicolons — RFC-legal, and
+    # the shape ``document.cookie`` and echoed headers really take.
+    jar = sanitize_body("Cookie: sid=LIVE-SID;auth=LIVE-AUTH;PHPSESSID=LIVE-PHP")
+    assert "LIVE-SID" not in jar
+    assert "LIVE-AUTH" not in jar, "auth is sensitive to the JSON path too"
+    assert "LIVE-PHP" not in jar
+
+    # A pull-pod frame: the same records that carry ``OD=`` carry session
+    # material, so this is the exact shape the price fix was written for.
+    frame = safe_websocket_frame(
+        "token=LIVE-TK\x01sid=LIVE-SID\x02authkey=LIVE-AK\x03signature=LIVE-SIG"
+    )
+    assert all(
+        secret not in frame
+        for secret in ("LIVE-TK", "LIVE-SID", "LIVE-AK", "LIVE-SIG")
+    )
+
+    # A query string in free text, where the price must survive the same way.
+    assert sanitize_body("GET /pod?uid=44;od=5/6 HTTP/1.1") == (
+        "GET /pod?uid=[redacted];od=5/6 HTTP/1.1"
+    )
+    # And the control characters ``\s`` does not cover are stops as well.
+    assert sanitize_body("uid=44\x0eod=5/6") == "uid=[redacted]\x0eod=5/6"
+
+    # Repository vocabulary is still not a credential — the word-split rule that
+    # kept ``possession`` and a player named Schrauth readable is unchanged.
+    kept = sanitize_body("source_key=fanduel;book_key=x;event_id=7;token_count=3")
+    assert kept == "source_key=fanduel;book_key=x;event_id=7;token_count=3"
+
+
 def test_profiles_refuse_unlicensed_state_routes() -> None:
     assert profile("hardrock", "IL").source == "hardrock"
     assert profile("caesars", "PA").app_url == (
@@ -310,3 +380,198 @@ def test_written_research_artifact_is_sanitized_and_resumable(tmp_path) -> None:
             responses=[],
             websockets=[],
         )
+
+
+# ── observe_page: the research primitive's own failure modes ──────────────────
+#
+# These exist because the primitive had no tests at all, and three separate
+# defects in it silently destroyed evidence rather than reporting anything.
+
+
+class _FakeRequest:
+    def __init__(self, url: str, resource_type: str = "xhr", failure: str = "") -> None:
+        self.url = url
+        self.resource_type = resource_type
+        self.method = "GET"
+        self.headers = {"accept": "application/json"}
+        self.post_data = None
+        self.failure = failure
+
+
+class _FakeResponse:
+    def __init__(self, request: _FakeRequest, status: int, body: str) -> None:
+        self.request = request
+        self.status = status
+        self.headers = {"content-type": "application/json"}
+        self._body = body
+
+    def text(self) -> str:
+        return self._body
+
+
+class _FakeConsoleMessage:
+    def __init__(self, level: str, text: str, url: str = "") -> None:
+        self.type = level
+        self.text = text
+        self.location = {"url": url}
+
+
+class _FakePage:
+    """The handful of Playwright page methods ``observe_page`` actually calls."""
+
+    def __init__(self, *, click_raises: bool = False, script=()) -> None:
+        self.handlers: dict[str, list] = {}
+        self.removed: list[tuple[str, object]] = []
+        self._click_raises = click_raises
+        self._script = list(script)
+        self.goto_calls: list[str] = []
+
+    def on(self, event: str, handler) -> None:
+        self.handlers.setdefault(event, []).append(handler)
+
+    def remove_listener(self, event: str, handler) -> None:
+        self.removed.append((event, handler))
+        self.handlers.get(event, []).remove(handler)
+
+    def goto(self, url: str, **_kwargs) -> None:
+        self.goto_calls.append(url)
+
+    def wait_for_timeout(self, _ms) -> None:
+        # Traffic arrives during the wait, which is when a real page emits it.
+        for event, payload in self._script:
+            for handler in list(self.handlers.get(event, [])):
+                handler(payload)
+        self._script = []
+
+    def get_by_text(self, text: str, exact: bool = False):
+        page = self
+
+        class _Locator:
+            @property
+            def first(self):
+                return self
+
+            def click(self, **_kwargs):
+                if page._click_raises:
+                    raise TimeoutError(f"locator resolved to no element: {text!r}")
+
+        return _Locator()
+
+
+def _session(page: _FakePage):
+    """A BrowserSession around a fake page, without launching Chromium."""
+    from src.sources.browser import BrowserSession
+
+    session = object.__new__(BrowserSession)
+    session._page = page
+    session._timeout_ms = 1_000
+    return session
+
+
+def test_a_missed_click_is_recorded_rather_than_discarding_the_capture() -> None:
+    """A selector that misses used to throw away the whole session.
+
+    ``recon_sources`` catches the exception and returns *before* it writes
+    anything, so a three-minute capture was lost because one piece of
+    navigation text did not match — on a workflow whose entire method is trial
+    and error over navigation text.
+    """
+    page = _FakePage(
+        click_raises=True,
+        script=[
+            (
+                "response",
+                _FakeResponse(
+                    _FakeRequest("https://book.test/api/odds"), 200, '{"odds":[1]}'
+                ),
+            )
+        ],
+    )
+    responses, sockets = _session(page).observe_page(
+        "https://book.test/", wait_ms=100, click_text="Baseball"
+    )
+
+    # The traffic survived the missed click.
+    assert [r.url for r in responses if r.status_code == 200] == [
+        "https://book.test/api/odds"
+    ]
+    # And the miss is itself evidence, naming the text that failed.
+    misses = [r for r in responses if r.method == "CLICK"]
+    assert len(misses) == 1
+    assert "Baseball" in misses[0].response_body
+    assert misses[0].status_code == 0
+    assert sockets == []
+
+
+def test_failed_requests_and_console_errors_reach_the_manifest() -> None:
+    """A preloader that stalls on a request that never completed left no trace.
+
+    The ``response`` handler only sees exchanges that finished, so a stalled
+    session and a session with nothing to fetch produced identical manifests.
+    """
+    page = _FakePage(
+        script=[
+            (
+                "requestfailed",
+                _FakeRequest(
+                    "https://pod.book.test/subscribe",
+                    resource_type="fetch",
+                    failure="net::ERR_CONNECTION_TIMED_OUT",
+                ),
+            ),
+            ("console", _FakeConsoleMessage("error", "catalog subscribe failed")),
+            ("console", _FakeConsoleMessage("log", "telemetry heartbeat")),
+        ]
+    )
+    responses, _ = _session(page).observe_page("https://book.test/", wait_ms=100)
+
+    failed = [r for r in responses if r.method == "FAILED"]
+    assert len(failed) == 1
+    assert failed[0].url == "https://pod.book.test/subscribe"
+    assert "ERR_CONNECTION_TIMED_OUT" in failed[0].response_body
+    assert failed[0].status_code == 0
+
+    console = [r for r in responses if r.method == "CONSOLE"]
+    # Errors are kept; ordinary telemetry logs are not, or the manifest is noise.
+    assert [c.response_body for c in console] == ["catalog subscribe failed"]
+
+
+def test_console_and_failure_diagnostics_are_sanitized() -> None:
+    """These are bodies like any other, so they go through the same redactors."""
+    page = _FakePage(
+        script=[
+            (
+                "console",
+                _FakeConsoleMessage("error", "boot failed for session_id=LIVE-SID-7"),
+            ),
+            (
+                "requestfailed",
+                _FakeRequest(
+                    "https://book.test/auth?token=LIVE-TOKEN-9", failure="aborted"
+                ),
+            ),
+        ]
+    )
+    responses, _ = _session(page).observe_page("https://book.test/", wait_ms=100)
+    rendered = " ".join(f"{r.url} {r.response_body}" for r in responses)
+    assert "LIVE-SID-7" not in rendered
+    assert "LIVE-TOKEN-9" not in rendered
+
+
+def test_observing_twice_does_not_double_count_the_second_pass() -> None:
+    """Handlers were registered per call and never removed.
+
+    A warm-then-observe flow — exactly what the persistent-profile rung needs —
+    reported the second pass's traffic once per previous call.
+    """
+    response = ("response", _FakeResponse(_FakeRequest("https://book.test/a"), 200, "{}"))
+    page = _FakePage(script=[response])
+    session = _session(page)
+
+    first, _ = session.observe_page("https://book.test/", wait_ms=10)
+    assert len(first) == 1
+    assert page.handlers.get("response", []) == []
+
+    page._script = [response]
+    second, _ = session.observe_page("https://book.test/", wait_ms=10)
+    assert len(second) == 1

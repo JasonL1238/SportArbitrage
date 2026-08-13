@@ -12799,7 +12799,7 @@ class TestASelfImposedPageCapIsReported:
     """
 
     PAGING_ADAPTERS = (
-        "polymarket", "polymarket_us", "smarkets", "sxbet", "kalshi", "matchbook",
+        "polymarket_us", "smarkets", "sxbet", "kalshi", "matchbook",
     )
 
     @staticmethod
@@ -12918,6 +12918,19 @@ class TestASelfImposedPageCapIsReported:
             return (
                 TestASelfImposedPageCapIsReported._unpaced(source),
                 {entry.ticker for entry in source.series},
+            )
+
+        if module != "matchbook":
+            # Matchbook used to be the unconditional tail, so a name with no
+            # branch of its own was quietly handed Matchbook's adapter and
+            # asserted Matchbook's paging under someone else's name.  The
+            # deregistered offshore ``polymarket`` sat in ``PAGING_ADAPTERS``
+            # doing exactly that, and went on passing after its adapter was
+            # deleted, because this function never imported it.  An unknown
+            # name is now a loud failure.
+            raise AssertionError(
+                f"{module!r} is in PAGING_ADAPTERS with no branch in _endless; "
+                "add one or remove the key — do not let it inherit Matchbook's"
             )
 
         from src.sources.matchbook import MatchbookAdapter
