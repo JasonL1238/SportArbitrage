@@ -36,6 +36,66 @@ precedes it, and the `connectToken` that the persisted-query URL carries in its
 application issues** — introspection being off means the schema cannot be asked
 for, and inventing a query is inventing an endpoint.
 
+### The anonymous flow, reproduced over plain HTTP — 2026-08-13
+
+The 2026-08-03 note said "anonymous `Startup`, persisted `CompetitionPage`, and
+`CompetitionPageSectionLinesTabNode` calls all returned `200`", and prescribed
+keeping "the anonymous token in memory only". Both halves are right, and the
+second is **load bearing** rather than a privacy aside: without the token the
+odds fields are refused. What follows is the whole handshake, measured, because
+the intermediate refusals are the useful part.
+
+**Client headers, from the bundle** (module 98655, and 48041 for the platform
+constant). Not credentials — API versioning and routing:
+
+| header | value |
+| --- | --- |
+| `x-platform` | `web` |
+| `x-app-version` | `26.16.1` |
+| `x-app` / `x-client` | `espnbet` |
+
+`NEXT_PUBLIC_BUILD_VARIANT` is literally `"espnbet"` — theScore Bet runs on the
+ESPN Bet codebase, both being Penn Entertainment. `venues.md` records ESPN BET as
+discontinued, so there is no live sibling to mirror, but it is worth knowing
+before `src/distinctness.py` is asked whether this venue is a platform front-end.
+
+**The ladder of refusals, each one naming its own cause:**
+
+| request | result |
+| --- | --- |
+| `startup` with no client headers | `200` with `"Invalid user agent, app_version: nil platform: nil"` |
+| `startup` **with** the headers above | **`200`** — `currentRegionCode: "US-IL"`, `validRegion: true` |
+| `page` with headers, no token | `403` `UNAUTHORIZED` |
+| `page` with `authorization: Bearer <token>` | `401` `auth_type: "identity"` — wrong header |
+| `page` with `x-anonymous-authorization: <token>` | `401` `auth_type: "anonymous"` — right header, wrong form |
+| `page` with `x-anonymous-authorization: Bearer <token>` | **`200`** |
+| the persisted-query `GET` without a token | `403` — so this is **not** an allowlist; the same gate applies to both forms |
+| the persisted `GET` without `content-type` | `400`, a CSRF guard asking for a non-simple content type |
+
+So the working sequence, all anonymous, all plain HTTP, no browser at collection
+time:
+
+1. `POST /graphql` + client headers →
+   `startup { regionalMetadata { currentRegionCode } anonymousToken(connectToken: $ct) }`.
+   `connectToken` is a client-generated id; a freshly generated 26-character one
+   is accepted. **Select `regionalMetadata` and not `ipAddress`** and the exit IP
+   never enters the response at all — §A3's body filter becomes defence in depth
+   rather than the only control.
+2. Every later call adds `x-anonymous-authorization: Bearer <anonymousToken>`.
+3. `page(canonicalUrl: "/sport/…/competition/mlb")` → `pageChildren`, of which the
+   `Section` with `archetype: "COMPETITION_LINES"` carries the id for
+4. `competitionSection(id:)` → `sectionChildren` → `MarketplaceShelf.marketplaceShelfChildren`
+   → `GridMarketCard { event { fallbackEvent { … } } markets { selections { … } } }`.
+
+**`pagedMarkets` in a captured payload is an alias** — the field on
+`GridMarketCard` is `markets`, and querying `pagedMarkets` fails validation.
+A response key is not a schema field.
+
+Verified live: 10 cards, `Boston Red Sox @ Toronto Blue Jays`,
+`MONEYLINE/Moneyline`, `AWAY_MONEYLINE BOS Red Sox 26/25 (-2500)`. Two things the
+adapter must handle that this one call already showed: `status: "IN_PLAY"` events
+sit on the same board as pregame ones, and a selection's `odds` can be `null`.
+
 **Twelve anonymous operations, all 200, from the home page alone**: `Startup`
 (17 KB), `SportsMenu` (95 KB), `FeaturedMarketsCarouselNode` (130 KB),
 `MarketplaceShelves` (93 KB), `PromotionsCarouselNode`, `ChipsCarouselNode`,
