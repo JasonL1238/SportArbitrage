@@ -47,7 +47,8 @@ python scripts/probe_sources.py --state IL
   catalogues (2026-08-08) · Two things to fix *before* the Pennsylvania recapture
   (2026-08-08) · v2 returns full-game only unless asked (2026-08-08)
 - **`evidence/state-routing.md`** — theScore Bet: the anonymous surface, measured
-  end to end (2026-08-13) · Three first-party host maps, measured by DNS
+  end to end (2026-08-13) · The anonymous flow, reproduced over plain HTTP
+  (2026-08-13) · Three first-party host maps, measured by DNS
   with negative controls (2026-08-13) · Caesars is gated by an AWS WAF token, not by
   egress — and its odds are not on REST at all (2026-08-12) · Fanatics: closed — the
   odds board is behind a login (2026-08-12) · Pennsylvania first-party routes promoted
