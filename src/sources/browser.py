@@ -236,6 +236,16 @@ class BrowserSession:
                 body = response.text()
             except Exception:  # noqa: BLE001 - an unreadable body is recorded as empty
                 body = ""
+            try:
+                post_data = request.post_data
+            except Exception:  # noqa: BLE001 - a gzip/protobuf body is not text, and
+                # Playwright raises rather than returning bytes.  Recording it as
+                # absent keeps the response in the manifest; letting it raise here
+                # dropped every later response on the page, because this handler
+                # runs inside Playwright's event emitter and the error propagates
+                # out of the capture rather than into it.  Observed 2026-08-12 on
+                # Caesars IL, where telemetry beacons post gzip.
+                post_data = None
             responses.append(
                 PageObservation(
                     method=str(request.method),
@@ -244,7 +254,7 @@ class BrowserSession:
                     resource_type=resource_type,
                     request_headers=safe_request_headers(request.headers),
                     response_headers=safe_response_headers(response.headers),
-                    request_body=sanitize_body(request.post_data),
+                    request_body=sanitize_body(post_data),
                     response_body=sanitize_body(body) or "",
                 )
             )

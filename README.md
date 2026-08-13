@@ -88,7 +88,7 @@ disappears and what is left is a one-sided bet for the whole stake.
 | `smarkets` | exchange | `api.smarkets.com/v3/{events,markets,contracts,quotes}` — fully typed; moneyline only, within the venue's 20/min limit |
 | `sxbet` | exchange | `api.sx.bet/{markets/active,orders}` — a resting order book; every price is one counterparty's offer, with its own size |
 | `kalshi` | prediction market | `api.elections.kalshi.com/trade-api/v2/markets` — MLB series, structured strikes and tickers |
-| `polymarket` | prediction market | `gamma-api.polymarket.com/events` — structured `sportsMarketType`, `line` and `teams` |
+| `polymarket_us` | prediction market | `gateway.polymarket.us/v2/leagues/{slug}/events` — the CFTC-designated QCX venue; prices come from `marketSides`, never from `outcomes` |
 
 Four of them publish **how much money is behind a price**: a top-of-book price
 with $40 behind it is not an arbitrage at a $500 stake, so it caps the position

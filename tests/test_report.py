@@ -2043,17 +2043,18 @@ def test_the_payload_carries_a_source_map_for_legacy_runs(populated: Store) -> N
 def test_a_us_regulated_venue_is_not_marked_unbettable() -> None:
     """Kalshi is the one that must not be swept up by the set.
 
-    ``polymarket`` deliberately is: the registered adapter reads the offshore
-    platform, and the CFTC-designated Polymarket US is a different legal entity
-    with a different order book.  Both directions are pinned here because the
-    page uses this flag to decide what the US-only view shows, so an error either
-    way is a wrong answer to "can I actually take this price".
+    ``pinnacle`` deliberately is swept up, and ``polymarket_us`` deliberately is
+    not — the CFTC-designated venue is takeable while the offshore Polymarket
+    that used to hold the other side of this pin was deregistered on 2026-08-13.
+    Both directions are pinned here because the page uses this flag to decide
+    what the US-only view shows, so an error either way is a wrong answer to
+    "can I actually take this price".
     """
     from src.report import _source_entry
 
-    for key in ("kalshi", "fanduel", "draftkings"):
+    for key in ("kalshi", "fanduel", "draftkings", "polymarket_us"):
         assert _source_entry(key)["us_unavailable"] is False, key
-    assert _source_entry("polymarket")["us_unavailable"] is True
+    assert _source_entry("pinnacle")["us_unavailable"] is True
 
 
 def test_the_arb_payload_carries_both_the_us_only_and_the_offshore_view(

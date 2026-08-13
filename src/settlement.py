@@ -140,7 +140,15 @@ SETTLEMENT: dict[str, SettlementRegime] = {
     "smarkets": SettlementRegime.VOID_AND_REFUND,
     "sxbet": SettlementRegime.VOID_AND_REFUND,
     "kalshi": SettlementRegime.SETTLE_MAKE_UP_GAME,
-    "polymarket": SettlementRegime.RESOLVE_FIFTY_FIFTY,
+    # The offshore Polymarket resolved a cancelled game at 0.50 and was
+    # deregistered on 2026-08-13.  Its rule is *not* this venue's: the US FAQ
+    # settles a postponed game from the make-up contest when that is replayed
+    # within the contract's expiry (typically two weeks), and a cancelled one
+    # "at last fair market prices as of the time the cancellation was officially
+    # announced" — a venue-determined fair price, not 0.50, and not a refund.
+    # Every collected market description repeats the clause verbatim.  That is
+    # Kalshi's regime, differing only in the window's length.
+    "polymarket_us": SettlementRegime.SETTLE_MAKE_UP_GAME,
 }
 
 

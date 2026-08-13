@@ -528,12 +528,12 @@ class TestTheDirectRouteIsCheckedToo:
         ``access=direct satisfied=True`` off an offshore book with no findings.
 
         Three different reasons, one classifier — offshore (``pinnacle``), a real
-        first-party book holding no PA licence (``hardrock``), and the offshore
-        Polymarket that this same change marked unreachable.
+        first-party book holding no PA licence (``hardrock``), and an offshore
+        exchange (``smarkets``).
         """
         from src.sources import registry
 
-        for key in ("pinnacle", "hardrock", "polymarket", "bovada"):
+        for key in ("pinnacle", "hardrock", "smarkets", "bovada"):
             assert key not in registry.takeable_from_state("PA")
             with pytest.raises(RuntimeError, match="not reachable from PA"):
                 _check_locality_declarations({"PA": (self._entry(key),)})
@@ -1036,28 +1036,31 @@ def test_a_us_regulated_venue_is_reachable_from_every_state():
     assert marking.count_without_local_leg([position]) == 0
 
 
-def test_the_offshore_polymarket_is_not_the_us_one():
-    """One brand, two order books, and only the other one is takeable.
+def test_the_us_regulated_prediction_markets_are_takeable_and_offshore_books_are_not():
+    """Two CFTC venues are reachable; the offshore order books are not.
 
-    ``src.sources.polymarket`` reads ``gamma-api.polymarket.com``. The US venue is
-    QCX LLC trading as Polymarket US — a separate CFTC-designated contract market
-    with its own book, fees and settlement. Treating the offshore price as
-    reachable is how a hedge that cannot be entered gets reported as risk-free, so
-    its legs are labelled like any other unreachable venue.
+    This used to pin the offshore Polymarket as the unreachable half against
+    Kalshi's reachable one. That venue was deregistered on 2026-08-13 once
+    ``polymarket_us`` — QCX LLC, a separate CFTC-designated contract market with
+    its own book, fees and settlement — was collecting, so the unreachable half
+    is now carried by a venue that is still registered. The claim is unchanged:
+    treating an unreachable price as takeable is how a hedge that cannot be
+    entered gets reported as risk-free.
 
     The inverse mistake is the one the test above guards, and both are live: this
-    must not sweep up Kalshi.
+    must not sweep up either CFTC venue.
     """
     from src.sources import registry
 
     marking = locality_marking("PA", route_scope="state")
-    offshore_only = _Position("polymarket", "pinnacle")
+    offshore_only = _Position("smarkets", "pinnacle")
     assert not marking.has_local_leg(offshore_only)
-    assert marking.non_local_sources(offshore_only) == ("pinnacle", "polymarket")
+    assert marking.non_local_sources(offshore_only) == ("pinnacle", "smarkets")
 
     for state in JURISDICTIONS:
-        assert "polymarket" not in registry.takeable_from_state(state), state
+        assert "smarkets" not in registry.takeable_from_state(state), state
         assert "kalshi" in registry.takeable_from_state(state), state
+        assert "polymarket_us" in registry.takeable_from_state(state), state
 
 
 def test_reachability_is_not_the_same_question_as_a_retail_licence():
@@ -1116,7 +1119,12 @@ def test_nationwide_reach_and_a_state_licence_cannot_both_be_claimed():
     """
     from src.sources import registry
 
-    assert registry.NATIONWIDE_SOURCE_KEYS == frozenset({"kalshi"})
+    # Pinned by content, not by size: both members are CFTC-designated venues
+    # holding no state sportsbook licence, and that is the only ground for
+    # membership.  ``polymarket_us`` is here while the offshore ``polymarket`` is
+    # in US_UNAVAILABLE_SOURCE_KEYS — one brand, two legal entities, opposite
+    # answers — so this assertion is also what stops the two being confused.
+    assert registry.NATIONWIDE_SOURCE_KEYS == frozenset({"kalshi", "polymarket_us"})
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(
             registry,

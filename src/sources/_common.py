@@ -1112,7 +1112,7 @@ class Fixture:
     """Key of the competitor *the book* called home, where the book says.
 
     Optional because not every venue states one: an event-contract market names a
-    contract rather than a side (polymarket), and an exchange or a sportsbook may
+    contract rather than a side (polymarket_us), and an exchange or a sportsbook may
     simply publish the pair (matchbook, betrivers_kambi).  Requiring it here is what
     kept those three restating this class instead of using it.  Where a venue does
     state one, it is not always :attr:`home` — see the venue's own note, because a

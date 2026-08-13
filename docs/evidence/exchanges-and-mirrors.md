@@ -3,6 +3,212 @@
 Credentialed exchanges, prediction markets, and the venues that turned out to
 be front-ends of an order book already registered.
 
+## The offshore Polymarket is deregistered; the brand now names one venue — 2026-08-13
+
+Removed at the operator's request once `polymarket_us` was collecting: the
+adapter, its four committed captures, its `COMMISSIONS` / `SETTLEMENT` /
+`betlinks` / `SOURCE_NOTES` entries, and its place in
+`US_UNAVAILABLE_SOURCE_KEYS`. Restore with
+`git log -- src/sources/polymarket.py`.
+
+**The reason is the operator's, and it is a scope decision rather than a
+measurement:** the offshore book is not executable from the United States, so
+its prices were context only — hidden behind the dashboard's offshore toggle,
+labelled "not reachable from {ST}" on every position, and never a leg anyone
+could take. Against that, carrying it cost a second venue under a name already
+proven confusable: the 2026-08-09 probe that read this brand as KYC-gated had
+in fact asked the wrong *host* of the *other* venue, and that cost three days.
+
+**What was argued against removing it, recorded because the decision may want
+revisiting:** it was the only independent watcher of `polymarket_us`, and the
+distinctness screen run the same day needs both venues live to be repeated. It
+also sat in a class of **eleven** US-unstakeable sources — `pinnacle`,
+`bovada`, `cloudbet`, `matchbook`, `smarkets`, `sxbet`, `onexbet`,
+`leovegas_kambi`, `an_bovada`, `an_onexbet` — so removing this one alone is a
+judgement about *this brand*, not a policy about unstakeable reference books.
+Pinnacle in particular is the sharpest price on the board and is equally
+untakeable from Illinois. If the rule ever becomes "US-stakeable only", it
+should be applied to that whole set deliberately, and the cost of losing
+Pinnacle's number priced in first.
+
+Note also that this venue did **not** meet the existing bar for deregistration.
+The `an_circa` / `an_fliff` / `an_superbook` removals of 2026-08-09 were for
+feeds returning **zero rows**; this one returned 326 in its final screen. The
+bar it meets is the operator's, not the record's.
+
+Two tests were **retargeted rather than deleted**, because the behaviours they
+pin are also `polymarket_us`'s and dropping them would have quietly lost
+coverage: `TestPolymarketReadsTheLeagueFromThePayload` (the season-suffix strip
+on `seriesSlug`, which once rejected 124 real events) and
+`TestPolymarketAsksWhetherItTruncatedRatherThanAssuming` (the one-row probe past
+the page cap). Both now exercise the US adapter against its own captures.
+
+## Polymarket US registered: four traps, and the two that would have priced a favourite at 20:1 — 2026-08-13
+
+`polymarket_us` is registered against `gateway.polymarket.us`, in
+`NATIONWIDE_SOURCE_KEYS` beside `kalshi` — a CFTC-designated venue holding no
+state sportsbook licence — while the offshore `polymarket` stays in
+`US_UNAVAILABLE_SOURCE_KEYS`. One brand, two legal entities, opposite answers.
+
+**Four things in this payload produce a plausible wrong number rather than an
+error.** All four were measured on a live board, and each has a guard.
+
+1. **`outcomes` is not index-aligned with `marketSides`.** Over 544 NFL markets,
+   `outcomes[0]` disagreed with `marketSides[0].description` on **198, or 36%**.
+   On KC @ LAD, `outcomes` reads `["Los Angeles Dodgers","Kansas City Royals"]`
+   while `marketSides[0]` is Kansas City — so indexing prices by `outcomes` puts
+   the Dodgers at 0.05, a 20:1 line on a heavy favourite, on a third of all rows.
+   The adapter reads `marketSides` and never `outcomes` or `outcomePrices`.
+2. **The takeable price is `marketSides[i].quote.value`.** Verified 544/544:
+   side 0's quote equals `bestAskQuote`, side 1's equals `1 − bestBidQuote`. The
+   venue performs the `1 − bid` transform the offshore adapter does by hand and
+   publishes it per side.
+3. **`team_` versus `game_` in `sportsMarketType` does not mean what it says.**
+   `football_team_full_game_total` is a **game** total ("Will the total in GB vs
+   PIT be more than 17.5"); `football_team_first_half_total` is a **team** total
+   ("Will GB score more than 9.5 in the first half"). One token apart, opposite
+   scopes, and the vendor's own schema page confirms it. What decides it is
+   `metadata`, present with a `teamId` both sides repeat exactly on the
+   team-scoped markets. Every mapped type declares a scope and the payload is
+   **asserted** against it — a disagreement is `market_scope_disagrees_with_its_type`,
+   never a reinterpretation.
+4. **Home and away come from `league.ordering`, never from the team blob.** On
+   market `390522` both sides carry `teamId: 74` while their embedded team
+   objects say `ordering: "away"` and `"home"` — the same team, two answers,
+   because that field is stamped by side index. `league.ordering` is `"away"`
+   (mlb, nfl, nba, nhl, wnba) or `"home"` (epl, mls, ucl); each route declares
+   what it expects and a payload that disagrees is rejected.
+
+Two smaller shape facts: a spread's line is on its own side
+(`description: "+20.50"`, already signed for that side's team) and the
+market-level `line` is *not* per-side — its sign is inconsistent across families
+(`2.5` on one full-game spread, `-1.5` on a first-five) — so it is read only for
+totals. And soccer is the mirror image of offshore: each contract carries a
+`teamId`, or `None` for the draw, so the three-way **is** attributable and is
+collected, while this venue prices no soccer spread or total at all. The three
+contracts share one synthesized `source_market_id` so the completeness check sees
+one three-way market; measured, they price 0.43 / 0.27 / 0.31, summing to 1.01.
+
+**Charge and settlement are both different from the offshore venue, and copying
+either across would have been wrong.** `docs.polymarket.us/fees` states
+`Fee = Θ × C × p × (1 − p)` with `Θ = 0.06` — Kalshi's shape at a lower rate, not
+Polymarket's `min(p, 1−p)` — and every collected market carries
+`feeCoefficient: 0.06` inline, so the page and the payload agree. Settlement is
+`SETTLE_MAKE_UP_GAME`: the vendor settles a postponed game from the make-up
+contest within the contract's expiry and a cancelled one "at last fair market
+prices as of the time the cancellation was officially announced" — a
+venue-determined price, not the offshore 0.50 rule and not a refund.
+
+**Distinctness screen — run, and clear.** `screen_candidate` has no production
+caller, so it was run by hand against a **same-session** capture of both venues;
+screening against the committed 2026-07-28 offshore fixture would have compared
+disjoint game dates and returned `UNDECIDED`, which is not an answer. Result:
+**96 shared moneyline selections** (the bar is 20), **12/96 identical (12.5%) —
+DISTINCT**, non-blocking.
+
+That verdict is read as *weak* evidence, per the caveat further down this file: a
+front-end offset by a constant also reads `DISTINCT`. The examples rule that out
+independently — the gaps are wildly uneven (`2.9412` vs `1.6393` on one
+selection, `1.5038` vs `1.4925` on another), and on the same fixture the offshore
+book quotes a **128% overround** against the US venue's **100.5%**. Two real
+order books of very different depth, not one feed twice.
+
+**The committed fixture omits NFL, deliberately.** With NFL included, the
+cross-book identity check refused the pool: `NFL-GB@NFL-PIT` and `NFL-IND@NFL-NE`
+had `vi_fanduel` and `vi_betrivers` (captured 2026-08-03) favouring the home side
+while this game-day capture favours the away side. Not an adapter fault — all
+three sources agree on *who* is home, and GB is `teamId 59` priced 0.59 against
+PIT's 0.42 — but ten days of **preseason** line movement, which is the same shape
+as the `an_parx` retirement recorded in `action-network.md`. Narrowing the new
+capture was chosen over retiring a working fixture.
+
+The cost is stated rather than hidden: `TEAM_TOTAL` and `FIRST_HALF` rows were
+NFL-only, so **the committed fixture exercises neither**, even though the live
+adapter emits both (measured: 312 full-game team totals, 192 first-half team
+totals, 200 first-half spread/total rows in one pass). Re-capture NFL against a
+fresh `vi_*` vintage to close that gap.
+
+**Still inferred, never observed:** the three `hockey_team_full_game_*` types.
+NHL was empty at every capture. They are safe to declare because both guards
+stand behind them — a type that does not exist never matches, and a wrong scope
+is rejected — and a 60-minute three-way would arrive with three sides and be
+skipped rather than published as a two-way. Re-probe before the season.
+
+**Deferred, with the reason in the module docstring:** UFC (`src.vocab` has no
+MMA sport), NCAA basketball (no cbb/wcbb league), quarter and second-half markets
+(no such `Period`). These are vocabulary changes, not adapter work.
+
+## Polymarket US is not credential-gated — the 2026-08-09 probe asked the wrong host — 2026-08-12
+
+**Measured from the operator's Illinois egress** (`data/egress_state.json` state
+`IL`, fingerprint `34e56847c7ec…`), Chrome-impersonated `curl_cffi`, three
+requests paced ~1.5 s apart:
+
+| host + path | status | bytes | what came back |
+| --- | --- | --- | --- |
+| `gateway.polymarket.us/v2/leagues` | **200** | 11,343 | **50** leagues, every one `isOperational` — `mlb`, `nba`, `nfl`, `nhl`, `wnba`, `epl`, `ucl`, `ufc`, `f1`, plus esports (`cs2`, `lol`, `dota2`, `valorant`) |
+| `gateway.polymarket.us/v2/leagues/mlb/events?limit=3` | **200** | 162,727 | events carrying **15 markets each**, with `sportradarGameId`, `gameId`, `teams`, `participants`, `startTime`, `score`, `period`, `live` |
+| `gateway.polymarket.us/v1/markets?limit=3&active=true&closed=false` | **200** | 12,727 | markets with `outcomes`, `outcomePrices`, `marketSides`, `feeCoefficient` |
+| `api.polymarket.us/v1/markets?limit=3` | 401 | 33 | `Missing required API key headers` — **unchanged**, in the same session |
+
+**The finding is the hostname.** The 2026-08-09 entry below recorded this venue
+as reachable only after iOS-app KYC, on the strength of that 401. But
+`api.polymarket.us` is the vendor's *authenticated* host; `gateway.polymarket.us`
+is the public keyless one, and it answers anonymously. Both were asked in the
+same session from the same egress, so the difference is the host and nothing
+else. The venue was never credential-gated for **reading**; it was asked the
+wrong question for three days. Placing a wager there is a separate matter and
+still needs the KYC'd account.
+
+Two things a future adapter must not assume, both measured here rather than
+guessed:
+
+* **`/v1/markets` is futures, not game lines.** Its default page returned 196
+  `sportsMarketType: futures` and 4 `election` out of 200 — "World Series
+  Champion", "National League Champion" — and **no** pregame moneylines.
+  Narrowing it with `sportsMarketTypes=MONEYLINE` is refused with **HTTP 400**.
+  The game-level board is under `/v2/leagues/{slug}/events`, which is where an
+  adapter reads. An adapter written against `/v1/markets` would collect a
+  plausible, parseable, entirely wrong shelf.
+* **~~The price semantics are unresolved and must not be inferred.~~ Settled
+  2026-08-13 — see the section above.** This paragraph read: on
+  `baseball_team_first_five_total` for BAL vs MIN, `outcomes` was
+  `["Over","Under"]` and `outcomePrices` `["0.9300","0.9400"]`, which does not
+  read as two complementary contract probabilities (they sum to 1.87, not ~1.00),
+  so whether they were two Yes legs, a bid/ask pair or something else was left
+  open. They are a **bid/ask pair of one token** — `outcomePrices` is
+  `[bestBid, bestAsk]` — so the two numbers were never meant to sum to 1.00 and
+  the puzzle was of this file's own making. The instruction to settle it before
+  writing a parser was still right, and settling it is what found the larger
+  trap: `outcomes` is not index-aligned with `marketSides` at all, so the whole
+  array is unreadable and the adapter ignores it.
+
+Still open, and not answered by any of the above: whether Illinois permits
+**staking** these contracts. The IGB issued Polymarket a cease-and-desist dated
+2026-01-27, the operator confirmed on 2026-08-12 that sports contracts are
+visible in the app from Illinois, and `[[docs/MULTI_STATE.md]]`'s takeability
+question is decided per state, not per reachability. Reachable is not the same
+as stakeable, and `src/coverage.py`'s locality marking is where that distinction
+gets rendered.
+
+Distinctness is also unscreened: the repository already registers an offshore
+`polymarket` (`gamma-api.polymarket.com`). Same brand, same parent, and
+`src/distinctness.py`'s `screen_candidate` has **no production caller** — so
+nothing catches a mirror automatically. Registering `polymarket_us` without
+screening it against `polymarket` ~~, and without declaring the pair in
+`src/redundancy.py`,~~ is how one venue's two feeds become the two opposite legs
+of a "guaranteed" position.
+
+**Correction, 2026-08-13: the `src/redundancy.py` half of that sentence was
+wrong, and acting on it would have removed the check it was asking for.**
+`REDUNDANT_PAIRS` is for a first-party book and its *republisher* —
+`tests/test_redundancy.py` asserts every secondary begins `an_`, `vi_` or
+`vsin_`, so the pair fails outright in either order. Worse, `is_redundant_pair`
+is consulted at `src/collector.py:1155` to **suppress**
+`sources_are_one_counterparty`, so declaring the pair would have silenced the
+runtime mirror gate on exactly the two venues it was meant to guard. The screen
+was the right half of the instruction and it was run; see the section above.
+
 ## ProphetX and Novig: credentialed exchanges, API read — 2026-08-09 (adapters removed 2026-08-11)
 
 Both venues' official documentation was read (not probed — neither has an
@@ -198,14 +404,20 @@ CDNA's *sports* contracts will be in it is itself unanswered.
 
 ## Polymarket: two venues share the brand — 2026-08-08
 
-`src/sources/polymarket.py` reads `gamma-api.polymarket.com`, the offshore
-platform. The US venue is a different legal entity: QCX LLC, doing business as
-Polymarket US, a CFTC-designated contract market Polymarket acquired in July
-2025, with its own order book, fee schedule and settlement rules. The offshore
-key is therefore in `US_UNAVAILABLE_SOURCE_KEYS` and its legs are labelled "not
-reachable from {ST}" like any other unreachable venue. Polymarket US belongs
-here as its own source key — `COMMISSIONS` and `SETTLEMENT` are keyed by source
-key, so a config variant would read a fee schedule off the wrong venue's bytes.
+The offshore adapter (deleted 2026-08-13, restore with
+`git log -- src/sources/polymarket.py`) read `gamma-api.polymarket.com`, the
+offshore platform. The US venue is a different legal entity: QCX LLC, doing
+business as Polymarket US, a CFTC-designated contract market Polymarket acquired
+in July 2025, with its own order book, fee schedule and settlement rules. The
+offshore key was therefore in `US_UNAVAILABLE_SOURCE_KEYS` and its legs were
+labelled "not reachable from {ST}" like any other unreachable venue. Polymarket
+US belongs here as its own source key — `COMMISSIONS` and `SETTLEMENT` are keyed
+by source key, so a config variant would read a fee schedule off the wrong
+venue's bytes.
+
+**This is no longer a live distinction: the offshore venue was deregistered on
+2026-08-13** and the brand now names exactly one source in this repository. See
+the deregistration section at the top of this file.
 
 ## Mirrors: the trap that looks like progress
 

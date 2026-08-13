@@ -299,13 +299,14 @@ SOURCE_NOTES: dict[str, dict[str, str]] = {
                 "order book, there is a fee per contract, and a cancelled game is not "
                 "refunded the way a book refunds it.",
     },
-    "polymarket": {
-        "label": "Polymarket",
-        "host": "gamma-api.polymarket.com",
+    "polymarket_us": {
+        "label": "Polymarket US",
+        "host": "gateway.polymarket.us",
         "kind": "prediction market",
-        "what": "Contracts again, priced between 0 and 1. A cancelled game resolves every "
-                "contract at 0.50 whatever you paid, which is not what a book does with "
-                "the same fixture.",
+        "what": "The US-regulated Polymarket, and a different company from the one above "
+                "with a different order book — so the two can legitimately disagree, and "
+                "only this one can be traded from here. A cancelled game settles at the "
+                "last fair price the exchange saw rather than being refunded.",
     },
 }
 

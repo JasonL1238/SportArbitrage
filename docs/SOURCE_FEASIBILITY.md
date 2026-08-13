@@ -46,14 +46,21 @@ python scripts/probe_sources.py --state IL
   for vintage coherence (2026-08-09) · The two endpoint versions are different
   catalogues (2026-08-08) · Two things to fix *before* the Pennsylvania recapture
   (2026-08-08) · v2 returns full-game only unless asked (2026-08-08)
-- **`evidence/state-routing.md`** — Pennsylvania first-party routes promoted
+- **`evidence/state-routing.md`** — Caesars is gated by an AWS WAF token, not by
+  egress — and its odds are not on REST at all (2026-08-12) · Fanatics: closed — the
+  odds board is behind a login (2026-08-12) · Pennsylvania first-party routes promoted
   (2026-08-08) · The links the promotion made wrong, and the suite that texted
   (2026-08-08) · The Pennsylvania recapture (2026-08-08T16:38Z) · Multi-state routing
   update (2026-08-03) · Pennsylvania routing status (2026-08-03) · Illinois re-probe
   (2026-08-03) · First-party acquisition follow-up (2026-08-04) · Redundant feed
   coverage · Pennsylvania: no book reaches the two-feed bar · First-party endpoint
   findings
-- **`evidence/exchanges-and-mirrors.md`** — ProphetX and Novig: credentialed exchanges,
+- **`evidence/exchanges-and-mirrors.md`** — The offshore Polymarket is deregistered; the
+  brand now names one venue (2026-08-13) · Polymarket US registered: four traps, and the
+  two that would have priced a favourite at 20:1 (2026-08-13) · Polymarket US is not
+  credential-gated — the
+  2026-08-09 probe asked the wrong host (2026-08-12) · ProphetX and Novig: credentialed
+  exchanges,
   API read (2026-08-09), adapters removed unregistered (2026-08-11) · Registration
   checklist: the nine places a new key has to appear · Polymarket US and Crypto.com Sports: both walls,
   measured (2026-08-09) · Polymarket: two venues share the brand (2026-08-08) · Mirrors:

@@ -968,9 +968,10 @@ class LocalityMarking:
     or mark, a reachable one.
 
     The inverse error is just as live, which is why reachability is a set and not a
-    kind: ``polymarket`` reads the *offshore* book, a different legal entity from
-    the CFTC-designated Polymarket US, so it is unreachable and is marked.  Two
-    prediction markets, opposite answers.
+    kind: ``matchbook``, ``smarkets`` and ``sxbet`` are exchanges and unreachable,
+    while ``kalshi`` and ``polymarket_us`` are CFTC-regulated venues and takeable.
+    Same shape of venue, opposite answers — so the answer cannot be read off the
+    kind, only off the set.
 
     One implementation, because there were three call sites with three different
     answers and the most permissive one was the live path that sends the text.

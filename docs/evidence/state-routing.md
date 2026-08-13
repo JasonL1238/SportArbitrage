@@ -3,6 +3,96 @@
 Per-state route evidence: what a licensed host returned from matching egress,
 which routes were promoted on it, and which feeds cover which book.
 
+## Caesars is gated by an AWS WAF token, not by egress — and its odds are not on REST at all — 2026-08-12
+
+Captured with `python scripts/recon_sources.py caesars --state IL --mode chrome
+--include-all --capture-dom --wait-ms 45000` from the operator's **Illinois**
+egress (`egress_state.json` state `IL`, fingerprint `34e56847c7ec…`), against the
+page the operator confirmed the same day shows odds **while logged out**:
+`sportsbook.caesars.com/us/il/bet/`. 146 responses, 38 websockets, manifest
+`data/research/caesars/IL/20260812T175756Z/`.
+
+**Real Chrome, logged out, Illinois, and the v4 endpoints still 403.** Every 403
+body is the same 919-byte CloudFront page:
+
+| path under `https://api.americanwagering.com/regions/us/locations/il/brands/czr/` | Chrome |
+| --- | --- |
+| `sb/features` | 200 (12,474 B) |
+| `sb/bets/configuration` | 200 (579 B) |
+| `sb/v3/sports-menu` | 200 (33,437 B) |
+| `sb/v3/teamMetadata` | 200 (84,624 B) |
+| `sb/v4/home` | **403** |
+| `sb/v4/navigation-items` | **403** (twice) |
+| `sb/v4/sports/homepage/quick-picks` | **403** |
+| `gw/growth/v4/sports/homepage/banners` | **403** |
+
+So **v4 is not what a browser gets either**, and the long-standing plan to
+"re-point the adapter from v3 to v4" is dead on the evidence rather than
+untried. It was already recorded as measured in the 2026-08-04 session and
+mis-carried forward as an open variable.
+
+**The gate is the token, and this is the decisive pair.** The same two v3 paths
+were then requested through the repository's own default transport
+(`build_default_client`, Chrome-impersonated `curl_cffi`) from the same egress,
+minutes later:
+
+| path | Chrome | `curl_cffi` |
+| --- | --- | --- |
+| `sb/features` | 200 | **200** |
+| `sb/v3/sports-menu` | 200 | **403** |
+| `sb/v3/teamMetadata` | 200 | **403** |
+
+One endpoint answers both clients; two answer only the browser. The exit IP is
+identical, the state is identical, the TLS fingerprint is Chrome in both cases —
+`curl_cffi` already impersonates it, and has since before any of these probes.
+What the browser has and the client does not is an **AWS WAF token**: the page
+loads `b470c5d1aeb4.edge.sdk.awswaf.com/…/challenge.js`, posts `mp_verify`, and
+carries telemetry to the same host. That is the whole difference.
+
+This retires three explanations that have each cost a session: it is not egress
+identity (five books answered from this exact egress in run 6 while Caesars
+alone was blocked), not geolocation, and not TLS fingerprinting. **Deriving the
+token outside the browser is defeating an anti-automation control and is out of
+scope permanently** — not a judgement call to revisit, see `venues.md`'s "never
+bypass a challenge" and `AGENTS.md` § Scrape.
+
+**Odds never traverse REST.** `v3/sports-menu` is a 19-sport catalogue —
+`sportId`, `name`, `eventCount`, `competitions`, `displayOrder` — with **no
+prices anywhere in it**, and
+`https://api.americanwagering.com/regions/us/locations/il/brands/czr/sb/v3/events/highlights/`,
+the path `src/sources/caesars.py:151` actually asks for, **was never requested by
+the page at all**. The prices arrive over a Diffusion push socket:
+
+```
+wss://api.americanwagering.com/regions/us/locations/il/brands/czr/diffusion?ty=WB&v=25&ca=10&r=0
+```
+
+binary frames, 8 sent / 9 received in the capture window (`ty=WB` = WebSocket
+binary, `v=25` = Diffusion protocol 25). The other 34 sockets are GeoComply
+(`wss.plc-gc.com:9703-9705`, 11 each, no frames) and one
+`be-push.us.williamhill.com` — William Hill being Caesars' platform.
+
+So a working Caesars adapter needs **both** a browser session that legitimately
+holds the WAF token **and** a Diffusion client speaking a binary push protocol —
+not a re-pointed URL. That is a materially larger build than any prior estimate,
+and it is the honest reason this book has stayed unreachable while five peers
+were promoted.
+
+### Fanatics: closed — the odds board is behind a login — 2026-08-12
+
+The operator checked the Fanatics app directly on 2026-08-12: **the board is not
+browsable pre-login.** Combined with there being no browser sportsbook at all
+(`sportsbook.fanatics.com` redirects to the marketing site `betfanatics.com`),
+this closes the venue for a repository whose whole collection model is anonymous.
+
+There is no remaining first-party path, so **Fanatics is not a reachability
+question any more and should not be reopened as one**. It stays a required book
+in both IL and PA (`an_fanatics` ids 2990 / 2791), which means it stays at
+`SINGLE_SOURCE` until a **second same-licence republisher** exists — that, not
+first-party work, is the only thing that moves it. The earlier `404` readings
+from `sportsbook.1il.betfanatics.com` were taken from a third-party egress, were
+never re-measured from Illinois, and are now moot.
+
 ## Pennsylvania first-party routes promoted — 2026-08-08
 
 `configured=PA detected_egress=PA` throughout (each run's collect printed the

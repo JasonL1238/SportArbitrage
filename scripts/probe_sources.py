@@ -113,10 +113,43 @@ RESEARCH_CANDIDATES: tuple[Candidate, ...] = (
               {"series_ticker": "KXMLBGAME", "limit": "3", "status": "open"},
               counts=_len("markets"),
               note="rate limits an unpaced probe with 429"),
-    Candidate("prediction", "polymarket",
+    # Kept as a measurement, not as a route: the offshore venue was deregistered
+    # on 2026-08-13 in favour of the US entity below.  A candidate with no record
+    # is a candidate somebody tries again.
+    Candidate("prediction", "polymarket-offshore",
               "https://gamma-api.polymarket.com/events",
               {"limit": "3", "closed": "false", "active": "true", "tag_slug": "mlb"},
-              counts=lambda p: f"{len(p)} event(s)" if isinstance(p, list) else "?"),
+              counts=lambda p: f"{len(p)} event(s)" if isinstance(p, list) else "?",
+              note="DEREGISTERED 2026-08-13 — answers, but is not US-executable "
+                   "and is no longer collected; polymarket_us replaced it"),
+    # Polymarket **US** (QCX), and the host is the whole finding.  The 2026-08-09
+    # measurement recorded this venue as credential-gated on the strength of
+    # ``api.polymarket.us`` answering 401 "Missing required API key headers" — but
+    # that is the vendor's *authenticated* host.  ``gateway.polymarket.us`` is the
+    # public keyless one and answers anonymously; re-measured 2026-08-12 from an
+    # Illinois egress, 200 on all three below while ``api.`` still 401s in the same
+    # session.  Keep the 401 candidate beside them: it is what stops the next agent
+    # concluding the venue is walled after asking one host.
+    Candidate("prediction", "polymarket-us-leagues",
+              "https://gateway.polymarket.us/v2/leagues", {},
+              counts=_len("leagues"),
+              note="public/keyless; 50 leagues, all isOperational — mlb, nba, nfl, "
+                   "nhl, wnba, epl, ucl plus esports (cs2, lol, dota2, valorant)"),
+    Candidate("prediction", "polymarket-us-events",
+              "https://gateway.polymarket.us/v2/leagues/mlb/events", {"limit": "3"},
+              counts=_len("events"),
+              note="game-level markets (15/event) with sportradarGameId; the "
+                   "surface an adapter would read"),
+    Candidate("prediction", "polymarket-us-markets",
+              "https://gateway.polymarket.us/v1/markets",
+              {"limit": "3", "active": "true", "closed": "false"},
+              counts=_len("markets"),
+              note="FUTURES only by default — not the pregame game lines; "
+                   "sportsMarketTypes=MONEYLINE is refused with 400"),
+    Candidate("prediction", "polymarket-us-authenticated-host",
+              "https://api.polymarket.us/v1/markets", {"limit": "3"},
+              note="401 'Missing required API key headers' — expected and kept: "
+                   "this is the host the 2026-08-09 probe mistook for the venue"),
     Candidate("sportsbook", "bovada",
               "https://www.bovada.lv/services/sports/event/coupon/events/A/description/baseball/mlb",
               {"marketFilterId": "def", "lang": "en"},

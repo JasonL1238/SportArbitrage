@@ -165,7 +165,12 @@ SITE: Mapping[str, str] = {
     "matchbook": "https://www.matchbook.com",
     "onexbet": "https://1xbet.com/en",
     "pinnacle": "https://www.pinnacle.com/en",
-    "polymarket": "https://polymarket.com",
+    # Site-level only, and deliberately so.  The collected events carry a ``slug``
+    # and a ``ticker``, so an event URL looks derivable — but no pattern has been
+    # requested and confirmed, and this table's rule is evidence rather than a
+    # plausible guess.  Deriving one belongs with a ``scripts/verify_betlinks.py``
+    # pass, not here.
+    "polymarket_us": "https://polymarket.us",
     "smarkets": "https://smarkets.com",
     "parx": "https://www.betparx.com",
     "thescore": "https://www.thescore.bet",
@@ -325,13 +330,6 @@ EVENT_URL: Mapping[str, _Event] = {
     "leovegas_kambi": _Event(
         "https://www.leovegas.com/en-ca/sport#event/{id}",
         note="2026-08-04: HTTP 404 on every sample — this grammar is wrong",
-    ),
-    "polymarket": _Event(
-        "https://polymarket.com/event/{slug}",
-        note=(
-            "2026-08-04: HTTP 404 — Polymarket slugs are market questions, not "
-            "team names, and nothing we store reconstructs one"
-        ),
     ),
 }
 

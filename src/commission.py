@@ -193,7 +193,21 @@ COMMISSIONS: dict[str, Commission] = {
     "sxbet": WinningsCommission(label="sxbet", rate=0.05),
     # ── prediction markets: a fee per contract, paid on entry ─────────────────
     "kalshi": ContractFeeCommission(label="kalshi", rate=0.07, shape="p_times_q"),
-    "polymarket": ContractFeeCommission(label="polymarket", rate=0.05, shape="min_p_q"),
+    # The offshore Polymarket charged ``0.05 × min(p, 1−p)`` and was deregistered
+    # on 2026-08-13; the US venue below is a different company on a different
+    # schedule, so nothing carried over.
+    # ``docs.polymarket.us/fees`` states ``Fee = Θ × C × p × (1 − p)`` with
+    # ``Θ = 0.06`` — Kalshi's shape at a lower rate — and gives the worked maximum
+    # of $1.50 per 100-contract lot at ``p = 0.50``, which is what this
+    # reproduces.  Every market in the collected board also carries
+    # ``feeCoefficient: 0.06`` inline, so the payload and the fee page agree.
+    #
+    # The maker rebate (``Θ = −0.0125``) and the volume tiers are deliberately
+    # ignored: every price this application takes is taken, not made, and no
+    # rebate is available at this size.  Least favourable reading, as above.
+    "polymarket_us": ContractFeeCommission(
+        label="polymarket_us", rate=0.06, shape="p_times_q"
+    ),
 }
 
 

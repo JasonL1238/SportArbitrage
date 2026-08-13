@@ -66,7 +66,7 @@ from src.sources.kalshi import KalshiAdapter
 from src.sources.matchbook import MatchbookAdapter
 from src.sources.onexbet import OneXBetAdapter
 from src.sources.pinnacle import PinnacleAdapter
-from src.sources.polymarket import PolymarketAdapter
+from src.sources.polymarket_us import PolymarketUSAdapter
 from src.sources.smarkets import SmarketsAdapter
 from src.sources.sxbet import SxBetAdapter
 from src.sources.vegasinsider import VegasInsiderAdapter
@@ -141,22 +141,18 @@ REPUBLISHED_SOURCE_KEYS: frozenset[str] = frozenset(
 #   an_bovada       Action Network mirrors of two of the above.  Already
 #   an_onexbet      view-only, but they have to disappear *with* their book, or
 #                   the US-only view still shows its price as context.
-#   polymarket      **Two venues share this brand and only one is US-executable.**
-#                   ``src.sources.polymarket`` reads ``gamma-api.polymarket.com``,
-#                   the offshore platform.  The US venue is a different legal
-#                   entity — QCX LLC, doing business as Polymarket US, a
-#                   CFTC-designated contract market Polymarket acquired in July
-#                   2025 — with its own order book, its own fee schedule and its
-#                   own settlement rules.  A price quoted by the offshore book is
-#                   not one a US customer can take, and pricing a hedge off it
-#                   reports a position as risk-free that cannot be entered.  The
-#                   US venue belongs here as its own source key, not as a config
-#                   variant of this one: ``COMMISSIONS`` and ``SETTLEMENT`` are
-#                   keyed by source key, so sharing one would read a fee schedule
-#                   and a rain-out rule off the wrong venue's bytes.
 #
-# Kalshi is deliberately absent: it operates its own CFTC-regulated exchange and
-# is executable from the US.
+# Kalshi and ``polymarket_us`` are deliberately absent: both operate their own
+# CFTC-regulated venue and are executable from the US.
+#
+# The offshore ``polymarket`` (``gamma-api.polymarket.com``) used to be the last
+# name in this set and was **deregistered on 2026-08-13** at the operator's
+# request, once ``polymarket_us`` — the CFTC-designated QCX venue, a different
+# legal entity — was collecting.  The brand is now one key here rather than two,
+# which also removes the confusion that cost three days when a probe against the
+# wrong Polymarket *host* was read as the venue refusing.  See
+# ``docs/evidence/exchanges-and-mirrors.md``; ``git log -- src/sources/polymarket.py``
+# restores the adapter if the offshore board is ever wanted as context again.
 US_UNAVAILABLE_SOURCE_KEYS: frozenset[str] = frozenset(
     {
         "pinnacle",
@@ -169,7 +165,6 @@ US_UNAVAILABLE_SOURCE_KEYS: frozenset[str] = frozenset(
         "sxbet",
         "an_bovada",
         "an_onexbet",
-        "polymarket",
     }
 )
 
@@ -196,7 +191,20 @@ US_UNAVAILABLE_SOURCE_KEYS: frozenset[str] = frozenset(
 #: here — it holds licences state by state, so it goes in
 #: :data:`RETAIL_SOURCE_KEYS` with real per-state routes, where a missing route
 #: fails loudly.
-NATIONWIDE_SOURCE_KEYS: frozenset[str] = frozenset({"kalshi"})
+#:
+#: ``polymarket_us`` qualifies on the same merits and for the same reason — QCX
+#: LLC is a CFTC-designated contract market, not a state licensee.  The offshore
+#: Polymarket that used to sit in :data:`US_UNAVAILABLE_SOURCE_KEYS` under the
+#: same brand was deregistered on 2026-08-13, so there is no longer a second
+#: venue here to confuse this one with.
+#: Note what this does **not** settle: the nationwide half of
+#: :func:`takeable_from_state` is state-invariant, so listing a venue here claims
+#: uniform reach across every jurisdiction.  Illinois served the IGB's
+#: cease-and-desist on Polymarket on 2026-01-27 and that question is open; the
+#: operator's decision on 2026-08-09 was to keep these venues takeable rather
+#: than label them, and answering it per state needs the table
+#: :func:`takeable_from_state` names before this set can express it.
+NATIONWIDE_SOURCE_KEYS: frozenset[str] = frozenset({"kalshi", "polymarket_us"})
 
 VIEW_ONLY_SOURCES: frozenset[str] = REPUBLISHED_SOURCE_KEYS | jurisdiction(
     settings.STATE
@@ -691,9 +699,14 @@ _BASE_SOURCES: tuple[SourceDescriptor, ...] = (
         adapter=KalshiAdapter,
         kind=SourceKind.PREDICTION_MARKET,
     ),
+    # QCX LLC, a CFTC-designated contract market, reading the public keyless
+    # ``gateway.polymarket.us``.  The offshore Polymarket that used to sit beside
+    # this line was deregistered on 2026-08-13 — see
+    # :data:`US_UNAVAILABLE_SOURCE_KEYS` — so "Polymarket" now means exactly one
+    # venue in this repository, and it is the one a US customer can trade.
     SourceDescriptor(
-        key="polymarket",
-        adapter=PolymarketAdapter,
+        key="polymarket_us",
+        adapter=PolymarketUSAdapter,
         kind=SourceKind.PREDICTION_MARKET,
     ),
 )
@@ -814,10 +827,12 @@ def takeable_from_state(state: str) -> frozenset[str]:
     :mod:`src.jurisdictions` first — do not read a per-state answer out of this
     name until one exists.
 
-    ``polymarket`` used to be the second name in that set and is not any more: the
-    registered adapter reads the offshore platform, which is a different legal
-    entity from the CFTC-designated Polymarket US.  Its legs are now labelled
-    "not reachable from {ST}" everywhere rather than counted as a local hedge.
+    ``polymarket`` used to be the second name in that set, was moved out of it
+    because the registered adapter read the *offshore* platform rather than the
+    CFTC-designated Polymarket US, and was deregistered altogether on 2026-08-13
+    once ``polymarket_us`` collected.  The name in the set today is that US
+    venue, which is takeable on the merits rather than by inheritance from a
+    brand.
     """
     return state_licensed_keys(state) | NATIONWIDE_SOURCE_KEYS
 

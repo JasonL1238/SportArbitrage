@@ -3223,22 +3223,25 @@ class TestAScopeThatFailsPartWayKeepsWhatItFetched:
         """
         import httpx
 
-        from src.sources.polymarket import PolymarketAdapter
+        from src.sources.polymarket_us import PolymarketUSAdapter
 
         def handler(request: httpx.Request) -> httpx.Response:
             offset = int(request.url.params.get("offset", "0"))
-            tag = request.url.params.get("tag_slug", "")
-            if tag == "mlb" and offset > 0:
+            slug = request.url.path.rstrip("/").split("/")[-2]
+            if slug == "mlb" and offset > 0:
                 return httpx.Response(500, json={"error": "boom"})
             # A full first page, so the loop asks for a second.
-            return httpx.Response(200, json=[
-                {"id": str(index), "slug": f"{tag}-{index}", "title": "x",
-                 "startTime": "2026-08-01T18:00:00Z", "markets": []}
-                for index in range(40)
-            ])
+            return httpx.Response(200, json={
+                "league": {"slug": slug, "ordering": "away"},
+                "events": [
+                    {"id": str(index), "slug": f"{slug}-{index}", "title": "x",
+                     "startTime": "2026-08-01T18:00:00Z", "markets": []}
+                    for index in range(25)
+                ],
+            })
 
         client = httpx.Client(transport=httpx.MockTransport(handler))
-        source = PolymarketAdapter(["MLB", "NFL"], client=client)
+        source = PolymarketUSAdapter(["MLB", "NFL"], client=client)
         kept = {raw.endpoint for raw in source.fetch_raw()}
 
         # The page that arrived before the failure is still here...
@@ -5490,7 +5493,10 @@ class TestTheChargeAndTheSettlementRuleArePinnedPerVenue:
         "matchbook": '2.00% of net winnings',
         "onexbet": "no commission (the venue's margin is already in the price)",
         "pinnacle": "no commission (the venue's margin is already in the price)",
-        "polymarket": '0.05 × min(p, 1−p) per contract, charged on entry',
+        # The offshore Polymarket charged ``0.05 × min(p, 1−p)`` and was
+        # deregistered on 2026-08-13; QCX publishes Kalshi's shape at a lower
+        # rate, so nothing about the old line carried over to this one.
+        "polymarket_us": '0.06 × p×(1−p) per contract, charged on entry',
         "smarkets": '2.00% of net winnings',
         "sxbet": '5.00% of net winnings',
     }
@@ -5533,7 +5539,10 @@ class TestTheChargeAndTheSettlementRuleArePinnedPerVenue:
         "matchbook": 'void_and_refund',
         "onexbet": 'void_and_refund',
         "pinnacle": 'void_and_refund',
-        "polymarket": 'resolve_fifty_fifty',
+        # The US venue settles a cancelled game at last fair market price, which
+        # is the make-up regime, not the ``resolve_fifty_fifty`` rule the
+        # deregistered offshore Polymarket used.
+        "polymarket_us": 'settle_make_up_game',
         "smarkets": 'void_and_refund',
         "sxbet": 'void_and_refund',
     }
@@ -5561,7 +5570,7 @@ class TestTheChargeAndTheSettlementRuleArePinnedPerVenue:
 
 
 class TestPolymarketReadsTheLeagueFromThePayload:
-    """The competition came entirely from the *request's* tag slug.
+    """The competition came entirely from the *request's* league slug.
 
     It matters because participant resolution is not injective across leagues —
     ``canonical_participant("San Francisco Giants", NFL)`` is NFL-NYG and
@@ -5575,6 +5584,13 @@ class TestPolymarketReadsTheLeagueFromThePayload:
     ``mls-2025`` and ``nfl-2026`` against routes named ``mls`` and ``nfl``.  The
     committed capture holds only the unsuffixed ``mlb``, so the test written
     against it passed while the live slate broke.
+
+    Written for the offshore Polymarket and retargeted to ``polymarket_us`` when
+    that venue was deregistered on 2026-08-13: the fault is the same one and the
+    US adapter carries the same guard, so the coverage moves rather than being
+    dropped.  The payload differs — the offshore body was a bare list, this one
+    is an object with an ``events`` array — which is why ``_capture`` reaches
+    one level deeper than the version this replaced.
     """
 
     def _capture(self, *, series=None, team_league=None):
@@ -5584,23 +5600,24 @@ class TestPolymarketReadsTheLeagueFromThePayload:
 
         store = RawStore("tests/fixtures/raw")
         raws = []
-        for path in sorted(glob.glob("tests/fixtures/raw/polymarket__*.json")):
+        for path in sorted(glob.glob("tests/fixtures/raw/polymarket_us__*.json")):
             raw = store.read(path)
             payload = raw.json()
-            if isinstance(payload, list) and payload:
+            events = payload.get("events") if isinstance(payload, dict) else None
+            if events:
                 if series is not None:
-                    payload[0]["seriesSlug"] = series
+                    events[0]["seriesSlug"] = series
                 if team_league is not None:
-                    for team in payload[0].get("teams") or []:
+                    for team in events[0].get("teams") or []:
                         team["league"] = team_league
                 raw = dataclasses.replace(raw, body=json.dumps(payload))
             raws.append(raw)
         return raws
 
     def _refusals(self, **edits):
-        from src.sources.polymarket import parse_polymarket
+        from src.sources.polymarket_us import parse_polymarket_us
 
-        outcome = parse_polymarket(self._capture(**edits))
+        outcome = parse_polymarket_us(self._capture(**edits))
         return outcome, [
             r for r in outcome.rejections
             if r.reason == "event_league_disagrees_with_its_route"
@@ -5802,7 +5819,9 @@ class TestAThinOrderBookIsNotAMispairedRow:
     places is the one thing none of them can produce.
     """
 
-    ORDER_DRIVEN = frozenset({"matchbook", "smarkets", "kalshi", "polymarket", "sxbet"})
+    ORDER_DRIVEN = frozenset(
+        {"matchbook", "smarkets", "kalshi", "polymarket_us", "sxbet"}
+    )
 
     def _rows(self, *, suspect, home, away, count=12):
         """*count* fixtures priced by three books plus one suspect venue."""
@@ -5902,7 +5921,8 @@ class TestTheWomensMarkerReachesEveryVenueThatNeedsIt:
     #: cannot arrive under a men's league key in the first place.
     IMMUNE = (
         "betmgm", "bovada", "caesars", "cloudbet", "draftkings", "hardrock",
-        "kalshi", "onexbet", "polymarket", "vi_draftkings", "vi_caesars",
+        "kalshi", "onexbet", "polymarket_us",
+        "vi_draftkings", "vi_caesars",
         "vi_hardrock", "vi_fanatics", "vi_bet365",
         # VegasInsider routes name one league each (see its ``ROUTES``), so a
         # women's fixture cannot arrive under a men's key.
@@ -5930,10 +5950,10 @@ class TestTheWomensMarkerReachesEveryVenueThatNeedsIt:
         """Pins the claim rather than the absence: each of these routes names
         exactly one competition, so there is nothing to disambiguate."""
         from src.sources.bovada import LEAGUE_PATHS
-        from src.sources.polymarket import TAG_ROUTES
+        from src.sources.polymarket_us import LEAGUE_ROUTES
 
         assert all(path.league for path in LEAGUE_PATHS)
-        assert all(route.league for route in TAG_ROUTES)
+        assert all(route.league for route in LEAGUE_ROUTES)
 
     def test_the_two_lists_account_for_every_registered_source(self) -> None:
         """The lists above partition the registry, and nothing said so.
@@ -6452,7 +6472,9 @@ class TestAThreeWaySwapIsStillAMispairing:
     (source, market) pairs on the captured slate.
     """
 
-    ORDER_DRIVEN = frozenset({"matchbook", "smarkets", "kalshi", "polymarket", "sxbet"})
+    ORDER_DRIVEN = frozenset(
+        {"matchbook", "smarkets", "kalshi", "polymarket_us", "sxbet"}
+    )
 
     def _slate(self, *, suspect, swap, draws, thin=False):
         rows = []
@@ -6967,7 +6989,9 @@ class TestASpreadsTwoHalvesAreOneMarket:
     only 3 were moneylines.
     """
 
-    ORDER_DRIVEN = frozenset({"matchbook", "smarkets", "kalshi", "polymarket", "sxbet"})
+    ORDER_DRIVEN = frozenset(
+        {"matchbook", "smarkets", "kalshi", "polymarket_us", "sxbet"}
+    )
 
     def _slate(self, *, suspect, swap, market, line=1.5):
         rows = []
@@ -7004,7 +7028,7 @@ class TestASpreadsTwoHalvesAreOneMarket:
             and f.severity is Severity.ERROR
         ]
 
-    @pytest.mark.parametrize("suspect", ["matchbook", "sxbet", "kalshi", "polymarket"])
+    @pytest.mark.parametrize("suspect", ["matchbook", "sxbet", "kalshi", "polymarket_us"])
     def test_a_swapped_spread_on_an_exchange_is_caught(self, suspect) -> None:
         assert self._errors(
             self._slate(suspect=suspect, swap=True, market=Market.SPREAD)
@@ -7733,7 +7757,9 @@ class TestASpreadsTwoContractsStayApart:
     side and an ERROR it had not earned.
     """
 
-    ORDER_DRIVEN = frozenset({"matchbook", "smarkets", "kalshi", "polymarket", "sxbet"})
+    ORDER_DRIVEN = frozenset(
+        {"matchbook", "smarkets", "kalshi", "polymarket_us", "sxbet"}
+    )
 
     def _fixture(self, index, market, line, prices):
         key = f"MLB-a{index}@MLB-b{index}:2026-07-29"
@@ -12180,7 +12206,7 @@ class TestEachVenuesKindIsPinnedBecauseItPicksTheRule:
         "matchbook": True,
         "onexbet": False,
         "pinnacle": False,
-        "polymarket": True,
+        "polymarket_us": True,
         "smarkets": True,
         "sxbet": True,
     }
@@ -12772,7 +12798,9 @@ class TestASelfImposedPageCapIsReported:
     characters of it — both of which the broken code matched.
     """
 
-    PAGING_ADAPTERS = ("polymarket", "smarkets", "sxbet", "kalshi", "matchbook")
+    PAGING_ADAPTERS = (
+        "polymarket", "polymarket_us", "smarkets", "sxbet", "kalshi", "matchbook",
+    )
 
     @staticmethod
     def _unpaced(source):
@@ -12807,22 +12835,25 @@ class TestASelfImposedPageCapIsReported:
             (datetime.now(UTC) + timedelta(days=2)).timestamp()
         )
 
-        if module == "polymarket":
-            from src.sources.polymarket import PolymarketAdapter
+        if module == "polymarket_us":
+            from src.sources.polymarket_us import PolymarketUSAdapter
 
             def handler(request: httpx.Request) -> httpx.Response:
-                tag = request.url.params.get("tag_slug", "")
+                # ``/v2/leagues/{slug}/events`` — the slug is in the path here
+                # rather than in a query parameter as it is offshore.
+                slug = request.url.path.rstrip("/").split("/")[-2]
                 limit = int(request.url.params.get("limit", "2"))
-                # Always exactly full — including the one-row probe past the
-                # cap, which is what makes this a truncation and not a slate
-                # that happened to end on the boundary.
-                return httpx.Response(200, json=[
-                    {"id": f"{tag}{index}", "slug": f"{tag}-{index}", "title": "x",
-                     "startTime": "2026-08-01T18:00:00Z", "markets": []}
-                    for index in range(limit)
-                ])
+                return httpx.Response(200, json={
+                    "league": {"slug": slug, "ordering": "away"},
+                    "events": [
+                        {"id": f"{slug}{index}", "slug": f"{slug}-{index}",
+                         "title": "x", "startTime": "2026-08-01T18:00:00Z",
+                         "markets": []}
+                        for index in range(limit)
+                    ],
+                })
 
-            source = PolymarketAdapter(
+            source = PolymarketUSAdapter(
                 ["MLB", "NFL"], page_size=2,
                 client=httpx.Client(transport=httpx.MockTransport(handler)),
             )
@@ -13013,9 +13044,9 @@ class TestPolymarketAsksWhetherItTruncatedRatherThanAssuming:
     def _adapter(handler):
         import httpx
 
-        from src.sources.polymarket import PolymarketAdapter
+        from src.sources.polymarket_us import PolymarketUSAdapter
 
-        source = PolymarketAdapter(
+        source = PolymarketUSAdapter(
             ["MLB"], page_size=2,
             client=httpx.Client(transport=httpx.MockTransport(handler)),
         )
@@ -13023,11 +13054,11 @@ class TestPolymarketAsksWhetherItTruncatedRatherThanAssuming:
 
     @staticmethod
     def _events(count: int):
-        return [
+        return {"league": {"slug": "mlb", "ordering": "away"}, "events": [
             {"id": f"e{index}", "slug": f"mlb-{index}", "title": "x",
              "startTime": "2026-08-01T18:00:00Z", "markets": []}
             for index in range(count)
-        ]
+        ]}
 
     def test_a_slate_that_ends_on_the_cap_boundary_is_not_a_truncation(self) -> None:
         """Every permitted page exactly full and nothing after them.  Nothing was
@@ -13110,13 +13141,13 @@ class TestPolymarketAsksWhetherItTruncatedRatherThanAssuming:
     def test_a_non_list_probe_is_not_handed_to_parse(self) -> None:
         """The probe answered 200 with an error envelope.  That settles nothing
         about whether more events follow, so the run is truncated — and the
-        envelope must not be kept among the pages ``parse_polymarket`` will
-        ``require_list`` over, or the two full pages already collected are
-        thrown away with the whole source.
+        envelope must not be kept among the pages ``parse_polymarket_us`` will
+        ``require_mapping``/``require_list`` over, or the two full pages already
+        collected are thrown away with the whole source.
         """
         import httpx
 
-        from src.sources.polymarket import parse_polymarket
+        from src.sources.polymarket_us import parse_polymarket_us
 
         def handler(request: httpx.Request) -> httpx.Response:
             limit = int(request.url.params.get("limit", "2"))
@@ -13131,11 +13162,11 @@ class TestPolymarketAsksWhetherItTruncatedRatherThanAssuming:
         finally:
             source.close()
         assert [s.split(":", 1)[0] for s in cut] == ["mlb"]
-        assert "not a list of events" in cut[0]
+        assert "without a readable 'events' list" in cut[0]
         assert "events:mlb:03" not in {raw.endpoint for raw in raws}
         # FormatChangeError is the pre-fix failure: require_list on the
         # retained envelope.  Getting past parse at all is the pin.
-        parse_polymarket(raws)
+        parse_polymarket_us(raws)
 
 
 class TestARefusedSubRequestIsRecordedNotSwallowed:
@@ -13372,21 +13403,25 @@ class TestEveryPagingAdapterKeepsWhatItAlreadyPaidFor:
             source._http.retry = RetryPolicy(attempts=1)
             return source
 
-        if module == "polymarket":
-            from src.sources.polymarket import PolymarketAdapter
+        if module == "polymarket_us":
+            from src.sources.polymarket_us import PolymarketUSAdapter
 
             def handler(request: httpx.Request) -> httpx.Response:
-                tag = request.url.params.get("tag_slug", "")
+                slug = request.url.path.rstrip("/").split("/")[-2]
                 offset = int(request.url.params.get("offset", "0"))
-                if tag == "mlb" and offset:
+                if slug == "mlb" and offset:
                     return httpx.Response(500, json={"error": "boom"})
-                return httpx.Response(200, json=[
-                    {"id": f"{tag}{index}", "slug": f"{tag}-{index}", "title": "x",
-                     "startTime": "2026-08-01T18:00:00Z", "markets": []}
-                    for index in range(2)
-                ])
+                return httpx.Response(200, json={
+                    "league": {"slug": slug, "ordering": "away"},
+                    "events": [
+                        {"id": f"{slug}{index}", "slug": f"{slug}-{index}",
+                         "title": "x", "startTime": "2026-08-01T18:00:00Z",
+                         "markets": []}
+                        for index in range(2)
+                    ],
+                })
 
-            source = PolymarketAdapter(
+            source = PolymarketUSAdapter(
                 ["MLB", "NFL"], page_size=2,
                 client=httpx.Client(transport=httpx.MockTransport(handler)),
             )
@@ -13516,7 +13551,7 @@ class TestEveryPagingAdapterKeepsWhatItAlreadyPaidFor:
 
     @pytest.mark.parametrize(
         "module",
-        ["polymarket", "smarkets", "sxbet", "kalshi", "matchbook", "pinnacle"],
+        ["polymarket_us", "smarkets", "sxbet", "kalshi", "matchbook", "pinnacle"],
     )
     def test_a_scope_that_fails_part_way_keeps_the_responses_before_it(
         self, module
@@ -13653,7 +13688,7 @@ class TestEveryPagingAdapterKeepsWhatItAlreadyPaidFor:
         assert "refused 1 of the 1 scope(s)" in message, message
 
     COVERED = frozenset(
-        {"polymarket", "smarkets", "sxbet", "kalshi", "matchbook", "pinnacle"}
+        {"polymarket_us", "smarkets", "sxbet", "kalshi", "matchbook", "pinnacle"}
     )
 
     def test_no_multi_request_adapter_is_left_off_that_list(self) -> None:
