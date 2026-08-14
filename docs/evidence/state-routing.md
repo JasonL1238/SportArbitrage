@@ -3,103 +3,143 @@
 Per-state route evidence: what a licensed host returned from matching egress,
 which routes were promoted on it, and which feeds cover which book.
 
-## bet365 Illinois answers plain HTTP, and the socket was never the gate — 2026-08-14
+## bet365 Illinois: the home page is HTTP, the board is not, and the egress is now blocked — 2026-08-14
 
 From the operator's **Illinois** egress (fingerprint `34e56847c7ec`), **no
-proxy**. Track B's ladder, rungs R1/R2/R7/R8/R9. **Three recorded findings about
-this venue are wrong**, and the correction is large enough to change what an
-adapter for it would look like.
+proxy**. Track B's ladder, rungs R1/R2/R4/R7/R8/R9, **and a correction to the
+first version of this section, which was written the same day and overstated
+three things.** An adversarial audit against the manifests on disk found them;
+the measurements below are the ones that survived it.
+
+**Read this first: the Illinois egress is hard-blocked for bet365.** About a
+hundred probing requests over one evening — the last of them fuzzing the `pd`
+parameter's encoding — ended with Cloudflare returning **`403`, 4,547 bytes,
+"Sorry, you have been blocked"** across the entire estate: `www.il.bet365.com`,
+`www.bet365.com`, the previously-ungated `routingdata` endpoint, and both push
+hosts. Confirmed by three independent transports (the repo's `curl_cffi`,
+Playwright real Chrome, plain `curl`) returning byte-identical refusals, which
+makes it **IP-scoped rather than fingerprint-scoped**, and re-confirmed after it
+had held for over an hour. It is a WAF block, not a JS challenge, so there is no
+legitimate way through and none was attempted. **Every "200" recorded below was
+real when taken and is not reproducible from this egress today.** Anyone
+continuing this work needs a different IL egress, and should treat parameter
+fuzzing against this host as the thing that costs it.
+
+### What is true
 
 **R1 — the transport was never the problem.** `www.il.bet365.com` under the
-repo's ordinary `curl_cffi` transport: **`200`, 41,842 bytes, the real sportsbook
-shell**. Every "403 Cloudflare under plain httpx" reading in the record was taken
-against the *stateless* `www.bet365.com`, which is not the book. `venues.md`'s
-bet365 row and `probe_sources.py`'s candidate both said otherwise and are
-corrected; the probe candidate stays pointed at the stateless origin
-deliberately, as the control that localises the refusal.
+repo's ordinary `curl_cffi` transport returned **`200`, 41,842 bytes**, the real
+sportsbook shell. Every "403 Cloudflare under plain httpx" reading in the older
+record was taken against the *stateless* `www.bet365.com`, which is not the book.
+That correction stands on its own evidence and is independent of the block above.
 
-**R9 — fails, as predicted.** No `__NEXT_DATA__`, no `application/ld+json`, no
-`window.__INITIAL_STATE__`. Five minutes, and worth the five minutes.
+**R8 — the client configuration is in that body, and two of its URLs are
+ungated.** `b_util.WebsiteConfig` carries `STATE_LOCALE: "USIL"`, the push hosts
+`wss://premws-pt1.us.365lpodds.com` and `wss://pshudws.us.365lpodds.com`, and
+three URLs: `/manifestapi/getmanifest?…` and
+`/websiteroutingdatacontentapi/routingdata?v=…` with no token (both answered
+`200`, 46 KB and 16.9 KB), and `/defaultapi/sports-configuration?_h=…` with one.
+The routing data is the app's **own endpoint catalogue, 135 entries**.
 
-**R8 — the whole client configuration is in that plain-HTTP body.** `b_util
-.WebsiteConfig` carries, unredacted except for three secrets:
+**The socket `uid` is not a credential.** From the page's own boot code:
+`` `${t}:${e}/zap/?uid=` + String(Math.random()).substring(2) ``, subprotocol
+`zap-protocol-v2`. A client-generated random number, not a derivation of `_h` or
+`SST`. Nothing here needs an anti-bot control defeated, which is why none was.
 
-| key | value |
-| --- | --- |
-| `STATE_LOCALE` | `USIL` — the state pin, stated |
-| `MANIFEST_CONFIG_LOCATION` | `/manifestapi/getmanifest?s=www-US-sportsus&v=3347&cl=US&sl=USIL&a=0` |
-| `SERVICE_RULES_LOCATION` | `/websiteroutingdatacontentapi/routingdata?v=3274933210` |
-| `CONNECTION_DETAILS` | `wss://premws-pt1.us.365lpodds.com,443,3` |
-| `PRIVATE_CONNECTION_DETAILS` | `wss://pshudws.us.365lpodds.com,443,3` |
-| `SITE_CONFIG_LOCATION` | `/defaultapi/sports-configuration?_h=…` — **the only one gated** |
+**The home page's prices really do arrive over plain HTTP.**
+`/pullpodapi/gethomepageadditionalpods` — an ordinary XHR, no `_h`, `csid=28` in
+the query — returned **192,756 bytes carrying 754 `OD=` fractional-odds tokens**,
+and re-requesting it from the repo's transport with **no browser at all** gave
+the same 754. That is a genuine anonymous surface.
 
-The two ungated URLs are ones the page requests itself with no computed secret,
-so asking them is observation. Both answer: the manifest **`200`, 46 KB JSON**,
-the routing data **`200`, 16.9 KB JSON** — and the routing data is the
-application's **own endpoint catalogue, 135 entries**, naming
-`/matchbettingcontentapi/coupon`, `/matchmarketscontentapi/markets`,
-`/matchmarketscontentapi/upcomingmatches` and ~100 more. `/defaultapi/sports-configuration`
-without its `_h` answers **`500`**, not `403` — recorded because a 500 is what an
-unauthenticated *error* looks like rather than a refusal, and nothing here
-computes `_h`.
+**R9 — fails.** No `__NEXT_DATA__`, no `application/ld+json`, no
+`window.__INITIAL_STATE__`.
 
-**The socket `uid` is not a credential, and that retires the hypothesis the whole
-track was built on.** Read off the page's own boot code:
+### Three things the first version of this section got wrong
 
-```js
-p = `${t}:${e}/zap/?uid=` + String(Math.random()).substring(2)
-new WebSocket(p, "zap-protocol-v2")
-```
+**1. "R2 renders the full Illinois board" — it renders the *home page*.** The DOM
+snapshot's own URL is `https://www.il.bet365.com/#/HO/` — bet365's home route —
+and none of that capture's 26 responses is a request to any league endpoint. The
+app never navigated into a competition. Of its **553** price tokens (not 551),
+only **179 are fixture-grid prices**; the remaining 374 are collapsed futures
+lists and "$10 pays $X" boost tiles. Every priced block is one the payload itself
+labels `#SPOTLIGHT…#`, and the DOM prices are not an independent surface but the
+same rows: the ten-game NFL preseason block reconstructs fixture-for-fixture and
+price-for-price from the pod body after fractional→American conversion
+(`OD=20/21;HA=-4.5` → `-4.5`, `-105`), captions included.
 
-A client-generated random number, exactly like theScore's `connectToken`. It is
-**not** derived from `_h` or `SST`. There is no anti-bot control on the odds
-socket to be blocked by, which means the 2026-08-04 stall was never a refused
-session.
+**And MLB contributed zero prices.** Its pod carries three real fixtures with
+starting pitchers, but **every one of its 24 price rows is `SU=1`** — suspended,
+because all three games had already started against the DOM footer's own
+`Server Time 9:26:10 PM CT`. The rendered rows read "Spread / Total / Money" with
+no numbers under them. WNBA likewise. So the club names I cited as evidence of a
+board were an *unpriced* coupon: there were six of them, not three, and the
+"Giants" was the NFL New York Giants.
 
-**R2 — passes, and supersedes "the catalog subscription stalls".** A *fresh
-isolated* Chrome, 60 s, renders the full Illinois board: MLB/NFL/WNBA/Soccer
-navigation, three MLB club names, and **551 price-shaped tokens** in the
-sanitized DOM. The 2026-08-04 note — "fresh isolated Chromium and stable-Chrome
-profiles load the correct IL shell but their catalog subscription stalls at the
-application preloader" — no longer describes what happens, so R3's warm
-persistent profile was never needed.
+**2. "Supersedes the catalog subscription stalls" — the stall is confirmed, and
+now localized.** The control is the `__time` clock: all three socket hosts were
+asked for it, `pshudws` answered 0.9 s after the document and `sportspublisher`
+1.8 s after, while **`premws-pt1` published nothing at all across 24 socket
+lifetimes in four captures** — not a price, not a config topic, not the clock.
+The repeated sockets are a **reconnect loop with subscription replay** (six
+byte-identical subscribe frames; the topic set decaying 21 → 21 → 11 as
+per-event subscribers give up), and their count tracks *page uptime* at roughly
+one new socket every 10–13 s. So the "two extra websockets after routing to MLB"
+were the 15.5 extra seconds that run lasted, **not** the route.
 
-**R7 — the census, and it points away from the sockets.** Seven websockets:
+The decisive capture is the deep-linked one: the app fetched
+`/defaultapi/sports-configuration` **with the MLB route in its query and a valid
+token**, got `200` and 5,490 bytes, logged twice that the config preload "was not
+used within a few seconds from the window's load event", issued **no** pod,
+coupon or markets request, and its sockets subscribed to config topics only and
+received zero frames. That is a browser holding a valid `_h`/`SST` on the correct
+MLB route, stalled waiting for the odds catalogue — which is the 2026-08-04
+sentence verbatim. What has changed since then is only that the home page now
+paints from HTTP pods, so the stall no longer *looks* like a preloader.
 
-| socket | sent | received |
-| --- | --- | --- |
-| `premws-pt1.us.365lpodds.com` (odds) ×5 | a real topic subscription (`P-ENDP,P_CONFIG,…,InPlay_32_0,OVInPlay_32_0,…`) | **`101` and `100` only — no records** |
-| `pshudws.us.365lpodds.com` (private) | 1 | 5, including `__timeF|IN;TI=…;UF=55;|` |
-| `www.il.bet365.com/sportspublisher` | 2 | 4, including a `__time` frame |
+**3. "200 with zero bytes means the endpoint is real and the parameters are
+incomplete" — it means nothing.** A path that does not exist
+(`/matchmarketscontentapi/thisdoesnotexist`) returns the **identical** `200`,
+`content-length: 0`, no content-type, `cf-cache-status: DYNAMIC`. That reading
+was a lever that was never there.
 
-So sessions are accepted and content frames *do* flow on two of the three
-socket kinds. The odds sockets subscribe and are answered with silence — which,
-given the DOM is full of prices, means **the board did not arrive over the
-socket**.
+### The routing grammar, decoded — and the one lead left
 
-**It arrived over plain HTTP, and so can ours.**
-`/pullpodapi/gethomepageadditionalpods` — an ordinary XHR with no `_h`, no
-session token, `csid=28` (the state code) and `lid=32` in the query — served
-**192,756 bytes carrying 754 fractional-odds tokens** (`OD=5/1`, `OD=8/5`, …)
-with fixtures (`DEN Broncos @ ATL Falcons`), market labels (`Spread`, `Total`,
-`Money`) and competition names (`NFL-Exhibition`). Re-requested from the repo's
-own transport with **no browser at all**: `200`, 192 KB, the same 754 prices.
+`/matchbettingcontentapi/coupon` genuinely cannot serve MLB: both of its
+catalogue entries require `D:5,8,19` and the MLB route is `D48`. That much was
+right. The grammar around it:
 
-**What that means for the plan.** Track B's §B4 — "if frames are the only
-surface, store the tape, fold in `parse`" — is moot. bet365 is a delimited-text
-REST source of the same class as every other adapter here, needing no websocket,
-no tape format, no `SLOW_SOURCES` entry, and no browser at collection time.
+- `~` separates **AND** terms; `KEY:v1,v2` matches a route segment.
+- **The caret is part of the key, not an operator** — `K^:12` requires the route
+  token `K^12` while `K:2` requires `K2`, and both keys coexist in the catalogue.
+- An empty value list (`AC:`, `AS:`) constrains the route's leading type token.
+- `o` sorts **numerically** (the catalogue arrives pre-sorted; lexical order
+  would put `1000` before `22`).
+- `S^:1` selects a *partial* endpoint over its full sibling — a pattern holding
+  for all six partial/full pairs.
 
-**Where it stops, precisely.** The homepage pods are *spotlight* markets, not a
-league board. `/matchbettingcontentapi/coupon` with the navigation payload's own
-MLB path (`pd=#AC#B16#C20525425#D48#E1096#F10#`) plus the pull-pod query set
-answers **`200` with zero bytes** — the endpoint is real and the parameter set is
-incomplete. That is the next lever: the per-league coupon parameters, readable
-from a browser session that clicks into MLB. Nothing beyond it needs solving.
+By that grammar `/matchmarketscontentapi/markets` (`o=250`, `B:…16…` and
+`D:…47,48…`) **was** the right endpoint, and the reason it returned empty is
+proposed to be a missing **`/contentdata` path prefix** — the previously
+unexplained `c` field, where `c==1` means prefix and `c` absent means bare path,
+a rule consistent with all six content-API requests in the captures.
 
-**Unverified, and worth stating**: that the pull-pod *content* differs per state.
-The host and `csid=28` pin Illinois structurally, which satisfies the routing
-rule, but no second state has been asked.
+**That is a hypothesis and it is unverified**, because the egress was blocked
+before it could be asked. `/contentdata/matchmarketscontentapi/markets?…` is the
+single next request this work needs, and it needs an IL egress that is not this
+one.
+
+Also worth carrying forward: the app is React-Router driven
+(`REACT_ROUTER_PERCENTAGE = 100,100`), `SITE_ROOT_PATH` values (`sportsil`,
+`sportsus`) are asset-bundle names rather than site roots and `sportsil` is dead
+code, a mobile user-agent cannot change the shell (the root carries
+`vary: accept-encoding` only and is byte-identical at 41,842 B across five
+captures), and `/splashcontentapi/splash` excludes sport 16 outright so `#AS#B16#`
+can never route there.
+
+**Unverified, and worth stating**: that pull-pod *content* differs per state. The
+host and `csid=28` pin Illinois structurally, which satisfies the routing rule,
+but no second state was ever asked.
 
 ## Fanatics has no anonymous board on the web, and the DNS map was not a route — 2026-08-14
 

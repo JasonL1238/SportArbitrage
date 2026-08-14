@@ -212,15 +212,21 @@ class BrowserSession:
         adapters may later reproduce a proven public request directly.
 
         *then_hash* sets ``location.hash`` **after** the app has had time to
-        boot, which is the only way to reach a route inside a hash-routed
-        single-page app.  A deep link supplied in *url* does not work on one:
-        the fragment is read by the app's own router once, during a boot that
-        has not happened yet when ``goto`` resolves, so the initial hash is
-        simply ignored — bet365's Illinois board answered a deep-linked MLB
-        route with the home page and no league request at all.  Clicking is not
-        a substitute either, since the nav text may be present before the
-        handler that routes on it.  This performs the same **same-document**
-        navigation the app's own menu performs.
+        boot — a **same-document** navigation, which is what a single-page app's
+        own menu performs and what a fresh ``goto`` is not.  A fragment supplied
+        in *url* is a different thing: it is present before the app's router
+        exists, and an app that reads it only once may never see it.  bet365's
+        Illinois shell answered a deep-linked MLB route with the home page and
+        no league request at all; clicking the nav text did not route either,
+        the text being present before the handler that acts on it.
+
+        A caution learned from that venue: **this reaching the router is not the
+        same as the route producing traffic.**  There, routing was honoured — the
+        app re-fetched its configuration with the new route in the query — and
+        still issued no content request, because what it was waiting for never
+        arrived on a different channel.  Use it to *reach* a route, then measure
+        what happens; do not read a quiet capture as a route that failed to
+        apply, which is what the ``ROUTE`` diagnostic exists to distinguish.
         """
         from src.sources.research import (
             safe_request_headers,

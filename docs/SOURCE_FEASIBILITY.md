@@ -46,8 +46,10 @@ python scripts/probe_sources.py --state IL
   for vintage coherence (2026-08-09) · The two endpoint versions are different
   catalogues (2026-08-08) · Two things to fix *before* the Pennsylvania recapture
   (2026-08-08) · v2 returns full-game only unless asked (2026-08-08)
-- **`evidence/state-routing.md`** — bet365 Illinois answers plain HTTP, and the
-  socket was never the gate (2026-08-14) · Fanatics has no anonymous board on the
+- **`evidence/state-routing.md`** — bet365 Illinois: the home page is HTTP, the
+  board is not, and the egress is now blocked (2026-08-14) · What is true ·
+  Three things the first version of this section got wrong · The routing grammar,
+  decoded — and the one lead left · Fanatics has no anonymous board on the
   web, and the DNS map was not a route (2026-08-14) · theScore Bet is registered:
   Illinois' first direct route (2026-08-13) · theScore Bet: the anonymous surface, measured
   end to end (2026-08-13) · The anonymous flow, reproduced over plain HTTP
