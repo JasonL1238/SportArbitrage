@@ -358,6 +358,29 @@ def test_the_filter_is_too_narrow_to_hide_a_refusal() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    "token", ["plain", 'has"quote', "back\\slash", 'both"\\mixed', "a/b+c="]
+)
+def test_redaction_fails_closed_on_every_escape_shape(token: str) -> None:
+    """A partial match is worse than no match, and no match is worse still.
+
+    The value is a JSON string, so it may hold escapes.  Matching it with
+    ``[^"]*`` would stop at an escaped quote and replace a *prefix* — leaving
+    the tail of the credential in the bytes inside malformed JSON.  Matching
+    with ``[^"\\\\]*`` fails the opposite way and is worse: any backslash and
+    the pattern does not match at all, so the whole token is stored.
+    """
+    body = json.dumps({"data": {"startup": {"anonymousToken": token, "keep": 1}}})
+    stored = redact_anonymous_token(body)
+
+    assert token not in stored
+    assert json.loads(stored)["data"]["startup"]["anonymousToken"] == "[redacted]"
+    # …and the fetch still gets the real value, decoded rather than sliced.
+    adapter = TheScoreAdapter()
+    adapter._capture_token(body)
+    assert adapter._token == token
+
+
 def test_parsing_is_pure_of_the_instance_that_fetched(mlb, mls) -> None:
     """``replay_run`` builds the adapter with no arguments, so parse must not read it."""
     configured = TheScoreAdapter(

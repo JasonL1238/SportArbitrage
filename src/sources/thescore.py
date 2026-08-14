@@ -29,6 +29,7 @@ wrong egress refuses rather than pricing another state's board.
 """
 from __future__ import annotations
 
+import json
 import logging
 import re
 import uuid
@@ -274,7 +275,15 @@ A captured response spells that key ``pagedMarkets``; it is a **response alias**
 and the schema field is ``markets``, so querying the alias fails validation.  A
 response key is not a schema field."""
 
-_ANONYMOUS_TOKEN = re.compile(r'("anonymousToken"\s*:\s*)"[^"\\]*"')
+#: The token's key and its **whole** JSON string value, escapes included.
+#:
+#: ``(?:[^"\\]|\\.)*`` rather than ``[^"]*`` because a value holding an escaped
+#: quote would end the simpler class early, and the substitution would then
+#: replace a prefix and leave the rest of the token in the bytes — malformed
+#: JSON carrying the tail of the credential.  ``[^"\\]*`` fails the other way and
+#: is worse: a value with any backslash in it would not match at all, and the
+#: token would be stored whole.  Redaction must fail closed.
+_ANONYMOUS_TOKEN = re.compile(r'("anonymousToken"\s*:\s*)("(?:[^"\\]|\\.)*")')
 _REDACTED = '"[redacted]"'
 
 
@@ -338,8 +347,14 @@ class TheScoreAdapter:
         """
         match = _ANONYMOUS_TOKEN.search(body)
         if match is not None:
-            token = body[match.end(1):].split('"')[1]
-            if token:
+            try:
+                # Decoded rather than sliced: the captured group is a JSON
+                # string, and reading it as raw characters would keep the
+                # escapes and send a token the server never issued.
+                token = json.loads(match.group(2))
+            except ValueError:  # pragma: no cover - the regex accepts JSON strings
+                token = ""
+            if isinstance(token, str) and token:
                 self._token = token
         return redact_anonymous_token(body)
 

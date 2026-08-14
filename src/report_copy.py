@@ -368,6 +368,39 @@ SKIP_NOTES: list[tuple[str, str]] = [
     ("tennis_doubles", "A doubles match: four competitors, not two."),
     ("market_on_doubles_event", "Belongs to a doubles match, which is out of scope."),
 
+    # ── theScore Bet's shelf vocabulary ──────────────────────────────────────
+    ("card_without_event",
+     "A card on the lines shelf that carries no event at all — a promotional tile "
+     "sitting among the games."),
+    ("event_not_standard:",
+     "A card whose event is not a scheduled fixture: an outright, or a card type this "
+     "parser does not read. The type it was is named after the colon."),
+    ("competition_off_route:",
+     "The competition this event belongs to is not the one the route asked for. Filing "
+     "it under the requested league would mislabel it, so it is counted instead."),
+    ("beyond_schedule_horizon",
+     "A real fixture, listed further ahead than the league schedules. No other book has "
+     "posted it yet, so it can never join — a counted omission rather than a row that "
+     "fails the same validation check every run."),
+    ("market_status:",
+     "The book marked this market as something other than open — suspended, or settled. "
+     "Its price is not one you could take."),
+    ("two_way_moneyline_on_a_draw_league",
+     "A two-outcome moneyline on a competition where draws are priced. On this venue the "
+     "three-way is its own market type, so a two-way one is a different product — "
+     "merging them would publish a market missing a third of its outcomes."),
+    ("three_way_moneyline_off_a_draw_league",
+     "A three-way moneyline on a competition that cannot draw. Not a shape this parser "
+     "will guess at."),
+    ("market_names_a_sub_period",
+     "The market's own name says it covers a window narrower than the whole game — a "
+     "half, a quarter, an inning. Published as a full-game price it would join real "
+     "full-game rows and price a different bet."),
+    ("unknown_total_side:",
+     "An over/under market whose selection said neither over nor under."),
+    ("selection_without_odds",
+     "A leg the book listed with no price — the shape a suspended selection takes."),
+
     ("incomplete_event_header",
      "A comparison page listed a game whose header was missing an id, a start time or "
      "a team name, so the row could not be tied to a fixture. Reading it anyway would "
