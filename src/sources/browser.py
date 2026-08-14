@@ -203,12 +203,24 @@ class BrowserSession:
         wait_ms: float = 8_000,
         include: Callable[[str, str], bool] | None = None,
         click_text: str | None = None,
+        then_hash: str | None = None,
     ) -> tuple[list[PageObservation], list[WebSocketObservation]]:
         """Navigate the real page and capture its XHR/fetch/GraphQL traffic.
 
         This is deliberately a research primitive, not a parser.  It never
         returns cookies, authorization headers, or unsanitized tokens.  Venue
         adapters may later reproduce a proven public request directly.
+
+        *then_hash* sets ``location.hash`` **after** the app has had time to
+        boot, which is the only way to reach a route inside a hash-routed
+        single-page app.  A deep link supplied in *url* does not work on one:
+        the fragment is read by the app's own router once, during a boot that
+        has not happened yet when ``goto`` resolves, so the initial hash is
+        simply ignored — bet365's Illinois board answered a deep-linked MLB
+        route with the home page and no league request at all.  Clicking is not
+        a substitute either, since the nav text may be present before the
+        handler that routes on it.  This performs the same **same-document**
+        navigation the app's own menu performs.
         """
         from src.sources.research import (
             safe_request_headers,
@@ -355,6 +367,27 @@ class BrowserSession:
                 url, wait_until="domcontentloaded", timeout=self._timeout_ms
             )
             remaining = max(0, wait_ms)
+            if then_hash:
+                # A third of the budget to boot, then route, then the rest to
+                # let the route's own traffic arrive.  Split rather than fixed
+                # so a caller can buy more of either by raising ``wait_ms``.
+                before_route = min(20_000, remaining // 3)
+                self._page.wait_for_timeout(before_route)
+                remaining -= before_route
+                try:
+                    self._page.evaluate("h => { location.hash = h; }", then_hash)
+                except Exception as exc:  # noqa: BLE001 - recorded, never fatal,
+                    # for the same reason a missed click is: the traffic captured
+                    # before the route is still evidence.
+                    responses.append(
+                        diagnostic(
+                            "ROUTE",
+                            url,
+                            "hash",
+                            f"{then_hash!r} not applied: "
+                            f"{type(exc).__name__}: {exc}",
+                        )
+                    )
             if click_text:
                 before_click = min(4_000, remaining // 3)
                 self._page.wait_for_timeout(before_click)

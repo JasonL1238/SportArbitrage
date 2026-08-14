@@ -94,6 +94,14 @@ def main(argv: list[str] | None = None) -> int:
         "--click-text",
         help="after bootstrap, click the first visible element containing this text",
     )
+    parser.add_argument(
+        "--then-hash",
+        help=(
+            "after bootstrap, set location.hash to this route — the only way "
+            "into a hash-routed app, whose router reads the fragment once "
+            "during a boot that has not happened when the page load resolves"
+        ),
+    )
     parser.add_argument("--output", type=Path, default=Path("data/research"))
     parser.add_argument(
         "--raw-output",
@@ -191,6 +199,7 @@ def main(argv: list[str] | None = None) -> int:
                     wait_ms=args.wait_ms,
                     include=include,
                     click_text=args.click_text,
+                    then_hash=args.then_hash,
                 )
                 if args.capture_dom:
                     responses.append(session.dom_snapshot())

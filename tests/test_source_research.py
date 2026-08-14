@@ -419,12 +419,23 @@ class _FakeConsoleMessage:
 class _FakePage:
     """The handful of Playwright page methods ``observe_page`` actually calls."""
 
-    def __init__(self, *, click_raises: bool = False, script=()) -> None:
+    def __init__(
+        self,
+        *,
+        click_raises: bool = False,
+        evaluate_raises: bool = False,
+        script=(),
+        after_route=(),
+    ) -> None:
         self.handlers: dict[str, list] = {}
         self.removed: list[tuple[str, object]] = []
         self._click_raises = click_raises
+        self._evaluate_raises = evaluate_raises
         self._script = list(script)
+        self._after_route = list(after_route)
         self.goto_calls: list[str] = []
+        self.evaluate_calls: list[tuple[str, object]] = []
+        self.order: list[str] = []
 
     def on(self, event: str, handler) -> None:
         self.handlers.setdefault(event, []).append(handler)
@@ -435,6 +446,17 @@ class _FakePage:
 
     def goto(self, url: str, **_kwargs) -> None:
         self.goto_calls.append(url)
+        self.order.append("goto")
+
+    def evaluate(self, _expression: str, arg=None):
+        self.order.append("evaluate")
+        self.evaluate_calls.append((_expression, arg))
+        if self._evaluate_raises:
+            raise RuntimeError("execution context was destroyed")
+        # Routing is what makes the *second* batch of traffic arrive, so the
+        # fake emits it only once the hash has actually been set.
+        self._script.extend(self._after_route)
+        self._after_route = []
 
     def wait_for_timeout(self, _ms) -> None:
         # Traffic arrives during the wait, which is when a real page emits it.
@@ -575,3 +597,78 @@ def test_observing_twice_does_not_double_count_the_second_pass() -> None:
     page._script = [response]
     second, _ = session.observe_page("https://book.test/", wait_ms=10)
     assert len(second) == 1
+
+
+def test_a_hash_route_is_applied_after_boot_and_its_traffic_is_captured() -> None:
+    """A hash-routed app ignores a deep link supplied in the initial URL.
+
+    Its router reads ``location.hash`` once, during a boot that has not happened
+    when ``goto`` resolves — so bet365's Illinois board answered a deep-linked
+    MLB route with the home page and issued no league request at all, and a
+    click on the nav text did not route either.  Setting the hash *after* the
+    app is up is the same same-document navigation its own menu performs.
+    """
+    page = _FakePage(
+        script=[
+            (
+                "response",
+                _FakeResponse(
+                    _FakeRequest("https://book.test/api/home"), 200, '{"home":1}'
+                ),
+            )
+        ],
+        after_route=[
+            (
+                "response",
+                _FakeResponse(
+                    _FakeRequest("https://book.test/api/league"), 200, '{"league":1}'
+                ),
+            )
+        ],
+    )
+    responses, _sockets = _session(page).observe_page(
+        "https://book.test/", wait_ms=900, then_hash="#/AC/B16/"
+    )
+
+    # Booted first, routed second — the order is the whole point.
+    assert page.order == ["goto", "evaluate"]
+    assert page.evaluate_calls[0][1] == "#/AC/B16/"
+    # Traffic from *both* sides of the route survives.
+    assert [r.url for r in responses] == [
+        "https://book.test/api/home",
+        "https://book.test/api/league",
+    ]
+
+
+def test_a_route_that_cannot_be_applied_is_recorded_rather_than_fatal() -> None:
+    """Same rule as a missed click: the traffic before it is still evidence."""
+    page = _FakePage(
+        evaluate_raises=True,
+        script=[
+            (
+                "response",
+                _FakeResponse(
+                    _FakeRequest("https://book.test/api/home"), 200, '{"home":1}'
+                ),
+            )
+        ],
+    )
+    responses, _sockets = _session(page).observe_page(
+        "https://book.test/", wait_ms=900, then_hash="#/AC/B16/"
+    )
+
+    assert [r.url for r in responses if r.status_code == 200] == [
+        "https://book.test/api/home"
+    ]
+    routed = [r for r in responses if r.method == "ROUTE"]
+    assert len(routed) == 1
+    assert "#/AC/B16/" in routed[0].response_body
+    assert "RuntimeError" in routed[0].response_body
+
+
+def test_no_hash_means_no_evaluation_at_all() -> None:
+    """The default path must not touch the page's JavaScript context."""
+    page = _FakePage()
+    _session(page).observe_page("https://book.test/", wait_ms=100)
+    assert page.evaluate_calls == []
+    assert page.order == ["goto"]
