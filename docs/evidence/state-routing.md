@@ -3,6 +3,98 @@
 Per-state route evidence: what a licensed host returned from matching egress,
 which routes were promoted on it, and which feeds cover which book.
 
+## theScore Bet is registered: Illinois' first direct route — 2026-08-13
+
+From the operator's **Illinois** egress (fingerprint `34e56847c7ec`), **no
+proxy**. `src/sources/thescore.py`, registered in `RETAIL_SOURCE_KEYS` with an
+IL route and a PA one. This is the first `REQUIRED_BOOKS` entry to move off
+`direct=None` since the table was written.
+
+**What the live run did.** Run 11, `collect --state IL --source thescore --tier
+core --no-alert`: **573 quotes, 125 events, 21 requests, 274 KiB, 12.2 s, 0
+rejections, 2 out of scope** (both in-play). `replay --run 11` → **PASS**. A
+separate direct exercise over all eleven competitions produced 621 quotes / 281
+markets / 133 events with **0 validation findings**. The 12-second pass is far
+inside the threshold that would put it in `SLOW_SOURCES`.
+
+**The schema, as the adapter uses it.** Three documents, all `POST /graphql`:
+
+1. `startup` → `regionalMetadata { currentRegionCode … }` and
+   `anonymousToken(connectToken:)`.
+2. `page(canonicalUrl:)` → the `Section` with `archetype: "COMPETITION_LINES"`.
+3. `competitionSection(id:)` → `sectionChildren` → `MarketplaceShelf.marketplaceShelfChildren`.
+
+`competitionSection` takes **only** `id` — `first`, `limit`, `page`, `offset`,
+`cursor` and `oddsFormat` are all rejected as unknown arguments, and so is every
+paging argument on `marketplaceShelfChildren`. So a competition's shelf is
+whatever it is; there is nothing to page.
+
+**Corrections to the section below, which was written from the browser capture:**
+
+| It said | Measured through the adapter's own documents |
+| --- | --- |
+| `MarketSelection` has a `name` string and a `fullName` | `name` is an object of type `SelectionName`; `fullName` is inside it and `shortName` does not exist |
+| `StandardEvent` carries `homeTeam`/`awayTeam` | It carries `homeParticipant`/`awayParticipant`; the `homeTeam` pair is on `LiveApiBaseballEvent` and is a different type |
+| — (not known) | `MarketCardInterface` does not exist, and `MarketCard` exists but has no `event`, so the fragment must spread the two concrete card types |
+| 58 events / 86 markets on the MLB lines tab | The `competitionSection` shelf serves 13 MLB cards × 3 markets. The larger figures were type-occurrence counts across a whole manifest, not one payload |
+
+**Orientation is stated twice, and that retires the whole problem.**
+`MarketSelection.participant.id` carries **the same identifier** the event gave
+its own `homeParticipant`/`awayParticipant` — verified across MLB and MLS — and
+a `DRAW` leg carries `participant: null`. So `MarketSelection.type` and the
+participant id are two independent witnesses to the same fact, and the adapter
+requires them to agree rather than trusting either. This is strictly better than
+what was planned: the plan's third witness was to resolve the selection *name*
+against the fixture's participants, and that was implemented first and
+**rejected 13 real soccer markets** — theScore writes "Monchengladbach" for
+"Borussia Monchengladbach", "Mainz 05" for "1. FSV Mainz 05", "LA Galaxy" for
+"Los Angeles Galaxy" — because an open-roster competition has no alias table and
+normalizes each spelling to a different key. An id has no such gap.
+
+**Soccer is safe structurally, not by rule.** The three-way lives on its own card
+type — `SoccerGridMarketCard`, distinct from `GridMarketCard` — carrying
+`THREE_WAY_MONEYLINE`. So a two-way `MONEYLINE` cannot arrive on a soccer fixture
+through this path at all. The adapter still refuses one, and additionally drops
+**all** legs of a three-way that lost its draw, because two legs of three are
+byte-identical to a genuine two-way market.
+
+**The eleven canonical paths, every one asked and answered.** A wrong path
+answers `200` with `page: null`, and the organization segment follows no pattern:
+
+| League | Path | League | Path |
+| --- | --- | --- | --- |
+| MLB | `/sport/baseball/organization/united-states/competition/mlb` | MLS | `/sport/soccer/organization/`**`usa`**`/competition/mls` |
+| NBA | `…/basketball/…/united-states/competition/nba` | EPL | `…/soccer/…/england/competition/premier-league` |
+| WNBA | `…/basketball/…/united-states/competition/wnba` | LA_LIGA | `…/soccer/…/spain/competition/la-liga` |
+| NFL | `…/football/…/united-states/competition/nfl` | SERIE_A | `…/soccer/…/italy/competition/serie-a` |
+| NHL | `…/hockey/…/united-states/competition/nhl` | BUNDESLIGA | `…/soccer/…/germany/competition/bundesliga` |
+| | | LIGUE_1 | `…/soccer/…/france/competition/ligue-1` |
+
+**MLS is under `usa` while every other American league is under
+`united-states`** — `…/united-states/competition/mls` returns `200` with a null
+page. `nfl` serves the preseason board (34 cards) and `nfl-preseason` also
+resolves; the adapter uses `nfl`. Tennis and NWSL are **not** collected: neither
+path has been asked, and that is a coverage gap rather than a wall.
+
+Two failure shapes, deliberately graded apart: a **null page** is a hard failure
+(the path moved), while a page **with no lines section** is an empty scope — an
+out-of-season competition serves a drawer instead of a lines tab, and EPL did
+exactly that on 2026-08-12 before its season opened. Reading the second as a
+refusal would grade this book broken every summer.
+
+**The anonymous token never reaches a stored byte.** The fetch needs it and the
+capture must not carry it, so it is captured and redacted in one pass through the
+`body_filter` seam — a single anchored substitution on `"anonymousToken"`, not a
+sanitizer, because `check_http_response` is handed `raw.body` and a broad filter
+there would turn a block page into an apparently-good `200`. The seven committed
+fixtures carry no IPv4 and no bearer token.
+
+**Pennsylvania is provisioned, not measured.** Its route is `TEMPLATE` on the
+DNS-confirmed `sportsbook.us-pa.thescore.bet`. What makes carrying it unproven
+safe is that `_require_expected_region` compares the edge's own
+`currentRegionCode` to the routed state on every fetch, so from anywhere but
+Pennsylvania it refuses rather than pricing Illinois' board under PA's name.
+
 ## theScore Bet: the anonymous surface, measured end to end — 2026-08-13
 
 From the operator's **Illinois** egress (fingerprint `34e56847c7ec`), with
@@ -680,6 +772,13 @@ through the **first** path — a first-party route — and the table's own "best
 reachable state" column says so. The six with no first-party route are the ones
 with no way to comply at all.
 
+**2026-08-13: theScore Bet now has a PA route and is still not satisfied by it.**
+`thescore` was registered with a `TEMPLATE` Pennsylvania route on a DNS-confirmed
+edge that has never been asked over HTTP. The count above is unchanged on
+purpose: `Access.DIRECT` is graded on `direct_rows > 0`, so a route that has
+produced nothing lifts nothing, and naming it in `REQUIRED_BOOKS` says which key
+*would* be the direct route rather than claiming one exists in practice.
+
 | Book | First party | Same-licence feed (AN book id) | Cross-licence only | Best reachable state |
 |---|---|---|---|---|
 | BetMGM | `betmgm` | `an_betmgm` (280) | `vi_betmgm` | `DIRECT` |
@@ -691,7 +790,7 @@ with no way to comply at all.
 | Fanatics | none | `an_fanatics` (2791) | `vi_fanatics` | `SINGLE_SOURCE` (warning) |
 | betPARX | none | `an_parx` (74) — **unproven** | none | `SINGLE_SOURCE` (warning) |
 | Mohegan Pennsylvania | none | `an_unibet` (246) — **unproven** | none | `SINGLE_SOURCE` (warning) |
-| theScore Bet | none | `an_thescore` (4623) — **unproven** | none | `SINGLE_SOURCE` (warning) |
+| theScore Bet | `thescore` — **`TEMPLATE`, never asked over HTTP** | `an_thescore` (4623) — **unproven** | none | `SINGLE_SOURCE` (warning) |
 | PlaySugarHouse | none | none | none | `MISSING` (error) |
 
 **The three unproven feeds.** `an_parx`, `an_unibet` and `an_thescore` are the
@@ -747,7 +846,7 @@ built there.
 | Fanatics | sportsbook web host redirects to marketing; first-party discovery remains native-app work |
 | Bally Kambi | `429 No access` |
 | Circa | official site says the complete real-time menu is in its mobile app; no public first-party web odds surface found. Its site explicitly lists VSiN and WagerTalk as aggregators, so `vsin_circa` is the independent fallback. |
-| theScore Bet | **first party verified**: `env.js` exposes the public GraphQL host; the default edge redirects this Illinois egress to `sportsbook.us-il.thescore.bet`. Anonymous `Startup`, persisted `CompetitionPage`, and `CompetitionPageSectionLinesTabNode` calls all returned `200`. The MLB lines payload contained 47 event nodes, 55 markets, and 147 selections with structured American odds. Parser/capture work remains. *(2026-08-13: superseded — re-measured end to end, and two details here are wrong. The redirect is a `302` **on the API**, not on the page; and the persisted queries are `GET`s that the endpoint does not require at all, since a plain anonymous `POST` of a query document answers `200`. See § "theScore Bet: the anonymous surface, measured end to end".)* |
+| theScore Bet | **first party verified**: `env.js` exposes the public GraphQL host; the default edge redirects this Illinois egress to `sportsbook.us-il.thescore.bet`. Anonymous `Startup`, persisted `CompetitionPage`, and `CompetitionPageSectionLinesTabNode` calls all returned `200`. The MLB lines payload contained 47 event nodes, 55 markets, and 147 selections with structured American odds. Parser/capture work remains. *(2026-08-13: **the adapter shipped** — see § "theScore Bet is registered". Superseded — re-measured end to end, and two details here are wrong. The redirect is a `302` **on the API**, not on the page; and the persisted queries are `GET`s that the endpoint does not require at all, since a plain anonymous `POST` of a query document answers `200`. See § "theScore Bet: the anonymous surface, measured end to end".)* |
 
 The theScore request sequence is state-sensitive and should be implemented as
 one adapter rather than hard-coded curl calls: fetch the official public bundle

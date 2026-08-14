@@ -278,14 +278,23 @@ def _required(
 #:   severity, both unobserved-locally.  An IGB book the operator named, with no
 #:   Illinois-licence observation path, should never be quietly absent from the
 #:   table.
-#: * ``theScore Bet`` is watched through id 4601, **proven** on 2026-08-10: the
-#:   first request from Illinois returned 74 soccer rows across 11 fixtures
-#:   (run 35, replay PASS, capture committed as ``an_thescore`` contract
-#:   evidence — docs/evidence/action-network.md § "theScore Bet's Illinois id
-#:   answers").
-#:   So ``SINGLE_SOURCE`` here is observed, not on-paper.  The first-party
-#:   ``us-il`` GraphQL surface answered anonymous probes on 2026-08-04 and is
-#:   the Phase 2 adapter that would upgrade the grade to ``DIRECT``.
+#: * ``theScore Bet`` has **both** paths, and is the only entry here that does.
+#:   The republisher is id 4601, proven on 2026-08-10 — the first request from
+#:   Illinois returned 74 soccer rows across 11 fixtures (run 35, replay PASS,
+#:   capture committed as ``an_thescore`` contract evidence;
+#:   docs/evidence/action-network.md § "theScore Bet's Illinois id answers").
+#:   The first-party route landed on 2026-08-13: ``thescore``, anonymous over
+#:   plain HTTP against ``sportsbook.us-il.thescore.bet``, 573 quotes over 125
+#:   events in run 11 with 0 rejections and replay PASS
+#:   (docs/evidence/state-routing.md § "theScore Bet is registered").  An earlier
+#:   version of this note dated that surface's first probe 2026-08-04; the
+#:   evidence sits under § "Illinois re-probe — 2026-08-03" and commit 44b080f
+#:   carries that date.
+#:
+#:   Pennsylvania names the same key on a ``TEMPLATE`` route that has never been
+#:   asked over HTTP.  That cannot inflate PA's grade — ``Access.DIRECT`` is
+#:   earned on ``direct_rows > 0`` — so PA stays ``SINGLE_SOURCE`` until the
+#:   route actually produces from a Pennsylvania egress.
 REQUIRED_BOOKS: Mapping[str, tuple[RequiredBook, ...]] = {
     "IL": (
         _required("bet365", same=("an_bet365",), other=("vi_bet365",)),
