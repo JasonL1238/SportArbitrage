@@ -1,0 +1,34 @@
+{
+ "envelope_version": 3,
+ "source": "thescore",
+ "endpoint": "page-mls",
+ "url": "https://sportsbook.us-il.thescore.bet/graphql",
+ "status_code": 200,
+ "content_type": "application/json",
+ "fetched_at": "2026-08-14T01:27:06.772874+00:00",
+ "request_params": {
+  "method": "POST",
+  "body_sha256": "2731d8e4fb9968a5"
+ },
+ "headers": {
+  "date": "Fri, 14 Aug 2026 01:27:01 GMT",
+  "content-type": "application/json",
+  "cache-control": "max-age=6,stale-while-revalidate=861",
+  "x-gateway": "router",
+  "vary": "origin, accept-encoding",
+  "content-encoding": "gzip",
+  "access-control-allow-origin": "https://sportsbook.thescore.bet",
+  "access-control-allow-credentials": "true",
+  "x-envoy-upstream-service-time": "12",
+  "server": "cloudflare",
+  "cf-cache-status": "DYNAMIC",
+  "x-country": "US",
+  "strict-transport-security": "max-age=15552000; includeSubDomains",
+  "access-control-allow-methods": "GET,POST,OPTIONS",
+  "cf-ray": "a2ac2cbd38eb8b98-ORD"
+ },
+ "capture_id": "",
+ "sha256": "0a2e6c6f4ee9df8e9518aa5125340bdb3ca024ef1f77473d084169eef11f94bc",
+ "byte_size": 305,
+ "body": "{\"data\":{\"page\":{\"id\":\"Page:f4fb5c15-3ef3-4203-a316-1c45d3131463\",\"pageChildren\":[{\"__typename\":\"Section\",\"id\":\"Section:3f7f8bef-25e5-4d10-9b5c-22eb4e12bd2d\",\"archetype\":\"COMPETITION_LINES\"},{\"__typename\":\"Section\",\"id\":\"Section:7f00c8ff-9423-47d3-9953-f537aa3553f3\",\"archetype\":\"DYNAMIC_COMPETITION\"}]}}}"
+}

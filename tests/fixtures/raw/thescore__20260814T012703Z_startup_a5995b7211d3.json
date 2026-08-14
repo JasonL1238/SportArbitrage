@@ -1,0 +1,34 @@
+{
+ "envelope_version": 3,
+ "source": "thescore",
+ "endpoint": "startup",
+ "url": "https://sportsbook.us-il.thescore.bet/graphql",
+ "status_code": 200,
+ "content_type": "application/json",
+ "fetched_at": "2026-08-14T01:27:03.810235+00:00",
+ "request_params": {
+  "method": "POST",
+  "body_sha256": "b2e8be4ff59f9681"
+ },
+ "headers": {
+  "date": "Fri, 14 Aug 2026 01:26:59 GMT",
+  "content-type": "application/json",
+  "cache-control": "max-age=0,must-revalidate,private",
+  "x-gateway": "router",
+  "vary": "origin, accept-encoding",
+  "content-encoding": "gzip",
+  "access-control-allow-origin": "https://sportsbook.thescore.bet",
+  "access-control-allow-credentials": "true",
+  "x-envoy-upstream-service-time": "10",
+  "server": "cloudflare",
+  "cf-cache-status": "DYNAMIC",
+  "x-country": "US",
+  "strict-transport-security": "max-age=15552000; includeSubDomains",
+  "access-control-allow-methods": "GET,POST,OPTIONS",
+  "cf-ray": "a2ac2caabf098b98-ORD"
+ },
+ "capture_id": "",
+ "sha256": "a5995b7211d3a288ae92a74196cf4dd5e74dac6c57484848e8ed87f31017df2a",
+ "byte_size": 152,
+ "body": "{\"data\":{\"startup\":{\"regionalMetadata\":{\"currentRegionCode\":\"US-IL\",\"ipAddressShortRegionCode\":\"IL\",\"validRegion\":true},\"anonymousToken\":\"[redacted]\"}}}"
+}

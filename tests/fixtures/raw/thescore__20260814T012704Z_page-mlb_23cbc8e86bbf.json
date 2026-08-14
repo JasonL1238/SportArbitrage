@@ -1,0 +1,34 @@
+{
+ "envelope_version": 3,
+ "source": "thescore",
+ "endpoint": "page-mlb",
+ "url": "https://sportsbook.us-il.thescore.bet/graphql",
+ "status_code": 200,
+ "content_type": "application/json",
+ "fetched_at": "2026-08-14T01:27:04.381161+00:00",
+ "request_params": {
+  "method": "POST",
+  "body_sha256": "ddfa0d58c550831c"
+ },
+ "headers": {
+  "date": "Fri, 14 Aug 2026 01:26:59 GMT",
+  "content-type": "application/json",
+  "cache-control": "max-age=45,stale-while-revalidate=900",
+  "x-gateway": "router",
+  "vary": "origin, accept-encoding",
+  "content-encoding": "gzip",
+  "access-control-allow-origin": "https://sportsbook.thescore.bet",
+  "access-control-allow-credentials": "true",
+  "x-envoy-upstream-service-time": "28",
+  "server": "cloudflare",
+  "cf-cache-status": "DYNAMIC",
+  "x-country": "US",
+  "strict-transport-security": "max-age=15552000; includeSubDomains",
+  "access-control-allow-methods": "GET,POST,OPTIONS",
+  "cf-ray": "a2ac2cae2bce8b98-ORD"
+ },
+ "capture_id": "",
+ "sha256": "23cbc8e86bbfeaebc5cd9999e1a9069ff22ccf10fbb2270223c7ea677040dd33",
+ "byte_size": 1304,
+ "body": "{\"data\":{\"page\":{\"id\":\"Page:8aec520a-9e3d-4e2a-923d-d93e6360bdc3\",\"pageChildren\":[{\"__typename\":\"Section\",\"id\":\"Section:d9513891-c315-4c16-8554-09d52d3ce9b2\",\"archetype\":\"COMPETITION_LINES\"},{\"__typename\":\"Section\",\"id\":\"Section:57b4b729-a72d-4cfd-bdf8-5d1011b4dc85\",\"archetype\":\"DYNAMIC_COMPETITION\"},{\"__typename\":\"Section\",\"id\":\"Section:2d730736-9f10-4894-b693-07558b3ea5f6\",\"archetype\":\"DYNAMIC_COMPETITION\"},{\"__typename\":\"Section\",\"id\":\"Section:2b9329ea-b19f-4184-a103-ca892192ff5c\",\"archetype\":\"DYNAMIC_COMPETITION\"},{\"__typename\":\"Section\",\"id\":\"Section:6b21f38b-a53c-401c-8c1f-3458a8905a82\",\"archetype\":\"DYNAMIC_COMPETITION\"},{\"__typename\":\"Section\",\"id\":\"Section:3d76914f-d4a3-4b58-9b7d-bc3b09f5f133\",\"archetype\":\"DYNAMIC_COMPETITION\"},{\"__typename\":\"Section\",\"id\":\"Section:cc53bfb9-3a2c-4bf6-a0f4-67f4f03693ac\",\"archetype\":\"DYNAMIC_COMPETITION\"},{\"__typename\":\"Section\",\"id\":\"Section:e5b33afe-6b52-40a0-af5c-1d5ebb7b0d34\",\"archetype\":\"DYNAMIC_COMPETITION\"},{\"__typename\":\"Section\",\"id\":\"Section:20c531db-26e2-4b60-84fa-29976850734c\",\"archetype\":\"DYNAMIC_COMPETITION\"},{\"__typename\":\"Section\",\"id\":\"Section:997608a8-4e22-4058-9af9-5875398fdb63\",\"archetype\":\"DYNAMIC_COMPETITION\"},{\"__typename\":\"Section\",\"id\":\"Section:ce76fdbb-4e2d-447e-8d37-2a460ccbf286\",\"archetype\":\"DYNAMIC_COMPETITION\"}]}}}"
+}
