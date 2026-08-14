@@ -57,7 +57,7 @@ Neither opened odds JSON without a licensed-state exit IP:
 |---|---|---|---|
 | DraftKings | `403` Akamai | HTML shell loads; `sportsbook-nash` API still `403`; no odds XHR | `ODDS_HTTP_PROXY` to IL/NJ residential, then adapter |
 | Caesars | `403` CloudFront | `403` | same — licensed-state proxy |
-| Fanatics | NXDOMAIN | NXDOMAIN | ~~find current host~~ — **found 2026-08-13**: `sportsbook.1{state}.betfanatics.com`, licence-shaped and DNS-confirmed with controls (`state-routing.md` § "Three first-party host maps"). The NXDOMAIN pair above was measured against a host that is not the board. Next lever is an HTTP request from IL/PA egress |
+| Fanatics | NXDOMAIN | NXDOMAIN | ~~find current host~~ ~~**found 2026-08-13**~~ — **closed 2026-08-14, asked from IL egress on both transports.** The DNS-confirmed `sportsbook.1{state}.betfanatics.com` map is a licensure signal, not a route: all five licensed states serve a byte-identical 548 B nginx `404` on every path. The app host `sportsbook.fanatics.com` is an Akamai Bot Manager challenge on plain HTTP and `301`s to the marketing site through a real browser. `sportsbook.betfanatics.com/sportsbook` is a real `401`. No anonymous web board exists; next lever is a logged-in capture through the mobile rig, gated on fixture viability (`state-routing.md` § "Fanatics has no anonymous board on the web") |
 | bet365 | `403` Cloudflare | `403` | anonymous application observation only; never bypass a challenge |
 | Betway / Bally / Fliff / Hard Rock | no simple public GET | — | reverse runtime/XHR or mobile |
 | ESPN BET | discontinued | — | skip |

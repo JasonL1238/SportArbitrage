@@ -260,21 +260,25 @@ PROFILES: Mapping[str, ResearchProfile] = {
     "fanatics": ResearchProfile(
         source="fanatics",
         states=frozenset({"IL", "PA", "NJ", "DC"}),
-        # ``sportsbook.fanatics.com`` redirects to the marketing site and is not
-        # a board; sending the next agent there is how the "no host exists"
-        # reading survived.  The real per-state pattern, measured by DNS on
-        # 2026-08-13, is ``sportsbook.1{state}.betfanatics.com`` — and it tracks
-        # *licensure*, which is what makes it a route rather than a guess:
-        # ``1il``, ``1pa``, ``1nj``, ``1dc`` and ``1oh`` all resolve, while
-        # ``1ca`` (no legal sports betting), ``1zz``, a nonsense control, the
-        # unprefixed ``il`` and the reindexed ``2il`` are all NXDOMAIN.
+        # **A resolving host is not a board, and this profile pointed at the
+        # proof of that for a day.**  ``sportsbook.1{state}.betfanatics.com``
+        # resolves and tracks *licensure* — ``1il``, ``1pa``, ``1nj``, ``1dc``
+        # and ``1oh`` all resolve while ``1ca`` (no legal sports betting),
+        # ``1zz``, a nonsense control, the unprefixed ``il`` and the reindexed
+        # ``2il`` are NXDOMAIN — which is a striking DNS signal and was read here
+        # as a route.  Asked over HTTPS from matching Illinois egress on
+        # 2026-08-14, **all five serve a byte-identical 548-byte nginx 404**
+        # (sha256 ``d465172175d3``) on ``/`` and on every conventional path.
+        # Same bytes for Ohio as for Illinois, so it is one backend answering
+        # nothing rather than a per-state board.
         #
-        # **A resolving host is not a board.** The earlier ``404`` readings from
-        # ``sportsbook.1il.betfanatics.com`` were taken from third-party egress
-        # and never re-measured from Illinois, so what this host serves from
-        # matching egress is still unmeasured — that is the question this
-        # profile now lets somebody ask.
-        app_url="https://sportsbook.1{state}.betfanatics.com/",
+        # The app is at the stateless ``sportsbook.fanatics.com``, which answers
+        # ``200`` with an **Akamai Bot Manager challenge** rather than the
+        # redirect-to-marketing the 2026-08-12 note recorded.  Pointing here is
+        # what lets the browser rung ask the only question left: whether a real
+        # browser completing Akamai's own handshake reaches a board or a login.
+        # Solving that challenge in code is out of scope permanently.
+        app_url="https://sportsbook.fanatics.com/",
         api_hosts=("fanatics.com", "betfanatics.com"),
     ),
     "bet365": ResearchProfile(

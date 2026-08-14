@@ -3,6 +3,71 @@
 Per-state route evidence: what a licensed host returned from matching egress,
 which routes were promoted on it, and which feeds cover which book.
 
+## Fanatics has no anonymous board on the web, and the DNS map was not a route — 2026-08-14
+
+From the operator's **Illinois** egress (fingerprint `34e56847c7ec`), **no
+proxy**, both transports. This closes Track D's cheapest rung and **retracts the
+2026-08-13 reopening above**: the striking DNS finding was real and was not a
+route, and the research profile spent a day pointing at it.
+
+**Every per-state host serves the same nothing.** Asked over HTTPS at `/`:
+
+| host | result |
+| --- | --- |
+| `sportsbook.1il.betfanatics.com` | `404`, 548 B, `server: cloudflare`, sha256 `d465172175d3` |
+| `sportsbook.1pa.betfanatics.com` | `404`, **same 548 B, same sha256** |
+| `sportsbook.1nj.betfanatics.com` | `404`, same sha256 |
+| `sportsbook.1dc.betfanatics.com` | `404`, same sha256 |
+| `sportsbook.1oh.betfanatics.com` | `404`, same sha256 |
+
+The body is a bare nginx 404 — not a block page, not a login wall, not a geo
+refusal. **Ohio answers Illinois' exact bytes**, so this is one backend serving
+nothing rather than a per-state board, and the same 404 came back from `/health`,
+`/status`, `/api`, `/api/v1`, `/v1`, `/graphql`, `/sportsbook`, `/sports`,
+`/betting`, `/index.html` and `/robots.txt`. `api.1il.betfanatics.com` is
+NXDOMAIN.
+
+That a hostname resolves, and that the set of resolving hostnames tracks
+licensure exactly, turns out to say nothing about whether anything is served
+there. Worth stating plainly because the DNS evidence was genuinely strong —
+`1oh` resolving while `1ca` does not is not a coincidence — and it still did not
+survive one HTTP request.
+
+**The app is Akamai-protected and lands on marketing.**
+
+| step | result |
+| --- | --- |
+| `sportsbook.fanatics.com`, plain HTTP | `200`, 2,712 B — an **Akamai Bot Manager challenge page** (`sec-if-cpt-container`, "Powered and protected by Akamai"), not a shell |
+| `sportsbook.fanatics.com`, real Chrome | Akamai passed, then **`301` → `betfanatics.com`** |
+| `betfanatics.com` | `200`, 537 KB — the marketing site |
+
+63 responses captured through the browser, 0 websockets. The rendered DOM is a
+state-availability map, "WINNING HITS DIFFERENT HERE", and betting *guides*. Its
+only odds-shaped tokens are helpline numbers. The single JSON payload that could
+have held a board is an **oddschecker affiliate widget** carrying exactly one
+offer — "FANATICS PARTNERSHIP 10x100% Profit Boost Tokens Instantly - NY/IL" — a
+promotion, not prices; its `geolocation: {countryCode: "us", subdivisionCode:
+"il"}` independently confirms the egress.
+
+So the 2026-08-12 note's conclusion stands and its reasoning is now right: the
+sportsbook web host does end at marketing. It just does so via Akamai and a 301
+rather than by not existing.
+
+**One real gated surface, named so nobody re-finds it.**
+`sportsbook.betfanatics.com` is not the same nothing as the per-state hosts:
+`/graphql` returns a **Jetty** 404 page (364 B, `HTTP ERROR 404 Not Found` with
+a URI table) rather than the nginx one, so that path reaches an application
+server; and `/sportsbook` returns **`401` with a zero-length body**. Real
+infrastructure, authenticated, no anonymous board. Nothing here is a route
+without credentials, and a credentialed board runs straight into the fixture gate
+(`exchanges-and-mirrors.md`: a response body carrying an account identifier has
+no sanctioned path to a committed fixture).
+
+**Track D's remaining path is unchanged and now costed honestly**: D-R1, a
+logged-in capture through the Track C rig, on an account the operator creates by
+hand, gated on D-R2 — whether the board *response body* is personalized. Solving
+the Akamai challenge in code is out of scope permanently.
+
 ## theScore Bet is registered: Illinois' first direct route — 2026-08-13
 
 From the operator's **Illinois** egress (fingerprint `34e56847c7ec`), **no
@@ -357,6 +422,11 @@ one premise of it — that there is no web host to find. The `404` readings from
 `sportsbook.1il.betfanatics.com` that the closure note called moot were taken
 from third-party egress; from Illinois egress this host has never been asked.
 `src/sources/research.py` now points there instead of at the marketing redirect.
+
+> **Superseded the next day.** Asked from Illinois egress on 2026-08-14, all five
+> per-state hosts serve a byte-identical 548-byte nginx `404`. The DNS map is a
+> real licensure signal and is **not a route**, and pointing the research profile
+> at it was wrong. See § "Fanatics has no anonymous board on the web" above.
 
 **bet365**, for completeness, re-confirming the 2026-08-13 measurement already
 relied on: `www.il.bet365.com`, `www.pa.bet365.com` and `www.nj.bet365.com`
