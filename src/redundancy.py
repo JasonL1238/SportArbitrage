@@ -48,6 +48,12 @@ REDUNDANT_PAIRS: tuple[tuple[str, str], ...] = (
     ("hardrock", "an_hardrock"),
     ("hardrock", "vi_hardrock"),
     ("an_hardrock", "vi_hardrock"),
+    # No ``vi_thescore`` column exists, so this is the only pair for the book.
+    # Near-identical prices are the *expected* result and the reason to declare
+    # it: both read the same operator's same state licence, so agreement
+    # independently confirms Action Network's id 4601 really is theScore
+    # Illinois. Disagreement is the finding.
+    ("thescore", "an_thescore"),
     ("caesars", "an_caesars"),
     ("caesars", "vi_caesars"),
     ("an_caesars", "vi_caesars"),

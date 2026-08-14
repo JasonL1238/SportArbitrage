@@ -78,6 +78,16 @@ SOURCE_NOTES: dict[str, dict[str, str]] = {
         "what": "First-party GraphQL feed behind Hard Rock's own app. Needs a "
                 "licensed-state egress to answer with a slate at all.",
     },
+    "thescore": {
+        "label": "theScore Bet",
+        "host": "sportsbook.us-{state}.thescore.bet",
+        "kind": "sportsbook",
+        "what": "First-party GraphQL board behind theScore's own per-state edge. "
+                "Anonymous, but every odds field is refused without the session "
+                "token the app itself fetches, and the edge reports back which "
+                "licence answered — so a wrong-state egress refuses rather than "
+                "pricing somebody else's board.",
+    },
     "caesars": {
         "label": "Caesars",
         "host": "api.americanwagering.com",
@@ -245,8 +255,10 @@ SOURCE_NOTES: dict[str, dict[str, str]] = {
         "label": "theScore Bet (Action Network)",
         "host": "api.actionnetwork.com",
         "kind": "sportsbook",
-        "what": "theScore Bet prices from Action Network's public scoreboard — the only "
-                "observation path into this book until a first-party route exists.",
+        "what": "theScore Bet prices from Action Network's public scoreboard. The second "
+                "observation path into this book since the first-party route landed on "
+                "2026-08-13; the two read the same licence, so agreement confirms the "
+                "id mapping and disagreement is the finding.",
     },
     "an_fanatics": {
         "label": "Fanatics (Action Network)",

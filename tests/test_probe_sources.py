@@ -311,6 +311,12 @@ def test_a_route_with_no_probe_url_is_loud_rather_than_skipped(monkeypatch) -> N
     entry — and the only other loop that prints route keys filters to
     ``UNAVAILABLE``, so nothing anywhere reported it.  The operator would read
     "6 of 6 candidate(s) answered" for a state holding seven routes.
+
+    The invented key has to be one that will never earn a branch.  This used
+    ``thescore``, which earned one the day that adapter was registered
+    (2026-08-13) — at which point the test stopped exercising the tail it is
+    about and failed on the borrowed config instead.  Third time that name has
+    been a stand-in for "a key nothing claims" and stopped being one.
     """
     import pytest
 
@@ -328,7 +334,7 @@ def test_a_route_with_no_probe_url_is_loud_rather_than_skipped(monkeypatch) -> N
             "status": RouteStatus.TEMPLATE,
         }
     )
-    patched = {**configured.routes, "thescore": invented}
+    patched = {**configured.routes, "no_such_book": invented}
     monkeypatch.setattr(
         probe_sources,
         "jurisdiction",
@@ -345,5 +351,5 @@ def test_a_route_with_no_probe_url_is_loud_rather_than_skipped(monkeypatch) -> N
 
     with pytest.raises(SystemExit) as caught:
         probe_sources.state_candidates("IL")
-    assert "thescore" in str(caught.value)
+    assert "no_such_book" in str(caught.value)
     assert "no probe URL" in str(caught.value)

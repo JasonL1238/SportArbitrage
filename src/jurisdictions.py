@@ -339,6 +339,15 @@ IL = Jurisdiction(
             "IL",
             "validated from matching Illinois egress on 2026-08-03",
         ),
+        "thescore": _route(
+            "thescore",
+            "https://sportsbook.us-il.thescore.bet",
+            {"api_base": "https://sportsbook.us-il.thescore.bet"},
+            RouteStatus.TEMPLATE,
+            "IL",
+            "anonymous board read from matching Illinois egress on 2026-08-13; "
+            "awaiting two clean runs for VALIDATED",
+        ),
     },
     promos=PromoRoute(
         fanduel_region="IL",
@@ -443,6 +452,25 @@ PA = Jurisdiction(
             status=RouteStatus.UNAVAILABLE,
             routed_state="PA",
             detail="Hard Rock is not a Pennsylvania online sportsbook",
+        ),
+        # TEMPLATE in its exact sense — structurally known and unproven — and
+        # honest here rather than optimistic: the host is DNS-confirmed against
+        # a negative control (`sportsbook.us-pa` resolves, `us-zz` is NXDOMAIN,
+        # 2026-08-13), the path grammar is Illinois' with one segment changed,
+        # and theScore holds a PA licence (Action Network files it as id 4623).
+        # What makes it safe to carry unproven is that the adapter compares the
+        # edge's own `currentRegionCode` to this routed state on every fetch, so
+        # from anywhere but Pennsylvania it refuses instead of pricing.  That is
+        # the whole point of entering it now: the route works on arrival rather
+        # than needing a session.
+        "thescore": _route(
+            "thescore",
+            "https://sportsbook.us-pa.thescore.bet",
+            {"api_base": "https://sportsbook.us-pa.thescore.bet"},
+            RouteStatus.TEMPLATE,
+            "PA",
+            "PA edge confirmed by DNS with a negative control on 2026-08-13; "
+            "never asked over HTTP",
         ),
     },
     promos=PromoRoute(

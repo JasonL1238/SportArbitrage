@@ -69,6 +69,7 @@ from src.sources.pinnacle import PinnacleAdapter
 from src.sources.polymarket_us import PolymarketUSAdapter
 from src.sources.smarkets import SmarketsAdapter
 from src.sources.sxbet import SxBetAdapter
+from src.sources.thescore import TheScoreAdapter
 from src.sources.vegasinsider import VegasInsiderAdapter
 from src.sources.vsin import VsinCircaAdapter
 
@@ -92,7 +93,15 @@ SLOW_SOURCES: frozenset[str] = frozenset({"smarkets"})
 #: books into one counterparty via distinctness (a consensus feed that agrees
 #: with A and with B would otherwise union-find A with B).
 RETAIL_SOURCE_KEYS: frozenset[str] = frozenset(
-    {"fanduel", "betrivers_kambi", "betmgm", "draftkings", "caesars", "hardrock"}
+    {
+        "fanduel",
+        "betrivers_kambi",
+        "betmgm",
+        "draftkings",
+        "caesars",
+        "hardrock",
+        "thescore",
+    }
 )
 
 # Republished comparison surfaces identify gaps and stale/misaligned prices, but
@@ -430,6 +439,11 @@ _BASE_SOURCES: tuple[SourceDescriptor, ...] = (
     SourceDescriptor(
         key="hardrock",
         adapter=HardRockAdapter,
+        kind=SourceKind.SPORTSBOOK,
+    ),
+    SourceDescriptor(
+        key="thescore",
+        adapter=TheScoreAdapter,
         kind=SourceKind.SPORTSBOOK,
     ),
     SourceDescriptor(

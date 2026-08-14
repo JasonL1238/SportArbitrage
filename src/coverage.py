@@ -312,7 +312,7 @@ REQUIRED_BOOKS: Mapping[str, tuple[RequiredBook, ...]] = {
             same=("an_hardrock",),
             other=("vi_hardrock",),
         ),
-        _required("theScore Bet", same=("an_thescore",)),
+        _required("theScore Bet", "thescore", same=("an_thescore",)),
     ),
     "PA": (
         _required("bet365", same=("an_bet365",), other=("vi_bet365",)),
@@ -335,7 +335,7 @@ REQUIRED_BOOKS: Mapping[str, tuple[RequiredBook, ...]] = {
         _required("Fanatics", same=("an_fanatics",), other=("vi_fanatics",)),
         _required("Mohegan Pennsylvania", same=("an_unibet",)),
         _required("PlaySugarHouse"),
-        _required("theScore Bet", same=("an_thescore",)),
+        _required("theScore Bet", "thescore", same=("an_thescore",)),
     ),
 }
 

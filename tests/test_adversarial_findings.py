@@ -5499,6 +5499,7 @@ class TestTheChargeAndTheSettlementRuleArePinnedPerVenue:
         "polymarket_us": '0.06 × p×(1−p) per contract, charged on entry',
         "smarkets": '2.00% of net winnings',
         "sxbet": '5.00% of net winnings',
+        "thescore": "no commission (the venue's margin is already in the price)",
     }
 
     REGIMES = {
@@ -5545,6 +5546,7 @@ class TestTheChargeAndTheSettlementRuleArePinnedPerVenue:
         "polymarket_us": 'settle_make_up_game',
         "smarkets": 'void_and_refund',
         "sxbet": 'void_and_refund',
+        "thescore": 'void_and_refund',
     }
 
     def test_every_venues_charge_is_what_it_is(self) -> None:
@@ -5928,6 +5930,10 @@ class TestTheWomensMarkerReachesEveryVenueThatNeedsIt:
         # women's fixture cannot arrive under a men's key.
         "vi_betmgm", "vi_fanduel", "vi_betrivers",
         "vsin_circa",
+        # theScore configures one canonical competition path per route and
+        # reads the league back off the endpoint label, so the WNBA arrives
+        # under WNBA and cannot land on a men's key.
+        "thescore",
     )
 
     def test_every_catch_all_adapter_applies_the_marker(self) -> None:
@@ -12193,6 +12199,7 @@ class TestEachVenuesKindIsPinnedBecauseItPicksTheRule:
         "vi_fanduel": False,
         "vi_betrivers": False,
         "vsin_circa": False,
+        "thescore": False,
         "betmgm": False,
         "betrivers_kambi": False,
         "bovada": False,

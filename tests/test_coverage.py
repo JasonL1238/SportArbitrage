@@ -515,9 +515,16 @@ class TestTheDirectRouteIsCheckedToo:
 
     def test_an_unregistered_key_cannot_be_a_direct_route(self) -> None:
         """Nothing will ever store a row under it, so the book reports MISSING
-        forever with no message saying why."""
+        forever with no message saying why.
+
+        The placeholder is deliberately a key no adapter will ever claim.  This
+        test used ``thescore`` — the very book its sibling cases are written
+        about — until that adapter was registered on 2026-08-13, at which point
+        the assertion said the opposite of the truth and failed.  A name that
+        could become real is not a stand-in for one that cannot.
+        """
         with pytest.raises(RuntimeError, match="not a registered source"):
-            _check_locality_declarations({"PA": (self._entry("thescore"),)})
+            _check_locality_declarations({"PA": (self._entry("no_such_book"),)})
 
     def test_a_venue_unreachable_from_this_state_cannot_be_a_direct_route(self) -> None:
         """The clause a first pass at this invariant missed entirely.
@@ -552,12 +559,20 @@ class TestTheDirectRouteIsCheckedToo:
 
     def test_the_real_direct_routes_still_pass(self) -> None:
         """The check must not be so strict that the shipped table cannot express
-        a first-party route — five of PA's eleven books have one."""
+        a first-party route — six of PA's eleven books have one.
+
+        ``thescore`` joined on 2026-08-13.  Its PA route is ``TEMPLATE`` and has
+        never been asked over HTTP, which is exactly why naming it here is safe:
+        the table says *which* key would be the direct route, and ``DIRECT`` is
+        graded only on ``direct_rows > 0``, so an unproven route cannot lift the
+        grade on its own.
+        """
         declared = {
             entry.direct for entry in REQUIRED_BOOKS["PA"] if entry.direct is not None
         }
         assert declared == {
             "fanduel", "betrivers_kambi", "draftkings", "betmgm", "caesars",
+            "thescore",
         }
         for key in sorted(declared):
             _check_locality_declarations(
@@ -1091,20 +1106,26 @@ def test_a_source_that_declares_no_reachability_fails_the_import():
     takeable in DC — where theScore Bet is not listed at all — and
     ``_check_direct_route`` then accepts it as PA's direct route, which is the
     whole locality rule failing in the direction that looks like coverage.
+
+    That example is now history rather than hypothesis — ``thescore`` was
+    registered into ``RETAIL_SOURCE_KEYS`` on 2026-08-13, with per-state routes,
+    which is exactly what the docstring above prescribes.  So the *unclassified*
+    key here has to be one nothing will ever claim; using a plausible book name
+    means this check silently stops checking the day somebody adds it.
     """
     import dataclasses
 
     from src.sources import registry
     from src.sources.kalshi import KalshiAdapter
 
-    invented = dataclasses.replace(registry.descriptor("kalshi"), key="thescore")
+    invented = dataclasses.replace(registry.descriptor("kalshi"), key="no_such_book")
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(
             registry, "_BASE_SOURCES", registry._BASE_SOURCES + (invented,)
         )
         with pytest.raises(RuntimeError) as caught:
             registry._check_reachability_is_declared()
-    assert "thescore" in str(caught.value)
+    assert "no_such_book" in str(caught.value)
     assert invented.adapter is KalshiAdapter, "descriptor copy kept a real adapter"
 
 

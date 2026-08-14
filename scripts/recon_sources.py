@@ -127,7 +127,7 @@ def main(argv: list[str] | None = None) -> int:
     session = None
     try:
         if args.mode == "adapter":
-            if args.source not in {"caesars", "hardrock"}:
+            if args.source not in {"caesars", "hardrock", "thescore"}:
                 raise ValueError(f"{args.source} has no first-party adapter yet")
             from src.sources._common import Tier
             from src.sources.registry import descriptor_for_state

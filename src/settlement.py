@@ -109,6 +109,7 @@ SETTLEMENT: dict[str, SettlementRegime] = {
     "betmgm": SettlementRegime.VOID_AND_REFUND,
     "draftkings": SettlementRegime.VOID_AND_REFUND,
     "hardrock": SettlementRegime.VOID_AND_REFUND,
+    "thescore": SettlementRegime.VOID_AND_REFUND,
     "caesars": SettlementRegime.VOID_AND_REFUND,
     "cloudbet": SettlementRegime.VOID_AND_REFUND,
     "onexbet": SettlementRegime.VOID_AND_REFUND,

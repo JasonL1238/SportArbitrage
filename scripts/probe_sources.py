@@ -236,6 +236,12 @@ def state_candidates(state: str) -> tuple[Candidate, ...]:
             url = f"{config['base_url']}/sports"
         elif key == "hardrock":
             url = "https://api.hardrocksportsbook.com/sportsbook/api/public/events/tree"
+        elif key == "thescore":
+            # The GraphQL endpoint itself.  A bare GET answers without the
+            # client headers or the anonymous token the adapter sends, which is
+            # what a probe wants: it asks whether the state's edge is reachable
+            # at all, not whether a board parses.
+            url = f"{config['api_base']}/graphql"
         else:
             # A route with no branch here used to be dropped silently, and
             # nothing downstream would have said so: it never reaches
