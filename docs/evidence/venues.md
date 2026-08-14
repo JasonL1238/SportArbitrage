@@ -58,7 +58,7 @@ Neither opened odds JSON without a licensed-state exit IP:
 | DraftKings | `403` Akamai | HTML shell loads; `sportsbook-nash` API still `403`; no odds XHR | `ODDS_HTTP_PROXY` to IL/NJ residential, then adapter |
 | Caesars | `403` CloudFront | `403` | same — licensed-state proxy |
 | Fanatics | NXDOMAIN | NXDOMAIN | ~~find current host~~ ~~**found 2026-08-13**~~ — **closed 2026-08-14, asked from IL egress on both transports.** The DNS-confirmed `sportsbook.1{state}.betfanatics.com` map is a licensure signal, not a route: all five licensed states serve a byte-identical 548 B nginx `404` on every path. The app host `sportsbook.fanatics.com` is an Akamai Bot Manager challenge on plain HTTP and `301`s to the marketing site through a real browser. `sportsbook.betfanatics.com/sportsbook` is a real `401`. No anonymous web board exists; next lever is a logged-in capture through the mobile rig, gated on fixture viability (`state-routing.md` § "Fanatics has no anonymous board on the web") |
-| bet365 | `403` Cloudflare | `403` | anonymous application observation only; never bypass a challenge |
+| bet365 | `403` Cloudflare *(stateless origin)* | `403` *(stateless origin)* | ~~anonymous application observation only~~ — **2026-08-14, IL egress, per-state host**: `www.il.bet365.com` returns `200` with the full shell under plain `curl_cffi`, and `/pullpodapi/gethomepageadditionalpods` serves **754 prices with no token**. The 403s above were measured against `www.bet365.com`, which is not the book. Next lever is the per-league coupon parameters (`state-routing.md` § "bet365 Illinois answers plain HTTP") |
 | Betway / Bally / Fliff / Hard Rock | no simple public GET | — | reverse runtime/XHR or mobile |
 | ESPN BET | discontinued | — | skip |
 

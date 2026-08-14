@@ -193,9 +193,15 @@ RESEARCH_CANDIDATES: tuple[Candidate, ...] = (
     Candidate("blocked", "fanatics",
               "https://sportsbook.fanatics.com/",
               note="old api.sportsbook.fanatics.com is NXDOMAIN; site is Akamai bot-manager"),
+    # The stateless origin, which is what every "403 Cloudflare" reading was
+    # taken against.  The **state** host answers: 2026-08-14 from IL egress,
+    # ``www.il.bet365.com`` returned 200 with the full 41.8 KB sportsbook shell
+    # under this same transport, and its pull-pod XHR served 754 prices with no
+    # token at all.  Kept pointed here on purpose — this row is the control that
+    # says the refusal belongs to the stateless origin rather than to the book.
     Candidate("blocked", "bet365",
               "https://www.bet365.com/SportsBook.API/web", {"lid": "1", "zid": "0"},
-              note="Cloudflare under plain httpx"),
+              note="stateless origin; the per-state host answers (state-routing.md 2026-08-14)"),
     Candidate("hardrock", "hardrock-ladder",
               "https://api.hardrocksportsbook.com/sportsbook/v1/api/getRootLadder",
               note="registered as hardrock; ladder reachable from CA"),
