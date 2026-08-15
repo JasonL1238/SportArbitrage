@@ -182,11 +182,11 @@ written, and the grep is what is true now.
 | File | Lines | Where to land |
 | --- | --- | --- |
 | `tests/test_adversarial_findings.py` | 14.7k | 17 banners, one per review round — they say nothing about subject. Search the production symbol or the exact test name instead |
-| `src/report_assets.py` | 7.0k | 42 banners, in `/* ── … */` form. `frame`, `panels and routing`, `venues`, `arbitrage`, `overview`. Four handwritten constants — `CSS`, `BODY`, `JS`, and `EMPTY_SHELL`, the nothing-collected-yet page. Every panel count and filter decision is here, not in `src/report.py` |
+| `src/report_assets.py` | 7.2k | 42 banners, in `/* ── … */` form. `frame`, `panels and routing`, `venues`, `arbitrage`, `overview`. Four handwritten constants — `CSS`, `BODY`, `JS`, and `EMPTY_SHELL`, the nothing-collected-yet page. Every panel count and filter decision is here, not in `src/report.py` |
 | `tests/test_promo_planner.py` | 4.0k | 8 banners |
 | `src/collector.py` | 3.7k | `coverage`, `one run`, `replay`, `CLI` |
 | `src/arb.py` | 2.7k | `the arithmetic`, `settlement model`, `grouping`, `detection`, `best-price surface` |
-| `tests/test_report.py` | 2.5k | 8 banners |
+| `tests/test_report.py` | 2.7k | 8 banners |
 | `src/report.py` | 2.3k | `build_report` and `_serve` are the two entry points, and `build_report`'s own 1.4k-line body has no banner inside it. The only two, `rendering` and `CLI`, start at line 1577 |
 | `src/validation.py` | 2.3k | `consensus`, `row-level`, `market-level`, `cross-source` |
 | `src/promos/planner.py` | 2.2k | `offer-text parsing`, `brand → stakeable odds feeds`, `slate context`, `stake solving and outcome evaluation`, `the scan`, `plan payloads` |

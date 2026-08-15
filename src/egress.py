@@ -9,13 +9,24 @@ from pathlib import Path
 from typing import Any, Mapping
 
 
-# Two independent, credentials-free providers keep automatic selection from
-# depending on one rate limiter.  Callers may inject a different sequence for
-# tests or an internal lookup service.
-DEFAULT_DETECTION_URLS: tuple[str, ...] = (
-    "https://ipapi.co/json/",
-    "https://ipwho.is/",
-)
+# One provider, deliberately.  ``ipwho.is`` used to be the fallback here, on the
+# reasoning that two credentials-free providers keep detection off one rate
+# limiter — but ``detect_egress`` returns the FIRST answer, so a second provider
+# is only a safety net if both agree, and these two did not.  Measured
+# 2026-08-14 on the operator's own residential egress (fingerprint 34e56847c7ec,
+# independently confirmed as Illinois by theScore's server-side region code):
+# ipapi.co said IL, ipwho.is said CA / Los Angeles.  ipapi.co's free tier caps
+# requests, so a busy afternoon exhausted it, the fallback answered, and
+# collection refused with "detected CA".  A provider that is wrong about the IP
+# is worse than no provider: it fails toward a confident wrong state rather than
+# toward an honest gap.  Detection is now advisory (see
+# ``state_selection.select_states``), so losing the net costs nothing that the
+# operator's own state choice does not already cover.
+#
+# Callers may inject a different sequence for tests or an internal lookup
+# service; a second URL is a genuine fallback only for a caller who has checked
+# that it agrees.
+DEFAULT_DETECTION_URLS: tuple[str, ...] = ("https://ipapi.co/json/",)
 
 
 @dataclass(frozen=True)

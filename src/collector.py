@@ -2382,10 +2382,13 @@ def _cmd_collect(args: argparse.Namespace) -> int:
             store.close()
         return 2
     print(
-        f"auto-state: detected {selection.detected.state} via {selection.provider}; "
+        f"auto-state: detected {selection.detected_state or 'nothing'} via "
+        f"{selection.provider or 'no provider'}; "
         f"batch states: {', '.join(selection.states)}",
         flush=True,
     )
+    if selection.note:
+        print(f"auto-state: {selection.note}", flush=True)
     exit_code = 0
     try:
         iteration = 0
@@ -2394,7 +2397,7 @@ def _cmd_collect(args: argparse.Namespace) -> int:
             try:
                 batch = collect_batch_once(
                     selection.states,
-                    detected_state=selection.detected.state,
+                    detected_state=selection.detected_state,
                     raw_store=raw_store,
                     store=store,
                     source_keys=args.source,
@@ -3603,7 +3606,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         # From the jurisdiction table, never a second list: adding a state should
         # not mean finding every place the old four were spelled out.
         choices=sorted(JURISDICTIONS),
-        help="additional state to scrape; repeatable (detected state is always included)",
+        help="state to scrape; repeatable. Naming any state replaces detection "
+        "for this run; naming none collects the detected state",
     )
     collect.add_argument(
         "--tier",

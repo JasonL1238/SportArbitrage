@@ -831,7 +831,7 @@ BODY = """
         <option value="sport:baseball">All baseball</option>
         <option value="all">Everything (slower)</option>
       </select>
-      <span class="eyebrow">States (current is always included)</span>
+      <span class="eyebrow">States (detected one is pre-checked)</span>
       <div class="state-picks" id="scrape-states">
         <label><input type="checkbox" value="IL">IL</label>
         <label><input type="checkbox" value="PA">PA</label>
@@ -6712,17 +6712,74 @@ function selectedScrapeStates() {
     .map((node) => node.value);
 }
 
-function lockDetectedScrapeState(state) {
-  if (!state) return;
-  const input = Array.from(document.querySelectorAll('#scrape-states input'))
-    .find((node) => node.value === state);
-  if (input) {
-    input.checked = true;
-    input.disabled = true;
-    input.closest('label').title = 'Detected current state; always included';
+/* Which states to scrape is the operator's choice, and these boxes are where it
+   is made.  Detection only pre-checks one — it used to check it AND disable it,
+   which made a third-party IP lookup the authority on where you are.  It was
+   wrong about this machine (said CA for an Illinois egress), and a wrong reading
+   could not be corrected by hand.  Now: a remembered choice wins over detection,
+   detection fills in when there is no remembered choice, and IL is the last
+   resort so the button is never dead. */
+const SCRAPE_STATES_KEY = 'lineshop.scrape.states';
+
+function rememberScrapeStates() {
+  try {
+    window.localStorage.setItem(
+      SCRAPE_STATES_KEY, JSON.stringify(selectedScrapeStates()));
+  } catch (err) { /* private browsing, or a full quota — the picker still works */ }
+}
+
+function rememberedScrapeStates() {
+  try {
+    const raw = window.localStorage.getItem(SCRAPE_STATES_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    /* An empty remembered array is NOT a choice to scrape nothing — it is what a
+       stray click leaves behind, and honouring it would disable the button with
+       no way back except clearing storage. */
+    return Array.isArray(parsed) && parsed.length ? parsed : null;
+  } catch (err) {
+    return null;
   }
 }
-lockDetectedScrapeState(DATA.meta.detected_state);
+
+function initScrapeStates(detected) {
+  const boxes = Array.from(document.querySelectorAll('#scrape-states input'));
+  if (!boxes.length) return;
+  boxes.forEach((node) => node.addEventListener('change', rememberScrapeStates));
+  const remembered = rememberedScrapeStates();
+  const wanted = remembered
+    || (detected && boxes.some((node) => node.value === detected) ? [detected] : ['IL']);
+  boxes.forEach((node) => {
+    node.checked = wanted.indexOf(node.value) >= 0;
+    node.closest('label').title = node.value === detected
+      ? 'Detected from your connection — uncheck it if that is wrong'
+      : `Also scrape ${node.value}`;
+  });
+}
+initScrapeStates(DATA.meta.detected_state);
+
+/* ``state_note`` is set only when live detection could not answer and a stored
+   reading stood in for it.  The page rebuilt after the scrape cannot work that
+   out for itself — its ``detected_state`` is that stored reading, and looks
+   ordinary — so the fact is carried over the reload rather than inferred. */
+const SCRAPE_NOTE_KEY = 'lineshop.scrape.stateNote';
+
+function carryStateNote(note) {
+  if (!note) return;
+  try {
+    window.sessionStorage.setItem(SCRAPE_NOTE_KEY, String(note));
+  } catch (err) { /* nothing to carry it in; the CLI still prints it */ }
+}
+
+function takeCarriedStateNote() {
+  try {
+    const note = window.sessionStorage.getItem(SCRAPE_NOTE_KEY);
+    if (note) window.sessionStorage.removeItem(SCRAPE_NOTE_KEY);
+    return note || '';
+  } catch (err) {
+    return '';
+  }
+}
 
 function paintScrapeProgress(progress, busy) {
   const box = el('scrape-progress');
@@ -6770,6 +6827,11 @@ function wireScrapeButton() {
     return;
   }
   status.textContent = 'Ready — scrapes the venues, then reloads this page on the new snapshot.';
+  /* A scrape that ran on a stood-in state says so on the page built FROM it.
+     The success path reloads immediately, so a note written into this line
+     before the reload would flash and vanish — it is carried across instead. */
+  const carried = takeCarriedStateNote();
+  if (carried) status.textContent = carried + ' Ready to scrape again.';
 
   let pollTimer = null;
   const stopPoll = () => {
@@ -6839,6 +6901,7 @@ function wireScrapeButton() {
         return;
       }
       const quotes = (body.collect && body.collect.quote_count) || 0;
+      carryStateNote(body.collect && body.collect.state_note);
       status.textContent = `Got ${quotes.toLocaleString()} prices — reloading…`;
       paintScrapeProgress({
         phase: 'done',

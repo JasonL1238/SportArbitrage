@@ -1907,7 +1907,7 @@ def _run_collect_from_ui(
     try:
         batch = collect_batch_once(
             selection.states,
-            detected_state=selection.detected.state,
+            detected_state=selection.detected_state,
             raw_store=raw_store,
             store=store,
             sports=sports,
@@ -1921,6 +1921,10 @@ def _run_collect_from_ui(
     return {
         "batch_id": batch.batch_id,
         "detected_state": batch.detected_state,
+        # Empty unless detection could not answer.  The scrape still ran — on the
+        # states whose boxes were checked — and the reader is told which reading
+        # stood in for the live one.
+        "state_note": selection.note,
         "states": [state for state, _ in batch.runs if state != "GLOBAL"],
         "runs": {state: result.run_id for state, result in batch.runs},
         "ok": batch.ok,
@@ -1946,7 +1950,7 @@ def _run_promos_from_ui(
     selection = detect_and_select(states)
     batch = collect_promos_batch_once(
         selection.states,
-        detected_state=selection.detected.state,
+        detected_state=selection.detected_state,
         sources=sources,
         store=True,
         persist_raw=True,

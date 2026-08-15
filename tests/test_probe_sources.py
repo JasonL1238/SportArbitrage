@@ -254,11 +254,21 @@ def test_detection_falls_back_after_provider_failure() -> None:
     assert provider == "https://second.invalid/"
 
 
-def test_batch_state_detection_includes_requested_states_with_reduced_record(
+def test_batch_state_detection_uses_requested_states_with_reduced_record(
     monkeypatch, tmp_path,
 ) -> None:
+    """The record persisted alongside the selection still carries no raw IP.
+
+    The state assertion here changed with the selection rule: a requested state
+    is now the whole answer rather than an addition after the detected one, so
+    detecting PA while ``["IL"]`` is asked for collects Illinois alone.  What the
+    test is really guarding — that detection writes a fingerprint and never the
+    address — is unchanged, and is checked on the same path that now also records
+    a reading whose state collection would refuse.
+    """
     import src.state_selection as state_selection
 
+    monkeypatch.delenv("ODDS_STATE", raising=False)
     detection = detection_from_payload(
         {"ip": "203.0.113.12", "region_code": "PA"},
         detected_at=datetime.now(UTC),
@@ -279,7 +289,8 @@ def test_batch_state_detection_includes_requested_states_with_reduced_record(
     selection = state_selection.detect_and_select(
         ["IL"], client_factory=lambda **kwargs: Client()
     )
-    assert selection.states == ("PA", "IL")
+    assert selection.states == ("IL",)
+    assert selection.detected_state == "PA"
     assert "203.0.113.12" not in state_selection.settings.EGRESS_STATE_PATH.read_text()
 
 

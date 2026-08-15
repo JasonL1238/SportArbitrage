@@ -92,10 +92,25 @@ Settings and operational records:
 | `ODDS_PROBE_TTL_DAYS` | Fresh-`ok` TTL; default 60 days. |
 
 Detection answers “where are we *effectively*?” — physical presence or proxy
-exit. Every live scrape performs one lookup. `ipapi.co` is tried first and
-`ipwho.is` is the fallback.
+exit. Every live scrape performs one lookup, against `ipapi.co`. There is no
+second provider: `detect_egress` returns the first answer, so a fallback only
+adds safety when both agree, and the `ipwho.is` fallback disagreed — on
+2026-08-14 it placed a known-Illinois egress in California, and did so exactly
+when `ipapi.co`'s free-tier cap had been spent. `egress.DEFAULT_DETECTION_URLS`
+records the measurement.
+
 The public exit IP is necessarily disclosed to the provider but is reduced to a
 SHA-256 fingerprint before local persistence.
+
+**Detection is advisory, not a gate.** An explicitly chosen state wins outright
+and needs no lookup; detection only fills a choice nobody made; a *recent*
+stored record fills in when the lookup fails; and only when none of those names
+a state does `select_states` refuse — asking for a state rather than guessing.
+So a detected state collection does not support (`CA`) no longer blocks a run
+whose state was chosen by hand. The duty that replaces the gate is labelling:
+`report._payload` compares the stored detection against the run's own
+jurisdiction and appends a jurisdiction warning when they differ, which is why a
+fresh reading is persisted even when it names an unsupported state.
 
 ```bash
 python -m src.collector collect --tier core --state PA --state NJ --no-alert

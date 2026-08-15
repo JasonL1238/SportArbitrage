@@ -3,6 +3,62 @@
 Per-state route evidence: what a licensed host returned from matching egress,
 which routes were promoted on it, and which feeds cover which book.
 
+## Two detection providers disagreed about one egress, and the wrong one was winning — 2026-08-14
+
+The operator hit `Scrape failed: StateSelectionError: detected CA, but collection
+supports only IL, PA, NJ, DC` from the dashboard — intermittently, on a machine
+sitting in Illinois whose egress fingerprint had not changed (`34e56847c7ec`, the
+same value recorded in every section above).
+
+**Measured, both providers asked in one pass:**
+
+| provider | order | answer |
+| --- | --- | --- |
+| `https://ipapi.co/json/` | tried first | `HTTP 429 Too Many Requests` at the time of the failure; `IL` when it answers |
+| `https://ipwho.is/` | fallback | `HTTP 200`, `region_code: CA`, city Los Angeles |
+
+The IP was never in doubt. `data/egress_state.json` held `state: IL` with that
+same fingerprint, and theScore's own server-side `currentRegionCode` — a
+first-party licence statement, not a geolocation guess — reads `US-IL` from this
+egress. `ipwho.is` is simply wrong about this address.
+
+**Why it was intermittent, and why the fallback made it worse.**
+`detect_egress` returns the *first* provider that answers, so a second provider
+is a safety net only if both agree. ipapi.co's free tier caps requests and every
+scrape, probe, and `detect_state.py` run spends one, so a busy session exhausted
+it — and the exhaustion handed the decision to the provider that was wrong. The
+failure therefore tracked how many lookups had been spent recently, not where the
+machine was.
+
+**The `CA` refusal was the benign half.** Detection was a *gate*:
+`select_states` validated the detected state before it read the requested ones,
+so `--state IL` could not clear it and there was no way to state by hand where
+you were. The dangerous mirror image is the same disagreement pointing the other
+way — standing in PA with a provider claiming IL would have collected Illinois
+routes over a Pennsylvania egress and filed the rows as Illinois, which is
+exactly the wrong-state-feed failure the scrape rules exist to prevent. Nothing
+downstream would have objected: the feeds answer 200 and the numbers look
+plausible.
+
+**Changed, same day.** `ipwho.is` is removed — a provider that is wrong about the
+IP fails toward a confident wrong state, which is worse than an honest gap.
+Detection is now advisory rather than a gate: an explicitly chosen state wins and
+needs no lookup, detection only fills a choice nobody made, a *recent* stored
+record fills in when the lookup fails, and only when none of those names a state
+does collection refuse — naming what to pass. The dashboard's state checkboxes
+pre-check the detected state instead of checking *and disabling* it, and remember
+the operator's own choice across reloads.
+
+What replaces the gate is labelling, not trust: a fresh reading is now persisted
+even when it names a state collection does not support, because
+`report._payload` compares it against the run's own jurisdiction and appends a
+jurisdiction warning when they differ. A deliberately out-of-state run is
+allowed and visible rather than blocked.
+
+**Left standing:** a third-party IP database is a weak witness — this one was
+wrong today. The strong form of the check is a venue reporting which licence it
+served, which only `thescore` currently does.
+
 ## bet365 Illinois: the home page is HTTP, the board is not, and the egress is now blocked — 2026-08-14
 
 From the operator's **Illinois** egress (fingerprint `34e56847c7ec`), **no

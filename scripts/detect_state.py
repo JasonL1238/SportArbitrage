@@ -29,8 +29,9 @@ def main(argv: list[str] | None = None) -> int:
         "--url",
         action="append",
         help=(
-            "injectable ipapi-style JSON lookup; repeat for fallback order "
-            "(default: ipapi.co, then ipwho.is)"
+            "injectable ipapi-style JSON lookup; repeat for fallback order. "
+            "The default is ipapi.co alone — the first answer wins, so a second "
+            "provider helps only if you have checked that it agrees"
         ),
     )
     parser.add_argument("--no-store", action="store_true", help="print but do not persist")

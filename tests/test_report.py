@@ -2618,3 +2618,56 @@ def test_the_runs_table_does_not_relabel_a_scopeless_run_as_state_scoped(tmp_pat
 
     entry = next(row for row in data["runs"] if row["id"] == run)
     assert entry["route_scope"] == ""
+
+
+def test_a_run_whose_state_disagrees_with_the_detected_egress_says_so(
+    tmp_path, monkeypatch
+) -> None:
+    """The label that replaced the detection gate, asserted rather than assumed.
+
+    State selection used to refuse any run whose detected egress named a state
+    collection does not support, which also meant an operator could not choose a
+    state by hand.  That gate is gone (see ``state_selection``'s module docstring),
+    and what stands in its place is this warning: a run may collect a state the
+    connection does not match, but the reader has to be told.  The mechanism
+    predates the change and had no test, so the guard the new design leans on
+    could have been removed by an unrelated edit without anything failing.
+    """
+    from src import egress, report, settings
+    from src.store import Store
+    from src.validation import ValidationReport
+
+    record = tmp_path / "egress.json"
+    egress.save_detection(
+        record,
+        egress.detection_from_payload(
+            {"ip": "203.0.113.31", "region_code": "CA"}, detected_at=datetime.now(UTC)
+        ),
+    )
+    monkeypatch.setattr(settings, "EGRESS_STATE_PATH", record)
+    monkeypatch.setattr(report.settings, "EGRESS_STATE_PATH", record)
+
+    path = tmp_path / "db.sqlite3"
+    with Store(path) as store:
+        run = store.start_run(datetime.now(UTC), jurisdiction="IL", route_scope="state")
+        store.finish_run(
+            run, finished_at=datetime.now(UTC),
+            report=ValidationReport(quote_count=0, event_count=0),
+            counterparties={},
+        )
+    with Store(path) as store:
+        warnings = build_report(store)["meta"]["jurisdiction_warnings"]
+
+    assert any("IL" in note and "CA" in note for note in warnings), warnings
+
+    # An agreeing reading is silent — the warning marks a disagreement, and a
+    # warning on every run would be no warning at all.
+    egress.save_detection(
+        record,
+        egress.detection_from_payload(
+            {"ip": "203.0.113.31", "region_code": "IL"}, detected_at=datetime.now(UTC)
+        ),
+    )
+    with Store(path) as store:
+        agreeing = build_report(store)["meta"]["jurisdiction_warnings"]
+    assert not any("CA" in note for note in agreeing), agreeing
