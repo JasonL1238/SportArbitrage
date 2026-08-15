@@ -21,7 +21,8 @@ minute:
 * The offshore shelf answers on **v1 only**.  Asking ``21,35,2495`` in the same
   minute, v1 carried Bovada on NFL and Bovada with 1xBet on soccer; v2 carried
   neither on any of five leagues.  :data:`LEGACY_V1_BASE_URL` exists for exactly
-  those two sources and for no other reason.
+  that shelf and for no other reason — since ``an_onexbet``'s 2026-08-15
+  deregistration, ``an_bovada`` is its one remaining user.
 * Fliff (``2292``), Circa (``78``), SuperBook (``14``) and SugarHouse (``708``)
   answer on **neither**.
 
