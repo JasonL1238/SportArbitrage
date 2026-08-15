@@ -309,10 +309,9 @@ IL = Jurisdiction(
             "draftkings",
             "https://sportsbook-nash.draftkings.com",
             {
-                "base_url": "https://sportsbook-nash.draftkings.com/sites/US-IL-SB/api/v5",
                 "content_base_url": (
                     "https://sportsbook-nash.draftkings.com/sites/US-IL-SB/api/"
-                    "sportscontent/controldata/league/leagueSubcategory/v1"
+                    "sportscontent/controldata/league/primaryMarkets/v1"
                 ),
             },
             RouteStatus.VALIDATED,
@@ -410,10 +409,9 @@ PA = Jurisdiction(
             "draftkings",
             "https://sportsbook-nash.draftkings.com",
             {
-                "base_url": "https://sportsbook-nash.draftkings.com/sites/US-PA-SB/api/v5",
                 "content_base_url": (
                     "https://sportsbook-nash.draftkings.com/sites/US-PA-SB/api/"
-                    "sportscontent/controldata/league/leagueSubcategory/v1"
+                    "sportscontent/controldata/league/primaryMarkets/v1"
                 ),
             },
             RouteStatus.VALIDATED,
@@ -527,10 +525,9 @@ NJ = Jurisdiction(
             "draftkings",
             "https://sportsbook-nash.draftkings.com",
             {
-                "base_url": "https://sportsbook-nash.draftkings.com/sites/US-NJ-SB/api/v5",
                 "content_base_url": (
                     "https://sportsbook-nash.draftkings.com/sites/US-NJ-SB/api/"
-                    "sportscontent/controldata/league/leagueSubcategory/v1"
+                    "sportscontent/controldata/league/primaryMarkets/v1"
                 ),
             },
             RouteStatus.TEMPLATE,
@@ -600,10 +597,9 @@ DC = Jurisdiction(
             "draftkings",
             "https://sportsbook-nash.draftkings.com",
             {
-                "base_url": "https://sportsbook-nash.draftkings.com/sites/US-DC-SB/api/v5",
                 "content_base_url": (
                     "https://sportsbook-nash.draftkings.com/sites/US-DC-SB/api/"
-                    "sportscontent/controldata/league/leagueSubcategory/v1"
+                    "sportscontent/controldata/league/primaryMarkets/v1"
                 ),
             },
             RouteStatus.TEMPLATE,

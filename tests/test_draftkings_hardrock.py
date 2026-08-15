@@ -5,10 +5,18 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
 from src.raw_store import RawResponse, RawStore
 from src.schema import Market, Selection
 from src.sources.caesars import parse_caesars
-from src.sources.draftkings import parse_draftkings
+from src.sources.draftkings import (
+    EVENT_GROUPS,
+    DraftKingsAdapter,
+    _require_game_lines,
+    parse_draftkings,
+)
+from src.sources.guards import FormatChangeError
 from src.sources.hardrock import parse_hardrock
 
 RAW = Path(__file__).resolve().parent / "fixtures" / "raw"
@@ -156,6 +164,146 @@ def test_draftkings_takes_true_odds_over_the_printed_decimal() -> None:
     fallback = parse_draftkings([raw2])
     assert not fallback.rejections
     assert {q.decimal_odds for q in fallback.quotes} == {1.46, 2.31}
+
+
+def test_draftkings_parses_the_primary_markets_route() -> None:
+    """The live route: a genuine WNBA capture from ``primaryMarkets/v1``.
+
+    Pins the shape the adapter actually fetches, as opposed to the two older
+    generations the parser keeps only so their committed captures still replay.
+    """
+    raw = _load("draftkings__*_sportscontent-94682_*.json")
+    early = datetime(2026, 8, 14, tzinfo=timezone.utc)
+    raw = RawResponse(
+        source=raw.source, endpoint=raw.endpoint, url=raw.url,
+        status_code=raw.status_code, body=raw.body, fetched_at=early,
+        content_type=raw.content_type, request_params=raw.request_params,
+        headers=raw.headers,
+    )
+    # The request carries no subcategory id: markets are chosen by tag, and
+    # events by ``type eq 'Fixture'``.  That is what makes the route immune to
+    # the renumbering that broke NFL.
+    assert "subCategoryId" not in json.dumps(raw.request_params)
+    assert raw.request_params["marketsQuery"].endswith("t eq 'PrimaryMarket')")
+    assert "type eq 'Fixture'" in raw.request_params["eventsQuery"]
+
+    outcome = parse_draftkings([raw])
+    assert not outcome.rejections, [(r.reason, r.detail) for r in outcome.rejections]
+    assert outcome.quotes
+    assert {q.league for q in outcome.quotes} == {"WNBA"}
+    assert {q.market for q in outcome.quotes} == {
+        Market.MONEYLINE, Market.SPREAD, Market.TOTAL,
+    }
+
+
+def test_draftkings_refuses_a_futures_payload_that_answered_200() -> None:
+    """The exact regression: HTTP 200, well formed, and not game lines.
+
+    This body is the real one DraftKings served on 2026-08-14 for the stale NFL
+    subcategory ``10500`` — one 38-way "NFL 2026/27 Season" market whose
+    participants are US states.  The parser already declined to build rows from
+    it; what was missing is that the *scope* counted as healthy, so the run said
+    ``draftkings ok=1`` while NFL contributed nothing.  The guard must call it a
+    failure.
+    """
+    raw = _load("draftkings__*_sportscontent-88808-futures_*.json")
+    assert raw.status_code == 200, "the point of this fixture is that it is a 200"
+
+    payload = json.loads(raw.body)
+    assert len(payload["events"]) == 1
+    assert payload["events"][0]["eventParticipantType"] == "MultiTeam"
+
+    with pytest.raises(FormatChangeError) as caught:
+        _require_game_lines(raw, "draftkings")
+    message = str(caught.value)
+    assert "not one is a two-sided fixture" in message
+    assert "MultiTeam" in message
+    assert "NFL 2026/27 Season" in message
+
+    # And the parser's own behaviour is unchanged: it still builds nothing,
+    # rather than inventing rows from a futures market.
+    assert not parse_draftkings([raw]).quotes
+
+
+def test_draftkings_empty_slate_is_not_a_failure() -> None:
+    """A league with no games must stay an *empty* scope, not a refusal.
+
+    The distinction is the whole reason the guard returns quietly on an empty
+    event list: "no games today" and "this route is broken" produce the same
+    zero, and grading the first as a failure would fail every run in an
+    off-season.
+    """
+    raw = RawResponse(
+        source="draftkings", endpoint="sportscontent-42648",
+        url="https://sportsbook-nash.draftkings.com/example", status_code=200,
+        body=json.dumps({"events": [], "markets": [], "selections": []}),
+        fetched_at=datetime(2026, 8, 14, tzinfo=timezone.utc),
+        content_type="application/json",
+    )
+    _require_game_lines(raw, "draftkings")  # must not raise
+
+
+def test_draftkings_registers_nfl_preseason_as_the_same_competition() -> None:
+    """Two DraftKings leagues, one normalized competition.
+
+    DraftKings shelves *NFL Preseason* (24685) apart from *NFL* (88808).  In
+    August the preseason league holds the games other books are pricing, so both
+    are collected — but ``leagues`` must still name NFL once, because it is a
+    declaration of what the adapter covers rather than of how many requests it
+    makes.
+    """
+    ids = {gid for gid, _sport, league in EVENT_GROUPS if league == "NFL"}
+    assert ids == {88808, 24685}
+
+    adapter = DraftKingsAdapter(leagues=["NFL"])
+    try:
+        assert adapter.leagues == ("NFL",)
+        assert len(adapter._scopes) == 2
+        assert set(adapter.capabilities()) == {"NFL"}
+    finally:
+        adapter.close()
+
+
+def test_draftkings_state_routes_name_the_same_api_generation() -> None:
+    """Every state's pinned content route must be the generation the adapter speaks.
+
+    The per-state ``content_base_url`` in :mod:`src.jurisdictions` *overrides* the
+    adapter's default, and that override is the only thing pinning a fetch to one
+    state's licence.  So the two have to name the same API generation — and for a
+    while they did not: the default moved to ``primaryMarkets`` while all four
+    state configs still said ``leagueSubcategory``.  Because the per-state value
+    wins, every ``--state`` run kept using the retired route.  Nothing failed,
+    because both endpoints answered; the run just was not exercising the route
+    the code claimed to use.
+    """
+    from src.jurisdictions import JURISDICTIONS
+    from src.sources.draftkings import DEFAULT_CONTENT_BASE_URL
+
+    generation = DEFAULT_CONTENT_BASE_URL.rsplit("/league/", 1)[-1]
+    assert generation == "primaryMarkets/v1"
+
+    seen = 0
+    for state, jurisdiction in JURISDICTIONS.items():
+        route = jurisdiction.routes.get("draftkings")
+        if route is None:
+            continue
+        configured = route.config.get("content_base_url")
+        assert configured, f"{state}: DraftKings route states no content_base_url"
+        assert configured.rsplit("/league/", 1)[-1] == generation, (
+            f"{state}: pinned route is {configured!r}, which is a different API "
+            f"generation from the adapter's {generation!r}"
+        )
+        # And it must still be that state's own shelf, not another's.
+        assert f"/sites/US-{state}-SB/" in configured, (
+            f"{state}: pinned route does not carry {state}'s own site segment"
+        )
+        # ``base_url`` was the retired v5 route and is no longer a constructor
+        # parameter; leaving it in config would raise TypeError at build time.
+        assert "base_url" not in route.config, (
+            f"{state}: config still passes base_url, which the adapter dropped"
+        )
+        seen += 1
+    assert seen == 4, f"expected all four jurisdictions to route DraftKings, saw {seen}"
 
 
 def test_hardrock_joins_root_idx_to_ladder() -> None:

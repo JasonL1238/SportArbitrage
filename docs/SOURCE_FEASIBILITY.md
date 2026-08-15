@@ -46,7 +46,8 @@ python scripts/probe_sources.py --state IL
   for vintage coherence (2026-08-09) · The two endpoint versions are different
   catalogues (2026-08-08) · Two things to fix *before* the Pennsylvania recapture
   (2026-08-08) · v2 returns full-game only unless asked (2026-08-08)
-- **`evidence/state-routing.md`** — bet365 Illinois: the home page is HTTP, the
+- **`evidence/state-routing.md`** — Two detection providers disagreed about one
+  egress, and the wrong one was winning (2026-08-14) · bet365 Illinois: the home page is HTTP, the
   board is not, and the egress is now blocked (2026-08-14) · What is true ·
   Three things the first version of this section got wrong · The routing grammar,
   decoded — and the one lead left · Fanatics has no anonymous board on the
@@ -76,6 +77,7 @@ python scripts/probe_sources.py --state IL
   (2026-08-08)
 - **`evidence/venues.md`** — Original California baseline: registered sources · Rate
   limits, honoured rather than routed around · Original California blocks · Previously
-  blocked under plain `httpx`: reopen candidates · What this leaves
+  blocked under plain `httpx`: reopen candidates · What this leaves · DraftKings
+  Illinois: three route generations, 2026-08-14
 - **`evidence/adapter-lessons.md`** — Two corrections to the original plan · Notes on
   charges · Notes on settlement · Traps the adapters had to be corrected for

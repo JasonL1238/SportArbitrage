@@ -91,3 +91,70 @@ licensed-state egress for validation.
 Four of the venues are exchanges or prediction markets, whose two-sided quotes
 and — for two of them — stated liquidity make a position *more* checkable than
 any sportsbook's posted price does.
+
+---
+
+## DraftKings Illinois — three route generations, 2026-08-14
+
+Measured from the machine's own IL egress (no proxy; `data/egress_state.json`
+records the IL fingerprint). All ids below were read from the route table the
+public NFL page embeds for itself, never guessed or iterated.
+
+**What was wrong.** Run 13 collected **78 rows, MLB only**, from a book holding an
+IL licence. Two defects, and the second is why the first stayed invisible:
+
+| League | id | Route it was using | Answer |
+|---|---|---|---|
+| MLB | 84240 | `leagueSubcategory/v1` sub `4519` | correct, 14 events |
+| NFL | 88808 | `leagueSubcategory/v1` sub `10500` | **`200` carrying futures** |
+| WNBA | 94682 | retired `api/v5/eventgroups` | `access denied` |
+| NHL | 42133 | retired `api/v5/eventgroups` | `access denied` |
+| EPL | 40253 | retired `api/v5/eventgroups` | `access denied` |
+| NBA | 42648 | retired `api/v5/eventgroups` | not requested (off-season) |
+
+Subcategory `10500` had gone stale. It answered `200` with 24,210 bytes holding a
+single 38-way market named `Winner` on an event called *NFL 2026/27 Season*,
+whose participants are **US states** (California, Maryland, Florida, Ohio,
+Texas…) and whose `eventParticipantType` is `MultiTeam`. The parser refused to
+build rows from it — correctly — but the scope counted as *produced*, so the run
+reported `draftkings ok=1` and `scopes_failed=3` rather than 4. The capture is
+committed as
+`tests/fixtures/raw/draftkings__20260814T015421Z_sportscontent-88808-futures_*.json`.
+NFL's current Game Lines subcategory is `4518`, not `10500`; it is recorded here
+only as evidence that these ids move, because the adapter no longer uses any.
+
+**What replaced it.** The page itself reads
+`api/sportscontent/controldata/league/primaryMarkets/v1/markets`, parameterised
+only by league id plus two constants — `$filter=... AND type eq 'Fixture'` for
+events and `$filter=tags/any(t: t eq 'PrimaryMarket')` for markets. There is no
+subcategory id on this route, so there is nothing seasonal left to keep current,
+and `type eq 'Fixture'` excludes the futures class structurally.
+
+Verified 2026-08-14 with a **plain HTTP client** — no Akamai `403`, no browser
+fallback needed, which is a change from the `403` recorded above:
+
+| League | id | events | markets |
+|---|---|---|---|
+| MLB | 84240 | 11 | Moneyline, Run Line, Total |
+| NFL | 88808 | 100 (capped) | Moneyline, Spread, Total |
+| NFL Preseason | 24685 | 10 | Moneyline, Spread, Total |
+| WNBA | 94682 | 5 | Moneyline, Spread, Total |
+| NBA | 42648 | 41 | Moneyline, Spread, Total |
+| NHL | 42133 | 31 | Moneyline, Puck Line, Total |
+| EPL | 40253 | 10 | Moneyline only |
+
+Three findings worth not rediscovering:
+
+- **`24685` is *NFL Preseason*, a separate league from NFL (`88808`).** In August
+  it is the one holding games other books are pricing; `88808`'s earliest event
+  is 2026-09-10. Both are registered and both normalize to the `NFL` league key.
+- **`top` caps at 100.** The page asks for 20; 100 is served and `300` is refused
+  with `HTTP 400 {"errorStatus":{"code":"MRKTBFF-400"}}`. NFL fills the cap, so
+  it is reported through `ScopeTally.truncated` rather than passing as a whole
+  slate. No paging parameter was tried — the page does not use one.
+- **EPL returns Moneyline only on this route**, where the subcategory route also
+  carried totals. Accepted: the alternative was the zero rows EPL produced
+  before. Revisit if soccer totals become load-bearing.
+
+Result: **1,212 quotes across 207 events** (NFL 110, NBA 41, NHL 30, MLB 11,
+EPL 10, WNBA 5), against 78 MLB-only rows before.

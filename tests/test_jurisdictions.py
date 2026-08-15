@@ -39,8 +39,10 @@ def test_il_and_pa_retail_routes_keep_stable_source_keys() -> None:
     assert pa["betrivers_kambi"].config == {
         "operator": "rsiuspa", "market": "US-PA", "lang": "en_US",
     }
-    assert "US-IL-SB" in il["draftkings"].config["base_url"]
-    assert "US-PA-SB" in pa["draftkings"].config["base_url"]
+    # ``content_base_url`` carries the state pin now that the v5 ``base_url``
+    # route is retired and no longer a constructor parameter.
+    assert "US-IL-SB" in il["draftkings"].config["content_base_url"]
+    assert "US-PA-SB" in pa["draftkings"].config["content_base_url"]
     assert sum(entry.key == "betrivers_kambi" for entry in pa.values()) == 1
 
 
@@ -183,6 +185,114 @@ def test_egress_record_hashes_ip_and_never_persists_it(tmp_path) -> None:
     assert load_detection(path) == detected
 
 
+def _selection_env(monkeypatch, tmp_path):
+    """Point detection at a scratch record and remove the compatibility state."""
+    import src.state_selection as state_selection
+
+    monkeypatch.delenv("ODDS_STATE", raising=False)
+    monkeypatch.setattr(
+        state_selection.settings, "EGRESS_STATE_PATH", tmp_path / "egress.json"
+    )
+
+    class Client:
+        def close(self):
+            pass
+
+    def refuse(client, urls):
+        raise RuntimeError("HTTP Error 429: Too Many Requests")
+
+    return state_selection, Client, refuse
+
+
+def test_only_one_detection_provider_is_configured() -> None:
+    """The ``ipwho.is`` fallback is gone, and its absence is asserted.
+
+    ``detect_egress`` returns the FIRST provider that answers, so a second
+    provider is a safety net only when both agree — and on 2026-08-14 these two
+    did not: ipapi.co said IL and ipwho.is said CA for one unchanged egress that
+    theScore's own region code independently confirmed as Illinois.  Because
+    ipapi.co rate-limits, the disagreeing provider answered precisely when the
+    accurate one had been spent, and collection refused with "detected CA".
+    """
+    from src.egress import DEFAULT_DETECTION_URLS
+
+    assert DEFAULT_DETECTION_URLS == ("https://ipapi.co/json/",)
+
+
+def test_a_failed_lookup_falls_back_to_a_recent_record_and_says_so(
+    monkeypatch, tmp_path
+) -> None:
+    state_selection, Client, refuse = _selection_env(monkeypatch, tmp_path)
+    stored = detection_from_payload(
+        {"ip": "203.0.113.7", "region_code": "IL"}, detected_at=datetime.now(UTC)
+    )
+    save_detection(state_selection.settings.EGRESS_STATE_PATH, stored)
+    monkeypatch.setattr(state_selection, "detect_egress", refuse)
+
+    selection = state_selection.detect_and_select(
+        None, client_factory=lambda **kwargs: Client()
+    )
+    assert selection.states == ("IL",)
+    assert selection.detected_state == "IL"
+    assert "429" in selection.note and "IL" in selection.note
+    # The stood-in record keeps its original timestamp — re-saving it would
+    # claim the state was detected now, which is the one thing it was not.
+    assert load_detection(state_selection.settings.EGRESS_STATE_PATH) == stored
+
+
+def test_a_stale_record_does_not_decide_a_run_but_a_chosen_state_does(
+    monkeypatch, tmp_path
+) -> None:
+    """Old enough to predate a move ⇒ not a substitute for asking.
+
+    ``is_recent`` runs to a day, which comfortably covers a flight or a drive
+    across a state line.  So a stale record refuses rather than guesses — and
+    the refusal is answerable, because naming a state needs no lookup at all.
+    """
+    import pytest
+
+    state_selection, Client, refuse = _selection_env(monkeypatch, tmp_path)
+    stale = detection_from_payload(
+        {"ip": "203.0.113.7", "region_code": "IL"},
+        detected_at=datetime(2026, 7, 1, tzinfo=UTC),
+    )
+    save_detection(state_selection.settings.EGRESS_STATE_PATH, stale)
+    monkeypatch.setattr(state_selection, "detect_egress", refuse)
+
+    with pytest.raises(state_selection.StateSelectionError) as caught:
+        state_selection.detect_and_select(None, client_factory=lambda **kwargs: Client())
+    assert "detection is unavailable" in str(caught.value)
+
+    chosen = state_selection.detect_and_select(
+        ["PA"], client_factory=lambda **kwargs: Client()
+    )
+    assert chosen.states == ("PA",)
+    assert chosen.detected is None
+    assert chosen.detected_state == ""
+
+
+def test_an_unsupported_fresh_reading_is_still_recorded(monkeypatch, tmp_path) -> None:
+    """The dashboard's jurisdiction warning is what reads this file.
+
+    A ``CA`` reading used to raise before ``save_detection`` ran, so the one
+    surface able to tell the reader "this run's state disagrees with your
+    connection" was left with nothing written down.  The reading is a fact about
+    the machine; whether collection supports the state is a separate question.
+    """
+    state_selection, Client, _ = _selection_env(monkeypatch, tmp_path)
+    reading = detection_from_payload({"ip": "203.0.113.9", "region_code": "CA"})
+    monkeypatch.setattr(
+        state_selection, "detect_egress", lambda client, urls: (reading, "provider")
+    )
+
+    selection = state_selection.detect_and_select(
+        ["IL"], client_factory=lambda **kwargs: Client()
+    )
+    assert selection.states == ("IL",)
+    assert selection.detected_state == "CA"
+    assert load_detection(state_selection.settings.EGRESS_STATE_PATH) == reading
+
+
 def test_probe_cache_skips_only_fresh_ok_for_same_state_and_egress(tmp_path) -> None:
     now = datetime(2026, 8, 3, tzinfo=UTC)
     fingerprint = "a" * 64
@@ -228,11 +338,60 @@ def test_every_instantiated_retail_route_matches_its_requested_state() -> None:
     assert nj["hardrock"].config["channel"] == "NEW_JERSEY_ONLINE"
 
 
-def test_state_selection_includes_detected_first_and_deduplicates(monkeypatch) -> None:
+def test_state_selection_prefers_the_chosen_states_and_deduplicates(monkeypatch) -> None:
+    """A chosen state wins outright; detection only fills an empty choice.
+
+    This test used to assert ``("PA", "NJ", "IL")`` for the same inputs — the
+    detected state forced to the front of states the operator had named.  That
+    ordering was the visible half of a gate: ``select_states`` validated the
+    detected state *before* reading the requested ones, so a detection answering
+    an unsupported state refused the run no matter what was asked for, and there
+    was no way to say "I am in Illinois" by hand.  A rate-limited HTTP lookup
+    outranking the operator is backwards, so choice now comes first and
+    detection is advisory.
+    """
     from src.state_selection import select_states
 
     monkeypatch.delenv("ODDS_STATE", raising=False)
-    assert select_states("pa", ["NJ", "pa", "IL"]) == ("PA", "NJ", "IL")
+    assert select_states("pa", ["NJ", "pa", "IL"]) == ("NJ", "PA", "IL")
+    # Nothing chosen: detection is exactly what fills the gap.
+    assert select_states("pa") == ("PA",)
+    # An unsupported detection is not an error when a state was chosen — this is
+    # the case that produced "detected CA, but collection supports only …" and
+    # could not be overridden.
+    assert select_states("CA", ["IL"]) == ("IL",)
+
+
+def test_state_selection_refuses_only_when_nothing_names_a_state(monkeypatch) -> None:
+    """The refusal survives, narrowed to the case where there is nothing to collect."""
+    import pytest
+
+    from src.state_selection import StateSelectionError, select_states
+
+    monkeypatch.delenv("ODDS_STATE", raising=False)
+    with pytest.raises(StateSelectionError) as unsupported:
+        select_states("CA")
+    assert "detected CA" in str(unsupported.value)
+    assert "--state" in str(unsupported.value)
+
+    with pytest.raises(StateSelectionError) as blank:
+        select_states("")
+    assert "detection is unavailable" in str(blank.value)
+    assert "--state" in str(blank.value)
+
+
+def test_odds_state_stays_an_addition_rather_than_a_choice(monkeypatch) -> None:
+    """``ODDS_STATE`` is a compatibility input and must not displace either input.
+
+    Two failure modes bracket it: dropping the detected state (so a PA run
+    collects only Illinois) and overriding an explicit choice.  It appends.
+    """
+    from src.state_selection import select_states
+
+    monkeypatch.setenv("ODDS_STATE", "IL")
+    assert select_states("PA") == ("PA", "IL")
+    assert select_states("PA", ["NJ"]) == ("NJ", "IL")
+    assert select_states("IL", ["IL"]) == ("IL",)
 
 
 def test_batch_fetches_global_sources_once_for_multiple_states(tmp_path, monkeypatch) -> None:

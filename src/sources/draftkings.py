@@ -1,14 +1,31 @@
 """DraftKings US sportsbook pregame markets, from the public sportsbook APIs.
 
-The legacy ``api/v5/eventgroups/{id}`` payload remains supported for replay.
-Live Illinois pages now read ``api/sportscontent/.../leagueSubcategory/v1``;
-that endpoint is used for leagues whose current Game Lines subcategory has been
-observed.  No account is involved.
+Two older payload generations remain supported **for replay only**, because
+captures of both are committed: ``api/v5/eventgroups/{id}`` and the
+``leagueSubcategory/v1`` shape that replaced it.  Neither is fetched any more.
 
-The Akamai edge rejects a plain HTTP client even from Illinois.  When no client
-was injected, collection therefore retries the current endpoint through the
-project's browser transport after seeding the public league page.  Parsing stays
-pure and supports both generations of captured bytes.
+Live Illinois pages read ``api/sportscontent/.../primaryMarkets/v1``, and that
+is the only route this adapter opens.  It takes a league id and two constant
+queries — ``type eq 'Fixture'`` for events and the ``PrimaryMarket`` tag for
+markets — so there is no per-league subcategory id to keep current.  That
+matters: subcategory ids move, and the one pinned for NFL (``10500``) had gone
+stale in a way that returned HTTP 200 carrying a 38-way season futures market
+("NFL 2026/27 Season", participants *California*, *Maryland*, *Texas*…) instead
+of game lines.  The parser correctly refused to build rows from it, the scope
+counted as healthy, and NFL silently contributed nothing for a whole run.
+``type eq 'Fixture'`` excludes that class of event structurally, and
+:func:`_require_game_lines` refuses it rather than reporting success if it ever
+returns anyway.  No account is involved.
+
+The Akamai edge used to reject a plain HTTP client even from Illinois, and that
+is no longer true of this route: on 2026-08-14 every league in
+:data:`EVENT_GROUPS` answered a plain client from the operator's own Illinois
+egress, with no browser involved.  The fallback below is kept rather than
+removed — the block was real, it was route-specific, and nothing says it will
+not return — but it is now the exception rather than the path.  When no client
+was injected, a refusal retries through the project's browser transport after
+seeding the public league page.  Parsing stays pure and supports all three
+generations of captured bytes.
 """
 from __future__ import annotations
 
@@ -43,35 +60,68 @@ from src.sources._common import (
     priced_quote,
 )
 from src.sources.base import ParseOutcome
-from src.sources.guards import FormatChangeError, SourceError
+from src.sources.guards import CoverageCappedError, FormatChangeError, SourceError
 
 log = logging.getLogger(__name__)
 
 SOURCE_KEY = "draftkings"
-DEFAULT_BASE_URL = "https://sportsbook-nash.draftkings.com/sites/US-IL-SB/api/v5"
+#: The state's own content host.  This default is Illinois; a state-scoped run
+#: gets its own through ``SourceDescriptor.config`` in :mod:`src.jurisdictions`,
+#: and that override is the *only* thing pinning a fetch to one state's licence —
+#: so the path here and the path there must name the same API generation.  They
+#: did not, briefly: this constant moved to ``primaryMarkets`` while the four
+#: per-state configs still said ``leagueSubcategory``, and because the per-state
+#: value wins, every ``--state`` run kept using the retired route while the
+#: unscoped adapter used the new one.  Both answered, so nothing failed.
 DEFAULT_CONTENT_BASE_URL = (
     "https://sportsbook-nash.draftkings.com/sites/US-IL-SB/api/"
-    "sportscontent/controldata/league/leagueSubcategory/v1"
+    "sportscontent/controldata/league/primaryMarkets/v1"
 )
 DEFAULT_ORIGIN = "https://sportsbook.draftkings.com/"
 HOST_INTERVAL = 0.5
 
-#: Event-group id → (sport, league key).  One request covers the whole league.
+#: League id → (sport, league key).  One request covers the whole league.
+#:
+#: These are DraftKings *league* ids, and every one of them was confirmed
+#: against the route table the public NFL page embeds for itself
+#: (``{"route":"/sport/3/league/88808","seoRoute":"/leagues/football/nfl"}``),
+#: so none is guessed.
+#:
+#: ``24685`` is a second football entry and not a duplicate: DraftKings splits
+#: *NFL Preseason* from *NFL* as separate leagues, and in August the preseason
+#: league is the one holding games that other books are pricing tonight, while
+#: ``88808`` starts in September.  Both normalize to the ``NFL`` league key —
+#: they are the same competition to everything downstream, and the split is a
+#: DraftKings shelving decision rather than a fact about the sport.
 EVENT_GROUPS: tuple[tuple[int, Sport, str], ...] = (
     (84240, Sport.BASEBALL, "MLB"),
     (94682, Sport.BASKETBALL, "WNBA"),
     (42648, Sport.BASKETBALL, "NBA"),
     (88808, Sport.FOOTBALL, "NFL"),
+    (24685, Sport.FOOTBALL, "NFL"),
     (42133, Sport.HOCKEY, "NHL"),
     (40253, Sport.SOCCER, "EPL"),
 )
 
-#: Current public page route and Game Lines subcategory.  IDs are discovered
-#: from the page's own request, not inferred from the retired v5 endpoint.
-CONTENT_ROUTES: dict[int, tuple[str, str]] = {
-    84240: ("baseball/mlb", "4519"),
-    88808: ("football/nfl", "10500"),
+#: League id → public page path, used only for the ``Referer`` a browser sends
+#: and as the seed URL when the plain client is turned away.  A league missing
+#: here still collects; it just sends the bare origin.
+PAGE_PATHS: dict[int, str] = {
+    84240: "baseball/mlb",
+    94682: "basketball/wnba",
+    42648: "basketball/nba",
+    88808: "football/nfl",
+    24685: "football/nfl-preseason",
+    42133: "hockey/nhl",
+    40253: "soccer/england---premier-league",
 }
+
+#: Most events one request will return.  The page asks for 20; 100 is served and
+#: ``300`` is refused with ``HTTP 400 MRKTBFF-400``, so this is the venue's own
+#: ceiling rather than a number chosen here.  A league that fills it is reported
+#: as truncated — see :meth:`DraftKingsAdapter.fetch_raw` — because a silent cap
+#: reads as "that is the whole slate" when it is not.
+EVENT_PAGE_CAP = 100
 
 MARKETS_BY_SPORT: dict[Sport, frozenset[Market]] = {
     Sport.BASEBALL: frozenset({Market.MONEYLINE, Market.SPREAD, Market.TOTAL}),
@@ -114,7 +164,6 @@ class DraftKingsAdapter:
         leagues: Sequence[str] | None = None,
         *,
         source_key: str = SOURCE_KEY,
-        base_url: str = DEFAULT_BASE_URL,
         content_base_url: str = DEFAULT_CONTENT_BASE_URL,
         timeout: float = 25.0,
         client: httpx.Client | None = None,
@@ -137,7 +186,6 @@ class DraftKingsAdapter:
         self._scopes = tuple(scopes)
         self._wanted = wanted
         self._source_key = source_key
-        self.base_url = base_url.rstrip("/")
         self.content_base_url = content_base_url.rstrip("/")
         self.proxy_state = proxy_state
         self._allow_browser_fallback = client is None
@@ -156,7 +204,15 @@ class DraftKingsAdapter:
 
     @property
     def leagues(self) -> tuple[str, ...]:
-        return tuple(scope.league for scope in self._scopes if scope.league in self._wanted)
+        # ``dict.fromkeys`` rather than ``set``: two scopes can share a league
+        # key — NFL and NFL Preseason are separate DraftKings leagues and one
+        # normalized competition — and this is a declaration of what the adapter
+        # collects, which must name each league once and in a stable order.
+        return tuple(
+            dict.fromkeys(
+                scope.league for scope in self._scopes if scope.league in self._wanted
+            )
+        )
 
     def capabilities(self, *, tier: Tier = Tier.FULL) -> dict[str, frozenset[Market]]:
         del tier
@@ -178,6 +234,7 @@ class DraftKingsAdapter:
             tally.requested(label)
             try:
                 raw = self._fetch_scope(scope)
+                _require_game_lines(raw, self._source_key)
             except SourceError as exc:
                 log.info(
                     "%s: event group %s unavailable: %s",
@@ -186,45 +243,51 @@ class DraftKingsAdapter:
                 tally.failed(label, exc)
                 continue
             raws.append(raw)
-            tally.produced(label, _event_count(raw))
+            count = _event_count(raw)
+            tally.produced(label, count)
+            if count >= EVENT_PAGE_CAP:
+                tally.truncated(
+                    label,
+                    CoverageCappedError(
+                        f"{self._source_key}:{raw.endpoint}: returned the maximum "
+                        f"{EVENT_PAGE_CAP} events, so this league's slate is cut off "
+                        f"at that many and the rest was not collected"
+                    ),
+                )
         tally.require_something(what="pregame eventgroup")
         return raws
 
     def _fetch_scope(self, scope: _GroupScope) -> RawResponse:
-        current = CONTENT_ROUTES.get(scope.event_group_id)
-        if current is None:
-            return self._http.get(
-                f"{self.base_url}/eventgroups/{scope.event_group_id}",
-                endpoint=f"eventgroup-{scope.event_group_id}",
-                params={"format": "json"},
-                headers={"Origin": DEFAULT_ORIGIN.rstrip("/"), "Referer": DEFAULT_ORIGIN},
-            )
-
-        page_path, subcategory_id = current
-        page_url = f"{DEFAULT_ORIGIN}leagues/{page_path}"
+        page_path = PAGE_PATHS.get(scope.event_group_id)
+        page_url = f"{DEFAULT_ORIGIN}leagues/{page_path}" if page_path else DEFAULT_ORIGIN
+        # The page's own provider parameters, with only ``top`` raised from the
+        # 20 a screen needs to the 100 the endpoint will serve.
         params = {
-            "isBatchable": "false",
-            "templateVars": f"{scope.event_group_id},{subcategory_id}",
             "eventsQuery": (
-                f"$filter=leagueId eq '{scope.event_group_id}' AND "
-                "clientMetadata/Subcategories/any(s: "
-                f"s/Id eq '{subcategory_id}')"
+                f"$filter=leagueId eq '{scope.event_group_id}' AND type eq 'Fixture'"
             ),
-            "marketsQuery": (
-                "$filter=clientMetadata/subCategoryId eq "
-                f"'{subcategory_id}' AND tags/all(t: t ne 'SportcastBetBuilder')"
-            ),
+            "marketsQuery": "$filter=tags/any(t: t eq 'PrimaryMarket')",
+            "top": str(EVENT_PAGE_CAP),
             "include": "Events",
             "entity": "events",
+            "isBatchable": "true",
         }
         headers = {"Origin": DEFAULT_ORIGIN.rstrip("/"), "Referer": page_url}
-        try:
-            return self._http.get(
+        # One request, two possible clients.  Spelling the call out twice let the
+        # plain and browser paths drift, which is the failure mode that matters
+        # here: the fallback exists to send *the same* request through a
+        # different transport, and a fallback that quietly asks for something
+        # else is worse than no fallback.
+        def fetch(http: SourceClient) -> RawResponse:
+            return http.get(
                 f"{self.content_base_url}/markets",
                 endpoint=f"sportscontent-{scope.event_group_id}",
                 params=params,
                 headers=headers,
             )
+
+        try:
+            return fetch(self._http)
         except SourceError:
             if not self._allow_browser_fallback:
                 raise
@@ -240,12 +303,7 @@ class DraftKingsAdapter:
                 ),
                 host_interval=HOST_INTERVAL,
             )
-        return self._browser_http.get(
-            f"{self.content_base_url}/markets",
-            endpoint=f"sportscontent-{scope.event_group_id}",
-            params=params,
-            headers=headers,
-        )
+        return fetch(self._browser_http)
 
     def parse(self, raws: Sequence[RawResponse]) -> ParseOutcome:
         return parse_draftkings(raws)
@@ -254,6 +312,74 @@ class DraftKingsAdapter:
         self._http.close()
         if self._browser_http is not None:
             self._browser_http.close()
+
+
+def _require_game_lines(raw: RawResponse, source: str) -> None:
+    """Refuse a 200 that carries something other than this league's game lines.
+
+    The failure this exists for produced no error anywhere: a stale subcategory
+    id answered ``200`` with one 38-way "NFL 2026/27 Season" futures market, the
+    parser declined to build rows from it because no participant pairing could
+    be made, and the scope was filed as *produced* — one event, healthy.  The
+    run reported ``draftkings ok=1`` while NFL contributed nothing.
+
+    So "answered" is not enough; the answer has to be the kind of thing that was
+    asked for.  A league with genuinely no games is a different case and must
+    stay an *empty* scope rather than a failure, which is why an empty event
+    list returns quietly here and :meth:`ScopeTally.produced` grades it.
+    """
+    try:
+        payload = raw.json()
+    except ValueError as exc:
+        raise FormatChangeError(f"{source}:{raw.endpoint}: body is not JSON") from exc
+    if not isinstance(payload, dict):
+        return  # the parser raises on this with a better message
+    events = payload.get("events")
+    if not isinstance(events, list) or not events:
+        return  # no slate is not a defect; ``produced`` files it as empty
+
+    fixtures = [
+        event
+        for event in events
+        if isinstance(event, Mapping)
+        and {
+            str(p.get("venueRole") or "")
+            for p in event.get("participants") or []
+            if isinstance(p, Mapping)
+        }
+        >= {"Home", "Away"}
+    ]
+    if not fixtures:
+        shapes = sorted(
+            {
+                str(event.get("eventParticipantType") or "?")
+                for event in events
+                if isinstance(event, Mapping)
+            }
+        )
+        names = [
+            str(event.get("name")) for event in events[:3] if isinstance(event, Mapping)
+        ]
+        raise FormatChangeError(
+            f"{source}:{raw.endpoint}: {len(events)} event(s) and not one is a "
+            f"two-sided fixture (participant shapes: {', '.join(shapes)}; "
+            f"e.g. {', '.join(repr(n) for n in names)}) — this route is answering "
+            f"with something other than game lines"
+        )
+
+    markets = payload.get("markets")
+    if isinstance(markets, list) and markets:
+        named = {
+            str(market.get("name") or "").casefold()
+            for market in markets
+            if isinstance(market, Mapping)
+        }
+        if not (named & set(MARKET_LABELS)):
+            raise FormatChangeError(
+                f"{source}:{raw.endpoint}: no market maps to a game line "
+                f"(saw {', '.join(sorted(named)) or 'none'}) — this route is "
+                f"answering with something other than game lines"
+            )
 
 
 def _event_count(raw: RawResponse) -> int:
