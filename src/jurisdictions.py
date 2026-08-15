@@ -414,15 +414,28 @@ PA = Jurisdiction(
                     "sportscontent/controldata/league/primaryMarkets/v1"
                 ),
             },
-            RouteStatus.VALIDATED,
+            RouteStatus.TEMPLATE,
             "PA",
-            # Validated for what it answers, which is less than it is asked:
-            # eventgroups 94682, 42133 and 40253 return "access denied" from
-            # this egress, so MLB and tennis produce and WNBA/NFL/NHL do not.
-            # scopes_refused keeps that failing loudly per run; a status can
-            # say the route is real, not that the shelf is whole.
-            "validated from matching Pennsylvania egress on 2026-08-08; "
-            "3 of 5 eventgroups access-denied",
+            # Downgraded from VALIDATED on 2026-08-14, deliberately, because the
+            # thing that was validated no longer exists.
+            #
+            # The 2026-08-08 validation was of `leagueSubcategory/v1`, and it
+            # recorded a partial answer: eventgroups 94682, 42133 and 40253
+            # returned "access denied" from that egress, so MLB and tennis
+            # produced and WNBA/NFL/NHL did not.  That is the same breakage the
+            # Illinois route had, and it is what moving to `primaryMarkets/v1`
+            # fixed there — all seven leagues answered a plain client from an
+            # Illinois egress on 2026-08-14.
+            #
+            # The path above is therefore the *fixed* one, carrying PA's own
+            # US-PA-SB segment.  It has never been exercised from a Pennsylvania
+            # egress, and this machine has none (ODDS_HTTP_PROXY_PA is unset and
+            # it egresses Illinois natively), so the claim it deserves is
+            # structurally known and unproven.  Re-validate from a PA exit and
+            # promote; do not promote on the Illinois result.
+            "primaryMarkets route carries PA's own segment but has not been "
+            "exercised from a Pennsylvania egress; the 2026-08-08 validation "
+            "was of the retired leagueSubcategory route",
         ),
         "caesars": _route(
             "caesars",

@@ -86,7 +86,15 @@ def test_pa_route_statuses_match_what_the_egress_actually_proved() -> None:
     routes = jurisdiction("PA").routes
     assert routes["fanduel"].status is RouteStatus.VALIDATED
     assert routes["betrivers_kambi"].status is RouteStatus.VALIDATED
-    assert routes["draftkings"].status is RouteStatus.VALIDATED
+    # DraftKings was demoted on 2026-08-14 and the demotion is the point: its
+    # 2026-08-08 evidence was earned by the ``leagueSubcategory`` route, which
+    # has since been retired and replaced with ``primaryMarkets``.  Keeping
+    # VALIDATED would assert evidence for a request this code no longer sends.
+    # The replacement carries PA's own US-PA-SB segment and was proven from an
+    # Illinois egress, which is not the same claim — promote it only after a
+    # Pennsylvania egress exercises it.
+    assert routes["draftkings"].status is RouteStatus.TEMPLATE
+    assert "primaryMarkets" in routes["draftkings"].config["content_base_url"]
     assert routes["betmgm"].status is RouteStatus.TEMPLATE
     assert routes["caesars"].status is RouteStatus.TEMPLATE
     assert routes["hardrock"].status is RouteStatus.UNAVAILABLE
