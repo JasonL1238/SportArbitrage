@@ -1582,6 +1582,11 @@ def _check_source_health(
         for h in health
         if h.quote_count == 0 and h.source_key not in view_only
     ]
+    #: What was asked for, counted the way ``producing`` and ``silent`` are
+    #: counted.  Every grade below compares against this rather than against
+    #: ``configured``, so a state that configures more mirrors than books cannot
+    #: fail on the arithmetic alone.
+    counterparty_configured = [key for key in configured if key not in view_only]
 
     if len(producing) < MIN_HEALTHY_SOURCES:
         report.add(
@@ -1620,7 +1625,7 @@ def _check_source_health(
             "what happens to a cancelled game all differ",
         )
 
-    if silent and len(configured) > len(producing):
+    if silent and len(counterparty_configured) > len(producing):
         # Graded on the *share* that answered, not on the absolute count.  Two of
         # thirty sources answering clears ``MIN_HEALTHY_SOURCES`` and used to
         # pass: on a fresh database with eight of ten geo-blocked — every
@@ -1644,17 +1649,43 @@ def _check_source_health(
         # fired: ``coverage`` is scope-filtered, so on ``--league TENNIS_OTHER``
         # it re-added the seven sources that never claimed tennis and failed a
         # run whose three relevant sources had all answered.
-        relevant = set(expected) & set(configured) if expected else set(configured)
+        #
+        # Counterparty sources on *both* sides of the fraction.  The numerator
+        # has excluded view-only mirrors since 35673ab; the denominator never
+        # did, and the asymmetry did not make the grade merely generous, it made
+        # it unreachable.  Illinois configures 21 mirrors against 17
+        # counterparties, so the best attainable share was 17/38 = 45%, below
+        # ``MIN_PRODUCING_SHARE`` — the WARNING arm was dead code, and one silent
+        # book graded a run whose counterparty health was 15/17 as "39% of the
+        # venues answering, which is a broken pipeline".  It fired that way on 7
+        # of the 17 runs in the store and never once as a warning.  A mirror
+        # going quiet is worth knowing and is reported per-source below; it is
+        # not evidence that collection collapsed, because a mirror was never
+        # something the slate could be compared against.
+        relevant = (
+            set(expected) & set(counterparty_configured)
+            if expected
+            else set(counterparty_configured)
+        )
         answered = [key for key in producing if key in relevant] if relevant else producing
-        denominator = len(relevant) or len(configured)
+        denominator = len(relevant) or len(counterparty_configured)
         share = len(answered) / denominator
         collapsed = share < MIN_PRODUCING_SHARE
+        quiet_mirrors = sum(
+            1 for h in health if h.quote_count == 0 and h.source_key in view_only
+        )
         report.add(
             Severity.ERROR if collapsed else Severity.WARNING,
             "configured_sources_produced_nothing",
-            f"{len(producing)} of {len(configured)} configured source(s) produced rows; "
+            f"{len(answered)} of {denominator} counterparty source(s) produced rows; "
             f"silent: {', '.join(sorted(silent))} — a shortfall against what was asked "
             "for, which a row count alone cannot show"
+            + (
+                f"; {quiet_mirrors} view-only feed(s) were quiet too, but a mirror "
+                "is not a counterparty"
+                if quiet_mirrors
+                else ""
+            )
             + (
                 f"; that is {share * 100:.0f}% of the venues answering, which is a "
                 "broken pipeline rather than a thin slate, whether or not any two of "

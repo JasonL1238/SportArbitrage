@@ -46,8 +46,11 @@ from src.normalize import (
 )
 from src.participants import (
     canonical_participant,
+    competition_marker,
+    is_futures,
     is_pairing,
     is_statistic,
+    with_marker,
 )
 from src.raw_store import RawResponse
 from src.schema import (
@@ -120,30 +123,54 @@ SPORT_SCOPES: tuple[SportScope, ...] = (
         4,
         Sport.SOCCER,
         ("EPL", "MLS", "LA_LIGA", "SERIE_A", "BUNDESLIGA", "LIGUE_1", "SOCCER_OTHER"),
-        None,  # mapped by competition name; ids vary across Entain tenants
+        None,  # no id gate: every competition is kept, routed or caught by SOCCER_OTHER
     ),
 )
 
 SCOPE_BY_SPORT_ID: dict[int, SportScope] = {s.sport_id: s for s in SPORT_SCOPES}
 
 #: Competition id -> canonical league for non-tennis sports.
+#:
+#: Soccer is matched on **id, never on a name substring**.  The 2026-08-14
+#: Illinois capture carries 109 soccer competitions on one feed, and among them
+#: "LaLiga" sits beside "LaLiga 2", "Serie A" beside "Serie B" *and* "Brasileiro
+#: Serie A", "Bundesliga" beside "2. Bundesliga", and "Ligue 1" beside "Ligue 2".
+#: The substring table this replaced filed every one of those on the senior key,
+#: and also swept up five unrelated competitions called "Premier League" — Welsh,
+#: Maltese, Tanzanian, Armenian and Canadian — so the run reported 29 EPL
+#: fixtures where there were 10.  Worse, it read "Frauen-Bundesliga" as
+#: BUNDESLIGA, putting a women's fixture on the men's key.
+#:
+#: 102829 is the fix to a silent gap rather than a collision: BetMGM writes the
+#: Spanish top flight as one word, "LaLiga", so the old ``"la liga"`` marker
+#: never fired and ``LA_LIGA`` — declared in ``SPORT_SCOPES`` — was unreachable
+#: from this feed.
+#:
+#: The cost of dropping the name fallback is that a tenant renumbering an id
+#: degrades that competition to ``SOCCER_OTHER``.  That is a labelling loss which
+#: ``league_disagreement`` reports loudly, where the substring rule's failure was
+#: a wrong league nothing objected to.
 COMPETITION_LEAGUE: dict[int, str] = {
     75: "MLB",
     402: "WNBA",
     34: "NHL",
     35: "NFL",
-    102841: "EPL",
+    102841: "EPL",  # England - Premier League
     104417: "MLS",
+    102829: "LA_LIGA",  # "LaLiga"; 102830 is LaLiga 2 and stays SOCCER_OTHER
+    102846: "SERIE_A",  # Italy; 102838 is Brasileiro Serie A and is not this
+    102842: "BUNDESLIGA",  # 102845 is 2. Bundesliga
+    102843: "LIGUE_1",  # 102376 is Ligue 2
 }
 
-SOCCER_NAME_MARKERS: tuple[tuple[str, str], ...] = (
-    ("premier league", "EPL"),
-    ("major league soccer", "MLS"),
-    ("la liga", "LA_LIGA"),
-    ("serie a", "SERIE_A"),
-    ("bundesliga", "BUNDESLIGA"),
-    ("ligue 1", "LIGUE_1"),
-)
+#: Every soccer competition not routed above lands here rather than being
+#: dropped.  BetMGM was the only registered adapter with neither a catch-all nor
+#: a second-tier guard: of the 712 soccer fixtures it returned on 2026-08-14 it
+#: discarded 599 as ``competition_out_of_scope``, 333 of which were fixtures
+#: other books in the same run had priced.  League is deliberately not part of
+#: event identity (``docs/INPUT_CONTRACT.md``), so the catch-all costs coverage
+#: legibility and nothing else — see ``src/leagues.py``'s charter for the key.
+SOCCER_CATCH_ALL = "SOCCER_OTHER"
 
 #: Tennis competition-name markers, order-sensitive: women's / ITF before ATP so
 #: a "WTA Challenger" cannot land as ATP_CHALLENGER.
@@ -377,6 +404,15 @@ class _Fixture(Fixture):
     participant_ids: Mapping[int, str]
     """BetMGM ``participantId`` -> canonical participant key."""
 
+    marker: str | None = None
+    """``"w"`` / ``"u19"`` / … when the *competition* name carries the
+    distinction and the team names do not.  Kept on the fixture so an outcome
+    label resolves through the same marked names the keys were built from."""
+
+    away_listed_first: bool = False
+    """Whether the book listed the away side first, which is what its
+    ``sourceName`` "1"/"2" counts from.  See :func:`_sides`."""
+
 
 def parse_betmgm(
     raws: Sequence[RawResponse],
@@ -500,13 +536,30 @@ def _accept_event(
     sides = _sides(event, competition, outcome)
     if sides is None:
         return None
-    home_name, away_name, book_home_name, id_map = sides
+    home_name, away_name, book_home_name, id_map, away_listed_first = sides
+
+    # Unrecognised soccer competitions now share one catch-all league, so the
+    # venue's own name for the competition is read by nothing else — and this
+    # feed carries Frauen-Bundesliga, u19 and reserve tiers beside their senior
+    # sides.  Without the marker the two produce a byte-identical event key and
+    # are priced as one market.
+    marker = competition_marker(_competition_name(event), competition.sport)
+    home_name = with_marker(home_name, marker) or home_name
+    away_name = with_marker(away_name, marker) or away_name
+    book_home_name = with_marker(book_home_name, marker) or book_home_name
+    id_map = {pid: with_marker(name, marker) or name for pid, name in id_map.items()}
 
     if any(is_pairing(part, competition.sport) for part in (home_name, away_name)):
         outcome.skipped["doubles_or_team_pairing"] += 1
         return None
     if any(is_statistic(part) for part in (home_name, away_name)):
         outcome.skipped["statistic_not_a_fixture"] += 1
+        return None
+    if any(is_futures(part) for part in (home_name, away_name)):
+        # An outright listed as a fixture — "Patro Eisden Maasmechelen - RSC
+        # Anderlecht Futures" on the Belgian second tier.  Out of scope by the
+        # contract, so counted rather than rejected.
+        outcome.skipped["futures_not_a_fixture"] += 1
         return None
 
     home = canonical_participant(home_name, competition)
@@ -564,6 +617,8 @@ def _accept_event(
         commence_time=commence_time,
         base_key=build_event_key(away_side.key, home_side.key, commence_time, competition),
         participant_ids=participant_ids,
+        marker=marker,
+        away_listed_first=away_listed_first,
     )
 
 
@@ -590,12 +645,7 @@ def _competition(
         return league_registry.league(league_key)
 
     if scope.sport is Sport.SOCCER:
-        league_key = COMPETITION_LEAGUE.get(competition_id or -1)
-        if league_key is None:
-            league_key = _soccer_league(name)
-        if league_key is None:
-            outcome.skipped["competition_out_of_scope"] += 1
-            return None
+        league_key = COMPETITION_LEAGUE.get(competition_id or -1) or SOCCER_CATCH_ALL
         return league_registry.league(league_key)
 
     if scope.competition_ids is not None and competition_id not in scope.competition_ids:
@@ -608,13 +658,17 @@ def _competition(
     return league_registry.league(league_key)
 
 
-def _soccer_league(name: str) -> str | None:
-    lowered = name.lower()
-    for marker, league_key in SOCCER_NAME_MARKERS:
-        if marker in lowered:
-            return league_key
-    # Europa / Champions / cups stay out of scope rather than becoming SOCCER_OTHER noise.
-    return None
+def _competition_name(event: Mapping[str, Any]) -> str:
+    """The venue's own name for the competition, for the marker to read.
+
+    Once an unrecognised competition lands on one catch-all league, nothing
+    downstream reads this name — so a women's, reserve or youth competition
+    whose *name* carries the distinction while the team names do not would
+    produce a fixture byte-identical to the men's fixture of the same two clubs
+    at another book.
+    """
+    raw = event.get("competition")
+    return _name(raw) or "" if isinstance(raw, dict) else ""
 
 
 def _tennis_league(name: str) -> str:
@@ -633,8 +687,21 @@ def _sides(
     event: Mapping[str, Any],
     competition: League,
     outcome: ParseOutcome,
-) -> tuple[str, str, str, dict[int, str]] | None:
-    """Return ``(home_name, away_name, book_home_name, id->name)``."""
+) -> tuple[str, str, str, dict[int, str], bool] | None:
+    """Return ``(home_name, away_name, book_home_name, id->name, away_listed_first)``.
+
+    The last element is what BetMGM's ``sourceName`` "1"/"2" counts from, and it
+    is not the same across sports.  On the US convention the title reads "Away at
+    Home" and "1" is the away side; on soccer's 1X2 the payload states the roles
+    and "1" is the home side.  Measured on the 2026-08-14 Illinois capture, over
+    every Match result option whose label matched a side exactly: soccer
+    ``sourceName`` 1 -> home 688 times and 2 -> away 694 times, with no
+    counterexample.  The rule was applied unconditionally in the US direction, so
+    a soccer option whose label did *not* match — "FC Dynamo Kiev" priced on a
+    fixture whose participant is spelled "FC Dynamo Kyiv" — landed the away price
+    on the home side.  It surfaced as a duplicate key rather than a wrong price
+    only because the home option had already claimed that key first.
+    """
     teams: list[tuple[int, str, str | None]] = []
     for part in event.get("participants") or []:
         if not isinstance(part, dict):
@@ -659,7 +726,9 @@ def _sides(
         home_name = home_stated[0][1]
         away_name = away_stated[0][1]
         id_map = {home_stated[0][0]: home_name, away_stated[0][0]: away_name}
-        return home_name, away_name, home_name, id_map
+        # Roles are stated, so there is no title order to read; soccer is the
+        # only sport that reaches this branch and its "1" is the home side.
+        return home_name, away_name, home_name, id_map, False
 
     # Strip typed leftovers; keep untyped team rows.
     plain = [(pid, name) for pid, name, side in teams if side in (None, "")]
@@ -678,7 +747,7 @@ def _sides(
         home_name = _match_side(right.split("(")[0].strip(), plain)
         if away_name and home_name and away_name != home_name:
             id_map = {pid: name for pid, name in plain}
-            return home_name, away_name, home_name, id_map
+            return home_name, away_name, home_name, id_map, True
 
     # "Home - Away" / "A - B" (soccer V1 title order is home-first; tennis has no home).
     if _DASH.search(event_name):
@@ -686,16 +755,14 @@ def _sides(
         first = _match_side(left.strip(), plain) or plain[0][1]
         second = _match_side(right.strip(), plain) or plain[1][1]
         id_map = {pid: name for pid, name in plain}
-        if competition.has_home_away:
-            return first, second, first, id_map
-        return first, second, first, id_map
+        return first, second, first, id_map, False
 
     # Last resort: participant list order, first=away, second=home for US sports.
     id_map = {pid: name for pid, name in plain}
     if competition.has_home_away:
         away_name, home_name = plain[0][1], plain[1][1]
-        return home_name, away_name, home_name, id_map
-    return plain[0][1], plain[1][1], plain[0][1], id_map
+        return home_name, away_name, home_name, id_map, True
+    return plain[0][1], plain[1][1], plain[0][1], id_map, False
 
 
 def _match_side(fragment: str, plain: Sequence[tuple[int, str]]) -> str | None:
@@ -996,17 +1063,29 @@ def _selection_for(
         priced_key = fixture.participant_ids.get(pid)
 
     if priced_key is None:
+        # Marked on both sides or neither.  The fixture's participant names carry
+        # the competition marker; the outcome label does not, and ``_label_matches``
+        # falls back to comparing the label against the name's *last* token — which
+        # on a marked name is the marker itself, so a literal "W" option would have
+        # matched the women's side of any fixture.
+        marked = with_marker(label, fixture.marker) or label
         for key, participant in (
             (fixture.home.key, fixture.home),
             (fixture.away.key, fixture.away),
         ):
-            if _label_matches(label, participant.name):
+            if _label_matches(marked, participant.name):
                 priced_key = key
                 break
 
     if priced_key is None and fixture.competition.has_home_away and str(source_name) in {"1", "2"}:
-        # On "Away at Home" fixtures, sourceName 1 is the away side.
-        priced_key = fixture.away.key if str(source_name) == "1" else fixture.home.key
+        # "1" is whichever side the book listed first — the away side on an
+        # "Away at Home" US title, the home side on soccer's 1X2.  Reading it as
+        # away unconditionally put the away price on the home key for any soccer
+        # option whose label did not match, which is measured in ``_sides``.
+        first_is_away = str(source_name) == "1"
+        if not fixture.away_listed_first:
+            first_is_away = not first_is_away
+        priced_key = fixture.away.key if first_is_away else fixture.home.key
 
     if priced_key is None:
         outcome.reject(

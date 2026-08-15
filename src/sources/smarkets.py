@@ -231,15 +231,29 @@ LEAGUE_BY_SLUG: dict[Sport, dict[str, str]] = {
     Sport.BASKETBALL: {"nba": "NBA", "wnba": "WNBA"},
     Sport.HOCKEY: {"nhl": "NHL"},
     Sport.FOOTBALL: {"nfl": "NFL"},
+    # Smarkets prefixes every football competition with its country, so these
+    # keys are the ones its own URLs carry: ``/sport/football/england-premier-
+    # league/…``.  The table used to hold the bare forms — ``premier-league``,
+    # ``la-liga``, ``serie-a`` — and therefore **matched nothing**: on the
+    # 2026-08-14 capture it resolved 0 of 947 football events, and every real
+    # EPL, La Liga, Serie A, Ligue 1, Bundesliga and MLS fixture Smarkets priced
+    # was filed under the catch-all.  Nine ``league_disagreement`` findings on
+    # that run were this one bug.
+    #
+    # No row was ever lost — league is not part of event identity — but the
+    # league filter, the coverage grid and every per-league count were wrong for
+    # the largest soccer feed in the run.
+    #
+    # Matched **exactly**, which is what makes the country prefix load-bearing:
+    # the same capture carries ``brazil-serie-a`` beside ``italy-serie-a`` and
+    # ``spain-la-liga-2`` beside ``spain-la-liga``, and neither collides here.
     Sport.SOCCER: {
-        "premier-league": "EPL",
-        "english-premier-league": "EPL",
-        "mls": "MLS",
-        "major-league-soccer": "MLS",
-        "la-liga": "LA_LIGA",
-        "serie-a": "SERIE_A",
-        "bundesliga": "BUNDESLIGA",
-        "ligue-1": "LIGUE_1",
+        "england-premier-league": "EPL",
+        "us-major-league-soccer": "MLS",
+        "spain-la-liga": "LA_LIGA",
+        "italy-serie-a": "SERIE_A",
+        "germany-bundesliga": "BUNDESLIGA",
+        "france-ligue-1": "LIGUE_1",
     },
 }
 

@@ -291,6 +291,27 @@ def is_statistic(raw: str | None) -> bool:
     return bool(raw) and bool(_STATISTIC_SIDE.search(raw))
 
 
+def is_futures(raw: str | None) -> bool:
+    """Is *raw* an outright/futures label dressed as a competitor?
+
+    The third member of the :func:`is_pairing` / :func:`is_statistic` family, and
+    it exists for the same reason: ``docs/INPUT_CONTRACT.md`` classes futures as
+    deliberately out of scope, so an adapter meeting one should count a **skip**,
+    not a rejection that marks the whole source unhealthy.
+
+    ``_open_slug`` has always refused these, but it refuses by returning ``None``
+    — which an adapter can only read as "this name did not resolve".  BetMGM's
+    Belgian second tier lists "RSC Anderlecht Futures" as a fixture participant;
+    before this, admitting that competition turned one out-of-scope entry into a
+    standing ``source_unhealthy:rejections`` warning on every run.
+    """
+    if not raw:
+        return False
+    return any(
+        word in _FUTURES_MARKERS for word in _words(raw, drop_parentheticals=False)
+    )
+
+
 # ── open rosters ─────────────────────────────────────────────────────────────
 
 #: Words that mark a string as an outright/futures label rather than a
@@ -386,8 +407,49 @@ _CLUB_TYPE_TOKENS: frozenset[str] = frozenset(
         # Levski Sofia, Neftchi, Zilina, Besiktas, Zira, Gent, Auxerre, Roma,
         # Monaco), and none fused two clubs any single source distinguishes.
         "kf", "cso", "pfc", "pfk", "msk", "jk", "kaa", "aj", "cs", "ik", "as",
+        # Legal forms and one sponsor prefix, each measured on the 2026-08-14
+        # Illinois run as splitting one fixture across two event keys with
+        # US-bettable books on both sides:
+        #   parma / parmacalcio          betmgm + thescore vs six others
+        #   udinese / udinesecalcio      betmgm + onexbet vs seven
+        #   frosinone / frosinonecalcio  betmgm + onexbet + thescore vs six
+        #   cagliari / cagliaricalcio    onexbet + thescore vs seven
+        #   lazio / sslazio              betmgm vs eight
+        #   lecce / uslecce              betmgm vs seven
+        #   venezia / unionevenezia      onexbet vs eight
+        #   leverkusen / bayerleverkusen fanduel alone vs six
+        # "bayer" is a sponsor rather than a club type, and is safe here only
+        # because tokens match whole words: "bayern" is a different token and
+        # Bayern Munich is untouched.
+        "calcio", "ss", "us", "unione", "bayer",
+        # Same class, same run: pure club-type affixes that split one fixture.
+        #   lille / lilleosc            betrivers + fanduel vs thescore
+        #   angers / angerssco          three books vs betmgm
+        #   atalanta / atalantabc       three books vs betmgm
+        #   palmeirassp / sepalmeirassp hardrock vs betmgm
+        #   mainz / fsvmainz05          fanduel vs thescore
+        # "se" belongs on this list by shape — SE Palmeiras, Sociedade
+        # Esportiva — and is refused because it is also Sergipe's state code,
+        # which is how books tell two Brazilian clubs of one name apart. The
+        # disjointness assertion in ``TestAStateCodeIsNotAClubType`` caught it;
+        # the ``_STATE_CODES_NOT_CLUB_TYPES`` comment is the standing warning.
+        "osc", "sco", "bc", "fsv",
     }
 )
+
+#: A club's founding year written as part of its name — "Como 1907", "Bologna
+#: 1909", "Padova 1966" — where another book writes the club alone.  Stripped
+#: **only in trailing position**, which is the whole safety argument: a leading
+#: year is part of how the club is known and distinguishes it ("1860 Munich"
+#: reduced to "munich" would be a different claim about who is playing), while a
+#: trailing one is decoration every other book omits.
+#:
+#: Two digits are never stripped, in either position.  "Schalke 04" is a founding
+#: year too, and ``tests/test_fanduel_adapter.py`` pins ``SOCCER-schalke04``
+#: against the committed capture — so "SV 07 Elversberg" is handled by a curated
+#: alias instead, where the ambiguity is decided once by hand rather than by a
+#: rule that cannot tell the two apart.
+_TRAILING_FOUNDING_YEAR = re.compile(r"^1[89]\d\d$")
 
 #: Tokens that look like club-type markers and are **state codes**, which is how
 #: books tell same-named clubs in different states apart.
@@ -429,6 +491,22 @@ _STATE_CODES_NOT_CLUB_TYPES: frozenset[str] = frozenset({"rs", "ce", "se", "mg",
 _SOCCER_DISAMBIGUATIONS: dict[str, str] = {
     "barcelonasc": "barcelonasc",
     "cdnacional": "cdnacional",
+    # Smarkets' "Wolves FC" is a Brisbane club — its opponent that day was Magic
+    # United, and the same run carries Brisbane Wolves, Wynnum Wolves and
+    # Wollongong Wolves as separate correct keys.  The ``"wolves"`` alias below
+    # sent it to Wolverhampton, on a date that also held a real Wolverhampton
+    # fixture 9.5 hours away, well inside soccer's 30-hour tolerance.  Nothing
+    # caught it: it produced no phantom only because the *other* side of the two
+    # fixtures differed, which is the escape clause this module's own comment
+    # calls a latent fault rather than a live one.
+    #
+    # Pinned rather than de-aliased.  The pin is consulted before any club-type
+    # token is stripped, so "Wolves FC" keeps its "fc" and never reaches the
+    # alias table — while a bare "Wolves" still resolves to Wolverhampton, which
+    # three tests require.  The Brisbane club stays split from its own other
+    # spellings, and that is the intended direction: an unjoined source is
+    # recoverable, two clubs' prices on one fixture are not.
+    "wolvesfc": "wolvesfc",
 }
 
 #: Conjunctions inside a club's own name, which books spell three ways for the
@@ -573,6 +651,72 @@ _SOCCER_ALIASES: dict[str, str] = {
     "atleticojunior": "junior",
     "sheffieldutd": "sheffieldunited",
     "sheffwed": "sheffieldwednesday",
+    # BetRivers' Kambi tenant is the only source that abbreviates an MLS city to
+    # its three-letter code — the other tenant of the same platform writes the
+    # club out — so each of these was one fixture under two keys, with the
+    # abbreviating side alone on its own. Measured on the 2026-08-14 Illinois
+    # run: 14 clubs, every one of them 1 source against 8 or 9.
+    #
+    # Curated rather than inferred, for the reason the comment above gives: the
+    # shape is <city code> + <nickname>, and no rule can tell "COL Crew" from a
+    # club actually called "Col". Each key here is a city code plus the club's
+    # own nickname, which is why none of them is the bare-nickname hazard that
+    # the "wolves" entry is.
+    "chifire": "chicagofire",
+    "colcrew": "columbuscrew",
+    "colrapids": "coloradorapids",
+    "houdynamo": "houstondynamo",
+    "minunited": "minnesotaunited",
+    "nerevolution": "newenglandrevolution",
+    "nycfc": "newyorkcity",
+    "orlcity": "orlandocity",
+    "phiunion": "philadelphiaunion",
+    "portimbers": "portlandtimbers",
+    "seasounders": "seattlesounders",
+    "sjearthquakes": "sanjoseearthquakes",
+    "sportingkc": "sportingkansascity",
+    "vanwhitecaps": "vancouverwhitecaps",
+    # Three more MLS splits from the same run that are not Kambi's doing — two
+    # books simply write the city in full and the rest abbreviate it, or write
+    # the club's legal name. "LA Galaxy" is the widest: three sources against
+    # seven, and ``betmgm`` x ``fanduel`` is a US-bettable pair across the split.
+    "lagalaxy": "losangelesgalaxy",
+    "stlouiscity": "saintlouiscity",
+    "nashvillesoccer": "nashville",
+    # Founding years the trailing-year rule deliberately will not touch, because
+    # they are two digits and lead the name. "SV 07 Elversberg" is one club with
+    # "Elversberg"; "Schalke 04" must keep its own, and no rule distinguishes
+    # them — so the ambiguity is decided here, once, by hand.
+    "07elversberg": "elversberg",
+    "04leverkusen": "leverkusen",
+    "paderborn07": "paderborn",
+    "mainz05": "mainz",
+    "1mainz05": "mainz",
+    # Two spellings of one French club, and two regional suffixes another book
+    # omits. "de" is not stripped as a rule — it is identity-bearing in Spanish
+    # and Portuguese names — so these are decided one at a time here.
+    "staderennais": "staderennes",
+    "strasbourgalsace": "strasbourg",
+    "olympiquedemarseille": "olympiquemarseille",
+    # Two long spellings of one club. The *bare* "Deportivo" that FanDuel sends
+    # is deliberately left split: the comment above records that on a live
+    # capture "Deportivo" is Deportivo Pasto, so claiming it is La Coruña would
+    # be the false merge this table exists to avoid. One unjoined source is
+    # recoverable; two clubs' prices on one fixture is not.
+    "deportivodelacoruna": "deportivolacoruna",
+    # Spanish and French clubs the committed captures carry under two spellings
+    # each, found when the split detector below was widened past tennis. Every
+    # pair here is one fixture: same opponent, same kickoff, disjoint sources.
+    "internazionalemilano": "inter",
+    "espanyolbarcelona": "espanyol",
+    "racingdesantander": "racingsantander",
+    "deportivoalaves": "alaves",
+    "betis": "realbetis",
+    "celta": "celtavigo",
+    "celtadevigo": "celtavigo",
+    "stadebrestois29": "brest",
+    "marseille": "olympiquemarseille",
+    "estactroyes": "troyes",
 }
 
 
@@ -703,6 +847,10 @@ def _open_slug(raw: str, *, sport: Sport) -> str | None:
     # A club's own words are order-bearing ("Manchester United" is not "United
     # Manchester"); a set of markers is not.
     club, suffix = _split_identity_suffix(kept)
+    # Trailing founding year, after the identity suffix is split off so that
+    # "Como 1907 W" keeps its ``w``.  Never when it is the club's only word.
+    if len(club) > 1 and _TRAILING_FOUNDING_YEAR.match(club[-1]):
+        club = club[:-1]
     kept = club + sorted(suffix)
     slug = "".join(kept)
     aliased = _SOCCER_ALIASES.get(slug)

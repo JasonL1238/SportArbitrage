@@ -656,9 +656,15 @@ def test_every_registered_source_declares_at_least_one_league(key: str) -> None:
     ``_check_source_health`` then grades the collapse against a denominator that
     silently excludes it.  Measured: two producing sources plus two silent ones
     is a 50% share and a warning; add three silent sources that declare nothing
-    and the message honestly prints "2 of 7" while the *grade* comes from a
-    hidden 2-of-4.  A pipeline that has lost five of seven books reads as a
-    warning.
+    and the *grade* still comes from a 2-of-4.  A pipeline that has lost five of
+    seven books reads as a warning.
+
+    The message used to print "2 of 7" beside that hidden 2-of-4, so the
+    disagreement was at least visible to anyone reading it.  It no longer does —
+    the finding now prints the same numerator and denominator the share is
+    computed from, which is what makes it trustworthy and also what makes this
+    assertion the only thing standing between a league-less adapter and a
+    silently shrunken denominator.
 
     Every adapter satisfies this today and ``build_sources`` refuses to construct
     an instance with no serviceable league — but nothing asserted it, and the

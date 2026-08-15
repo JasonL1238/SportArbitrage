@@ -30,7 +30,12 @@ from src.normalize import (
     implied_probability,
     is_plausible_decimal_odds,
 )
-from src.participants import canonical_participant, is_pairing
+from src.participants import (
+    canonical_participant,
+    competition_marker,
+    is_pairing,
+    with_marker,
+)
 from src.raw_store import RawResponse
 from src.schema import Market, Period, QuoteStatus, Selection, Sport
 from src.sources._common import (
@@ -45,9 +50,10 @@ from src.sources._common import (
     parse_epoch_time,
     parse_iso_time,
     priced_quote,
+    squashed_label,
 )
 from src.sources.base import ParseOutcome
-from src.sources.guards import FormatChangeError, SourceError
+from src.sources.guards import CoverageCappedError, FormatChangeError, SourceError
 
 log = logging.getLogger(__name__)
 
@@ -63,7 +69,11 @@ SPORT_SCOPES: tuple[tuple[str, Sport, tuple[str, ...]], ...] = (
     ("AMERICAN_FOOTBALL", Sport.FOOTBALL, ("NFL",)),
     ("ICE_HOCKEY", Sport.HOCKEY, ("NHL",)),
     ("TENNIS", Sport.TENNIS, ("ATP", "WTA", "ATP_CHALLENGER", "ITF")),
-    ("SOCCER", Sport.SOCCER, ("EPL", "MLS", "LA_LIGA", "SERIE_A", "BUNDESLIGA", "LIGUE_1")),
+    (
+        "SOCCER",
+        Sport.SOCCER,
+        ("EPL", "MLS", "LA_LIGA", "SERIE_A", "BUNDESLIGA", "LIGUE_1", "SOCCER_OTHER"),
+    ),
 )
 
 COMP_NAME_LEAGUES: tuple[tuple[str, str], ...] = (
@@ -72,14 +82,67 @@ COMP_NAME_LEAGUES: tuple[tuple[str, str], ...] = (
     ("nba", "NBA"),
     ("nfl", "NFL"),
     ("nhl", "NHL"),
-    ("premier league", "EPL"),
-    ("english premier", "EPL"),
-    ("major league soccer", "MLS"),
-    ("la liga", "LA_LIGA"),
-    ("serie a", "SERIE_A"),
-    ("bundesliga", "BUNDESLIGA"),
-    ("ligue 1", "LIGUE_1"),
 )
+
+#: Hard Rock writes a soccer competition as ``Country - Competition``, so the
+#: senior leagues are matched on **country prefix plus name**, never the name
+#: alone.  Two mislabels were live on 2026-08-14 and both came straight out of
+#: the unanchored table this replaced: ``Brazil - Serie A`` was filed as Italy's
+#: SERIE_A (19 fixtures, and ``league_disagreement`` had been naming it), and
+#: ``Spain - La Liga 2`` as LA_LIGA (8).  The same capture carries
+#: ``France - Ligue 2``, ``Brazil - Serie B`` and ``UEFA - Europa League`` for
+#: the rule to be measured against.
+#:
+#: The name half is compared with separators removed, because one record spells
+#: a competition two ways and the marker a third — the trap that made BetMGM's
+#: ``LA_LIGA`` unreachable.
+#:
+#: Hard Rock's own names for the English, Italian, German and US top flights are
+#: **unmeasured** — no stored capture carries them, those seasons not having
+#: begun — so their country prefixes come from the observed grammar and nothing
+#: else.  A wrong prefix lands the competition in the catch-all, which
+#: ``league_disagreement`` reports; a guessed full name could land it on the
+#: wrong senior key, which nothing would.
+SOCCER_COUNTRY_LEAGUES: tuple[tuple[str, str, str], ...] = (
+    ("england - ", "premierleague", "EPL"),
+    ("", "englishpremierleague", "EPL"),
+    ("usa - ", "majorleaguesoccer", "MLS"),
+    ("", "majorleaguesoccer", "MLS"),
+    ("spain - ", "laliga", "LA_LIGA"),
+    ("italy - ", "seriea", "SERIE_A"),
+    ("germany - ", "bundesliga", "BUNDESLIGA"),
+    ("france - ", "ligue1", "LIGUE_1"),
+)
+
+#: Demotes a competition out of its country's senior tier.  A false demotion
+#: costs a label and lands in the catch-all; a false promotion puts a
+#: second-tier price on a top-flight key, so the bias is deliberate.
+#: A women's, youth or reserve tier is demoted by ``competition_marker``
+#: instead, which already recognises the distinction in ten languages — "Frauen
+#: Bundesliga" is the German top flight's women's competition and is not the key
+#: the men's fixtures use.
+SECOND_TIER_MARKERS: tuple[str, ...] = (
+    " 2", "-2", "2.", "segunda", "serie b", "primera b", "ligue 2",
+)
+
+#: Every soccer competition not routed above.  Hard Rock fetches one bulk
+#: request per sport, so unlike 1xBet the catch-all costs no extra traffic at
+#: all — the drop was pure loss.
+SOCCER_CATCH_ALL = "SOCCER_OTHER"
+
+#: The Amelco sport code whose events the catch-all governs.  Named rather than
+#: written twice: the fetch endpoint is ``events-SOCCER`` and the scope tally's
+#: label is ``events:SOCCER``, and the two are easy to mistake for each other.
+SOCCER_SPORT_CODE = "SOCCER"
+
+#: Events per ``slice``.  The venue's own value, unchanged — what changed is that
+#: one slice is no longer mistaken for the whole scope.
+SLICE_SIZE = 80
+
+#: Slices per sport.  Soccer needed nine on 2026-08-14 (664 fixtures); the cap is
+#: a runaway guard, not a budget, and a scope that hits it is reported truncated
+#: exactly as DraftKings reports its own.
+MAX_SLICES_PER_SPORT = 12
 
 TENNIS_MARKERS: tuple[tuple[str, str], ...] = (
     ("itf", "ITF"),
@@ -281,15 +344,48 @@ class HardRockAdapter:
         for code, _sport, _leagues in self._scopes:
             label = f"events:{code}"
             tally.requested(label)
-            try:
-                raw = self._fetch_events(code, headers)
-            except SourceError as exc:
-                log.info("%s: %s unavailable: %s", self._source_key, code, exc)
-                tally.failed(label, exc)
+            # One slice was taken as the whole scope.  The venue answers ``count``
+            # with the true total beside the sliced ``data``, and reading it turns
+            # a silent 88% loss into either the rest of the slate or a truncation
+            # the operator can see.
+            collected = 0
+            total: int | None = None
+            failed = False
+            for slice_index in range(MAX_SLICES_PER_SPORT):
+                offset = slice_index * SLICE_SIZE
+                try:
+                    raw = self._fetch_events(code, headers, offset)
+                except SourceError as exc:
+                    log.info("%s: %s unavailable: %s", self._source_key, code, exc)
+                    if collected == 0:
+                        tally.failed(label, exc)
+                        failed = True
+                    else:
+                        # Pages already paid for stay; a later slice failing is a
+                        # short slate, not a dead scope.
+                        tally.truncated(
+                            label,
+                            CoverageCappedError(
+                                f"{self._source_key}:{label}: slice from {offset} "
+                                f"failed after {collected} event(s) were collected"
+                            ),
+                        )
+                    break
+                raws.append(raw)
+                page = _events_count(raw)
+                if total is None:
+                    total = _events_total(raw)
+                collected += page
+                # Short slice, or the venue ignored the offset and repeated
+                # itself.  Either way there is nothing further to ask for.
+                if page < SLICE_SIZE or (total is not None and collected >= total):
+                    break
+            # No ``else`` on the loop: exhausting the cap is reported below by
+            # the count comparison, which says how many are missing rather than
+            # only that some are.
+            if failed:
                 continue
-            raws.append(raw)
-            count = _events_count(raw)
-            if count == 0:
+            if collected == 0:
                 tally.failed(
                     label,
                     SourceError(
@@ -297,13 +393,24 @@ class HardRockAdapter:
                         "licensed-state ODDS_HTTP_PROXY is required from this egress"
                     ),
                 )
-            else:
-                tally.produced(label, count)
+                continue
+            tally.produced(label, collected)
+            if total is not None and collected < total:
+                tally.truncated(
+                    label,
+                    CoverageCappedError(
+                        f"{self._source_key}:{label}: the venue reports {total} "
+                        f"event(s) and {collected} were collected, so this sport's "
+                        "slate is cut off at that many"
+                    ),
+                )
 
         tally.require_something(what="pregame Hard Rock event")
         return raws
 
-    def _fetch_events(self, sport_code: str, headers: Mapping[str, str]) -> RawResponse:
+    def _fetch_events(
+        self, sport_code: str, headers: Mapping[str, str], offset: int = 0
+    ) -> RawResponse:
         market_types = [
             key for key in MARKET_TYPES if key.startswith(sport_code + ":")
         ]
@@ -319,12 +426,15 @@ class HardRockAdapter:
                 # App bundle uses ``isInplay``, not ``inplay``.
                 {"field": "isInplay", "value": "false"},
             ],
-            "slice": {"from": 0, "to": 80},
+            "slice": {"from": offset, "to": offset + SLICE_SIZE},
             "marketTypes": market_types or None,
         }
         return self._http.post(
             f"{self.api_base}/java-graphql/graphql",
-            endpoint=f"events-{sport_code}",
+            endpoint=(
+                f"events-{sport_code}" if offset == 0
+                else f"events-{sport_code}:from-{offset}"
+            ),
             json_body={
                 "operationName": "betSync",
                 "query": EVENTS_QUERY,
@@ -340,16 +450,51 @@ class HardRockAdapter:
         self._http.close()
 
 
-def _events_count(raw: RawResponse) -> int:
+def _scope_of(endpoint: str) -> str:
+    """The Amelco sport code an events endpoint belongs to.
+
+    ``events-SOCCER`` and ``events-SOCCER:from-80`` are the same scope; the
+    suffix only distinguishes slices so ``latest_per_endpoint`` keeps them all.
+    """
+    if not endpoint.startswith("events-"):
+        return ""
+    return endpoint[len("events-"):].split(":", 1)[0]
+
+
+def _events_block(raw: RawResponse) -> Mapping[str, Any]:
     try:
         payload = raw.json()
     except ValueError:
-        return 0
+        return {}
     if not isinstance(payload, dict):
-        return 0
+        return {}
     events = (((payload.get("data") or {}).get("betSync") or {}).get("events") or {})
-    data = events.get("data")
+    return events if isinstance(events, dict) else {}
+
+
+def _events_count(raw: RawResponse) -> int:
+    data = _events_block(raw).get("data")
     return len(data) if isinstance(data, list) else 0
+
+
+def _events_total(raw: RawResponse) -> int | None:
+    """How many events the venue says exist for this scope, or ``None``.
+
+    ``EVENTS_QUERY`` asks for ``count`` beside ``data`` and Hard Rock answers it
+    honestly — and nothing read it.  The request takes one slice, ``{from: 0,
+    to: SLICE_SIZE}``, so a sport with more than that many fixtures came back cut
+    off, was tallied at the truncated number, and produced no
+    ``scopes_truncated`` at all.  Measured on 2026-08-14: soccer returned 81 of
+    **664**, American football 81 of **150**.  583 soccer fixtures and 69
+    football fixtures were missing from that run with no finding anywhere.
+
+    DraftKings makes the opposite choice and says why (``draftkings.py``: "a
+    silent cap reads as 'that is the whole slate' when it is not").  This is the
+    same defect that comment describes, at a venue that hands us the number
+    needed to detect it.
+    """
+    total = _events_block(raw).get("count")
+    return total if isinstance(total, int) and total >= 0 else None
 
 
 def parse_hardrock(raws: Sequence[RawResponse]) -> ParseOutcome:
@@ -384,7 +529,19 @@ def parse_hardrock(raws: Sequence[RawResponse]) -> ParseOutcome:
         for event in data:
             if not isinstance(event, dict):
                 continue
-            fixture = _accept_event(event, source, raw.fetched_at, outcome)
+            fixture = _accept_event(
+                event,
+                source,
+                raw.fetched_at,
+                outcome,
+                # ``events-SOCCER``, hyphen — the tally's own label spells the
+                # same scope ``events:SOCCER``, and reading the wrong one here
+                # silently dropped every soccer fixture rather than failing.
+                # Slices past the first carry ``:from-N``, so this matches the
+                # scope rather than the whole endpoint: an exact comparison here
+                # would have dropped every soccer fixture but the first eighty.
+                is_soccer=_scope_of(raw.endpoint) == SOCCER_SPORT_CODE,
+            )
             if fixture is None:
                 continue
             fixtures[fixture.event_id] = fixture
@@ -459,6 +616,11 @@ class _Fixture(Fixture):
 
     title_first_key: str
 
+    marker: str | None = None
+    """``"w"`` / ``"u19"`` / … when the *competition* name carries the distinction
+    and the club names do not.  Kept so a selection label resolves through the same
+    marked names the keys were built from."""
+
     @property
     def title_second_key(self) -> str:
         """The competitor named second — whichever of ours the first one is not."""
@@ -472,6 +634,8 @@ def _accept_event(
     source: str,
     captured_at: datetime,
     outcome: ParseOutcome,
+    *,
+    is_soccer: bool = False,
 ) -> _Fixture | None:
     if event.get("inplay") or event.get("outright"):
         outcome.skipped["inplay_or_outright"] += 1
@@ -485,7 +649,8 @@ def _accept_event(
         outcome.skipped["missing_event_id"] += 1
         return None
 
-    league_key = _competition_league(str(event.get("compName") or ""))
+    comp_name = str(event.get("compName") or "")
+    league_key = _competition_league(comp_name, is_soccer=is_soccer)
     if league_key is None:
         outcome.skipped["competition_out_of_scope"] += 1
         return None
@@ -497,6 +662,14 @@ def _accept_event(
         outcome.skipped["missing_home_away"] += 1
         return None
     first_name, second_name, home_first = split
+    # Unrecognised competitions now share one catch-all league, so Hard Rock's own
+    # name for the competition is read by nothing else — and a women's, reserve or
+    # youth tier whose *name* carries the distinction while the club names do not
+    # would otherwise produce a fixture byte-identical to the men's fixture of the
+    # same two clubs at another book.
+    marker = competition_marker(comp_name, competition.sport)
+    first_name = with_marker(first_name, marker) or first_name
+    second_name = with_marker(second_name, marker) or second_name
     if home_first is None and competition.has_home_away:
         # The separator carries no orientation this adapter has verified, and in a
         # league with a real home side guessing one is a wrong price rather than a
@@ -542,6 +715,7 @@ def _accept_event(
         away=away_side,
         book_home_key=book_home.key if book_home is not None else None,
         title_first_key=first.key,
+        marker=marker,
         commence_time=commence_time,
         base_key=build_event_key(away_side.key, home_side.key, commence_time, competition),
     )
@@ -594,13 +768,25 @@ def _split_event_name(name: str) -> tuple[str, str, bool | None] | None:
     return None
 
 
-def _competition_league(comp_name: str) -> str | None:
+def _competition_league(comp_name: str, *, is_soccer: bool = False) -> str | None:
     hay = comp_name.casefold()
     if not hay:
         return None
     for marker, league in TENNIS_MARKERS:
         if marker in hay:
             return league
+    if is_soccer:
+        # Tier on the raw text, where the separators still carry the ordinal;
+        # the league name on the squashed text, where the record's own two
+        # spellings and the marker's third collapse to one.
+        second_tier = any(token in hay for token in SECOND_TIER_MARKERS) or bool(
+            competition_marker(comp_name, Sport.SOCCER)
+        )
+        squashed = squashed_label(hay)
+        for prefix, marker, league in SOCCER_COUNTRY_LEAGUES:
+            if hay.startswith(prefix) and marker in squashed and not second_tier:
+                return league
+        return SOCCER_CATCH_ALL
     for marker, league in COMP_NAME_LEAGUES:
         if marker in hay or hay == league.casefold():
             return league
@@ -766,6 +952,7 @@ def _selection_for(
 
     if name:
         participant_name = re.sub(r"\s+[+-]?\d+(?:\.\d+)?\s*$", "", name)
+        participant_name = with_marker(participant_name, fixture.marker) or participant_name
         participant = canonical_participant(participant_name, fixture.competition)
         if participant is not None:
             # Compare to book_home_key / oriented sides so tennis orient() cannot

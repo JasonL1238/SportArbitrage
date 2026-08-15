@@ -259,7 +259,7 @@ class TestTheSharedFixture:
 
         shared = set(Fixture.__dataclass_fields__)
         extra = {
-            betmgm: {"participant_ids"},
+            betmgm: {"participant_ids", "marker", "away_listed_first"},
             betrivers_kambi: {"marker"},
             cloudbet: {"market_prefix"},
             matchbook: {"marker"},

@@ -455,6 +455,20 @@ def test_hardrock_skips_an_event_name_whose_order_it_cannot_read() -> None:
 
 
 def test_caesars_parses_bar_wrapped_names() -> None:
+    """Name-splitting only.  **This does not validate the Caesars route.**
+
+    The fixture it loads is synthetic — placeholder event UUID
+    ``a1b2c3d4-…``, market ids ``m-ml``/``m-sp``/``m-tot``, selection ids
+    ``s1``-``s6``, textbook 1.91/1.91 prices, against a New Jersey URL — and it
+    describes a payload shape with no known live producer: the endpoint the
+    adapter asks for has never been observed being requested by the real page
+    (see the module docstring of ``src.sources.caesars`` and
+    ``docs/evidence/state-routing.md`` § Caesars, 2026-08-15).
+
+    So a green result here means ``_split_name`` handles bar-wrapped names, and
+    nothing more.  It is not evidence that the parser matches what Caesars
+    serves, and it must not be cited as such when the route is next assessed.
+    """
     raw = _load("caesars__*_event_*.json")
     raw = RawResponse(
         source=raw.source, endpoint=raw.endpoint, url=raw.url,
@@ -485,3 +499,130 @@ def test_hardrock_refuses_unknown_root_idx() -> None:
     )
     outcome = parse_hardrock([ladder, events])
     assert any(r.reason == "root_idx_not_on_ladder" for r in outcome.rejections)
+
+
+# ── Hard Rock's slice was mistaken for the whole scope ────────────────────────
+
+
+def _sliced_transport(total: int, *, honour_offset: bool = True):
+    """A Hard Rock GraphQL stub that serves ``total`` events one slice at a time."""
+    import httpx
+
+    seen: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/graphql"):
+            import json as _json
+
+            body = _json.loads(request.content.decode())
+            window = body["variables"]["slice"]
+            seen.append(window)
+            start = window["from"] if honour_offset else 0
+            stop = min(start + (window["to"] - window["from"]), total)
+            data = [
+                {
+                    "id": f"e{index}",
+                    "compName": "Denmark - Superliga",
+                    "eventTime": 1786000000000,
+                    "sport": "SOCCER",
+                    "name": "Alpha vs Beta",
+                    "displayed": True,
+                    "markets": [],
+                }
+                for index in range(start, max(start, stop))
+            ]
+            return httpx.Response(
+                200,
+                json={"data": {"betSync": {"events": {"data": data, "count": total}}}},
+            )
+        return httpx.Response(200, json={})
+
+    return httpx.MockTransport(handler), seen
+
+
+def _soccer_only_adapter(transport):
+    import httpx
+
+    from src.sources import hardrock
+
+    adapter = hardrock.HardRockAdapter(
+        leagues=("SOCCER_OTHER",), client=httpx.Client(transport=transport)
+    )
+    adapter._scopes = tuple(
+        scope for scope in adapter._scopes if scope[0] == hardrock.SOCCER_SPORT_CODE
+    )
+    return adapter
+
+
+def test_hardrock_collects_past_its_first_slice() -> None:
+    """One slice was taken as the whole scope, and the venue says otherwise.
+
+    ``EVENTS_QUERY`` asks for ``count`` beside ``data`` and Hard Rock answers it;
+    nothing read it. Measured on the 2026-08-14 Illinois run, where every scope
+    took a single ``{from: 0, to: 80}`` slice:
+
+    ======================  =========  ==========
+    scope                   collected  venue says
+    ======================  =========  ==========
+    ``events-SOCCER``       81         **664**
+    ``events-TENNIS``       81         **144**
+    ``events-AMERICAN_...`` 81         **150**
+    ======================  =========  ==========
+
+    715 fixtures missing from one run, and ``scopes_truncated`` named DraftKings,
+    Polymarket and SX Bet — never Hard Rock, because ``tally.produced`` was handed
+    the truncated number. DraftKings makes the opposite choice and says why: "a
+    silent cap reads as 'that is the whole slate' when it is not."
+    """
+    from src.sources.hardrock import SLICE_SIZE
+
+    transport, windows = _sliced_transport(total=SLICE_SIZE * 2 + 5)
+    adapter = _soccer_only_adapter(transport)
+    try:
+        adapter.fetch_raw()
+    finally:
+        adapter.close()
+
+    assert [w["from"] for w in windows] == [0, SLICE_SIZE, SLICE_SIZE * 2]
+    tally = adapter.last_fetch
+    assert tally.scopes_with_data == 1 and tally.scopes_requested == 1
+    assert not tally.truncated_scopes, "a scope that finished is not truncated"
+
+
+def test_hardrock_reports_a_scope_it_could_not_finish() -> None:
+    """The venue's own ``count`` is what makes the shortfall provable."""
+    from src.sources.hardrock import MAX_SLICES_PER_SPORT, SLICE_SIZE
+
+    beyond = SLICE_SIZE * (MAX_SLICES_PER_SPORT + 3)
+    transport, _ = _sliced_transport(total=beyond)
+    adapter = _soccer_only_adapter(transport)
+    try:
+        adapter.fetch_raw()
+    finally:
+        adapter.close()
+
+    truncated = adapter.last_fetch.truncated_scopes
+    assert len(truncated) == 1, truncated
+    assert "events:SOCCER" in truncated[0]
+    # The venue's own count is what makes the shortfall provable, so it is named.
+    assert f"reports {beyond} event(s)" in truncated[0], truncated[0]
+
+
+def test_hardrock_stops_if_the_venue_ignores_the_offset() -> None:
+    """A venue that serves slice one forever must not be paged forever.
+
+    Nothing here has probed Hard Rock's ``from``; the value is the venue's own
+    parameter with a different number in it. If it turns out to be ignored, the
+    loop sees the same events again and stops rather than spending twelve
+    requests to collect one page repeatedly.
+    """
+    from src.sources.hardrock import SLICE_SIZE
+
+    transport, windows = _sliced_transport(total=SLICE_SIZE, honour_offset=False)
+    adapter = _soccer_only_adapter(transport)
+    try:
+        adapter.fetch_raw()
+    finally:
+        adapter.close()
+
+    assert len(windows) == 1, windows

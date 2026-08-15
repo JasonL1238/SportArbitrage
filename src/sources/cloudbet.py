@@ -26,7 +26,12 @@ from src.normalize import (
     implied_probability,
     is_plausible_decimal_odds,
 )
-from src.participants import canonical_participant, is_pairing
+from src.participants import (
+    canonical_participant,
+    competition_marker,
+    is_pairing,
+    with_marker,
+)
 from src.raw_store import RawResponse
 from src.schema import Market, Period, QuoteStatus, Selection, Sport, draw_is_priced
 from src.sources._common import (
@@ -40,6 +45,7 @@ from src.sources._common import (
     latest_per_endpoint,
     parse_iso_time,
     priced_quote,
+    squashed_label,
 )
 from src.sources.base import ParseOutcome
 from src.sources.guards import FormatChangeError, SourceError
@@ -81,17 +87,58 @@ TENNIS_SECOND_TIER = "challenger"
 DEFAULT_LEAGUES: tuple[str, ...] = (
     "MLB", "WNBA", "NBA", "NFL", "NHL",
     "ATP", "WTA", "ATP_CHALLENGER", "ITF",
-    "EPL", "MLS", "LA_LIGA", "SERIE_A", "BUNDESLIGA", "LIGUE_1",
+    "EPL", "MLS", "LA_LIGA", "SERIE_A", "BUNDESLIGA", "LIGUE_1", "SOCCER_OTHER",
 )
 
-SOCCER_NAME_MARKERS: tuple[tuple[str, str], ...] = (
-    ("premier league", "EPL"),
-    ("major league soccer", "MLS"),
-    ("la liga", "LA_LIGA"),
-    ("serie a", "SERIE_A"),
-    ("bundesliga", "BUNDESLIGA"),
-    ("ligue 1", "LIGUE_1"),
+#: Cloudbet keys a competition as ``soccer-<country>-<slug>``, on every one of
+#: the six soccer competitions any stored listing has carried:
+#: ``soccer-england-premier-league``, ``soccer-usa-major-league-soccer``,
+#: ``soccer-argentina-superliga``, ``soccer-england-community-shield``,
+#: ``soccer-international-clubs-copa-sudamericana`` and
+#: ``soccer-international-clubs-uefa-super-cup``.
+#:
+#: So the senior competitions are matched on **country prefix plus name**, never
+#: on the name alone.  "Premier League" is equally what Iceland, Wales, Malta,
+#: Armenia, Tanzania and Canada call theirs, and the byte-identical substring
+#: table this replaced — the same one BetMGM carried — filed all of them as EPL.
+#:
+#: Cloudbet's own keys for La Liga, Serie A, Bundesliga and Ligue 1 are
+#: **unmeasured**: no stored listing has carried them, the European seasons
+#: having not begun at capture time.  Their country prefixes are written from the
+#: observed grammar and nothing else.  If a prefix is wrong the competition falls
+#: to the catch-all and ``league_disagreement`` names it against the other books
+#: — recoverable, and the reason no full slug is guessed here.
+#: The name half is matched against the haystack with every separator removed,
+#: because the same competition is spelled three ways in one record: the key says
+#: ``la-liga``, the name says ``LaLiga``, and the old marker said ``la liga`` —
+#: so it matched neither, exactly as BetMGM's did.
+SOCCER_COUNTRY_LEAGUES: tuple[tuple[str, str, str], ...] = (
+    ("soccer-england-", "premierleague", "EPL"),
+    ("soccer-usa-", "majorleaguesoccer", "MLS"),
+    ("soccer-usa-", "mls", "MLS"),
+    ("soccer-spain-", "laliga", "LA_LIGA"),
+    ("soccer-italy-", "seriea", "SERIE_A"),
+    ("soccer-germany-", "bundesliga", "BUNDESLIGA"),
+    ("soccer-france-", "ligue1", "LIGUE_1"),
 )
+
+#: Demotes a competition out of its country's senior tier.  Cloudbet writes
+#: "2. Bundesliga" and "LaLiga 2", which a country-anchored name match alone
+#: still files on the senior key — this replaces the ad-hoc ``"2."`` test that
+#: covered Bundesliga and nothing else.  A false demotion costs a label and
+#: lands in the catch-all; a false promotion puts a second-tier price on a
+#: top-flight key, so the bias is deliberate.
+#: A women's, youth or reserve tier is demoted by ``competition_marker``
+#: instead, which already recognises the distinction in ten languages.
+SECOND_TIER_MARKERS: tuple[str, ...] = (
+    "2. ", "-2-", "-2", " 2", "segunda", "serie b", "ligue 2",
+)
+
+#: Every soccer competition not routed above.  Cloudbet dropped these at *fetch*
+#: time with a bare ``continue``, so they were never requested and never counted
+#: — ``docs/INPUT_CONTRACT.md`` calls that a contract violation, and it is a
+#: worse position than BetMGM's counted skip because nothing recorded the loss.
+SOCCER_CATCH_ALL = "SOCCER_OTHER"
 
 _PARAM_NUM = re.compile(r"(?:handicap|total)=(-?\d+(?:\.\d+)?)")
 
@@ -251,11 +298,18 @@ def _competition_league(comp: Mapping[str, Any]) -> str | None:
         return found
     if "tennis" in key or "atp" in haystack or "wta" in haystack or "itf" in haystack:
         return _tennis_league(haystack)
-    for marker, league in SOCCER_NAME_MARKERS:
-        if marker in haystack:
-            if league == "BUNDESLIGA" and "2." in haystack:
-                continue
-            return league
+    if key.startswith("soccer-"):
+        # Tier on the raw text, where the separators still carry the ordinal
+        # ("2. Bundesliga", "la-liga-2"); the league name on the squashed text,
+        # where three spellings of one competition collapse to one.
+        second_tier = any(token in haystack for token in SECOND_TIER_MARKERS) or bool(
+            competition_marker(name, Sport.SOCCER)
+        )
+        squashed = squashed_label(haystack)
+        for prefix, marker, league in SOCCER_COUNTRY_LEAGUES:
+            if key.startswith(prefix) and marker in squashed and not second_tier:
+                return league
+        return SOCCER_CATCH_ALL
     if name in DEFAULT_LEAGUES:
         return name
     return None
@@ -334,8 +388,16 @@ def _accept_event(
         return None
     competition = league_registry.league(league_key)
 
+    # Unrecognised competitions now share one catch-all league, so Cloudbet's own
+    # name for the competition is read by nothing else — and a women's, reserve
+    # or youth tier whose *name* carries the distinction while the club names do
+    # not would otherwise produce a fixture byte-identical to the men's fixture
+    # of the same two clubs at another book.
+    marker = competition_marker(str(comp.get("name") or ""), competition.sport)
     home_name = str((event.get("home") or {}).get("name") or "").strip()
     away_name = str((event.get("away") or {}).get("name") or "").strip()
+    home_name = with_marker(home_name, marker) or home_name
+    away_name = with_marker(away_name, marker) or away_name
     if not home_name or not away_name:
         outcome.skipped["missing_home_away"] += 1
         return None
@@ -500,13 +562,28 @@ def _emit_selection(
             outcome.skipped["missing_line"] += 1
             return
         stated = float(match.group(1)) + 0.0
-        # Handicap params are home-perspective.  The feed lists both
-        # handicap=-1.5 and handicap=+1.5 pairs for the same run line; keep only
-        # the negative-home framing so one market_id is one contract.
+        # ``handicap`` is stated from the home side's perspective, so one value
+        # fixes both rows of a market: ``handicap=-1.5`` is home −1.5 / away +1.5.
+        #
+        # Both signs used to be treated as two framings of one contract, and
+        # ``handicap &gt; 0`` was deleted as a "mirror restatement" — 358 rows in the
+        # 2026-08-14 run. The bytes say otherwise. One baseball fixture,
+        # ``baseball.run_line``, carries all four rows with independent prices:
+        #
+        #   handicap=+1.5   home 1.49   away 2.50
+        #   handicap=-1.5   home 2.80   away 1.42
+        #
+        # 1.49 is not the mirror of 2.80. They are the two directions of the
+        # handicap — the market where home is favoured, and the market where away
+        # is — and a fixture has one of each. Keeping only the negative framing
+        # made cloudbet's home line negative in **100%** of its stored rows, so
+        # whenever the home team was the underdog the stored main line was the
+        # wrong bet. That is what fired ``line_favours_the_other_competitor`` on
+        # 12 of 33 shared fixtures.
+        #
+        # Only spreads negate. A total's two sides share one number — over 8.5
+        # and under 8.5 — and negating the under produced ``NFL total -48.5``.
         if market is Market.SPREAD:
-            if stated > 0:
-                outcome.skipped["mirror_spread_framing"] += 1
-                return
             line = stated if selection is Selection.HOME else -stated
         else:
             line = stated
@@ -514,7 +591,13 @@ def _emit_selection(
     # One Cloudbet market blob holds the whole ladder.  Identity must include
     # the line so ±1.5 and ±2.5 (or 8.5 vs 9.5 totals) stay distinct markets.
     if market is Market.SPREAD and line is not None:
-        source_market_id = f"{market_key}|{abs(line):g}"
+        # Signed, not absolute. The two handicap directions are different
+        # contracts with different prices, and ``abs`` filed all four rows under
+        # one id — two homes and two aways, which is the "two offers sharing a
+        # key" shape ``src/schema.py`` warns fires ``spread_not_mirrored``.
+        # ``stated`` is home-perspective and therefore constant across the two
+        # rows of one market, which is exactly what a market id has to be.
+        source_market_id = f"{market_key}|{stated:+g}"
     elif market is Market.TOTAL and line is not None:
         source_market_id = f"{market_key}|{line:g}"
     else:

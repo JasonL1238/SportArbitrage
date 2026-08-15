@@ -24,6 +24,7 @@ geo walls are something to route around, not accept.
 from __future__ import annotations
 
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -719,6 +720,26 @@ _WHOLE_GAME_PHRASES = (
 #: word is what separates "counted toward the whole game" from "settled on
 #: these frames alone".
 _SUB_PERIOD_PHRASES = ("extra innings", "extra inning", "extra time", "overtime")
+
+
+_SEPARATORLESS = re.compile(r"[^a-z0-9]")
+
+
+def squashed_label(text: str) -> str:
+    """*text* lowercased with every separator removed.
+
+    For matching a venue's league name when one record spells it several ways.
+    Cloudbet writes the same competition three times in one object — the key
+    says ``la-liga``, the name says ``LaLiga`` — and BetMGM writes it
+    ``LaLiga`` against a marker of ``"la liga"``, which is why its ``LA_LIGA``
+    was unreachable from that feed until 2026-08-15.
+
+    Deliberately *not* the same as :func:`_screening_text`, which collapses
+    separators to spaces so words stay words: this one removes them so
+    ``premierleague`` matches all three spellings, and it is only ever used
+    against a table of markers written in the same squashed form.
+    """
+    return _SEPARATORLESS.sub("", text.casefold())
 
 
 def _screening_text(labels: Sequence[Any]) -> str:

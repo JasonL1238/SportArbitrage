@@ -46,7 +46,11 @@ python scripts/probe_sources.py --state IL
   for vintage coherence (2026-08-09) · The two endpoint versions are different
   catalogues (2026-08-08) · Two things to fix *before* the Pennsylvania recapture
   (2026-08-08) · v2 returns full-game only unless asked (2026-08-08)
-- **`evidence/state-routing.md`** — Two detection providers disagreed about one
+- **`evidence/state-routing.md`** — Caesars: the session that closed it never
+  reached a board, and a 7th stakeable book would have added nothing
+  (2026-08-15) · The value question, asked before spending anything · Five
+  things the 2026-08-12 section got wrong · Two detection
+  providers disagreed about one
   egress, and the wrong one was winning (2026-08-14) · bet365 Illinois: the home page is HTTP, the
   board is not, and the egress is now blocked (2026-08-14) · What is true ·
   Three things the first version of this section got wrong · The routing grammar,
@@ -81,3 +85,5 @@ python scripts/probe_sources.py --state IL
   Illinois: three route generations, 2026-08-14
 - **`evidence/adapter-lessons.md`** — Two corrections to the original plan · Notes on
   charges · Notes on settlement · Traps the adapters had to be corrected for
+  (newest first: BetMGM's `sourceName` convention, and its substring league table,
+  both 2026-08-14)

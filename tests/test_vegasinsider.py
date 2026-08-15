@@ -5,7 +5,7 @@ import glob
 
 import pytest
 
-from src.raw_store import RawStore
+from src.raw_store import RawResponse, RawStore
 from src.schema import Market, Selection
 from src.sources.vegasinsider import parse_vegasinsider
 
@@ -126,3 +126,69 @@ def test_line_direction_and_total_side_survive_html_parsing() -> None:
     assert by_market_selection[Market.SPREAD, Selection.HOME].line == -1.5
     assert by_market_selection[Market.TOTAL, Selection.OVER].line == 9.5
     assert by_market_selection[Market.TOTAL, Selection.UNDER].line == 9.5
+
+
+def _page_raw(endpoint: str, html: str) -> RawResponse:
+    """One VegasInsider page as the store would hand it to the parser."""
+    import hashlib
+
+    body = html.strip()
+    return RawResponse.from_envelope(
+        {
+            "envelope_version": 3,
+            "source": endpoint.rsplit("-", 1)[-1],
+            "endpoint": endpoint,
+            "url": f"https://www.vegasinsider.com/{endpoint}/",
+            "status_code": 200,
+            "content_type": "text/html; charset=utf-8",
+            "fetched_at": "2026-08-14T07:50:00+00:00",
+            "request_params": {},
+            "headers": {},
+            "capture_id": "test-vegasinsider",
+            "sha256": hashlib.sha256(body.encode("utf-8")).hexdigest(),
+            "byte_size": len(body.encode("utf-8")),
+            "body": body,
+        }
+    )
+
+
+def test_a_missing_book_column_is_counted_rather_than_returned_silently() -> None:
+    """VegasInsider dropped every per-book column from its MLB page mid-day.
+
+    Measured on 2026-08-14: the 01:54 capture carries eleven columns
+    (``Time, Open, Bet365, BetMGM, DraftKings, Caesars, FanDuel, HardRock,
+    Fanatics, RiversCasino, Consensus``); the 07:50 capture carries
+    ``Time, Open, Consensus`` and **46 fixtures**. The parser looked its book up
+    with ``headers.index`` and returned bare on ``ValueError``, so all eight
+    ``vi_*`` sources discarded that whole board every run afterwards and reported
+    ``parsed 0 quotes from 4 responses; skipped={}``.
+
+    An empty skip dictionary on a parse that dropped everything is precisely what
+    ``docs/INPUT_CONTRACT.md`` forbids — it makes "we collected everything"
+    unfalsifiable. ``vi_fanatics`` was the only source that hit zero on *all*
+    its pages, so it was the only one that surfaced at all; the other seven lost
+    one board each and looked merely thin.
+    """
+    page = """
+    <table class="odds-table">
+      <thead><th>Time</th><th>Open</th><th>Consensus</th><th></th></thead>
+      <tbody id="odds-table-moneyline--0">
+        <tr><td class="game-time">7:05 PM</td></tr>
+        <tr><th><a class="team-name">Miami Marlins</a></th><td>+120</td></tr>
+        <tr><th><a class="team-name">Cincinnati Reds</a></th><td>-140</td></tr>
+      </tbody>
+    </table>
+    """
+    raw = _page_raw("odds-mlb-fanatics", page)
+    outcome = parse_vegasinsider([raw])
+
+    assert outcome.quotes == []
+    assert outcome.rejections == []
+    # The book that vanished, by name.
+    assert outcome.skipped["book_column_absent:Fanatics"] == 1
+    # And what the page did offer, so the diagnosis does not need the bytes.
+    assert any(
+        key.startswith("columns_offered:") and "Consensus" in key
+        for key in outcome.skipped
+    ), dict(outcome.skipped)
+    assert sum(outcome.skipped.values()) > 0, "a parse that dropped everything must say why"

@@ -27,8 +27,8 @@ import httpx
 import pytest
 
 from src.jurisdictions import JURISDICTIONS, RouteStatus
-from src.raw_store import RawStore
-from src.schema import Period
+from src.raw_store import RawResponse, RawStore
+from src.schema import Market, Period
 from src.sources import registry
 from src.sources.actionnetwork import (
     DEFAULT_BASE_URL,
@@ -506,3 +506,129 @@ def test_the_state_layer_names_pennsylvanias_own_ids() -> None:
     for key in ("an_hardrock", "an_bally"):
         assert key in built
         assert key not in fetched, f"{key} holds no PA licence and must not be fetched"
+
+
+# ── two markets in one list, and a spread that does not mirror ────────────────
+
+
+def _v2_capture(markets: dict) -> RawResponse:
+    """One v2 scoreboard game carrying *markets* for book 30."""
+    import hashlib
+    import json as _json
+
+    body = _json.dumps(
+        {
+            "games": [
+                {
+                    "id": 999001,
+                    "start_time": "2026-12-01T18:00:00Z",
+                    "status": "scheduled",
+                    "teams": [
+                        {"id": 202, "full_name": "Cincinnati Reds", "abbr": "CIN"},
+                        {"id": 214, "full_name": "Miami Marlins", "abbr": "MIA"},
+                    ],
+                    "home_team_id": 202,
+                    "away_team_id": 214,
+                    "markets": markets,
+                }
+            ]
+        }
+    )
+    return RawResponse.from_envelope(
+        {
+            "envelope_version": 3,
+            "source": "an_open",
+            "endpoint": "scoreboard:30:mlb",
+            "url": "https://api.actionnetwork.com/web/v2/scoreboard/mlb",
+            "status_code": 200,
+            "content_type": "application/json",
+            "fetched_at": "2026-11-30T12:00:00+00:00",
+            "request_params": {},
+            "headers": {},
+            "capture_id": "test-an-v2",
+            "sha256": hashlib.sha256(body.encode()).hexdigest(),
+            "byte_size": len(body.encode()),
+            "body": body,
+        }
+    )
+
+
+def _spread_row(market_id: str, side: str, team_id: int, value: float, odds: int) -> dict:
+    return {
+        "book_id": 30, "market_id": market_id, "side": side, "team_id": team_id,
+        "type": "spread", "value": value, "odds": odds, "period": "event",
+        "line_status": None,
+    }
+
+
+def test_two_markets_in_one_list_are_not_fused_into_one() -> None:
+    """``_emit_v2_market`` reduced its rows to a dict keyed on ``side``.
+
+    Action Network ships several markets in one list, so last-wins produced a
+    market holding the home price of one and the away price of another, filed
+    under whichever ``market_id`` sorted first. Measured across the captures on
+    disk: 63 such pairs at book 262, 27 at 270, 27 at 1538, 9 each at 282 and
+    4601 — every one masked by the ``inprogress`` filter dropping the fixture for
+    an unrelated reason, which is not a guard. Book 15 carries the same shape on
+    *scheduled* games.
+    """
+    raw = _v2_capture(
+        {
+            "30": {
+                "event": {
+                    "spread": [
+                        _spread_row("m-A", "home", 202, 1.5, -190),
+                        _spread_row("m-B", "home", 202, 6.0, -143),
+                        _spread_row("m-B", "away", 214, -6.0, 105),
+                        _spread_row("m-A", "away", 214, -1.5, 155),
+                    ]
+                }
+            }
+        }
+    )
+    outcome = parse_actionnetwork([raw])
+    assert not outcome.rejections, outcome.rejections
+
+    by_market: dict[str, dict[str, float]] = {}
+    for quote in outcome.quotes:
+        by_market.setdefault(str(quote.source_market_id), {})[quote.selection] = quote.line
+
+    assert set(by_market) == {"m-A", "m-B"}, by_market
+    assert by_market["m-A"] == {"home": 1.5, "away": -1.5}
+    assert by_market["m-B"] == {"home": 6.0, "away": -6.0}
+
+
+def test_a_spread_whose_sides_do_not_mirror_is_refused() -> None:
+    """Both sides at −1.5 is a wrong price, and it was stored.
+
+    Action Network's opener column published home −1.5 *and* away −1.5 under one
+    ``market_id`` for MLB-MIA@MLB-CIN on 2026-08-14. Each price was individually
+    plausible, so every per-row check passed and the pair surfaced only after
+    storage, as two run-level ERRORs — ``spread_not_mirrored`` and
+    ``negative_overround`` with the implied sum 0.7453.
+
+    ``docs/INPUT_CONTRACT.md`` lists mirroring among the hard invariants, whose
+    violation "breaks the pipeline rather than degrading it", so the pair is
+    refused where it arrives instead of being written and flagged.
+    """
+    raw = _v2_capture(
+        {
+            "30": {
+                "event": {
+                    "spread": [
+                        _spread_row("24005552", "home", 202, -1.5, 175),
+                        _spread_row("24005552", "away", 214, -1.5, 162),
+                    ]
+                }
+            }
+        }
+    )
+    outcome = parse_actionnetwork([raw])
+
+    assert [q for q in outcome.quotes if q.market is Market.SPREAD] == []
+    assert len(outcome.rejections) == 1, outcome.rejections
+    rejection = outcome.rejections[0]
+    assert rejection.reason == "spread_sides_not_opposites"
+    # The message has to carry both numbers, or the operator cannot tell an
+    # upstream error from a parser one.
+    assert "-1.5" in rejection.detail and "24005552" in rejection.detail

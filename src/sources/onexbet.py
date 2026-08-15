@@ -11,6 +11,7 @@ Clear types only: ``T=1/2/3`` moneyline (home/draw/away), ``T=7/8`` handicap,
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime
 from typing import Any, Mapping, Sequence
 
@@ -77,7 +78,37 @@ LEAGUE_FRAGMENTS: tuple[tuple[str, str], ...] = (
     ("MLS", "MLS"),
 )
 
+#: A tier or age qualifier trailing a senior competition's own name.  The
+#: fragments above anchor the *country* but leave the right-hand side open, so
+#: "England. Premier League 2" matched "ENGLAND. PREMIER LEAGUE" and was filed as
+#: the English top flight.  1xBet's own catalogue proves the shape is real rather
+#: than hypothetical — it carries "New South Wales Premier League 1/2",
+#: "Victoria Premier League 1 U23", "Queensland Premier League 2/3" and
+#: "Ontario Premier League 1/2", all of which are only safe today because
+#: Australia and Canada are not among the anchored countries.
+_TIER_SUFFIX = re.compile(r"^\s*[.\-]?\s*(?:\d+|U-?\d{2}|II+|B)\b", re.IGNORECASE)
+
+#: **No catch-all here, deliberately, and this is the one adapter where that is
+#: the right answer.** 1xBet fetches one request per competition
+#: (``Get1x2_VZip`` per ``champ_id``), and its 2026-08-14 soccer listing carried
+#: **847** competitions against the 20 this collects.  Admitting the rest would
+#: turn one pass into ~830 requests at a venue that served a CAPTCHA on its
+#: baseball scope in that same run.  The drop stays a counted
+#: ``competition_out_of_scope`` skip; the cost of the missing coverage is
+#: recorded here rather than paid in egress.
 LEAGUE_NOISE: tuple[str, ...] = (
+    # A player-prop shelf dressed as a competition.  1xBet's catalogue carries
+    # "Spain. La Liga. Team vs Player" and "UEFA Champions League. Team vs
+    # Player", whose O1/O2 are a club and a *person* — and the country prefix
+    # meant ``league_from_label`` filed them as LA_LIGA.  That is where the 20
+    # phantom fixtures on the 2026-08-14 run came from, Malaga alone spawning
+    # five ("vs Julian Alvarez", "vs Lookman").
+    #
+    # Filed here rather than screened at parse time because this list is
+    # consulted by ``_wanted_champs`` too, so the champ is never fetched at all —
+    # one request saved, and any straggler still lands as the existing
+    # ``competition_out_of_scope`` skip.
+    "VS PLAYER",
     "ALTERNATIVE",
     "STATISTICS",
     "DOUBLES",
@@ -259,12 +290,16 @@ def league_from_label(label: str) -> str | None:
     if any(noise in upper for noise in LEAGUE_NOISE):
         return None
     for fragment, key in LEAGUE_FRAGMENTS:
-        if fragment in upper:
-            if key == "BUNDESLIGA" and "2." in upper:
-                continue
-            if key == "NBA" and "WNBA" in upper:
-                continue
-            return key
+        index = upper.find(fragment)
+        if index < 0:
+            continue
+        if _TIER_SUFFIX.match(upper[index + len(fragment):]):
+            continue
+        if key == "BUNDESLIGA" and "2." in upper:
+            continue
+        if key == "NBA" and "WNBA" in upper:
+            continue
+        return key
     return None
 
 
@@ -391,7 +426,21 @@ def _accept(
         outcome.skipped["missing_home_away"] += 1
         return None
     lowered = f"{home_name} {away_name}".lower()
-    if "(points)" in lowered or home_name.lower().startswith("home ("):
+    # ``DI`` is 1xBet's own "this row aggregates N matches" descriptor — its
+    # values are "2 Matches", "15 Matches", "5 Matches, GMT 23:30".  Across every
+    # captured 1xBet payload it appears on exactly 16 events and **not one of
+    # them is a fixture**; the names on those rows are "Home"/"Away",
+    # "Home (Points)"/"Away (Points)", "Home (Runs)"/"Away (Runs)".  The screen
+    # here only caught the parenthesised ones, so the bare pair survived and
+    # ``canonical_participant`` — which for soccer resolves anything at all —
+    # turned the literal strings into ``SOCCER-home`` and ``SOCCER-away``, four
+    # phantom fixtures carrying real prices on the 2026-08-14 run.
+    #
+    # ``is_statistic`` deliberately does not catch a bare "Home": a test asserts
+    # ``not is_statistic("Away")`` under the comment "And it must not catch a
+    # competitor", and widening it would reach into five other adapters.  The
+    # venue's own field is both narrower and more certain.
+    if event.get("DI") or "(points)" in lowered or home_name.lower().startswith("home ("):
         outcome.skipped["statistic_not_a_fixture"] += 1
         return None
     if any(is_pairing(part, competition.sport) for part in (home_name, away_name)):

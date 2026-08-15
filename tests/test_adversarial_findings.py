@@ -1871,6 +1871,61 @@ class TestACollapsedRunIsNotASuccess:
         ]
         assert collapse and collapse[0].severity is Severity.ERROR
 
+    def test_the_share_is_reachable_when_mirrors_outnumber_books(self) -> None:
+        """The grade counted view-only mirrors in its denominator and not in its
+        numerator, which did not make it generous — it made it unreachable.
+
+        Illinois configures 21 republished mirrors against 17 counterparties, so
+        the best attainable share was 17/38 = 45%, under ``MIN_PRODUCING_SHARE``.
+        The WARNING arm was dead code on any unnarrowed run, and one silent book
+        graded a run whose counterparty health was 15/17 as "39% of the venues
+        answering, which is a broken pipeline".  It fired that way on 7 of the 17
+        runs in the store and never once as a warning, so it could not
+        distinguish a healthy run from a real collapse either.
+
+        Every other test on this path uses synthetic keys that no ``view_only``
+        set contains, which is exactly why this survived: the parameter itself
+        had no direct coverage.  This one uses the real Illinois sets.
+        """
+        from src.collector import _check_source_health
+        from src.sources import registry
+        from src.sources.base import SourceHealth
+        from src.validation import Severity, ValidationReport
+
+        view_only = registry.view_only_for_run("IL")
+        books = ["fanduel", "draftkings", "betmgm", "hardrock", "thescore", "bovada"]
+        mirrors = sorted(view_only)[:12]
+        assert len(mirrors) > len(books), "the trap needs mirrors to outnumber books"
+        configured = books + mirrors
+
+        def grade(silent_books: set[str]) -> Severity | None:
+            health = [
+                SourceHealth(
+                    source_key=key,
+                    ok=key not in silent_books,
+                    checked_at=FETCHED,
+                    quote_count=0 if key in silent_books else 100,
+                )
+                for key in configured
+            ]
+            report = ValidationReport()
+            _check_source_health(
+                health, report, configured=configured, view_only=view_only
+            )
+            found = [
+                f for f in report.findings
+                if f.code == "configured_sources_produced_nothing"
+            ]
+            return found[0].severity if found else None
+
+        # One book of six quiet is a thin slate, not a broken pipeline.
+        assert grade({"bovada"}) is Severity.WARNING
+        # Four of six is.
+        assert grade({"bovada", "hardrock", "thescore", "betmgm"}) is Severity.ERROR
+        # A quiet mirror is not a shortfall at all — nothing could be compared
+        # against it in the first place.
+        assert grade({mirrors[0]}) is None
+
     def test_a_source_that_rejected_its_rows_is_reported(self) -> None:
         """``SourceHealth.ok=False`` was never converted into a finding, and
         ``RunResult.ok`` reads only the validation report — so a book that refused
@@ -5911,6 +5966,14 @@ class TestTheWomensMarkerReachesEveryVenueThatNeedsIt:
     NEEDS_MARKER = (
         "pinnacle", "fanduel", "betrivers_kambi", "leovegas_kambi",
         "smarkets", "matchbook", "sxbet",
+        # Moved off IMMUNE when their soccer feeds gained a catch-all.  The claim
+        # that they configured one named competition per route was never true of
+        # soccer: BetMGM took a whole-sport feed carrying 109 competitions and
+        # classified them by unanchored substring, reading "Frauen-Bundesliga" as
+        # BUNDESLIGA — this exact fault, live, at an adapter listed immune to it.
+        # Cloudbet carried the same table byte for byte.  The list was never
+        # checked against the adapters it exempted.
+        "betmgm", "cloudbet", "hardrock",
         "an_draftkings", "an_caesars", "an_bet365", "an_open",
         "an_fanduel", "an_betrivers", "an_betmgm",
         "an_bovada", "an_onexbet",
@@ -5922,7 +5985,7 @@ class TestTheWomensMarkerReachesEveryVenueThatNeedsIt:
     #: The rest configure one named competition per route, so a women's fixture
     #: cannot arrive under a men's league key in the first place.
     IMMUNE = (
-        "betmgm", "bovada", "caesars", "cloudbet", "draftkings", "hardrock",
+        "bovada", "caesars", "draftkings",
         "kalshi", "onexbet", "polymarket_us",
         "vi_draftkings", "vi_caesars",
         "vi_hardrock", "vi_fanatics", "vi_bet365",
@@ -10182,15 +10245,23 @@ class TestAGenerationalSuffixDoesNotSplitATennisPlayer:
         assert junior != senior
 
     def test_the_fixture_slate_no_longer_splits_the_match(self) -> None:
-        """Replay the committed captures end to end: no tennis date may hold two
-        event keys that share one participant and the same start time — the
-        near-identity shape that only a spelling split produces."""
+        """Replay the committed captures end to end: no date may hold two event
+        keys that share one participant and the same start time — the
+        near-identity shape that only a spelling split produces.
+
+        Scoped to tennis when it was written, and soccer is where the shape is
+        commonest: on the 2026-08-14 Illinois run 271 soccer clusters held one
+        fixture under two or more keys, 21 of them separating two books a bet
+        could actually be placed at. Nothing detects this at runtime — every
+        cross-source check in ``src/validation.py`` groups by ``event_key`` or by
+        the participant-key set, and a split differs in both — so this test is
+        the only thing that reports the class at all.
+        """
         import collections
 
         from src.events import reconcile_event_keys
         from src.raw_store import RawStore
         from src.sources import registry
-        from src.vocab import Sport
 
         store = RawStore(pathlib.Path("tests/fixtures/raw"))
         quotes = []
@@ -10205,8 +10276,6 @@ class TestAGenerationalSuffixDoesNotSplitATennisPlayer:
         quotes, _ = reconcile_event_keys(quotes)
         fixtures = collections.defaultdict(set)
         for quote in quotes:
-            if quote.sport is not Sport.TENNIS:
-                continue
             fixtures[quote.event_key].add(quote.commence_time)
         sides = collections.defaultdict(set)
         for event_key in fixtures:
@@ -10214,14 +10283,29 @@ class TestAGenerationalSuffixDoesNotSplitATennisPlayer:
             away, home = body.split("@")
             for participant in (away, home):
                 sides[participant].add(event_key)
+        # The one split this corpus holds that must NOT be closed. FanDuel writes
+        # the Spanish club as bare "Deportivo", and `_SOCCER_ALIASES`' own comment
+        # records that on a live capture "Deportivo" is Deportivo Pasto — so an
+        # alias claiming it is La Coruna is the false merge that table exists to
+        # avoid. One unjoined source is recoverable; two clubs' prices on one
+        # fixture is not. Listed rather than filtered away so the cost stays
+        # visible and a future reader knows it was decided, not missed.
+        deliberate = {("SOCCER-deportivo", "SOCCER-deportivolacoruna")}
         splits = []
         for participant, keys in sides.items():
             if len(keys) < 2:
                 continue
             for first in keys:
                 for second in keys:
-                    if first < second and fixtures[first] & fixtures[second]:
-                        splits.append((participant, first, second))
+                    if not (first < second and fixtures[first] & fixtures[second]):
+                        continue
+                    pair = tuple(sorted(
+                        set(first.split(":")[0].split("@"))
+                        ^ set(second.split(":")[0].split("@"))
+                    ))
+                    if pair in deliberate:
+                        continue
+                    splits.append((participant, first, second))
         assert not splits, splits
 
 

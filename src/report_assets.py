@@ -2759,7 +2759,21 @@ function renderChrome() {
     return;
   }
   const health = run.sources;
-  const producing = health.filter((h) => h.quote_count > 0);
+  // Counterparty feeds only, because the validator grades the run that way and
+  // two numbers for one run on one page is worse than either alone: this pill
+  // read "32 of 38 feeds answered" beside a Checks row reading "15 of 38 … 39%,
+  // which is a broken pipeline", and nothing on the page told the reader which
+  // population each was counting. Quiet mirrors are named in the title rather
+  // than dropped — a republisher going dark is worth seeing, it just is not
+  // evidence that collection collapsed.
+  const books = health.filter((h) => !isViewOnly(h.key));
+  const producing = books.filter((h) => h.quote_count > 0);
+  const quietMirrors = health.filter((h) => isViewOnly(h.key) && !(h.quote_count > 0));
+  const feedsTitle = `${producing.length} of ${books.length} book(s) you could bet at answered`
+    + (quietMirrors.length
+      ? `; ${quietMirrors.length} view-only mirror(s) were quiet too (${
+          quietMirrors.map((h) => book(h.key)).join(', ')}), but a mirror is not a counterparty`
+      : '');
   const usableSports = (run.sports || []).filter((entry) => entry.comparable);
   const singleSports = (run.sports || []).filter((entry) => !entry.comparable);
 
@@ -2772,7 +2786,8 @@ function renderChrome() {
 
   el('masthead-pills').innerHTML = [
     `<span class="pill ${run.ok ? 'ok' : 'bad'}"><i></i>${run.ok ? 'looks healthy' : 'something looked wrong'}</span>`,
-    `<span class="pill ${producing.length >= 2 ? 'flat' : 'bad'}">${producing.length} of ${health.length} feeds answered</span>`,
+    `<span class="pill ${producing.length >= 2 ? 'flat' : 'bad'}" title="${escapeHtml(feedsTitle)}">${
+      producing.length} of ${books.length} books answered</span>`,
     `<span class="pill ${usableSports.length ? 'ok' : 'bad'}"><i></i>${usableSports.length} sport${
       usableSports.length === 1 ? '' : 's'} you can compare</span>`,
     singleSports.length
@@ -2828,6 +2843,11 @@ function renderOverview() {
   for (const group of groups.values()) if (sumsToAMargin(group)) complete += 1;
   const health = run.sources;
   const producing = health.filter((h) => h.quote_count > 0);
+  // "venues" below counts counterparties, to agree with the masthead pill and
+  // with the validator. A republished mirror answering is not a venue that
+  // answered; it is somebody else's price arriving second-hand.
+  const producingBooks = producing.filter((h) => !isViewOnly(h.key));
+  const producingMirrors = producing.length - producingBooks.length;
 
   const usableSports = (run.sports || []).filter((entry) => entry.comparable);
 
@@ -2842,7 +2862,8 @@ function renderOverview() {
         ? `${usableSports.length} comparable: ${usableSports.map((e) => sportLabel(e.sport)).join(', ')}`
         : 'none comparable across books',
       usableSports.length ? '' : 'is-warn'],
-    ['venues', producing.length, producing.map((h) => book(h.key)).join(', ')],
+    ['venues', producingBooks.length, producingBooks.map((h) => book(h.key)).join(', ')
+      + (producingMirrors ? ` · plus ${producingMirrors} republished mirror(s)` : '')],
     ['problems', run.error_count, run.error_count ? 'see Checks' : 'nothing flagged', run.error_count ? 'is-bad' : 'is-good'],
     ['worth a look', run.warning_count, run.warning_count ? 'see Checks' : 'nothing flagged', run.warning_count ? 'is-warn' : 'is-good'],
   ];

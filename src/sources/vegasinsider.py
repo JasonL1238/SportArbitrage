@@ -159,6 +159,9 @@ def parse_vegasinsider(raws: Sequence[RawResponse]) -> ParseOutcome:
                 table, raw, source, competition, BOOK_LABELS[book_slug], fixtures, pending, outcome
             )
         if not fixtures:
+            # Same rule as the missing-column case above: a page that yielded no
+            # fixture is a counted outcome, not a bare ``continue``.
+            outcome.skipped[f"no_fixture_rows:{raw.endpoint}"] += 1
             continue
         resolved = resolve_doubleheaders(
             {event_id: (fixture.base_key, fixture.commence_time) for event_id, fixture in fixtures.items()}
@@ -201,6 +204,25 @@ def _parse_table(
     try:
         column = headers.index(book_label)
     except ValueError:
+        # The page rendered, the fixtures are on it, and this book has no column.
+        #
+        # Counted rather than returned silently, which is what this did and what
+        # made a whole board disappear without a trace.  VegasInsider dropped
+        # every per-book column from its MLB page between 01:54 and 07:50 on
+        # 2026-08-14 — the earlier capture has eleven columns, the later one has
+        # ``Time / Open / Consensus`` and **46 fixtures** — so all eight ``vi_*``
+        # sources discarded that board on every run afterwards, reporting
+        # ``parsed 0 quotes from 4 responses; skipped={}``.  An empty skip
+        # dictionary on a parse that dropped everything is the one thing
+        # ``docs/INPUT_CONTRACT.md`` says a drop may never be.
+        #
+        # The columns that *are* present are named, because which book vanished
+        # and which survived is the whole diagnosis: ``Fanatics`` appeared only
+        # ever on the MLB page, which is why ``vi_fanatics`` went 90 -> 12 -> 0
+        # while its siblings merely shrank.
+        outcome.skipped[f"book_column_absent:{book_label}"] += 1
+        present = ", ".join(h for h in headers if h) or "no headers at all"
+        outcome.skipped[f"columns_offered:{present}"] += 1
         return
     for market, marker in (
         (Market.MONEYLINE, "moneyline"), (Market.TOTAL, "total"), (Market.SPREAD, "spread")
@@ -245,9 +267,21 @@ def _parse_table(
             for side_index, row in enumerate((away_row, home_row)):
                 cells = row.find_all(["th", "td"], recursive=False)
                 if column >= len(cells):
+                    # A header wider than its own body row — the table is not the
+                    # shape the header promised, which is worth counting rather
+                    # than stepping over.
+                    outcome.skipped[f"row_shorter_than_header:{market.value}"] += 1
                     continue
-                parsed = _price(cells[column].get_text(" ", strip=True), market, side_index)
+                text = cells[column].get_text(" ", strip=True)
+                parsed = _price(text, market, side_index)
                 if parsed is None:
+                    # An empty cell is a book not offering this market; anything
+                    # else is a price this parser could not read. They are
+                    # different problems and were both silent.
+                    outcome.skipped[
+                        f"no_price_in_cell:{market.value}" if not text.strip()
+                        else f"unreadable_price:{market.value}"
+                    ] += 1
                     continue
                 selection, line, american = parsed
                 pending.append((event_id, market, selection, line, american))

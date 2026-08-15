@@ -517,16 +517,40 @@ def _parse_v2_markets(
             if market_name not in {"moneyline", "spread", "total"}:
                 outcome.skipped[f"market_out_of_scope:{market_name}"] += len(usable)
                 continue
-            _emit_v2_market(
-                rows=usable,
-                market_name=str(market_name),
-                period=period,
-                raw=raw,
-                source=source,
-                fixture=fixture,
-                event_key=event_key,
-                outcome=outcome,
-            )
+            # One call per ``market_id``.  Action Network ships several markets
+            # in one list — an in-play run line beside a pregame one, say — and
+            # ``_emit_v2_market`` reduces its rows to a dict keyed on ``side``,
+            # so two markets in one list silently became one fabricated market
+            # with the home price of one and the away price of the other, filed
+            # under whichever ``market_id`` happened to sort first.  Measured
+            # across the captures on disk: 63 such pairs at book 262, 27 at 270,
+            # 27 at 1538, 9 each at 282 and 4601.  Every one of them was masked
+            # by the ``inprogress`` status filter dropping the fixture for an
+            # unrelated reason, which is not a guard — book 15 carries the same
+            # shape on *scheduled* games.
+            for market_rows in _by_market_id(usable):
+                _emit_v2_market(
+                    rows=market_rows,
+                    market_name=str(market_name),
+                    period=period,
+                    raw=raw,
+                    source=source,
+                    fixture=fixture,
+                    event_key=event_key,
+                    outcome=outcome,
+                )
+
+
+def _by_market_id(rows: Sequence[Mapping[str, Any]]) -> list[list[Mapping[str, Any]]]:
+    """Split one market list into its actual markets, in arrival order.
+
+    A market is identified by the venue's own ``market_id``; rows without one
+    stay together, because that is the only grouping their absence supports.
+    """
+    groups: dict[str, list[Mapping[str, Any]]] = {}
+    for row in rows:
+        groups.setdefault(str(row.get("market_id") or ""), []).append(row)
+    return list(groups.values())
 
 
 def _v2_row_count(value: Any) -> int:
@@ -616,6 +640,36 @@ def _emit_v2_market(
                 continue
             sides.append((selection, row.get("odds"), side, line))
         if len(sides) == 2:
+            # ``docs/INPUT_CONTRACT.md`` makes mirroring a hard invariant —
+            # "home.line == -away.line" — and a hard invariant broken at the
+            # source is a row that must not be stored, not one to store and
+            # flag.  Action Network's opener column published home −1.5 *and*
+            # away −1.5 under one ``market_id`` for MLB-MIA@MLB-CIN on
+            # 2026-08-14; both prices were individually plausible, so the pair
+            # sailed past every per-row check and surfaced only as two run-level
+            # ERRORs (``spread_not_mirrored`` and ``negative_overround``, the
+            # implied sum 0.7453) after it had already been written.
+            #
+            # Rejected rather than skipped: the source offered something in
+            # scope that cannot be represented faithfully, which is the
+            # contract's own definition of a rejection.
+            first_line, second_line = sides[0][3], sides[1][3]
+            if (
+                first_line is not None
+                and second_line is not None
+                and abs(first_line + second_line) > 1e-9
+            ):
+                outcome.reject(
+                    source,
+                    "spread_sides_not_opposites",
+                    f"market {market_id} on event {fixture.event_id} prices "
+                    f"{sides[0][2]} at {first_line:+g} and {sides[1][2]} at "
+                    f"{second_line:+g}; a spread's two sides are one contract "
+                    "and must mirror",
+                    event_id=fixture.event_id,
+                    market_id=market_id,
+                )
+                return
             _emit(
                 raw, source, fixture, event_key, outcome,
                 Market.SPREAD, period, market_id, tuple(sides), status,

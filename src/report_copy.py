@@ -406,6 +406,31 @@ SKIP_NOTES: list[tuple[str, str]] = [
      "a team name, so the row could not be tied to a fixture. Reading it anyway would "
      "attach somebody's prices to the wrong game."),
 
+    ("book_column_absent",
+     "The comparison page loaded and carried games, but this book had no column on it. "
+     "That is a page that stopped listing the book, not a book with no prices — "
+     "VegasInsider dropped every per-book column from its baseball and hockey pages on "
+     "2026-08-14, and until this was counted the whole board vanished with no reason "
+     "recorded at all."),
+    ("columns_offered",
+     "Which books the comparison page did carry, recorded beside the one that was "
+     "missing. Names the difference between 'this book is gone' and 'the page changed "
+     "shape', which is the whole diagnosis and used to need the raw bytes."),
+    ("no_fixture_rows",
+     "A comparison page that parsed but yielded no fixture — no game header survived. "
+     "Counted rather than stepped over, so a page that has gone empty is "
+     "distinguishable from one that was never asked for."),
+    ("row_shorter_than_header",
+     "A table row with fewer cells than its own header promised, so the book's column "
+     "index pointed past the end of the row."),
+    ("no_price_in_cell",
+     "The book's cell on this row was empty: it is not offering that market on that "
+     "game."),
+    ("unreadable_price",
+     "The book's cell held something this parser could not read as a price. Distinct "
+     "from an empty cell on purpose — one is a book not offering a market, the other "
+     "is a format this reader does not know."),
+
     # ── already started, or already collected ────────────────────────────────
     ("event_already_started",
      "The fixture is under way. Only pre-match prices are collected, because an in-play "
@@ -669,8 +694,11 @@ SKIP_NOTES: list[tuple[str, str]] = [
      "A soccer total whose line is far above game goals — usually corners."),
     ("line_out_of_scale",
      "A handicap/total line far outside the sport's plausible magnitude."),
-    ("mirror_spread_framing",
-     "The opposite home/away framing of the same handicap (already collected)."),
+    # ``mirror_spread_framing`` was here.  Cloudbet emitted it for every
+    # ``handicap > 0``, on the premise that the positive framing restated the
+    # negative one; the bytes say they are the two directions of the handicap
+    # with independent prices, so nothing skips them any more and the note
+    # described a decision the collector no longer makes.
     ("total_out_of_band",
      "A total whose line sits outside a plausible range for that sport."),
     ("unknown_selection_type:",
