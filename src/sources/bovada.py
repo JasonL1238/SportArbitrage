@@ -381,6 +381,16 @@ def parse_bovada(raws: Sequence[RawResponse]) -> ParseOutcome:
                 f"{source}: stored response for unknown coupon path {raw.endpoint!r}"
             )
         payload = raw.json()
+        if isinstance(payload, dict) and not payload:
+            # An empty scope arrives as ``{}`` where a slate is an array — the
+            # NHL coupon in the off-season, live.  ``fetch_raw``'s own
+            # ``_event_count`` reads that as zero events without complaint;
+            # raising here instead threw away every *other* scope's rows with
+            # it, which cost 843 proven-parseable quotes across 166 events on
+            # four of the ten stored runs.  A body that is malformed rather
+            # than empty still raises below.
+            outcome.skipped[f"empty_coupon_body:{_path_of(raw.endpoint)}"] += 1
+            continue
         if not isinstance(payload, list):
             raise FormatChangeError(
                 f"{source}:{raw.endpoint}: expected a JSON array of coupon groups"

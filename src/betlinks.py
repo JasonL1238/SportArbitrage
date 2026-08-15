@@ -86,7 +86,6 @@ MIRROR_BOOK: Mapping[str, str] = {
     "an_fanatics": "fanatics",
     "an_fanduel": "fanduel",
     "an_hardrock": "hardrock",
-    "an_onexbet": "onexbet",
     "an_parx": "parx",
     "an_thescore": "thescore",
     # Action Network files this book as ``UnibetPA``; the Pennsylvania online

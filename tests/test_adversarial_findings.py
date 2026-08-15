@@ -2063,6 +2063,42 @@ class TestAnAsianSplitLineIsStatedAsItsMidpoint:
         assert {r.reason for r in outcome.rejections} == {"unrecognised_second_handicap"}
 
 
+class TestOneEmptyCouponDoesNotDiscardTheRun:
+    """Bovada answers an off-season sport's coupon with ``{}`` where a slate is
+    an array.  ``fetch_raw``'s ``_event_count`` reads that as zero events; the
+    parser raised ``FormatChangeError`` over the very same bytes, and because
+    the whole source parses as one unit, the NHL coupon's two braces discarded
+    every other sport's rows — 843 proven-parseable quotes across 166 events on
+    runs 12, 13, 15 and 16.  An *empty* body is a counted skip; a *malformed*
+    body must still raise.
+    """
+
+    @staticmethod
+    def _empty_raw(body: str):
+        from dataclasses import replace
+
+        real = TestAnAsianSplitLineIsStatedAsItsMidpoint._capture()
+        return replace(real, endpoint="coupon:hockey/nhl", body=body)
+
+    def test_an_empty_object_is_a_counted_skip_beside_the_real_slate(self) -> None:
+        from src.sources.bovada import parse_bovada
+
+        soccer = TestAnAsianSplitLineIsStatedAsItsMidpoint._capture()
+        outcome = parse_bovada([soccer, self._empty_raw("{}")])
+        assert outcome.quotes, "the sport that answered must keep its rows"
+        assert outcome.skipped["empty_coupon_body:hockey/nhl"] == 1
+
+    def test_a_malformed_body_still_raises(self) -> None:
+        import pytest as _pytest
+
+        from src.sources.bovada import parse_bovada
+        from src.sources.guards import FormatChangeError
+
+        soccer = TestAnAsianSplitLineIsStatedAsItsMidpoint._capture()
+        with _pytest.raises(FormatChangeError):
+            parse_bovada([soccer, self._empty_raw('{"unexpected": 1}')])
+
+
 class TestEveryKalshiRowStatesItsDepth:
     def test_the_no_side_reads_the_field_the_venue_actually_sends(self) -> None:
         """``no_ask_size_fp`` appears in **none** of the 354 captured markets, so
@@ -5518,7 +5554,6 @@ class TestTheChargeAndTheSettlementRuleArePinnedPerVenue:
         "an_bovada": "no commission (the venue's margin is already in the price)",
         "an_draftkings": "no commission (the venue's margin is already in the price)",
         "an_fanduel": "no commission (the venue's margin is already in the price)",
-        "an_onexbet": "no commission (the venue's margin is already in the price)",
         "an_open": "no commission (the venue's margin is already in the price)",
         "an_hardrock": "no commission (the venue's margin is already in the price)",
         "an_fanatics": "no commission (the venue's margin is already in the price)",
@@ -5565,7 +5600,6 @@ class TestTheChargeAndTheSettlementRuleArePinnedPerVenue:
         "an_bovada": 'void_and_refund',
         "an_draftkings": 'void_and_refund',
         "an_fanduel": 'void_and_refund',
-        "an_onexbet": 'void_and_refund',
         "an_open": 'void_and_refund',
         "an_hardrock": 'void_and_refund',
         "an_fanatics": 'void_and_refund',
@@ -5976,7 +6010,7 @@ class TestTheWomensMarkerReachesEveryVenueThatNeedsIt:
         "betmgm", "cloudbet", "hardrock",
         "an_draftkings", "an_caesars", "an_bet365", "an_open",
         "an_fanduel", "an_betrivers", "an_betmgm",
-        "an_bovada", "an_onexbet",
+        "an_bovada",
         "an_hardrock", "an_fanatics", "an_bally",
         # Same Action Network class, so the same catch-all exposure.
         "an_parx", "an_unibet", "an_thescore",
@@ -10283,14 +10317,13 @@ class TestAGenerationalSuffixDoesNotSplitATennisPlayer:
             away, home = body.split("@")
             for participant in (away, home):
                 sides[participant].add(event_key)
-        # The one split this corpus holds that must NOT be closed. FanDuel writes
-        # the Spanish club as bare "Deportivo", and `_SOCCER_ALIASES`' own comment
-        # records that on a live capture "Deportivo" is Deportivo Pasto — so an
-        # alias claiming it is La Coruna is the false merge that table exists to
-        # avoid. One unjoined source is recoverable; two clubs' prices on one
-        # fixture is not. Listed rather than filtered away so the cost stays
+        # The splits this corpus holds that must NOT be closed live in
+        # ``validation.DELIBERATE_SPLITS`` — the runtime detector reads the same
+        # set, so the decision (and its rationale, beside the constant) is
+        # recorded once. Listed rather than filtered away so the cost stays
         # visible and a future reader knows it was decided, not missed.
-        deliberate = {("SOCCER-deportivo", "SOCCER-deportivolacoruna")}
+        from src.validation import DELIBERATE_SPLITS
+
         splits = []
         for participant, keys in sides.items():
             if len(keys) < 2:
@@ -10299,11 +10332,11 @@ class TestAGenerationalSuffixDoesNotSplitATennisPlayer:
                 for second in keys:
                     if not (first < second and fixtures[first] & fixtures[second]):
                         continue
-                    pair = tuple(sorted(
+                    pair = frozenset(
                         set(first.split(":")[0].split("@"))
                         ^ set(second.split(":")[0].split("@"))
-                    ))
-                    if pair in deliberate:
+                    )
+                    if pair in DELIBERATE_SPLITS:
                         continue
                     splits.append((participant, first, second))
         assert not splits, splits
@@ -12266,7 +12299,6 @@ class TestEachVenuesKindIsPinnedBecauseItPicksTheRule:
         "an_bovada": False,
         "an_draftkings": False,
         "an_fanduel": False,
-        "an_onexbet": False,
         "an_open": False,
         "an_hardrock": False,
         "an_fanatics": False,
@@ -13169,11 +13201,16 @@ class TestPolymarketAsksWhetherItTruncatedRatherThanAssuming:
         lost, so nothing is reported — this is the run the old code faulted."""
         import httpx
 
+        from src.sources.polymarket_us import MAX_PAGES_PER_LEAGUE
+
+        total = MAX_PAGES_PER_LEAGUE * 2  # every permitted page of two, exactly
+
         def handler(request: httpx.Request) -> httpx.Response:
             limit = int(request.url.params.get("limit", "2"))
             offset = int(request.url.params.get("offset", "0"))
-            # Four events, in two pages of two, and the slate stops there.
-            return httpx.Response(200, json=self._events(max(0, min(limit, 4 - offset))))
+            return httpx.Response(
+                200, json=self._events(max(0, min(limit, total - offset)))
+            )
 
         source = self._adapter(handler)
         try:
@@ -13197,9 +13234,11 @@ class TestPolymarketAsksWhetherItTruncatedRatherThanAssuming:
             source.fetch_raw()
         finally:
             source.close()
+        from src.sources.polymarket_us import MAX_PAGES_PER_LEAGUE
+
         cut = source.last_fetch.truncated_scopes
         assert [s.split(":", 1)[0] for s in cut] == ["mlb"]
-        assert "still had events past offset 4" in cut[0]
+        assert f"still had events past offset {MAX_PAGES_PER_LEAGUE * 2}" in cut[0]
         assert source.last_fetch.failed_scopes == []
 
     def test_the_probe_is_kept_rather_than_thrown_away(self) -> None:
@@ -13217,7 +13256,10 @@ class TestPolymarketAsksWhetherItTruncatedRatherThanAssuming:
             raws = source.fetch_raw()
         finally:
             source.close()
-        assert "events:mlb:03" in {raw.endpoint for raw in raws}
+        from src.sources.polymarket_us import MAX_PAGES_PER_LEAGUE, events_endpoint
+
+        probe_endpoint = events_endpoint("mlb", MAX_PAGES_PER_LEAGUE + 1)
+        assert probe_endpoint in {raw.endpoint for raw in raws}
 
     def test_a_refused_probe_leaves_the_question_open_and_says_so(self) -> None:
         """The one thing that could settle it was refused, so the slate cannot be
@@ -13265,9 +13307,12 @@ class TestPolymarketAsksWhetherItTruncatedRatherThanAssuming:
             cut = source.last_fetch.truncated_scopes
         finally:
             source.close()
+        from src.sources.polymarket_us import MAX_PAGES_PER_LEAGUE, events_endpoint
+
         assert [s.split(":", 1)[0] for s in cut] == ["mlb"]
         assert "without a readable 'events' list" in cut[0]
-        assert "events:mlb:03" not in {raw.endpoint for raw in raws}
+        probe_endpoint = events_endpoint("mlb", MAX_PAGES_PER_LEAGUE + 1)
+        assert probe_endpoint not in {raw.endpoint for raw in raws}
         # FormatChangeError is the pre-fix failure: require_list on the
         # retained envelope.  Getting past parse at all is the pin.
         parse_polymarket_us(raws)

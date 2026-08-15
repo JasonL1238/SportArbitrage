@@ -132,8 +132,9 @@ LEGACY_V1_BASE_URL = "https://api.actionnetwork.com/web/v1/scoreboard"
 #: slate the market groups went from ``{event: 154}`` to ``{event: 154,
 #: firstfiveinnings: 126, firstinning: 96}`` when asked.  Measured across the
 #: committed v1 fixtures, period rows are 35-57% of the parsed rows of every
-#: tenant that produces any, and 40-65% of its baseball rows (``an_onexbet`` is
-#: the one live tenant carrying none), so a v2 request without this drops between
+#: tenant that produces any, and 40-65% of its baseball rows (``an_onexbet``,
+#: deregistered 2026-08-15, was the one live tenant carrying none), so a v2
+#: request without this drops between
 #: a third and two-thirds of the board while every source still reports healthy —
 #: the same shape of loss as asking the wrong book id, and just as quiet.
 #:

@@ -41,6 +41,7 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from itertools import combinations
 from enum import StrEnum
 from statistics import median
 from typing import Any, Collection, Iterable, Mapping, Sequence
@@ -304,6 +305,7 @@ def validate(
     *,
     capabilities: Mapping[tuple[str, str], frozenset[Market]] | None = None,
     order_book_sources: Collection[str] = (),
+    consensus_sources: Collection[str] = (),
 ) -> ValidationReport:
     """Run every check over one run's worth of normalized rows.
 
@@ -332,6 +334,19 @@ def validate(
     Reported as warnings rather than errors for those sources — still visible,
     because a persistently empty market is worth knowing about, but not a reason
     to call the run unclean.  A sportsbook is held to the original bar.
+
+    *consensus_sources* names feeds whose numbers are **context, not a current
+    price** — Action Network's Open column publishes the line a market opened
+    at, and :mod:`src.arb` and :mod:`src.betlinks` already refuse it as a leg
+    (``CONSENSUS_FEEDS``).  An opening line that differs from today's prices,
+    or an opening handicap that favours the side the market has since moved
+    away from, is what an opening line *is* — run 16 graded both as ERRORs and
+    trained the operator to scroll past the codes that matter.  So these feeds
+    are excluded from the two cross-source *price* checks (agreement and line
+    orientation), on both sides: not judged, and not part of the consensus
+    others are judged against.  Every identity check still sees them — a
+    consensus feed disagreeing about who is playing is still a real signal —
+    and their own rows are still held to row- and market-level coherence.
     """
     report = ValidationReport(
         quote_count=len(quotes),
@@ -343,14 +358,21 @@ def validate(
         return report
 
     order_driven = frozenset(order_book_sources)
+    consensus_feeds = frozenset(consensus_sources)
+    current_priced = (
+        [quote for quote in quotes if quote.source not in consensus_feeds]
+        if consensus_feeds
+        else quotes
+    )
     _check_rows(quotes, report)
     _check_duplicates(quotes, report)
     markets = _group_markets(quotes)
     report.market_count = len(markets)
     _check_markets(markets, report, order_driven)
     _check_cross_source(quotes, report)
-    _check_line_orientation(quotes, report)
-    _check_price_agreement(quotes, report, order_driven)
+    _check_split_fixtures(quotes, report)
+    _check_line_orientation(current_priced, report)
+    _check_price_agreement(current_priced, report, order_driven)
     _check_observation_window(quotes, report)
     _check_coverage(quotes, report, capabilities or {}, order_driven)
     return report
@@ -1669,6 +1691,145 @@ def _check_orientation(quotes: Sequence[Quote], report: ValidationReport) -> Non
     )
 
 
+#: How near two kickoffs must be before two event keys sharing one participant
+#: are read as one fixture split by a spelling.  Wide enough to absorb the
+#: minutes by which books round a start time, narrow enough that one club's two
+#: real fixtures in a day — or one tennis player's two rounds — never qualify:
+#: no competitor genuinely starts two events half an hour apart.
+SPLIT_FIXTURE_KICKOFF_TOLERANCE = timedelta(minutes=30)
+
+#: Splits that are the cost of a refused merge, not a defect.  FanDuel writes
+#: the Spanish club as bare "Deportivo", and ``_SOCCER_ALIASES``' own comment
+#: records that on a live capture "Deportivo" is Deportivo Pasto — so an alias
+#: claiming it is La Coruna is the false merge that table exists to avoid.  One
+#: unjoined source is recoverable; two clubs' prices on one fixture is not.
+#: The committed-capture sweep in ``tests/test_adversarial_findings.py`` reads
+#: this same set, so the decision is recorded once.
+DELIBERATE_SPLITS: frozenset[frozenset[str]] = frozenset(
+    {frozenset({"SOCCER-deportivo", "SOCCER-deportivolacoruna"})}
+)
+
+
+def _check_split_fixtures(quotes: Sequence[Quote], report: ValidationReport) -> None:
+    """One real fixture under two event keys, because a spelling did not join.
+
+    Every other cross-source check groups by ``event_key`` or by the
+    participant-key set, and a split differs in both — so a book whose spelling
+    of one side lands on its own key simply never meets the others: no price
+    comparison, no orientation vote, no arbitrage leg, and nothing anywhere to
+    say so.  The class was found by a test over committed captures, which
+    cannot see a live slate.
+
+    The shape that only a split produces: two event keys that share exactly one
+    participant and start together.  Two *real* fixtures can share a competitor
+    on one date — a tennis player's two rounds, a doubleheader — but not the
+    same half hour, and a doubleheader shares both sides rather than one.
+
+    Reported per ``(source, sport)`` rather than per fixture, and that is a
+    tuning decision made against real volume: re-validating the 2026-08-14
+    Illinois run, the per-pair form produced **566** warnings — smarkets'
+    short-form club names alone split it from hundreds of minor-soccer
+    fixtures — which is the ``incomplete_market`` failure mode, a finding the
+    operator learns to scroll past.  What the operator actually acts on is
+    *which adapter needs participant rules*, so each source that sits alone on
+    its own key while other books share the kickoff gets one warning with its
+    count and worked examples.  Graded WARNING because the run's data is
+    right, merely unjoined.
+    """
+    times: dict[str, set[datetime]] = defaultdict(set)
+    sources_of: dict[str, set[str]] = defaultdict(set)
+    sport_of_key: dict[str, str] = {}
+    participants_of: dict[str, frozenset[str]] = {}
+    spelling: dict[tuple[str, str], str] = {}
+    sides: dict[str, set[str]] = defaultdict(set)
+    for quote in quotes:
+        key = quote.event_key
+        times[key].add(quote.commence_time)
+        sources_of[key].add(quote.source)
+        sport_of_key.setdefault(key, quote.sport.value)
+        participants_of.setdefault(
+            key, frozenset({quote.away_participant, quote.home_participant})
+        )
+        spelling.setdefault((key, quote.away_participant), quote.away_team)
+        spelling.setdefault((key, quote.home_participant), quote.home_team)
+        sides[quote.away_participant].add(key)
+        sides[quote.home_participant].add(key)
+
+    # Union split keys into components, so a three-spelling chain is one
+    # fixture rather than three pairwise reports.
+    tolerance = SPLIT_FIXTURE_KICKOFF_TOLERANCE.total_seconds()
+    parent: dict[str, str] = {}
+
+    def find(key: str) -> str:
+        root = key
+        while parent.get(root, root) != root:
+            root = parent[root]
+        parent[key] = root
+        return root
+
+    for keys in sides.values():
+        if len(keys) < 2:
+            continue
+        for first, second in combinations(sorted(keys), 2):
+            differing = participants_of[first] ^ participants_of[second]
+            # Zero differing sides is a doubleheader's two halves; two whole
+            # matchups differing is just the slate.  Exactly one side apart
+            # is the near-identity only a spelling produces.
+            if len(differing) != 2 or frozenset(differing) in DELIBERATE_SPLITS:
+                continue
+            gap = min(
+                abs((a - b).total_seconds())
+                for a in times[first]
+                for b in times[second]
+            )
+            if gap > tolerance:
+                continue
+            parent[find(first)] = find(second)
+
+    components: dict[str, set[str]] = defaultdict(set)
+    for key in parent:
+        components[find(key)].add(key)
+
+    # Within a component the key most books agree on is the reference; every
+    # other key's sources are the ones sitting out of the comparison, and the
+    # example names the spelling pair a participant rule would join.
+    unjoined: dict[tuple[str, str], list[str]] = defaultdict(list)
+    for keys in components.values():
+        if len(keys) < 2:
+            continue
+        reference = max(sorted(keys), key=lambda key: len(sources_of[key]))
+        for key in sorted(keys):
+            if key == reference:
+                continue
+            differing = participants_of[key] ^ participants_of[reference]
+            if len(differing) != 2:
+                # A chain can union two keys that differ from each other on
+                # both sides; the reference still shares one side with each.
+                continue
+            odd = next(iter(differing & participants_of[key]))
+            ref_odd = next(iter(differing & participants_of[reference]))
+            example = (
+                f"its {spelling.get((key, odd))!r} ({odd}) against "
+                f"{spelling.get((reference, ref_odd))!r} ({ref_odd}) at "
+                + ", ".join(sorted(sources_of[reference]))
+                + f" on {key}"
+            )
+            for source in sources_of[key]:
+                unjoined[(source, sport_of_key[key])].append(example)
+
+    for (source, sport), examples in sorted(unjoined.items()):
+        report.add(
+            Severity.WARNING,
+            "split_fixture_suspected",
+            f"{len(examples)} {sport} fixture(s) sit on this source's own event "
+            f"key while other books price the same kickoff under another "
+            f"spelling (e.g. {'; '.join(examples[:_EXAMPLES])}) — a split "
+            "fixture joins no cross-source comparison at all, so each spelling "
+            "pair needs a participant rule before this book can meet the others",
+            source=source,
+        )
+
+
 def _check_cross_source(quotes: Sequence[Quote], report: ValidationReport) -> None:
     """The whole point of one schema is that sources agree on identity."""
     by_event: dict[str, dict[str, list[Quote]]] = defaultdict(lambda: defaultdict(list))
@@ -2041,16 +2202,19 @@ def _check_coverage(
     label has probably changed" — which sends someone looking for a parsing fault
     that is not there.
 
-    Intentional Action Network failover feeds (:mod:`src.redundancy`) are held
-    to the same softer bar as order books: the republisher often omits a market
-    the first-party adapter prices, and that is thin upstream coverage rather
-    than a renamed label in *this* parser.
+    Republished mirrors (``an_*``, ``vi_*``, ``vsin_circa``) are held to the
+    same softer bar as order books: the republisher often omits a market the
+    book itself prices, and that is thin upstream coverage rather than a
+    renamed label in *this* parser.  Taken from the registry's own
+    classification rather than derived from :data:`src.redundancy.REDUNDANT_PAIRS`
+    tuple positions, because position encodes which feed backs up which — not
+    what a feed *is*: ``an_bet365`` and ``an_fanatics`` sit in the primary slot
+    of their only pairs (their books have no first-party adapter) and were
+    graded ERROR for bet365's own market menu.
     """
-    from src.redundancy import REDUNDANT_PAIRS
+    from src.sources.registry import REPUBLISHED_SOURCE_KEYS
 
-    soft_coverage = frozenset(order_book_sources) | {
-        secondary for _, secondary in REDUNDANT_PAIRS
-    }
+    soft_coverage = frozenset(order_book_sources) | REPUBLISHED_SOURCE_KEYS
     expected = _expected_markets(quotes, capabilities)
     by_source_sport: dict[tuple[str, Sport], set[tuple[Market, Period]]] = defaultdict(set)
     events_by_source_sport: dict[tuple[str, Sport], set[str]] = defaultdict(set)
@@ -2140,14 +2304,26 @@ def _check_coverage(
             # A whole sport's spreads with no resting order is a thin slate, not
             # a renamed label, and grading it an error fails the run over the
             # state of somebody else's order book.
+            #
+            # And a handful of events is not evidence of a rename either: the
+            # per-event sibling below refuses to diagnose one under eight
+            # events, while this branch would call a single spread-less hockey
+            # friendly an ERROR.  Same claim, same evidence bar.
+            small = event_count < MIN_EVENTS_TO_DIAGNOSE_A_RENAME
             report.add(
-                Severity.WARNING if source in soft_coverage else Severity.ERROR,
+                Severity.WARNING if source in soft_coverage or small else Severity.ERROR,
                 "core_market_absent",
                 f"no {sport.value} rows at all for "
                 + ", ".join(f"{m.value}/{p.value}" for m, p in entirely_absent)
                 + f" across {event_count} {sport.value} events, and this source prices "
-                "that market in no other window either — expected every game to have "
-                "these, so a source label has probably changed",
+                "that market in no other window either — "
+                + (
+                    f"though at {event_count} event(s) that is one thin fixture, "
+                    "not evidence of a renamed label"
+                    if small
+                    else "expected every game to have these, so a source label "
+                    "has probably changed"
+                ),
                 source=source,
             )
         for market, period in elsewhere:

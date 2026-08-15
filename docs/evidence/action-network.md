@@ -108,6 +108,17 @@ today — so the residual rule of this pattern is: never deregister a key that
 holds rows in a jurisdiction's CURRENT latest run; collect a fresh run
 without it first, then deregister.)*
 
+*(2026-08-15 update: `an_onexbet` (2495, 1xBet) joined this class and was
+deregistered the same way.  Its committed 2026-07-31 capture still parses to 12
+full-game rows, so the tenant once produced — but every stored run since
+2026-08-08 answers a request for 2495 with odds for books 15/30/69/75/123 and
+never 2495 (`odds_for_other_book`, zero quotes, `ok=0` in all ten multi-source
+runs; the 2026-08-14 NFL page carries 206 odds rows, none of them 1xBet's).
+The store holds zero quotes for the key, satisfying the pattern's gate.  The
+first-party `onexbet` adapter stays and loses its redundant pair; 2495 is also
+dropped from `an_bovada`'s shared `fetch_book_ids`.  Re-registration bar
+unchanged: tenant restored first, genuine capture second.)*
+
 ### theScore Bet's Illinois id answers — 2026-08-10T01:05Z
 
 The first-ever request of Action Network id 4601 (`theScore Bet IL`,

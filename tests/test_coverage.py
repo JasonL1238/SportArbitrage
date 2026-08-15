@@ -1200,7 +1200,6 @@ def test_the_one_legitimate_overlap_is_exactly_the_offshore_mirrors():
 
     assert registry.REPUBLISHED_SOURCE_KEYS & registry.US_UNAVAILABLE_SOURCE_KEYS == {
         "an_bovada",
-        "an_onexbet",
     }
     assert not registry.RETAIL_SOURCE_KEYS & registry.REPUBLISHED_SOURCE_KEYS
     assert not registry.RETAIL_SOURCE_KEYS & registry.US_UNAVAILABLE_SOURCE_KEYS

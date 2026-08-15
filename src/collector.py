@@ -943,10 +943,15 @@ def collect_once(
         "total": total_sources,
         "quote_count": len(all_quotes),
     })
+    from src.betlinks import CONSENSUS_FEEDS
+
     report = validate(
         all_quotes,
         capabilities=claimed,
         order_book_sources=_order_book_sources(sources),
+        # An opening line differing from current prices is what an opening line
+        # is; judged as a peer it fails runs — see ``validate``'s docstring.
+        consensus_sources=CONSENSUS_FEEDS,
     )
     _check_source_health(
         health_reports,

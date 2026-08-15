@@ -48,9 +48,10 @@ FIXTURE_RAW_DIR = Path(__file__).parent / "fixtures" / "raw"
 V2_URL = "https://api.actionnetwork.com/web/v2/scoreboard"
 V1_URL = "https://api.actionnetwork.com/web/v1/scoreboard"
 
-#: The two sources whose books exist on v1 and not on v2.  Any other key here
-#: would be a source silently reading last-generation ids.
-OFFSHORE_KEYS = frozenset({"an_bovada", "an_onexbet"})
+#: The source whose book exists on v1 and not on v2.  Any other key here would
+#: be a source silently reading last-generation ids.  (``an_onexbet`` sat here
+#: too until 2026-08-15, when the dropped tenant was deregistered.)
+OFFSHORE_KEYS = frozenset({"an_bovada"})
 
 
 def _an_descriptors(state: str | None) -> dict[str, registry.SourceDescriptor]:

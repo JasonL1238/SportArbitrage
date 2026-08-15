@@ -229,13 +229,6 @@ SOURCE_NOTES: dict[str, dict[str, str]] = {
         "what": "Bovada prices as Action Network publishes them — a redundant secondary "
                 "feed beside the primary Bovada adapter, kept for durability.",
     },
-    "an_onexbet": {
-        "label": "1xBet (Action Network)",
-        "host": "api.actionnetwork.com",
-        "kind": "sportsbook",
-        "what": "1xBet prices as Action Network publishes them — a redundant secondary "
-                "feed beside the primary 1xBet adapter, kept for durability.",
-    },
     "an_parx": {
         "label": "betPARX (Action Network)",
         "host": "api.actionnetwork.com",
@@ -420,6 +413,14 @@ SKIP_NOTES: list[tuple[str, str]] = [
      "A comparison page that parsed but yielded no fixture — no game header survived. "
      "Counted rather than stepped over, so a page that has gone empty is "
      "distinguishable from one that was never asked for."),
+    ("empty_coupon_body",
+     "The venue answered this sport's coupon with an empty object where a slate is an "
+     "array — an off-season scope, not a format change. Counted so the empty scope "
+     "stays visible without discarding the sports that did answer."),
+    ("no_line_table",
+     "This sport's page carries no odds table at all — the off-season shape. Counted "
+     "so the empty page stays visible without discarding the sports whose tables "
+     "parsed."),
     ("row_shorter_than_header",
      "A table row with fewer cells than its own header promised, so the book's column "
      "index pointed past the end of the row."),

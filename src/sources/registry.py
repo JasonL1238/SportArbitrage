@@ -117,7 +117,7 @@ REPUBLISHED_SOURCE_KEYS: frozenset[str] = frozenset(
         "vi_hardrock", "vi_fanatics", "vi_bet365", "an_hardrock",
         "an_fanatics", "an_bally",
         "an_bet365", "an_open", "an_fanduel", "an_betrivers", "an_betmgm",
-        "an_bovada", "an_onexbet", "an_parx", "an_unibet", "an_thescore",
+        "an_bovada", "an_parx", "an_unibet", "an_thescore",
         "vi_betmgm", "vi_fanduel", "vi_betrivers",
     )
 )
@@ -147,9 +147,10 @@ REPUBLISHED_SOURCE_KEYS: frozenset[str] = frozenset(
 #   matchbook       UK/Malta licensed exchange; no US access.
 #   smarkets        UK licensed exchange; no US access.
 #   sxbet           Offshore crypto exchange.
-#   an_bovada       Action Network mirrors of two of the above.  Already
-#   an_onexbet      view-only, but they have to disappear *with* their book, or
-#                   the US-only view still shows its price as context.
+#   an_bovada       Action Network mirror of Bovada.  Already view-only, but it
+#                   has to disappear *with* its book, or the US-only view still
+#                   shows its price as context.  (``an_onexbet`` sat beside it
+#                   until 2026-08-15, when the dropped tenant was deregistered.)
 #
 # Kalshi and ``polymarket_us`` are deliberately absent: both operate their own
 # CFTC-regulated venue and are executable from the US.
@@ -173,7 +174,6 @@ US_UNAVAILABLE_SOURCE_KEYS: frozenset[str] = frozenset(
         "smarkets",
         "sxbet",
         "an_bovada",
-        "an_onexbet",
     }
 )
 
@@ -677,23 +677,19 @@ _BASE_SOURCES: tuple[SourceDescriptor, ...] = (
     # still on v1, and v1 is where the old trap was measured: asking for
     # BetRivers/BetMGM ids (71, 75) there could *remove* those books from the
     # payload.  That does not reproduce on v2, but nothing here runs on v2.
+    # ``an_onexbet`` (book_id 2495) was deregistered on 2026-08-15: the
+    # scoreboard stopped carrying 1xBet's odds — a request for 2495 answers
+    # with books 15/30/69/75/123 and never 2495, measured on every stored run
+    # since 2026-08-08 — which is the an_fliff/an_circa/an_superbook class.
+    # Its 2495 is dropped from this fetch list with it; re-registration
+    # requires the tenant restored first and a genuine capture second.
     SourceDescriptor(
         key="an_bovada",
         adapter=ActionNetworkAdapter,
         kind=SourceKind.SPORTSBOOK,
         config={
             "book_id": 21,
-            "fetch_book_ids": "21,35,2495",
-            "base_url": LEGACY_V1_BASE_URL,
-        },
-    ),
-    SourceDescriptor(
-        key="an_onexbet",
-        adapter=ActionNetworkAdapter,
-        kind=SourceKind.SPORTSBOOK,
-        config={
-            "book_id": 2495,
-            "fetch_book_ids": "21,35,2495",
+            "fetch_book_ids": "21,35",
             "base_url": LEGACY_V1_BASE_URL,
         },
     ),
@@ -1095,7 +1091,7 @@ def _check_reachability_is_declared() -> None:
 
     So the four sets **cover** :data:`_BASE_SOURCES` — not partition it, because
     one overlap is real: a republished mirror of an offshore book is both
-    view-only and unstakeable (``an_bovada``, ``an_onexbet`` today, pinned in
+    view-only and unstakeable (``an_bovada`` today, pinned in
     ``tests/test_coverage.py``).  Every other overlap is a contradiction and is
     refused below: retail means "you can bet here, per state licence", which no
     other classification can simultaneously be true of, and nationwide means "no

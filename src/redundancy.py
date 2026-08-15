@@ -41,7 +41,6 @@ REDUNDANT_PAIRS: tuple[tuple[str, str], ...] = (
     ("betrivers_kambi", "an_betrivers"),
     ("betmgm", "an_betmgm"),
     ("bovada", "an_bovada"),
-    ("onexbet", "an_onexbet"),
     ("draftkings", "an_draftkings"),
     ("draftkings", "vi_draftkings"),
     ("an_draftkings", "vi_draftkings"),

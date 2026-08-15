@@ -188,7 +188,7 @@ written, and the grep is what is true now.
 | `src/arb.py` | 2.7k | `the arithmetic`, `settlement model`, `grouping`, `detection`, `best-price surface` |
 | `tests/test_report.py` | 2.7k | 8 banners |
 | `src/report.py` | 2.3k | `build_report` and `_serve` are the two entry points, and `build_report`'s own 1.4k-line body has no banner inside it. The only two, `rendering` and `CLI`, start at line 1577 |
-| `src/validation.py` | 2.3k | `consensus`, `row-level`, `market-level`, `cross-source` |
+| `src/validation.py` | 2.5k | `consensus`, `row-level`, `market-level`, `cross-source` |
 | `src/promos/planner.py` | 2.2k | `offer-text parsing`, `brand → stakeable odds feeds`, `slate context`, `stake solving and outcome evaluation`, `the scan`, `plan payloads` |
 | `src/store.py` | 1.7k | `schema compatibility`, `the store`, then `runs`, `writes`, `reads` inside it |
 | `src/sources/registry.py` | 1.3k | mostly one long descriptor list — grep the source key. Three banners group it: `exchanges`, `Action Network multi-book scoreboard`, `prediction markets` |

@@ -270,9 +270,12 @@ def _two_source_pair(**overrides):
 
 def test_clean_slate_passes_except_for_expected_coverage_gap() -> None:
     """The minimal slate only has moneylines, so the coverage check must flag
-    the missing core markets — proving that check is live."""
+    the missing core markets — proving that check is live.  A warning, not an
+    error: one fixture without a market is thin pricing, and the rename
+    diagnosis needs ``MIN_EVENTS_TO_DIAGNOSE_A_RENAME`` events of evidence."""
     report = validate(_two_source_pair())
-    assert {f.code for f in report.errors} == {"core_market_absent"}
+    assert report.errors == [], "\n".join(str(f) for f in report.errors)
+    assert "core_market_absent" in {f.code for f in report.warnings}
 
 
 def _full_slate(source: str, *, home_odds: float = 1.9) -> list:
@@ -462,9 +465,16 @@ def test_implied_probability_must_match_decimal_odds() -> None:
 
 
 def test_missing_core_market_is_an_error() -> None:
-    """Catches an upstream rename that turns a real market into a silent skip."""
-    quotes = [q for q in _full_slate("bookA") if q.market is not Market.TOTAL]
-    quotes += _full_slate("bookB")
+    """Catches an upstream rename that turns a real market into a silent skip.
+
+    Slate-sized on purpose: the ERROR grade claims a *rename*, and one fixture
+    without a market cannot support that claim — the same evidence bar the
+    per-event sibling already holds (``MIN_EVENTS_TO_DIAGNOSE_A_RENAME``).
+    """
+    quotes: list[Quote] = []
+    for fixture in _nfl_slate(8):
+        quotes += [q for q in _book(fixture, "book_a") if q.market is not Market.TOTAL]
+        quotes += _book(fixture, "book_b")
     assert "core_market_absent" in _errors(quotes)
 
 
@@ -1043,24 +1053,31 @@ class TestCoreCoverageBySport:
         assert "core_market_absent" not in _codes(quotes)
 
     def test_a_football_book_that_stopped_returning_spreads_is_an_error(self) -> None:
-        quotes = [
-            *[q for q in _book(NFL_GAME, "book_a") if q.market is not Market.SPREAD],
-            *_book(NFL_GAME, "book_b"),
-        ]
+        """"Stopped returning" implies a slate to have stopped on: below
+        ``MIN_EVENTS_TO_DIAGNOSE_A_RENAME`` events the same gap is one thin
+        fixture and grades as a warning instead."""
+        quotes: list[Quote] = []
+        for fixture in _nfl_slate(8):
+            quotes += [q for q in _book(fixture, "book_a") if q.market is not Market.SPREAD]
+            quotes += _book(fixture, "book_b")
         assert "core_market_absent" in _errors(quotes)
 
     def test_coverage_is_judged_per_sport_not_across_the_whole_slate(self) -> None:
         """A book with a full baseball slate and no soccer totals must not be
-        excused because its baseball totals satisfy a slate-wide check."""
+        excused because its baseball totals satisfy a slate-wide check.  The
+        finding's *scope* is the point here — its grade is the evidence rule's
+        business, and on a one-fixture soccer slate that grade is a warning."""
         quotes = [
             *_book(MLB_GAME, "book_a"),
             *_book(MLB_GAME, "book_b"),
             *[q for q in _book(SOCCER_GAME, "book_a") if q.market is not Market.TOTAL],
             *_book(SOCCER_GAME, "book_b"),
         ]
-        errors = [f for f in validate(quotes).errors if f.code == "core_market_absent"]
-        assert errors and "soccer" in errors[0].message
-        assert all("baseball" not in f.message for f in errors)
+        found = [
+            f for f in validate(quotes).findings if f.code == "core_market_absent"
+        ]
+        assert found and "soccer" in found[0].message
+        assert all("baseball" not in f.message for f in found)
 
     def test_a_partial_rename_within_one_sport_is_caught_per_event(self) -> None:
         """One book loses the total on a minority of a full slate.
@@ -1254,3 +1271,211 @@ class TestCrossSportSanity:
         ).model_copy(update={"sport": Sport.SOCCER})
         quotes = [*_book(MLB_GAME, "book_a"), *_book(MLB_GAME, "book_b"), forged, other]
         assert "heterogeneous_market" in _errors(quotes)
+
+
+class TestASplitFixtureIsNamedAtRuntime:
+    """One real fixture under two event keys, because a spelling did not join.
+
+    Every other cross-source check groups by ``event_key`` or by the
+    participant-key set, and a split differs in both — so until this check, the
+    class was reported only by a sweep over committed captures, which cannot
+    see a live slate.  Measured on the 2026-08-14 Illinois run: 271 soccer
+    clusters, 21 separating two books a bet could be placed at.
+    """
+
+    KICKOFF = datetime(2026, 7, 28, 19, 0, tzinfo=UTC)
+
+    def _fixture(self, home_team: str, home_key: str, *, minutes: int = 0) -> Fixture:
+        return Fixture(
+            sport=Sport.SOCCER,
+            league="EPL",
+            home_team=home_team,
+            away_team="Arsenal",
+            home_participant=home_key,
+            away_participant="SOCCER-arsenal",
+            commence=self.KICKOFF + timedelta(minutes=minutes),
+            total=2.5,
+            spread=0.5,
+        )
+
+    def test_two_keys_sharing_one_side_and_a_kickoff_are_flagged(self) -> None:
+        joined = self._fixture("Wolverhampton Wanderers", "SOCCER-wolverhampton")
+        split = self._fixture("Wolves FC", "SOCCER-wolvesfc", minutes=5)
+        quotes = [
+            *_book(joined, "book_a"),
+            *_book(joined, "book_b"),
+            *_book(split, "book_c"),
+        ]
+        report = validate(quotes)
+        found = [f for f in report.warnings if f.code == "split_fixture_suspected"]
+        assert len(found) == 1, [str(f) for f in report.findings]
+        # Filed against the book sitting alone on its own key, and the message
+        # names its key, both spellings, and where the majority was seen.
+        assert found[0].source == "book_c"
+        message = found[0].message
+        assert split.event_key in message
+        assert "Wolverhampton Wanderers" in message and "Wolves FC" in message
+        assert "book_a, book_b" in message
+
+    def test_a_three_spelling_chain_is_one_fixture_not_three_pairs(self) -> None:
+        """Cloudbet's typo, FanDuel's short form, and the majority spelling of
+        one player produced three pairwise reports for one match on the live
+        slate; a component is one fixture, reported once per odd book."""
+        majority = self._fixture("Wolverhampton Wanderers", "SOCCER-wolverhampton")
+        short = self._fixture("Wolves", "SOCCER-wolves", minutes=5)
+        typo = self._fixture("Wolverhamptan", "SOCCER-wolverhamptan", minutes=10)
+        quotes = [
+            *_book(majority, "book_a"),
+            *_book(majority, "book_b"),
+            *_book(short, "book_c"),
+            *_book(typo, "book_d"),
+        ]
+        report = validate(quotes)
+        found = [f for f in report.warnings if f.code == "split_fixture_suspected"]
+        assert {f.source for f in found} == {"book_c", "book_d"}
+        assert all("1 soccer fixture(s)" in f.message for f in found)
+
+    def test_two_real_fixtures_hours_apart_stay_quiet(self) -> None:
+        """A tennis player's two rounds, a club's cup replay — sharing one
+        competitor on a date is normal; sharing a half hour is not."""
+        first = self._fixture("Wolverhampton Wanderers", "SOCCER-wolverhampton")
+        second = self._fixture("Chelsea", "SOCCER-chelsea", minutes=5 * 60)
+        quotes = [*_book(first, "book_a"), *_book(second, "book_a")]
+        report = validate(quotes)
+        assert not [f for f in report.findings if f.code == "split_fixture_suspected"]
+
+    def test_a_doubleheader_is_not_a_split(self) -> None:
+        """Both halves share *both* sides, and the near-identity shape this
+        check hunts is exactly one side apart."""
+        game_two = [
+            quote.model_copy(update={"event_key": f"{MLB_GAME.event_key}#2"})
+            for quote in _book(MLB_GAME, "book_a")
+        ]
+        quotes = [*_book(MLB_GAME, "book_a"), *game_two]
+        report = validate(quotes)
+        assert not [f for f in report.findings if f.code == "split_fixture_suspected"]
+
+    def test_the_deliberate_deportivo_split_stays_quiet(self) -> None:
+        """``DELIBERATE_SPLITS`` records a refused merge — FanDuel's bare
+        "Deportivo" is Deportivo Pasto on a live capture, so an alias claiming
+        La Coruna would price two clubs onto one fixture.  The cost is accepted
+        once, not re-reported every run."""
+        pasto = Fixture(
+            sport=Sport.SOCCER, league="SOCCER_OTHER",
+            home_team="Deportivo", away_team="Millonarios",
+            home_participant="SOCCER-deportivo",
+            away_participant="SOCCER-millonarios",
+            commence=self.KICKOFF, total=2.5, spread=0.5,
+        )
+        coruna = Fixture(
+            sport=Sport.SOCCER, league="SOCCER_OTHER",
+            home_team="Deportivo La Coruna", away_team="Millonarios",
+            home_participant="SOCCER-deportivolacoruna",
+            away_participant="SOCCER-millonarios",
+            commence=self.KICKOFF, total=2.5, spread=0.5,
+        )
+        quotes = [*_book(pasto, "book_a"), *_book(coruna, "book_b")]
+        report = validate(quotes)
+        assert not [f for f in report.findings if f.code == "split_fixture_suspected"]
+
+
+class TestAConsensusFeedIsContextNotAPeer:
+    """``an_open`` publishes the line a market *opened* at.  ``src.arb`` and
+    ``src.betlinks`` already refuse it as a leg; judged as a price peer it
+    fails runs for being what it is — run 16 graded its opening prices
+    ``prices_disagree_with_every_other_source`` (ERROR) at a 0.25 deviation.
+    """
+
+    def _slate(self, *, shift_open_start: bool = False) -> list[Quote]:
+        rows: list[Quote] = []
+        start = datetime(2026, 7, 28, 22, 0, tzinfo=UTC)
+        for index in range(6):
+            key = f"MLB-CIN@MLB-PHI:2026-07-{10 + index}#{index}"
+            for source in ("book_one", "book_two", "book_three", "an_open"):
+                opened = source == "an_open"
+                commence = (
+                    start + timedelta(hours=6) if opened and shift_open_start else start
+                )
+                for selection, line, odds in (
+                    (Selection.HOME, -1.5, 5.0 if opened else 2.10),
+                    (Selection.AWAY, 1.5, 1.19 if opened else 1.80),
+                ):
+                    rows.append(make_quote(
+                        source=source, event_key=key, source_event_id=f"e{index}",
+                        market=Market.SPREAD, selection=selection, line=line,
+                        decimal_odds=odds, commence_time=commence,
+                        source_market_id=f"{source}-m{index}",
+                    ))
+        return rows
+
+    def test_judged_as_a_peer_the_open_column_fails_the_run(self) -> None:
+        """The pre-fix behaviour, kept as the control: without the exclusion
+        the opening prices earn the ERROR this class exists to remove."""
+        report = validate(self._slate())
+        found = [
+            f for f in report.findings
+            if f.code == "prices_disagree_with_every_other_source"
+        ]
+        assert found and found[0].source == "an_open"
+
+    def test_named_as_consensus_it_is_not_compared_on_price(self) -> None:
+        report = validate(self._slate(), consensus_sources={"an_open"})
+        assert not [
+            f for f in report.findings
+            if f.code == "prices_disagree_with_every_other_source"
+        ]
+
+    def test_identity_is_still_checked(self) -> None:
+        """Excluded from *price* comparison only: a consensus feed disagreeing
+        about when the game starts is still a real signal."""
+        report = validate(
+            self._slate(shift_open_start=True), consensus_sources={"an_open"}
+        )
+        assert "start_time_disagreement" in {f.code for f in report.findings}
+
+
+class TestCoverageJudgesAFeedByWhatItIs:
+    """``core_market_absent``'s softer bar covered republishers via the
+    *secondary* slot of ``REDUNDANT_PAIRS`` — but position encodes which feed
+    backs up which, not what a feed is.  ``an_bet365`` and ``an_fanatics`` sit
+    in the primary slot of their only pairs (their books have no first-party
+    adapter) and were graded ERROR for bet365's own market menu.
+    """
+
+    def _moneyline_only(self, source: str, count: int = 8) -> list[Quote]:
+        rows: list[Quote] = []
+        for fixture in _nfl_slate(count):
+            tag = f"{source}-{fixture.event_key}"
+            rows += [
+                _quote(fixture, source, market=Market.MONEYLINE,
+                       selection=selection, decimal_odds=odds,
+                       source_market_id=f"{tag}-ml")
+                for selection, odds in ((Selection.HOME, 1.91), (Selection.AWAY, 1.95))
+            ]
+        return rows
+
+    def _coverage_findings(self, quotes: list[Quote]) -> list:
+        from src.validation import _check_coverage
+
+        report = ValidationReport()
+        _check_coverage(quotes, report, {}, frozenset())
+        return [f for f in report.findings if f.code == "core_market_absent"]
+
+    def test_a_mirror_only_primary_gets_the_softer_bar(self) -> None:
+        found = self._coverage_findings(self._moneyline_only("an_bet365"))
+        assert found, "the finding itself must survive — only the grade changes"
+        assert all(f.severity is Severity.WARNING for f in found)
+
+    def test_a_first_party_book_is_still_held_to_the_bar(self) -> None:
+        found = self._coverage_findings(self._moneyline_only("fanduel"))
+        assert found
+        assert all(f.severity is Severity.ERROR for f in found)
+
+    def test_one_fixture_is_not_a_rename_diagnosis(self) -> None:
+        """The per-event sibling refuses to diagnose a rename under
+        ``MIN_EVENTS_TO_DIAGNOSE_A_RENAME`` events; the slate-wide branch held
+        no such bar and called a single spread-less fixture an ERROR."""
+        found = self._coverage_findings(self._moneyline_only("fanduel", count=1))
+        assert found
+        assert all(f.severity is Severity.WARNING for f in found)
+        assert "not evidence of a renamed label" in found[0].message

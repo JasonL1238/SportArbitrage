@@ -137,9 +137,14 @@ DEFAULT_BASE_URL = "https://gateway.polymarket.us"
 #: Events per request, and how many pages.  Much smaller than the offshore
 #: adapter's 40: a ``/v2`` event carries 136-170 markets inline, each with a full
 #: team object on *each* side, so three events is already 162 KB and ``limit=200``
-#: was met with a TCP reset.  Two pages of 25 is roughly 2.7 MB per league.
+#: was met with a TCP reset.  The page size is therefore the venue's tolerance
+#: and stays put; depth comes from page count.  Two pages cut MLB and NFL short
+#: on run 16 (the past-cap probe answered with more events both times); twelve
+#: pages of 25 is 300 events — past a full NFL regular season, the deepest shelf
+#: configured — at roughly 16 MB for a league that fills them all, and a shelf
+#: deeper still is reported truncated by :meth:`_probe_past_cap` as before.
 DEFAULT_PAGE_SIZE = 25
-MAX_PAGES_PER_LEAGUE = 2
+MAX_PAGES_PER_LEAGUE = 12
 
 _HOME = "home"
 _AWAY = "away"

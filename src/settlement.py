@@ -121,7 +121,6 @@ SETTLEMENT: dict[str, SettlementRegime] = {
     "an_betrivers": SettlementRegime.VOID_AND_REFUND,
     "an_betmgm": SettlementRegime.VOID_AND_REFUND,
     "an_bovada": SettlementRegime.VOID_AND_REFUND,
-    "an_onexbet": SettlementRegime.VOID_AND_REFUND,
     "an_hardrock": SettlementRegime.VOID_AND_REFUND,
     "an_fanatics": SettlementRegime.VOID_AND_REFUND,
     "an_bally": SettlementRegime.VOID_AND_REFUND,

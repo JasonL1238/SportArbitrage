@@ -24,8 +24,10 @@ revisiting:** it was the only independent watcher of `polymarket_us`, and the
 distinctness screen run the same day needs both venues live to be repeated. It
 also sat in a class of **eleven** US-unstakeable sources — `pinnacle`,
 `bovada`, `cloudbet`, `matchbook`, `smarkets`, `sxbet`, `onexbet`,
-`leovegas_kambi`, `an_bovada`, `an_onexbet` — so removing this one alone is a
-judgement about *this brand*, not a policy about unstakeable reference books.
+`leovegas_kambi`, `an_bovada`, and `an_onexbet` (the last deregistered
+2026-08-15 as a dropped tenant; see `action-network.md`) — so removing this one
+alone is a judgement about *this brand*, not a policy about unstakeable
+reference books.
 Pinnacle in particular is the sharpest price on the board and is equally
 untakeable from Illinois. If the rule ever becomes "US-stakeable only", it
 should be applied to that whole set deliberately, and the cost of losing

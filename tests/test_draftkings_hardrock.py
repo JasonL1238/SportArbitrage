@@ -306,6 +306,145 @@ def test_draftkings_state_routes_name_the_same_api_generation() -> None:
     assert seen == 4, f"expected all four jurisdictions to route DraftKings, saw {seen}"
 
 
+def _keyset_transport(total: int, *, with_sort_order: bool = True):
+    """A sportscontent stub serving ``total`` NHL fixtures 100 at a time.
+
+    Honours the ``sortOrder gt N`` predicate the venue's own subscription
+    queries carry, which is the grammar the adapter's paging reuses.
+    """
+    import re as _re
+
+    import httpx
+
+    from src.sources.draftkings import EVENT_PAGE_CAP
+
+    pool = [
+        {
+            "id": f"e{index}",
+            "name": f"Away{index} @ Home{index}",
+            "startEventDate": "2026-12-25T18:00:00.0000000Z",
+            "status": "NOT_STARTED",
+            "participants": [
+                {"venueRole": "Away", "name": f"Away{index}"},
+                {"venueRole": "Home", "name": f"Home{index}"},
+            ],
+            **({"sortOrder": 1000 + index} if with_sort_order else {}),
+        }
+        for index in range(total)
+    ]
+    queries: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        query = str(request.url.params.get("eventsQuery", ""))
+        queries.append(query)
+        anchor = _re.search(r"sortOrder gt (\d+)", query)
+        after = int(anchor.group(1)) if anchor else None
+        events = [
+            event
+            for event in pool
+            if after is None or event.get("sortOrder", 0) > after
+        ]
+        return httpx.Response(
+            200,
+            json={
+                "events": events[:EVENT_PAGE_CAP],
+                "markets": [],
+                "selections": [],
+            },
+        )
+
+    return httpx.MockTransport(handler), queries
+
+
+def test_draftkings_pages_past_a_full_page() -> None:
+    """A league deeper than one page is collected whole, not cut at 100.
+
+    Measured on run 16: NFL's slate runs to 2026-12-26 at four other books
+    while DraftKings stopped at week 7, because one ``top=100`` request was
+    taken as the whole slate.  ``top=300`` is refused (HTTP 400 MRKTBFF-400),
+    so the fix is the venue's own keyset grammar, not a bigger page.
+    """
+    import httpx
+
+    from src.sources.draftkings import EVENT_PAGE_CAP
+
+    total = EVENT_PAGE_CAP * 2 + 5
+    transport, queries = _keyset_transport(total)
+    adapter = DraftKingsAdapter(
+        leagues=["NHL"], client=httpx.Client(transport=transport)
+    )
+    try:
+        raws = adapter.fetch_raw()
+    finally:
+        adapter.close()
+
+    assert len(queries) == 3
+    assert "sortOrder gt" not in queries[0]
+    assert "sortOrder gt 1099" in queries[1], queries[1]
+    assert "sortOrder gt 1199" in queries[2], queries[2]
+    # Each page keeps its own endpoint so ``latest_per_endpoint`` in the parser
+    # cannot collapse them into one.
+    assert [raw.endpoint for raw in raws] == [
+        "sportscontent-42133",
+        "sportscontent-42133-p2",
+        "sportscontent-42133-p3",
+    ]
+    tally = adapter.last_fetch
+    assert not tally.truncated_scopes, "a scope that finished is not truncated"
+    assert tally.scopes_with_data == 1
+    from src.sources.draftkings import _event_count
+
+    assert sum(_event_count(raw) for raw in raws) == total
+
+
+def test_draftkings_reports_a_slate_that_outruns_the_page_budget() -> None:
+    import httpx
+
+    from src.sources.draftkings import EVENT_PAGE_CAP, MAX_EVENT_PAGES
+
+    total = EVENT_PAGE_CAP * MAX_EVENT_PAGES + 1
+    transport, queries = _keyset_transport(total)
+    adapter = DraftKingsAdapter(
+        leagues=["NHL"], client=httpx.Client(transport=transport)
+    )
+    try:
+        adapter.fetch_raw()
+    finally:
+        adapter.close()
+
+    assert len(queries) == MAX_EVENT_PAGES
+    truncated = adapter.last_fetch.truncated_scopes
+    assert len(truncated) == 1, truncated
+    assert "eventgroup:42133" in truncated[0]
+    assert "all filled" in truncated[0], truncated[0]
+
+
+def test_draftkings_stops_when_a_full_page_has_no_cursor() -> None:
+    """A full page without ``sortOrder`` cannot be paged past; say so.
+
+    Looping on the same query would hammer the venue with identical requests;
+    silently stopping would read as "that is the whole slate".  The right
+    answer is one page, reported truncated.
+    """
+    import httpx
+
+    from src.sources.draftkings import EVENT_PAGE_CAP
+
+    transport, queries = _keyset_transport(EVENT_PAGE_CAP, with_sort_order=False)
+    adapter = DraftKingsAdapter(
+        leagues=["NHL"], client=httpx.Client(transport=transport)
+    )
+    try:
+        adapter.fetch_raw()
+    finally:
+        adapter.close()
+
+    assert len(queries) == 1
+    truncated = adapter.last_fetch.truncated_scopes
+    assert len(truncated) == 1, truncated
+    assert "no advancing sortOrder cursor" in truncated[0], truncated[0]
+
+
 def test_hardrock_joins_root_idx_to_ladder() -> None:
     ladder = _load("hardrock__*_ladder_*.json")
     events = _load("hardrock__*_events-BASEBALL_*.json")

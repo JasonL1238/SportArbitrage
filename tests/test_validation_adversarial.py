@@ -739,23 +739,30 @@ class TestCoverage:
 
     def test_a_market_missing_everywhere_is_reported_once_not_twice(self) -> None:
         """A source with no totals at all is a slate-wide gap; reporting it per
-        event as well would bury the signal in noise."""
+        event as well would bury the signal in noise.  Checked across all
+        severities: on this one-event slate the gap grades WARNING, because the
+        ERRORed rename diagnosis needs ``MIN_EVENTS_TO_DIAGNOSE_A_RENAME``
+        events of evidence — the once-not-twice claim is what this test pins."""
         quotes = [q for q in _clean_slate() if q.market is not Market.TOTAL]
-        codes = _codes(validate(quotes), Severity.ERROR)
+        codes = {f.code for f in validate(quotes).findings}
         assert "core_market_absent" in codes
         assert "core_market_absent_for_event" not in codes
 
     def test_a_missing_market_in_one_sport_does_not_condemn_another(self) -> None:
         """Coverage is per (source, sport): a book with a complete baseball slate
         and no soccer spreads must be reported for soccer only, or the finding
-        cannot be acted on."""
+        cannot be acted on.  Scope and attribution are the claims here; on a
+        one-fixture soccer slate the grade is a warning, by the same evidence
+        rule the per-event sibling holds."""
         quotes = [
             *_complete_book("book_a"),
             *_complete_book("book_b"),
             *[q for q in _book(SOCCER_GAME, "book_a") if q.market is not Market.SPREAD],
             *_book(SOCCER_GAME, "book_b"),
         ]
-        absent = [f for f in validate(quotes).errors if f.code == "core_market_absent"]
+        absent = [
+            f for f in validate(quotes).findings if f.code == "core_market_absent"
+        ]
         assert len(absent) == 1
         assert "soccer" in absent[0].message and absent[0].source == "book_a"
 

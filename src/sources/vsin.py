@@ -143,8 +143,18 @@ def parse_vsin_circa(raws: Sequence[RawResponse]) -> ParseOutcome:
         competition = league_registry.league(league_key)
         soup = BeautifulSoup(raw.body, "html.parser")
         table = soup.select_one("table.sp-table")
-        body = table.select_one("tbody.sp-tbody-fg") if table else None
-        if table is None or body is None:
+        if table is None:
+            # An off-season sport's page carries no odds table at all — run
+            # 16's NHL page, live, beside three sports with full tables.  The
+            # whole source parses as one unit, so raising here discarded every
+            # other sport's rows and is what made Circa's only feed look
+            # intermittent.  A page whose table *exists* but has lost its
+            # full-game body or its Circa column still raises below: that is a
+            # structure change, not an empty slate.
+            outcome.skipped[f"no_line_table:{raw.endpoint}"] += 1
+            continue
+        body = table.select_one("tbody.sp-tbody-fg")
+        if body is None:
             raise FormatChangeError(f"{source}:{raw.endpoint}: no full-game line table")
         if "Circa" not in [cell.get_text(" ", strip=True) for cell in table.select("thead th")]:
             raise FormatChangeError(f"{source}:{raw.endpoint}: no named Circa column")

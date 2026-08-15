@@ -165,7 +165,6 @@ COMMISSIONS: dict[str, Commission] = {
     "an_betrivers": NO_COMMISSION,
     "an_betmgm": NO_COMMISSION,
     "an_bovada": NO_COMMISSION,
-    "an_onexbet": NO_COMMISSION,
     "an_hardrock": NO_COMMISSION,
     "an_fanatics": NO_COMMISSION,
     "an_bally": NO_COMMISSION,

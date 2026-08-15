@@ -108,8 +108,13 @@ ORDER_BATCH = 25
 #: :meth:`SXBetAdapter._fetch_orders`.
 ORDERS_PAGE_CAP = 100
 
-#: Bound on paging per sport — a runaway guard, not a limit anyone expects to hit.
-MAX_PAGES_PER_SPORT = 10
+#: Bound on paging per sport — a runaway guard, not a limit anyone expects to
+#: hit.  Tennis hit it: on run 16 (2026-08-14) the venue's cursor was still
+#: live after 10 pages and the largest comparable block on the slate (117
+#: ITF/WTA/ATP/Challenger events) came back cut off.  Thirty keeps the guard —
+#: a cursor that never dies still terminates — while clearing the deepest real
+#: sport by a factor of three.
+MAX_PAGES_PER_SPORT = 30
 
 _ACTIVE = "ACTIVE"
 

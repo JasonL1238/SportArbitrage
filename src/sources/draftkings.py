@@ -30,6 +30,7 @@ generations of captured bytes.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Mapping, Sequence
@@ -118,17 +119,33 @@ PAGE_PATHS: dict[int, str] = {
 
 #: Most events one request will return.  The page asks for 20; 100 is served and
 #: ``300`` is refused with ``HTTP 400 MRKTBFF-400``, so this is the venue's own
-#: ceiling rather than a number chosen here.  A league that fills it is reported
-#: as truncated — see :meth:`DraftKingsAdapter.fetch_raw` — because a silent cap
-#: reads as "that is the whole slate" when it is not.
+#: ceiling rather than a number chosen here.  A league that fills a page is
+#: paged past it — see :data:`MAX_EVENT_PAGES` — because a silent cap reads as
+#: "that is the whole slate" when it is not.
 EVENT_PAGE_CAP = 100
+
+#: Full pages fetched per league before stopping.  Paging reuses the venue's
+#: own grammar: the page's ``subscriptionPartials`` echo shows DraftKings' own
+#: client issuing ``sortOrder gt N`` range predicates against this same
+#: endpoint (captured 2026-08-14, ``sportscontent-88808``), so a follow-up page
+#: asks for exactly what the site asks for, anchored past the last event
+#: already held.  ``top`` itself stays at :data:`EVENT_PAGE_CAP` — see above.
+#: 4 × 100 events outruns any configured league's real pregame slate; a league
+#: that fills every page is reported truncated rather than assumed complete.
+MAX_EVENT_PAGES = 4
 
 MARKETS_BY_SPORT: dict[Sport, frozenset[Market]] = {
     Sport.BASEBALL: frozenset({Market.MONEYLINE, Market.SPREAD, Market.TOTAL}),
     Sport.BASKETBALL: frozenset({Market.MONEYLINE, Market.SPREAD, Market.TOTAL}),
     Sport.FOOTBALL: frozenset({Market.MONEYLINE, Market.SPREAD, Market.TOTAL}),
     Sport.HOCKEY: frozenset({Market.MONEYLINE, Market.SPREAD, Market.TOTAL}),
-    Sport.SOCCER: frozenset({Market.MONEYLINE, Market.TOTAL}),
+    # The ``primaryMarkets`` route serves what the league page's board shows.
+    # For the US sports that is moneyline, spread and total; for soccer the
+    # board is the moneyline alone — run 16's stored EPL page carries ten
+    # ``Moneyline`` markets and nothing else.  Claiming totals here (a
+    # holdover from the retired v5 route, which did serve them) made
+    # ``core_market_absent`` grade this route's normal answer an ERROR.
+    Sport.SOCCER: frozenset({Market.MONEYLINE}),
 }
 
 #: DK market ``label`` → (Market, Period).  Only full-game Game Lines.
@@ -232,40 +249,82 @@ class DraftKingsAdapter:
         for scope in self._scopes:
             label = f"eventgroup:{scope.event_group_id}"
             tally.requested(label)
-            try:
-                raw = self._fetch_scope(scope)
-                _require_game_lines(raw, self._source_key)
-            except SourceError as exc:
-                log.info(
-                    "%s: event group %s unavailable: %s",
-                    self._source_key, scope.event_group_id, exc,
+            collected = 0
+            after: int | None = None
+            failed = False
+            capped: str | None = None
+            for page_index in range(MAX_EVENT_PAGES):
+                try:
+                    raw = self._fetch_scope(scope, page=page_index, after=after)
+                    _require_game_lines(raw, self._source_key)
+                except SourceError as exc:
+                    log.info(
+                        "%s: event group %s unavailable: %s",
+                        self._source_key, scope.event_group_id, exc,
+                    )
+                    if collected == 0:
+                        tally.failed(label, exc)
+                        failed = True
+                    else:
+                        # Pages already paid for stay; a later page failing is
+                        # a short slate, not a dead scope.
+                        capped = (
+                            f"the page past sortOrder {after} failed after "
+                            f"{collected} event(s) were collected"
+                        )
+                    break
+                raws.append(raw)
+                count = _event_count(raw)
+                collected += count
+                if count < EVENT_PAGE_CAP:
+                    break
+                cursor = _max_sort_order(raw)
+                if cursor is None or (after is not None and cursor <= after):
+                    # A full page whose events carry no advancing cursor cannot
+                    # be paged past; say what was lost instead of looping.
+                    capped = (
+                        f"a full page of {EVENT_PAGE_CAP} events carries no "
+                        f"advancing sortOrder cursor, so the rest was not "
+                        f"collected"
+                    )
+                    break
+                after = cursor
+            else:
+                capped = (
+                    f"{MAX_EVENT_PAGES} pages of {EVENT_PAGE_CAP} events all "
+                    f"filled, so this league's slate is cut off at {collected} "
+                    f"and the rest was not collected"
                 )
-                tally.failed(label, exc)
+            if failed:
                 continue
-            raws.append(raw)
-            count = _event_count(raw)
-            tally.produced(label, count)
-            if count >= EVENT_PAGE_CAP:
+            tally.produced(label, collected)
+            if capped:
                 tally.truncated(
                     label,
-                    CoverageCappedError(
-                        f"{self._source_key}:{raw.endpoint}: returned the maximum "
-                        f"{EVENT_PAGE_CAP} events, so this league's slate is cut off "
-                        f"at that many and the rest was not collected"
-                    ),
+                    CoverageCappedError(f"{self._source_key}:{label}: {capped}"),
                 )
         tally.require_something(what="pregame eventgroup")
         return raws
 
-    def _fetch_scope(self, scope: _GroupScope) -> RawResponse:
+    def _fetch_scope(
+        self, scope: _GroupScope, *, page: int = 0, after: int | None = None
+    ) -> RawResponse:
         page_path = PAGE_PATHS.get(scope.event_group_id)
         page_url = f"{DEFAULT_ORIGIN}leagues/{page_path}" if page_path else DEFAULT_ORIGIN
         # The page's own provider parameters, with only ``top`` raised from the
-        # 20 a screen needs to the 100 the endpoint will serve.
+        # 20 a screen needs to the 100 the endpoint will serve, and — past the
+        # first page — the same ``sortOrder gt`` anchor the site's own
+        # subscription queries carry.
+        events_query = (
+            f"$filter=leagueId eq '{scope.event_group_id}' AND type eq 'Fixture'"
+        )
+        if after is not None:
+            events_query += f" and sortOrder gt {after}"
+        endpoint = f"sportscontent-{scope.event_group_id}"
+        if page:
+            endpoint = f"{endpoint}-p{page + 1}"
         params = {
-            "eventsQuery": (
-                f"$filter=leagueId eq '{scope.event_group_id}' AND type eq 'Fixture'"
-            ),
+            "eventsQuery": events_query,
             "marketsQuery": "$filter=tags/any(t: t eq 'PrimaryMarket')",
             "top": str(EVENT_PAGE_CAP),
             "include": "Events",
@@ -281,7 +340,7 @@ class DraftKingsAdapter:
         def fetch(http: SourceClient) -> RawResponse:
             return http.get(
                 f"{self.content_base_url}/markets",
-                endpoint=f"sportscontent-{scope.event_group_id}",
+                endpoint=endpoint,
                 params=params,
                 headers=headers,
             )
@@ -395,6 +454,29 @@ def _event_count(raw: RawResponse) -> int:
     return len(events) if isinstance(events, list) else 0
 
 
+def _max_sort_order(raw: RawResponse) -> int | None:
+    """The keyset cursor: the largest ``sortOrder`` among a page's events.
+
+    Only the current ``sportscontent`` shape carries it; a page without one
+    cannot be paged past, and the caller reports that instead of guessing.
+    """
+    try:
+        payload = raw.json()
+    except ValueError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    events = payload.get("events")
+    if not isinstance(events, list):
+        return None
+    orders = [
+        event.get("sortOrder")
+        for event in events
+        if isinstance(event, Mapping) and isinstance(event.get("sortOrder"), int)
+    ]
+    return max(orders) if orders else None
+
+
 def parse_draftkings(raws: Sequence[RawResponse]) -> ParseOutcome:
     """Pure: no network, no clock, no filesystem.  Source from the envelope."""
     outcome = ParseOutcome()
@@ -459,10 +541,12 @@ def _eventgroup_from_sportscontent(
     payload: Mapping[str, Any], endpoint: str
 ) -> Mapping[str, Any]:
     """Translate the current normalized DK store into the replay-stable shape."""
-    try:
-        group_id = int(endpoint.rsplit("-", 1)[-1])
-    except ValueError as exc:
-        raise FormatChangeError(f"draftkings:{endpoint}: missing league id") from exc
+    # ``sportscontent-88808`` and its keyset pages ``sportscontent-88808-p2``…
+    # both name the league between the route and any page suffix.
+    match = re.search(r"sportscontent-(\d+)", endpoint)
+    if match is None:
+        raise FormatChangeError(f"draftkings:{endpoint}: missing league id")
+    group_id = int(match.group(1))
     events = payload.get("events")
     markets = payload.get("markets")
     selections = payload.get("selections")
