@@ -190,6 +190,24 @@ select, input[type="search"], input[type="text"] {
   display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: end;
   margin: 0 0 12px;
 }
+
+.campaign-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.campaign-table th {
+  text-align: left; padding: 6px 10px; white-space: nowrap;
+  font: 500 10px/1.3 var(--mono); text-transform: uppercase;
+  letter-spacing: .08em; color: var(--muted);
+  border-bottom: 1px solid var(--line);
+}
+.campaign-table td {
+  padding: 6px 10px; white-space: nowrap; border-bottom: 1px solid var(--line);
+}
+.campaign-table tbody tr { cursor: pointer; }
+.campaign-table tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.campaign-table td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; text-align: right; }
+.campaign-table tr.is-claimed td { color: var(--muted); text-decoration: line-through; }
+.campaign-table tr.is-claimed td.claim-cell { text-decoration: none; }
+.campaign-table td.ev-pos { color: var(--up); font-weight: 600; }
+.campaign-table .expiry-soon { color: var(--warn); }
 .promo-toolbar label { display: flex; flex-direction: column; gap: 3px; min-width: 140px; }
 .promo-toolbar .eyebrow { margin: 0; }
 .promo-list { display: flex; flex-direction: column; gap: 8px; }
@@ -966,6 +984,16 @@ BODY = """
         </div>
         <div class="card-body flush">
           <div class="stats" id="promo-stats"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h3>Campaign</h3>
+          <span class="eyebrow" id="promo-campaign-note">offers ranked by expected value</span>
+        </div>
+        <div class="card-body flush">
+          <div class="scroll"><table class="campaign-table" id="promo-campaign"></table></div>
         </div>
       </div>
 
@@ -3561,6 +3589,133 @@ function promoDetailHtml(o) {
   </div>`;
 }
 
+/* ── the campaign table ──────────────────────────────────────────────────────
+   One row per offer, ranked by a single normalized EV dollar figure so the
+   operator can spend welcome offers best-first.  Every number is read from the
+   payload the plan cards already render — this table computes nothing new
+   except which of the planner's own figures is the comparable one:
+     qualify_then_convert / rollover_grind -> entry.expected_value (computed);
+     bonus_conversion -> unit x best conversion (flagged when the unit is the
+     $100 placeholder); no_sweat / boost_locked -> best plan's settled floor.
+   Anything unpriceable this run sinks to an unranked tail rather than being
+   dressed up with a number. */
+
+function promoClaimKey(o) { return 'promoClaimed:' + promoOfferKey(o); }
+
+function promoIsClaimed(o) {
+  try { return localStorage.getItem(promoClaimKey(o)) === '1'; }
+  catch (err) { return false; }
+}
+
+function promoCampaignEV(o) {
+  const entry = (PROMOS.plans || {})[promoOfferKey(o)];
+  if (!entry) return null;
+  const plans = entry.plans || [];
+  if (entry.expected_value !== null && entry.expected_value !== undefined) {
+    return { ev: Number(entry.expected_value), assumed: !!(entry.unit && entry.unit.assumed) };
+  }
+  if (!plans.length) return null;
+  if (entry.strategy === 'bonus_conversion') {
+    const best = plans.reduce((top, p) => {
+      const pct = p.conversion_pct === null || p.conversion_pct === undefined ? null : Number(p.conversion_pct);
+      return pct !== null && (top === null || pct > top) ? pct : top;
+    }, null);
+    const unit = entry.unit && entry.unit.amount ? Number(entry.unit.amount) : null;
+    if (best === null || unit === null) return null;
+    return { ev: unit * best / 100, assumed: !!(entry.unit && entry.unit.assumed) };
+  }
+  if (entry.strategy === 'no_sweat_hedge' || entry.strategy === 'boost_locked') {
+    const best = plans.reduce((top, p) => {
+      const floor = p.settled_cash === null || p.settled_cash === undefined ? null : Number(p.settled_cash);
+      return floor !== null && (top === null || floor > top) ? floor : top;
+    }, null);
+    if (best === null) return null;
+    return { ev: best, assumed: !!(entry.unit && entry.unit.assumed) };
+  }
+  return null;
+}
+
+function renderPromoCampaign(offers) {
+  const table = el('promo-campaign');
+  const note = el('promo-campaign-note');
+  if (!table) return;
+  const entryFor = (o) => (PROMOS.plans || {})[promoOfferKey(o)] || null;
+  const rows = offers.map((o) => {
+    const entry = entryFor(o);
+    const value = promoCampaignEV(o);
+    return { o, entry, value, claimed: promoIsClaimed(o) };
+  });
+  // Ranked first (claimed sink, then EV descending), unpriceable tail last.
+  rows.sort((a, b) => {
+    if (a.claimed !== b.claimed) return a.claimed ? 1 : -1;
+    const av = a.value ? a.value.ev : null;
+    const bv = b.value ? b.value.ev : null;
+    if ((av === null) !== (bv === null)) return av === null ? 1 : -1;
+    return (bv || 0) - (av || 0);
+  });
+  const soon = Date.now() + 7 * 24 * 3600 * 1000;
+  const runState = (PROMOS.run && PROMOS.run.jurisdiction ? String(PROMOS.run.jurisdiction) : '').toUpperCase();
+  const body = rows.map(({ o, entry, value, claimed }, index) => {
+    const key = promoOfferKey(o);
+    const regions = (o.eligible_regions || []);
+    const states = regions.length ? regions.slice(0, 4).join(' ') + (regions.length > 4 ? '…' : '') : '—';
+    const strategy = entry && PROMO_STRATEGY_LABEL[entry.strategy] ? PROMO_STRATEGY_LABEL[entry.strategy] : '—';
+    const evCell = value === null
+      ? '<td class="num dim">not priceable</td>'
+      : `<td class="num ev-pos">$${value.ev.toFixed(2)}${value.assumed ? ' <span class="dim">/ $100</span>' : ''}</td>`;
+    const qual = entry && entry.plans && entry.plans.length && entry.plans[0].qualifying_cost !== undefined
+      ? `$${Number(entry.plans[0].qualifying_cost || 0).toFixed(2)}` : '—';
+    const conv = (() => {
+      if (!entry || !(entry.plans || []).length) return '—';
+      const pcts = entry.plans.map((p) => p.conversion_pct).filter((v) => v !== null && v !== undefined);
+      return pcts.length ? `${Math.max(...pcts.map(Number)).toFixed(1)}%` : '—';
+    })();
+    const ends = o.ends_at
+      ? `<span class="${Date.parse(o.ends_at) < soon ? 'expiry-soon' : ''}">${escapeHtml(fmtClock(o.ends_at))}</span>`
+      : '<span class="dim">—</span>';
+    const confirmed = o.state_confirmed || !runState ? '' : ' <span class="pill warn">?</span>';
+    return `<tr class="${claimed ? 'is-claimed' : ''}" data-campaign-key="${escapeHtml(key)}">
+      <td class="num dim">${claimed || value === null ? '' : index + 1}</td>
+      <td>${escapeHtml(promoBookLabel(o.source))}${confirmed}</td>
+      <td class="dim">${escapeHtml(states)}</td>
+      <td>${escapeHtml((o.summary || o.title).slice(0, 60))}</td>
+      <td class="dim">${escapeHtml(strategy)}</td>
+      ${evCell}
+      <td class="num dim">${escapeHtml(qual)}</td>
+      <td class="num">${escapeHtml(conv)}</td>
+      <td>${ends}</td>
+      <td class="claim-cell"><input type="checkbox" aria-label="claimed" ${claimed ? 'checked' : ''}/></td>
+    </tr>`;
+  }).join('');
+  table.innerHTML = `<thead><tr>
+      <th>#</th><th>Book</th><th>States</th><th>Offer</th><th>Strategy</th>
+      <th>EV</th><th>Qual cost</th><th>Conv</th><th>Ends</th><th>Done</th>
+    </tr></thead><tbody>${body}</tbody>`;
+  if (note) {
+    const ranked = rows.filter((r) => !r.claimed && r.value !== null).length;
+    const claimed = rows.filter((r) => r.claimed).length;
+    note.textContent = `${ranked} priceable · ${claimed} done · checkbox is per-browser`;
+  }
+  table.querySelectorAll('tbody tr').forEach((tr) => {
+    const key = tr.getAttribute('data-campaign-key');
+    const box = tr.querySelector('input[type="checkbox"]');
+    if (box) {
+      box.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        try { localStorage.setItem('promoClaimed:' + key, box.checked ? '1' : '0'); }
+        catch (err) { /* private browsing: the checkbox simply does not stick */ }
+        renderPromos();
+      });
+    }
+    tr.addEventListener('click', () => {
+      selectedPromoKey = key;
+      renderPromos();
+      const row = document.querySelector(`.promo-row[data-promo-key="${CSS.escape(key)}"]`);
+      if (row) row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    });
+  });
+}
+
 function renderPromos() {
   const nav = el('nav-promos');
   const summary = el('promo-summary');
@@ -3592,6 +3747,10 @@ function renderPromos() {
   }
 
   if (!run) {
+    const campaign = el('promo-campaign');
+    if (campaign) campaign.innerHTML = '';
+    const campaignNote = el('promo-campaign-note');
+    if (campaignNote) campaignNote.textContent = 'no scrape yet';
     stats.innerHTML = `
       <div class="stat"><b>0</b><span>offers</span></div>
       <div class="stat"><b>—</b><span>last scrape</span></div>
@@ -3608,6 +3767,10 @@ function renderPromos() {
     <div class="stat"><b>${offers.length.toLocaleString()}</b><span>offers</span></div>
     <div class="stat"><b>${escapeHtml(fmtClock(run.started_at))}</b><span>scraped</span></div>
     <div class="stat"><b>${brands.ok}/${brands.total || 0}</b><span>brands ok</span></div>`;
+
+  // The campaign ranks every offer, unfiltered: the toolbar narrows the
+  // browsing list below, but spending order is a question about the whole set.
+  renderPromoCampaign(offers);
 
   const kindFilter = (el('promo-kind') && el('promo-kind').value) || '';
   const sourceFilter = (el('promo-source') && el('promo-source').value) || '';
@@ -3682,11 +3845,18 @@ function renderPromos() {
       const via = (o.metadata && o.metadata.feed === 'thelines') || String(o.source || '').startsWith('tl_')
         ? ' · via TheLines'
         : '';
+      /* The state verdict, in the odds side's "not reachable from {ST}" voice.
+         False means the offer's own copy never named the run's state — it is
+         stored and shown under that label rather than silently dropped. */
+      const runState = (PROMOS.run && PROMOS.run.jurisdiction ? String(PROMOS.run.jurisdiction) : '').toUpperCase();
+      const unconfirmed = !o.state_confirmed && runState && runState !== 'GLOBAL'
+        ? ` · <span class="pill warn">not confirmed for ${escapeHtml(runState)}</span>`
+        : '';
       return `<article class="promo-row${open ? ' is-open' : ''}" data-promo-key="${escapeHtml(key)}" tabindex="0" role="button" aria-expanded="${open ? 'true' : 'false'}">
         <div>
           <p class="title">${escapeHtml(o.summary || o.title)}</p>
           <p class="meta">${escapeHtml(promoBookLabel(o.source))} · ${escapeHtml(promoKindLabel(o.kind))}${
-            o.product ? ` · ${escapeHtml(o.product)}` : ''}${login}${vague}${regions}${code}${via}</p>
+            o.product ? ` · ${escapeHtml(o.product)}` : ''}${login}${vague}${regions}${code}${via}${unconfirmed}</p>
           ${desc}
         </div>
         <div class="side">

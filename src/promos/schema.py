@@ -103,6 +103,20 @@ class PromoOffer(BaseModel):
     is_specific: bool = False
     """True once enrichment found concrete mechanics ($/%, reward type, etc.)."""
 
+    state_confirmed: bool = False
+    """True when the collected state was affirmatively named by the offer's own copy.
+
+    Stamped by the collector against the run's jurisdiction; the default is
+    False so an unstamped row keeps the fail-closed reading.  An unconfirmed
+    offer is **stored and labeled** rather than dropped — the first live run
+    filtered 51 of 54 offers to no audit trail at all, and the one survivor's
+    "confirmation" came from another offer's state list sharing its description
+    (see docs/evidence/promos.md, 2026-08-16).  A stored False is the honest
+    verdict: it shows the operator the offer *and* the fact that its copy never
+    named the state, which is exactly the label-don't-withhold rule the odds
+    side adopted for out-of-state prices.
+    """
+
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("title")

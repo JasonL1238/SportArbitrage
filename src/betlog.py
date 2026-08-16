@@ -26,7 +26,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 #: How a leg finished.  ``pending`` is the only state that is not an outcome.
 STATUSES: tuple[str, ...] = (
@@ -45,7 +45,15 @@ SETTLED_STATUSES: frozenset[str] = frozenset(STATUSES) - {"pending"}
 #: ``single`` is one bet on its own.  The distinction is only ever presentational
 #: — every total below is computed leg by leg, so a half-filled arb is still
 #: accounted for honestly rather than as an all-or-nothing unit.
-KINDS: tuple[str, ...] = ("arb", "single")
+KINDS: tuple[str, ...] = ("arb", "single", "promo")
+
+#: What a leg was staked with.  ``cash`` is the operator's money; ``bonus`` is
+#: stake-not-returned site credit (a winning bonus bet pays winnings only);
+#: ``boosted`` is cash whose price carries a boost — informational, priced by
+#: the odds the operator logs.  The distinction is load-bearing arithmetic:
+#: logging a bonus leg as cash overstates its payout by the whole stake and
+#: counts credit the operator never risked as bankroll.
+STAKE_KINDS: tuple[str, ...] = ("cash", "bonus", "boosted")
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -72,6 +80,8 @@ CREATE TABLE IF NOT EXISTS bet_slip (
     margin_pct REAL,
     expected_profit_cents INTEGER,
     source_run_id INTEGER,
+    promo_source TEXT NOT NULL DEFAULT '',
+    promo_offer_id TEXT NOT NULL DEFAULT '',
     note TEXT NOT NULL DEFAULT ''
 );
 
@@ -84,6 +94,7 @@ CREATE TABLE IF NOT EXISTS bet_leg (
     line REAL,
     american_odds INTEGER,
     decimal_odds REAL NOT NULL,
+    stake_kind TEXT NOT NULL DEFAULT 'cash',
     stake_cents INTEGER NOT NULL,
     to_return_cents INTEGER NOT NULL,
     status TEXT NOT NULL DEFAULT 'pending',
@@ -211,6 +222,15 @@ def _line(value: Any) -> float | None:
     return out
 
 
+def _stake_kind(value: Any) -> str:
+    kind = str(value or "cash").strip().lower()
+    if kind not in STAKE_KINDS:
+        raise BetLogError(
+            f"unknown stake kind {value!r}; expected one of {', '.join(STAKE_KINDS)}"
+        )
+    return kind
+
+
 def _status(value: Any) -> str:
     status = str(value or "").strip().lower()
     if status not in STATUSES:
@@ -220,20 +240,31 @@ def _status(value: Any) -> str:
     return status
 
 
-def default_return_cents(status: str, *, stake_cents: int, to_return_cents: int) -> int | None:
+def default_return_cents(
+    status: str,
+    *,
+    stake_cents: int,
+    to_return_cents: int,
+    stake_kind: str = "cash",
+) -> int | None:
     """What a settled leg pays back before the operator overrides it.
 
     ``push`` and ``void`` return the stake, which is why they are not the same
     as ``lost`` and why a ledger that folds them into one is wrong about both
     turnover and record.  ``cashout`` has no derivable answer — the operator
     took a number the book offered — so it stays ``None`` until one is given.
+
+    A ``bonus`` leg's push/void returns **0 cash**: the stake was credit, and
+    what most books hand back is the credit itself, not money.  When a book
+    does re-credit the bonus bet, that is a fact about the *credit*, recorded
+    by re-logging the re-run — the cash ledger saw nothing come back.
     """
     if status == "won":
         return to_return_cents
     if status == "lost":
         return 0
     if status in ("push", "void"):
-        return stake_cents
+        return 0 if stake_kind == "bonus" else stake_cents
     return None
 
 
@@ -254,6 +285,7 @@ class LegInput:
     returned: float | None = None
     link_url: str = ""
     note: str = ""
+    stake_kind: str = "cash"
 
 
 @dataclass(frozen=True)
@@ -277,6 +309,8 @@ class SlipInput:
     source_run_id: int | None = None
     note: str = ""
     placed_at: str | None = None
+    promo_source: str = ""
+    promo_offer_id: str = ""
 
 
 def slip_from_payload(payload: Mapping[str, Any]) -> SlipInput:
@@ -310,6 +344,7 @@ def slip_from_payload(payload: Mapping[str, Any]) -> SlipInput:
                 returned=entry.get("returned"),
                 link_url=_text(entry.get("link_url"), limit=600),
                 note=_text(entry.get("note")),
+                stake_kind=str(entry.get("stake_kind") or "cash"),
             )
         )
     kind = str(payload.get("kind") or ("arb" if len(legs) > 1 else "single")).strip().lower()
@@ -333,6 +368,8 @@ def slip_from_payload(payload: Mapping[str, Any]) -> SlipInput:
         source_run_id=payload.get("source_run_id"),
         note=_text(payload.get("note"), limit=1000),
         placed_at=_text(payload.get("placed_at"), limit=40) or None,
+        promo_source=_text(payload.get("promo_source"), limit=80),
+        promo_offer_id=_text(payload.get("promo_offer_id"), limit=200),
     )
 
 
@@ -359,12 +396,33 @@ class BetLog:
         row = self._conn.execute(
             "SELECT value FROM meta WHERE key = 'schema_version'"
         ).fetchone()
+        current = int(row["value"]) if row is not None else 0
+        if row is not None and current < 2:
+            # v1 -> v2: promo awareness.  ALTERs are idempotent against the
+            # column set because a v1 file predates every one of these.
+            leg_cols = {
+                r["name"]
+                for r in self._conn.execute("PRAGMA table_info(bet_leg)").fetchall()
+            }
+            if "stake_kind" not in leg_cols:
+                self._conn.execute(
+                    "ALTER TABLE bet_leg ADD COLUMN stake_kind TEXT NOT NULL DEFAULT 'cash'"
+                )
+            slip_cols = {
+                r["name"]
+                for r in self._conn.execute("PRAGMA table_info(bet_slip)").fetchall()
+            }
+            for name in ("promo_source", "promo_offer_id"):
+                if name not in slip_cols:
+                    self._conn.execute(
+                        f"ALTER TABLE bet_slip ADD COLUMN {name} TEXT NOT NULL DEFAULT ''"
+                    )
         if row is None:
             self._conn.execute(
                 "INSERT INTO meta(key, value) VALUES ('schema_version', ?)",
                 (str(SCHEMA_VERSION),),
             )
-        elif int(row["value"]) != SCHEMA_VERSION:
+        elif current != SCHEMA_VERSION:
             self._conn.execute(
                 "UPDATE meta SET value = ? WHERE key = 'schema_version'",
                 (str(SCHEMA_VERSION),),
@@ -395,12 +453,20 @@ class BetLog:
             assert stake_cents is not None
             if stake_cents <= 0:
                 raise BetLogError("stake must be more than zero")
-            to_return = int(round(stake_cents * dec))
+            stake_kind = _stake_kind(leg.stake_kind)
+            # A bonus bet returns winnings only — the stake was credit, never
+            # cash.  ``stake × dec`` here overstated the payout by the whole
+            # stake, which is exactly the number a promo conversion's profit
+            # gets wrong by.
+            to_return = int(round(stake_cents * (dec - 1.0 if stake_kind == "bonus" else dec)))
             status = _status(leg.status)
             returned = _cents(leg.returned, label="returned", allow_none=True)
             if status != "pending" and returned is None:
                 returned = default_return_cents(
-                    status, stake_cents=stake_cents, to_return_cents=to_return
+                    status,
+                    stake_cents=stake_cents,
+                    to_return_cents=to_return,
+                    stake_kind=stake_kind,
                 )
             if status == "pending" and returned is not None:
                 raise BetLogError("a pending leg cannot have a returned amount")
@@ -411,6 +477,7 @@ class BetLog:
                 _line(leg.line),
                 amer,
                 dec,
+                stake_kind,
                 stake_cents,
                 to_return,
                 status,
@@ -428,8 +495,8 @@ class BetLog:
                        kind, placed_at, created_at, updated_at, sport, league,
                        event_key, home_team, away_team, commence_time, market,
                        period, side, line, margin_pct, expected_profit_cents,
-                       source_run_id, note)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                       source_run_id, promo_source, promo_offer_id, note)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     slip.kind if slip.kind in KINDS else "single",
                     placed_at,
@@ -448,6 +515,8 @@ class BetLog:
                     None if slip.margin_pct in (None, "") else float(slip.margin_pct),
                     _cents(slip.expected_profit, label="expected profit", allow_none=True),
                     None if slip.source_run_id in (None, "") else int(slip.source_run_id),
+                    _text(slip.promo_source, limit=80),
+                    _text(slip.promo_offer_id, limit=200),
                     _text(slip.note, limit=1000),
                 ),
             )
@@ -455,9 +524,9 @@ class BetLog:
             self._conn.executemany(
                 """INSERT INTO bet_leg(
                        slip_id, position, book, selection, line, american_odds,
-                       decimal_odds, stake_cents, to_return_cents, status,
-                       returned_cents, settled_at, link_url, note)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                       decimal_odds, stake_kind, stake_cents, to_return_cents,
+                       status, returned_cents, settled_at, link_url, note)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 [(slip_id, *row) for row in rows],
             )
         return slip_id
@@ -512,10 +581,13 @@ class BetLog:
             stake_cents = new_stake
             sets["stake_cents"] = stake_cents
 
+        stake_kind = _stake_kind(row["stake_kind"])
         old_to_return = int(row["to_return_cents"])
         to_return = old_to_return
         if priced or "stake" in changes:
-            to_return = int(round(stake_cents * dec))
+            to_return = int(
+                round(stake_cents * (dec - 1.0 if stake_kind == "bonus" else dec))
+            )
             sets["to_return_cents"] = to_return
 
         status = str(row["status"])
@@ -529,7 +601,10 @@ class BetLog:
                 sets["returned_cents"] = None
             elif "returned" not in changes:
                 sets["returned_cents"] = default_return_cents(
-                    status, stake_cents=stake_cents, to_return_cents=to_return
+                    status,
+                    stake_cents=stake_cents,
+                    to_return_cents=to_return,
+                    stake_kind=stake_kind,
                 )
         elif priced or "stake" in changes:
             # Price or stake moved under a leg already settled.  Only a return
@@ -540,10 +615,14 @@ class BetLog:
                     status,
                     stake_cents=int(row["stake_cents"]),
                     to_return_cents=old_to_return,
+                    stake_kind=stake_kind,
                 )
                 if was_derived:
                     sets["returned_cents"] = default_return_cents(
-                        status, stake_cents=stake_cents, to_return_cents=to_return
+                        status,
+                        stake_cents=stake_cents,
+                        to_return_cents=to_return,
+                        stake_kind=stake_kind,
                     )
 
         if "returned" in changes:
@@ -670,18 +749,30 @@ class BetLog:
         }
 
 
+def _cash_stake(leg: sqlite3.Row) -> int:
+    """A leg's claim on the bankroll: its stake, unless the stake was credit.
+
+    A bonus bet's face amount is real for computing its payout and is shown on
+    the leg — but none of the operator's money is at risk, so it contributes
+    nothing to staked, settled-stake, or open-stake totals.  Counting it made
+    a converted $150 credit look like $150 of bankroll spent and its profit
+    like a loss.
+    """
+    return 0 if str(leg["stake_kind"]) == "bonus" else int(leg["stake_cents"])
+
+
 def _slip_payload(row: sqlite3.Row, legs: Sequence[sqlite3.Row]) -> dict[str, Any]:
     leg_payloads = [_leg_payload(leg) for leg in legs]
-    staked = sum(int(leg["stake_cents"]) for leg in legs)
+    staked = sum(_cash_stake(leg) for leg in legs)
     settled = [leg for leg in legs if str(leg["status"]) in SETTLED_STATUSES]
     # A settled leg whose return was never entered (an un-priced cashout) is not
     # counted as returning zero — that would print a loss the operator did not
     # take.  It is excluded from the realized figures and named as unpriced.
     priced = [leg for leg in settled if leg["returned_cents"] is not None]
     returned = sum(int(leg["returned_cents"]) for leg in priced)
-    settled_stake = sum(int(leg["stake_cents"]) for leg in priced)
+    settled_stake = sum(_cash_stake(leg) for leg in priced)
     open_stake = sum(
-        int(leg["stake_cents"]) for leg in legs if str(leg["status"]) == "pending"
+        _cash_stake(leg) for leg in legs if str(leg["status"]) == "pending"
     )
     return {
         "id": int(row["id"]),
@@ -702,6 +793,8 @@ def _slip_payload(row: sqlite3.Row, legs: Sequence[sqlite3.Row]) -> dict[str, An
         "margin_pct": row["margin_pct"],
         "expected_profit": _dollars(row["expected_profit_cents"]),
         "source_run_id": row["source_run_id"],
+        "promo_source": row["promo_source"],
+        "promo_offer_id": row["promo_offer_id"],
         "note": row["note"],
         "legs": leg_payloads,
         "stake": _dollars(staked),
@@ -734,6 +827,7 @@ def _slip_status(legs: Sequence[sqlite3.Row]) -> str:
 
 def _leg_payload(row: sqlite3.Row) -> dict[str, Any]:
     stake = int(row["stake_cents"])
+    cash_stake = _cash_stake(row)
     returned = row["returned_cents"]
     return {
         "id": int(row["id"]),
@@ -746,9 +840,12 @@ def _leg_payload(row: sqlite3.Row) -> dict[str, Any]:
         "decimal_odds": row["decimal_odds"],
         "stake": _dollars(stake),
         "to_return": _dollars(int(row["to_return_cents"])),
+        "stake_kind": str(row["stake_kind"]),
         "status": str(row["status"]),
         "returned": _dollars(returned),
-        "profit": None if returned is None else _dollars(int(returned) - stake),
+        # Profit is measured against the *cash* put down: a winning bonus leg's
+        # whole return is profit, because nothing of the operator's was staked.
+        "profit": None if returned is None else _dollars(int(returned) - cash_stake),
         "settled_at": row["settled_at"],
         "link_url": row["link_url"],
         "note": row["note"],
@@ -777,6 +874,10 @@ def summarize(slips: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
         slip_count += 1
         for leg in slip.get("legs") or ():
             stake_cents = _cents(leg.get("stake"), label="stake") or 0
+            # Credit is not bankroll: a bonus leg's face stake is shown on the
+            # leg but claims none of the operator's money.
+            if str(leg.get("stake_kind") or "cash") == "bonus":
+                stake_cents = 0
             staked_cents += stake_cents
             status = str(leg.get("status") or "pending")
             book = str(leg.get("book") or "—")

@@ -464,9 +464,20 @@ def collect_promos_once(
         offers = enrich_offers(offers)
         offers = prefer_primary_offers(offers)
         offers = apply_usage_guidance(offers)
-        confirmed = [offer for offer in offers if offer_confirmed_for_state(offer, run_state)]
-        filtered_unconfirmed = len(offers) - len(confirmed)
-        offers = confirmed
+        # Stamp the state verdict rather than filtering on it.  The first live
+        # run dropped 51 of 54 offers here with no audit trail — a source that
+        # answered with twelve genuine offers graded FAILED because this line
+        # emptied it — and the one offer that *did* pass owed its confirmation
+        # to another offer's state list sharing its description.  Storing the
+        # verdict labels both mistakes instead of hiding them; the predicate
+        # itself is unchanged and still fails closed.
+        offers = [
+            offer.model_copy(
+                update={"state_confirmed": offer_confirmed_for_state(offer, run_state)}
+            )
+            for offer in offers
+        ]
+        filtered_unconfirmed = sum(1 for offer in offers if not offer.state_confirmed)
         health_rows = _reassess_health_after_enrich(health_rows, offers)
         ok_brands, total_brands, _ = brand_coverage(health_rows)
         # Run health folds TheLines secondaries into brand coverage so a dead
@@ -484,8 +495,9 @@ def collect_promos_once(
                     offers=offers,
                     health=health_rows,
                     notes=(
-                        f"{filtered_unconfirmed} offer(s) filtered because eligibility "
-                        f"for {run_state} was not affirmatively confirmed"
+                        f"{filtered_unconfirmed} offer(s) stored unconfirmed for "
+                        f"{run_state}: eligibility was not affirmatively named by "
+                        "the venue's own copy"
                     ),
                 )
             except Exception:
@@ -567,14 +579,18 @@ def _cmd_collect(args: argparse.Namespace) -> int:
         print(f"\n--- {state} promo run ---")
         for line in result.summary_lines():
             print(line)
-        print(f"  filtered unconfirmed for {state}: {result.filtered_unconfirmed}")
+        print(
+            f"  unconfirmed for {state}: {result.filtered_unconfirmed} "
+            "(stored and labeled, not dropped)"
+        )
         if args.verbose:
             for offer in result.offers:
                 end = offer.ends_at.isoformat() if offer.ends_at else "-"
                 label = offer.summary or offer.title
+                confirmed = "yes" if offer.state_confirmed else f"NOT {state}"
                 print(
                     f"  [{offer.source}] {offer.kind.value:14} {label[:70]}"
-                    f"  ends={end} specific={offer.is_specific}"
+                    f"  ends={end} specific={offer.is_specific} confirmed={confirmed}"
                 )
     return 0 if batch.ok else 1
 
@@ -652,9 +668,30 @@ def _cmd_plan(args: argparse.Namespace) -> int:
             return 1
         promo_row = promo_store.run_row(promo_run)
         promo_state = str((promo_row or {}).get("jurisdiction") or "").upper()
-        odds_run = odds_store.latest_run_id(
-            jurisdiction=promo_state or None,
-        )
+        if args.odds_run is not None:
+            # The flag chooses *among same-state runs*, never across states:
+            # planning IL promos against a PA slate would price hedges a
+            # different licence answered for.  It exists because "latest" can
+            # be a thin single-source probe run — the day this shipped, the
+            # latest IL run was a 174-quote bet365 acceptance run.
+            row = odds_store.run_row(args.odds_run)
+            if row is None:
+                print(f"no odds run #{args.odds_run} is stored", file=sys.stderr)
+                return 1
+            odds_jurisdiction = str(dict(row).get("jurisdiction") or "").upper()
+            if promo_state and odds_jurisdiction != promo_state:
+                print(
+                    f"odds run #{args.odds_run} is {odds_jurisdiction or 'ungoverned'}, "
+                    f"but promo run #{promo_run} is {promo_state} — refusing to price "
+                    "one state's offers against another's slate",
+                    file=sys.stderr,
+                )
+                return 1
+            odds_run = args.odds_run
+        else:
+            odds_run = odds_store.latest_run_id(
+                jurisdiction=promo_state or None,
+            )
         if odds_run is None:
             print(
                 f"no {promo_state or 'matching'} odds run is stored — run "
@@ -844,6 +881,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="price each stored offer against the latest odds run's games",
     )
     plan.add_argument("--run", type=int, help="promo run id (default: latest)")
+    plan.add_argument(
+        "--odds-run",
+        type=int,
+        dest="odds_run",
+        help=(
+            "odds run id to price against (default: the latest run in the promo "
+            "run's own state; refused when the two runs' states differ)"
+        ),
+    )
     plan.add_argument(
         "--source",
         action="append",

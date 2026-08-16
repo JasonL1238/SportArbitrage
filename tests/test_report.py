@@ -1146,6 +1146,9 @@ def test_promo_payload_and_build_report_include_promos(
     assert payload["offers"][0]["eligible_regions"] == ["NJ"]
     assert payload["offers"][0]["usage_guidance"]
     assert payload["offers"][0]["is_specific"] is True
+    # The state verdict rides the payload so the panel can label an offer
+    # whose copy never named the run's state instead of hiding it.
+    assert payload["offers"][0]["state_confirmed"] is False
     assert payload["health"][0]["source_key"] == "draftkings"
 
     monkeypatch.setattr(settings_mod, "DB_PATH", populated.path)

@@ -30,6 +30,7 @@ dashboard. No live network in tests; parsers run against tracked captures.
 | asking "did we already try this venue?" | `docs/SOURCE_FEASIBILITY.md` — an index — then the one `docs/evidence/` file it names | ~60-line index, then 90-420 lines |
 | adding a source, or changing the normalized quote contract or a field's meaning | `docs/INPUT_CONTRACT.md` — it states what a new adapter must deliver, not only what the fields mean | ~390 lines |
 | changing state routing, licences, or which state a run may fetch | `docs/MULTI_STATE.md` | ~260 lines |
+| how the operator spends promo offers — ordering, execution, rules | `docs/PROMO_CAMPAIGN.md` — operator playbook; the Campaign table renders its numbers | ~130 lines |
 
 Search for the symbol and its closest test before opening any large file, and read
 only the range you need. Do not read a file listed as a hotspot end to end.
@@ -182,7 +183,7 @@ written, and the grep is what is true now.
 | File | Lines | Where to land |
 | --- | --- | --- |
 | `tests/test_adversarial_findings.py` | 14.9k | 17 banners, one per review round — they say nothing about subject. Search the production symbol or the exact test name instead |
-| `src/report_assets.py` | 7.2k | 42 banners, in `/* ── … */` form. `frame`, `panels and routing`, `venues`, `arbitrage`, `overview`. Four handwritten constants — `CSS`, `BODY`, `JS`, and `EMPTY_SHELL`, the nothing-collected-yet page. Every panel count and filter decision is here, not in `src/report.py` |
+| `src/report_assets.py` | 7.4k | 43 banners, in `/* ── … */` form. `frame`, `panels and routing`, `venues`, `arbitrage`, `overview`. Four handwritten constants — `CSS`, `BODY`, `JS`, and `EMPTY_SHELL`, the nothing-collected-yet page. Every panel count and filter decision is here, not in `src/report.py` |
 | `tests/test_promo_planner.py` | 4.0k | 8 banners |
 | `src/collector.py` | 3.7k | `coverage`, `one run`, `replay`, `CLI` |
 | `src/arb.py` | 2.7k | `the arithmetic`, `settlement model`, `grouping`, `detection`, `best-price surface` |

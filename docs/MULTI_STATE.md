@@ -292,9 +292,13 @@ Use this when Step 2 fails for a venue.
 ## Delivery status
 
 - Implemented: typed IL/PA/NJ/DC map, detected multi-state batches, exact-state
-  odds/promo registries, global-fetch reuse, strict promo eligibility, batch/run
-  persistence, state-matched promo planning, cache TTL/force behavior, and
-  template-only probes.
+  odds/promo registries, global-fetch reuse, labeled promo eligibility (2026-08-16:
+  the strict gate's verdict is now *stored* on every offer as `state_confirmed`
+  rather than dropping unconfirmed rows — the first live run dropped 51 of 54
+  offers with no audit trail; the predicate itself is unchanged and still fails
+  closed, and every surface labels an unconfirmed offer instead of hiding it),
+  batch/run persistence, state-matched promo planning, cache TTL/force behavior,
+  and template-only probes.
 - Done 2026-08-08: PA egress runs produced parser-clean quotes and FanDuel,
   BetRivers and DraftKings were promoted to `validated` (evidence in
   `evidence/state-routing.md` § "Pennsylvania first-party routes promoted").

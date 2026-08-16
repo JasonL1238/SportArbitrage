@@ -151,3 +151,112 @@ def test_rejects_invalid_edits_without_changing_the_leg(tmp_path, change, messag
         with pytest.raises(BetLogError, match=message):
             log.update_leg(before["id"], change)
         assert log.slip(slip_id)["legs"][0] == before
+
+
+# ── promo awareness ──────────────────────────────────────────────────────────
+# A bonus bet is stake-not-returned credit.  Before these columns existed the
+# ledger booked it as cash: payout overstated by the whole stake, credit
+# counted as bankroll, and a converted $150 promo reading as a $150 loss.
+
+
+def _promo_payload() -> dict:
+    return {
+        "kind": "promo",
+        "sport": "soccer",
+        "market": "moneyline",
+        "promo_source": "tl_betmgm",
+        "promo_offer_id": "bet-10-get-150",
+        "legs": [
+            {"book": "betmgm", "selection": "Away", "decimal_odds": 8.5,
+             "stake": 150.00, "stake_kind": "bonus"},
+            {"book": "smarkets", "selection": "Draw", "decimal_odds": 6.4,
+             "stake": 178.74, "stake_kind": "cash"},
+        ],
+    }
+
+
+def test_a_bonus_leg_returns_winnings_only(tmp_path) -> None:
+    with BetLog(tmp_path / "bets.sqlite3") as log:
+        slip_id = log.record(slip_from_payload(_promo_payload()))
+        slip = log.slip(slip_id)
+        bonus, cash = slip["legs"]
+        # 150 × (8.5 − 1) = 1125, not 150 × 8.5 = 1275.
+        assert bonus["stake_kind"] == "bonus"
+        assert bonus["to_return"] == 1125.00
+        assert cash["stake_kind"] == "cash"
+        assert cash["to_return"] == round(178.74 * 6.4, 2)
+
+
+def test_bonus_stakes_are_not_bankroll(tmp_path) -> None:
+    with BetLog(tmp_path / "bets.sqlite3") as log:
+        slip_id = log.record(slip_from_payload(_promo_payload()))
+        slip = log.slip(slip_id)
+        # Only the cash hedge counts as money at risk.
+        assert slip["stake"] == 178.74
+        assert slip["open_stake"] == 178.74
+        assert slip["promo_source"] == "tl_betmgm"
+        assert slip["promo_offer_id"] == "bet-10-get-150"
+
+        payload = log.payload()
+        assert payload["summary"]["staked"] == 178.74
+
+
+def test_a_won_bonus_legs_whole_return_is_profit(tmp_path) -> None:
+    with BetLog(tmp_path / "bets.sqlite3") as log:
+        slip_id = log.record(slip_from_payload(_promo_payload()))
+        legs = log.slip(slip_id)["legs"]
+        updated = log.update_leg(legs[0]["id"], {"status": "won"})
+        bonus = updated["legs"][0]
+        assert bonus["returned"] == 1125.00
+        assert bonus["profit"] == 1125.00  # nothing of the operator's was staked
+
+
+def test_a_pushed_bonus_leg_returns_no_cash(tmp_path) -> None:
+    """The stake was credit; a push hands the credit back, not money.  If the
+    book re-credits the bonus bet, the re-run is logged as its own slip."""
+    with BetLog(tmp_path / "bets.sqlite3") as log:
+        slip_id = log.record(slip_from_payload(_promo_payload()))
+        legs = log.slip(slip_id)["legs"]
+        updated = log.update_leg(legs[0]["id"], {"status": "push"})
+        assert updated["legs"][0]["returned"] == 0.0
+        # The cash hedge's push still returns its stake.
+        updated = log.update_leg(legs[1]["id"], {"status": "push"})
+        assert updated["legs"][1]["returned"] == 178.74
+
+
+def test_editing_a_bonus_legs_price_rederives_the_bonus_payout(tmp_path) -> None:
+    with BetLog(tmp_path / "bets.sqlite3") as log:
+        slip_id = log.record(slip_from_payload(_promo_payload()))
+        legs = log.slip(slip_id)["legs"]
+        updated = log.update_leg(legs[0]["id"], {"decimal_odds": 5.0})
+        assert updated["legs"][0]["to_return"] == 600.00  # 150 × (5 − 1)
+
+
+def test_unknown_stake_kind_is_refused(tmp_path) -> None:
+    payload = _promo_payload()
+    payload["legs"][0]["stake_kind"] = "voucher"
+    with BetLog(tmp_path / "bets.sqlite3") as log:
+        with pytest.raises(BetLogError, match="unknown stake kind"):
+            log.record(slip_from_payload(payload))
+
+
+def test_v1_ledger_grows_the_promo_columns(tmp_path) -> None:
+    """A file written before promo awareness opens, migrates, and records."""
+    db = tmp_path / "bets.sqlite3"
+    with BetLog(db) as log:
+        log.record(slip_from_payload(_arb_payload()))
+    # Regress the file to v1 shape: drop the new columns, stamp the version.
+    conn = sqlite3.connect(db)
+    conn.execute("ALTER TABLE bet_leg DROP COLUMN stake_kind")
+    conn.execute("ALTER TABLE bet_slip DROP COLUMN promo_source")
+    conn.execute("ALTER TABLE bet_slip DROP COLUMN promo_offer_id")
+    conn.execute("UPDATE meta SET value = '1' WHERE key = 'schema_version'")
+    conn.commit()
+    conn.close()
+
+    with BetLog(db) as log:
+        # The old row reads as cash, and a promo slip records cleanly.
+        old = log.slips()[-1]
+        assert all(leg["stake_kind"] == "cash" for leg in old["legs"])
+        slip_id = log.record(slip_from_payload(_promo_payload()))
+        assert log.slip(slip_id)["legs"][0]["stake_kind"] == "bonus"

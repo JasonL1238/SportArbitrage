@@ -21,6 +21,7 @@ below are new paths, so their own histories start at the split.
 | Is this exchange or prediction market reachable, and does it need credentials? Is this venue really a separate counterparty, or a front-end of one already registered? | [`evidence/exchanges-and-mirrors.md`](evidence/exchanges-and-mirrors.md) |
 | What does a registered venue actually serve, what blocked it, and what does the whole set still fail to cover? | [`evidence/venues.md`](evidence/venues.md) |
 | Why does this adapter compute charges/settlement the way it does, and which traps produced a plausible wrong number rather than an error? | [`evidence/adapter-lessons.md`](evidence/adapter-lessons.md) |
+| What did each promo catalog actually serve on first contact, which offers confirmed which states, and what does a state label on a promo run really assert? | [`evidence/promos.md`](evidence/promos.md) |
 
 ## Recording a new measurement
 
@@ -124,3 +125,8 @@ python scripts/probe_sources.py --state IL
   charges · Notes on settlement · Traps the adapters had to be corrected for
   (newest first: BetMGM's `sourceName` convention, and its substring league table,
   both 2026-08-14)
+- **`evidence/promos.md`** — Multi-state batch: four runs, one fetch (2026-08-16) ·
+  First live promo collection, Illinois (2026-08-16) ·
+  Per-source results, all 24 · The unconfirmed measurement — 94% of the catalog
+  eaten · The one survivor is wrong — twice · The planner worked on first
+  contact · Operational notes

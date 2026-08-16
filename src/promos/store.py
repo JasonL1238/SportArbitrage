@@ -15,7 +15,7 @@ from typing import Any, Sequence
 from src.promos.base import PromoSourceHealth
 from src.promos.schema import PromoOffer
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -79,6 +79,7 @@ CREATE TABLE IF NOT EXISTS promo_offers (
     reward_type TEXT NOT NULL DEFAULT '',
     usage_guidance TEXT NOT NULL DEFAULT '',
     is_specific INTEGER NOT NULL DEFAULT 0,
+    state_confirmed INTEGER NOT NULL DEFAULT 0,
     metadata_json TEXT NOT NULL DEFAULT '{}',
     PRIMARY KEY (run_id, source, offer_id)
 );
@@ -96,6 +97,13 @@ _V2_COLUMNS: tuple[tuple[str, str], ...] = (
     ("reward_type", "TEXT NOT NULL DEFAULT ''"),
     ("usage_guidance", "TEXT NOT NULL DEFAULT ''"),
     ("is_specific", "INTEGER NOT NULL DEFAULT 0"),
+)
+
+#: v3: the collected state's own confirmation verdict moves onto the row, so an
+#: unconfirmed offer can be stored and labeled instead of dropped without trace.
+#: Default 0 keeps the fail-closed reading for rows written before the stamp.
+_V3_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("state_confirmed", "INTEGER NOT NULL DEFAULT 0"),
 )
 
 _RUN_COLUMNS: tuple[tuple[str, str], ...] = (
@@ -159,6 +167,15 @@ class PromoStore:
                 if name not in cols:
                     self._conn.execute(f"ALTER TABLE promo_offers ADD COLUMN {name} {decl}")
             current = 2
+        if current < 3:
+            cols = {
+                r["name"]
+                for r in self._conn.execute("PRAGMA table_info(promo_offers)").fetchall()
+            }
+            for name, decl in _V3_COLUMNS:
+                if name not in cols:
+                    self._conn.execute(f"ALTER TABLE promo_offers ADD COLUMN {name} {decl}")
+            current = 3
         run_cols = {
             r["name"]
             for r in self._conn.execute("PRAGMA table_info(promo_runs)").fetchall()
@@ -227,10 +244,10 @@ class PromoStore:
                     product, requires_login, summary, eligible_regions_json,
                     ineligible_regions_json, eligibility_notes, bonus_amount,
                     min_deposit, min_odds, wagering_requirement, reward_type,
-                    usage_guidance, is_specific, metadata_json
+                    usage_guidance, is_specific, state_confirmed, metadata_json
                 ) VALUES (
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?, ?, ?, ?
+                    ?, ?, ?, ?, ?, ?, ?, ?
                 )
                 """,
                 (
@@ -260,6 +277,7 @@ class PromoStore:
                     offer.reward_type or "",
                     (offer.usage_guidance or "")[:8000],
                     int(offer.is_specific),
+                    int(offer.state_confirmed),
                     json.dumps(offer.metadata, sort_keys=True),
                 ),
             )
@@ -325,7 +343,7 @@ class PromoStore:
                    summary, eligible_regions_json, ineligible_regions_json,
                    eligibility_notes, bonus_amount, min_deposit, min_odds,
                    wagering_requirement, reward_type, usage_guidance,
-                   is_specific, metadata_json
+                   is_specific, state_confirmed, metadata_json
             FROM promo_offers
             WHERE run_id = ?
             ORDER BY source, kind, title
@@ -348,6 +366,7 @@ class PromoStore:
             )
             item["requires_login"] = bool(item.get("requires_login"))
             item["is_specific"] = bool(item.get("is_specific"))
+            item["state_confirmed"] = bool(item.get("state_confirmed"))
             out.append(item)
         return out
 

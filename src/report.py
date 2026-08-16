@@ -660,6 +660,7 @@ def _promo_payload(
                     "reward_type": row.get("reward_type") or "",
                     "usage_guidance": row.get("usage_guidance") or "",
                     "is_specific": bool(row.get("is_specific")),
+                    "state_confirmed": bool(row.get("state_confirmed")),
                     "metadata": row.get("metadata") or {},
                 }
             )

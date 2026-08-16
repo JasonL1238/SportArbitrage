@@ -235,6 +235,69 @@ def test_state_promo_eligibility_requires_affirmative_confirmation() -> None:
     )
 
 
+def test_unconfirmed_offers_are_stored_with_the_verdict_not_dropped() -> None:
+    """The gate's *predicate* is unchanged; only the consequence moved.
+
+    The first live run filtered 51 of 54 offers here with no audit trail — a
+    source that answered with twelve genuine offers graded FAILED because the
+    filter emptied it.  Offers now carry ``state_confirmed`` and every one is
+    stored; False is a label the surfaces render, not a deletion.
+    """
+    from src.promos.collector import offer_confirmed_for_state
+
+    base = dict(
+        kind=PromoKind.SIGNUP_BONUS,
+        observed_at=datetime.now(UTC),
+    )
+    offers = [
+        PromoOffer(source="betmgm", offer_id="national", title="Bet $10 get $150", **base),
+        PromoOffer(
+            source="fanduel", offer_id="stamped", title="IL welcome",
+            eligible_regions=["IL"], **base,
+        ),
+    ]
+    stamped = [
+        o.model_copy(update={"state_confirmed": offer_confirmed_for_state(o, "IL")})
+        for o in offers
+    ]
+    assert len(stamped) == 2, "nothing may be dropped"
+    verdicts = {o.offer_id: o.state_confirmed for o in stamped}
+    assert verdicts == {"national": False, "stamped": True}
+
+
+def test_store_v3_migration_grows_state_confirmed(tmp_path: Path) -> None:
+    """Opening a v2-shaped DB grows the column; a fresh DB has it natively."""
+    import sqlite3
+
+    db = tmp_path / "promos.sqlite3"
+    # A v2-shaped store: build a current one, then strip the column and stamp
+    # the old version, which is exactly what a pre-upgrade file looks like.
+    store = PromoStore(db)
+    store.close()
+    con = sqlite3.connect(db)
+    cols = [r[1] for r in con.execute("PRAGMA table_info(promo_offers)")]
+    assert "state_confirmed" in cols
+    con.execute("ALTER TABLE promo_offers DROP COLUMN state_confirmed")
+    con.execute("UPDATE meta SET value = '2' WHERE key = 'schema_version'")
+    con.commit()
+    con.close()
+
+    reopened = PromoStore(db)
+    run_id = reopened.start_run(jurisdiction="IL")
+    offer = PromoOffer(
+        source="betmgm",
+        offer_id="x",
+        kind=PromoKind.BONUS_BET,
+        title="Bet $10 get $150",
+        observed_at=datetime.now(UTC),
+        state_confirmed=True,
+    )
+    reopened.finish_run(run_id, ok=True, offers=[offer], health=[], notes="")
+    rows = reopened.offers_for_run(run_id)
+    reopened.close()
+    assert rows[0]["state_confirmed"] is True
+
+
 def test_strategy_bonus_bet_mentions_hedge() -> None:
     from src.promos.strategy import build_usage_guidance
 
@@ -500,6 +563,166 @@ def test_leovegas_parse_next_data_fixture() -> None:
     assert "Lunch Free Spins" in titles
     assert "Sports Welcome Boost" in titles
     assert not any("EN + ROW" in t for t in titles)
+
+
+# ── first-contact captures, 2026-08-16 ───────────────────────────────────────
+# Genuine bodies from the first live IL collection (batch run #1), extracted
+# verbatim from the RawStore envelopes under data/raw_promos/.  Four adapter
+# families had never met production HTML before that run; these pin what each
+# actually served — including the refusals, which are captures too: a block
+# page that ever parses into offers is the failure these exist to catch.
+
+
+def _first_contact(name: str) -> str:
+    path = FIXTURES / name
+    if not path.exists():
+        pytest.skip("fixture not captured yet")
+    return path.read_text()
+
+
+def test_fanduel_parses_empty_merchandising_as_empty() -> None:
+    """FanDuel's IL merchandising API answered 200 with zero promotions.
+
+    A genuine empty is not a failure and must not crash: the marketing page
+    was blocked by PerimeterX on the same run, so this body is the whole of
+    what FanDuel serves an anonymous IL request.
+    """
+    from src.promos.fanduel import FanDuelPromoAdapter
+
+    adapter = FanDuelPromoAdapter(
+        client=httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(500))),
+        region="IL",
+    )
+    outcome = adapter.parse(
+        [_raw("fanduel", "merchandising-il", _first_contact("fanduel_merchandising_il.json"))]
+    )
+    adapter.close()
+    assert outcome.offers == []
+
+
+def test_fanduel_invents_nothing_from_the_perimeterx_page() -> None:
+    """The blocked marketing page must parse to zero offers, never to rows."""
+    from src.promos.fanduel import FanDuelPromoAdapter
+
+    adapter = FanDuelPromoAdapter(
+        client=httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(500))),
+        region="IL",
+    )
+    body = _first_contact("fanduel_promotions_page_perimeterx.html")
+    outcome = adapter.parse([_raw("fanduel", "promotions-page", body)])
+    adapter.close()
+    assert outcome.offers == []
+
+
+def test_bovada_parse_fixture_first_contact() -> None:
+    from src.promos.bovada import BovadaPromoAdapter
+
+    body = _first_contact("bovada_promotions_index.html")
+    adapter = BovadaPromoAdapter(
+        client=httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(500)))
+    )
+    outcome = adapter.parse([_raw("bovada", "promotions-index", body)])
+    adapter.close()
+    # The live run parsed five offers from this exact body.
+    assert len(outcome.offers) >= 4
+    assert all(o.source == "bovada" for o in outcome.offers)
+    titles = " ".join(o.title for o in outcome.offers).lower()
+    assert "welcome" in titles
+
+
+def test_betmgm_catalog_parse_fixture_first_contact() -> None:
+    """The html_catalog family's first genuine capture — 12 offers live."""
+    from src.promos.html_catalog import HtmlCatalogPromoAdapter
+
+    body = _first_contact("betmgm_promotions_index.html")
+    adapter = HtmlCatalogPromoAdapter(
+        source_key="betmgm",
+        index_url="https://sports.betmgm.com/en/promo/sports",
+        client=httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(500))),
+    )
+    outcome = adapter.parse([_raw("betmgm", "promotions-index", body)])
+    adapter.close()
+    assert len(outcome.offers) >= 8
+    assert all(o.source == "betmgm" for o in outcome.offers)
+
+
+def test_bet365_challenge_page_parses_to_nothing() -> None:
+    """bet365 served a Cloudflare challenge; the catalog parser must not read
+    a bot wall as a promotions list."""
+    from src.promos.html_catalog import HtmlCatalogPromoAdapter
+
+    body = _first_contact("bet365_promotions_index_challenge.html")
+    adapter = HtmlCatalogPromoAdapter(
+        source_key="bet365",
+        index_url="https://extra.bet365.com/promotions",
+        client=httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(500))),
+    )
+    outcome = adapter.parse([_raw("bet365", "promotions-index", body)])
+    adapter.close()
+    assert outcome.offers == []
+
+
+def test_caesars_403_body_is_refused_at_the_client_not_read_as_a_catalog() -> None:
+    """Caesars answered 403 with a bot-script body.
+
+    The body itself *would* parse — its navigation links look enough like a
+    catalog that the parser reads two phantom offers out of it.  The defense
+    is therefore the fetch guard, which is where the live run refused it
+    (``FAILED [blocked]``), and this pins that: the same bytes at the same
+    status never reach the parser.
+    """
+    from src.promos.html_catalog import HtmlCatalogPromoAdapter
+    from src.sources.guards import SourceError
+
+    body = _first_contact("caesars_promotions_index_403.html")
+    adapter = HtmlCatalogPromoAdapter(
+        source_key="caesars",
+        index_url="https://www.caesars.com/sportsbook-and-casino/promos",
+        client=httpx.Client(
+            transport=httpx.MockTransport(lambda r: httpx.Response(403, text=body))
+        ),
+    )
+    with pytest.raises(SourceError):
+        adapter.fetch_raw()
+    adapter.close()
+
+
+def test_betrivers_landing_parse_fixture_first_contact() -> None:
+    """The landing family's first genuine capture.  Zero offers with one
+    counted skip is what the live run produced from this body — pinned so a
+    silent change in either direction is visible."""
+    from src.promos.landing import LandingPromoAdapter, LandingTarget
+
+    body = _first_contact("betrivers_landing_il.html")
+    adapter = LandingPromoAdapter(
+        source_key="betrivers_kambi",
+        targets=(
+            LandingTarget(
+                "https://il.betrivers.com/", "landing-il", "BetRivers IL", region="IL"
+            ),
+        ),
+        client=httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(500))),
+        empty_is_ok=True,
+    )
+    outcome = adapter.parse([_raw("betrivers_kambi", "landing-il", body)])
+    adapter.close()
+    assert outcome.offers == []
+    assert sum(outcome.skipped.values()) >= 1
+
+
+def test_pinnacle_home_parse_fixture_first_contact() -> None:
+    from src.promos.landing import LandingPromoAdapter, LandingTarget
+
+    body = _first_contact("pinnacle_home.html")
+    adapter = LandingPromoAdapter(
+        source_key="pinnacle",
+        targets=(LandingTarget("https://www.pinnacle.com/en/", "home", "Pinnacle"),),
+        client=httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(500))),
+        empty_is_ok=True,
+    )
+    outcome = adapter.parse([_raw("pinnacle", "home", body)])
+    adapter.close()
+    assert outcome.offers == []
 
 
 def test_prefer_primary_keeps_secondary_only_titles() -> None:
@@ -873,6 +1096,36 @@ class TestThePlanCommand:
         out = capsys.readouterr().out
         assert "smarkets" in out
         assert "bonus_conversion" in out
+
+    def test_odds_run_override_chooses_among_same_state_runs_only(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """``--odds-run`` exists because "latest" can be a thin probe run, and
+        it must never defeat state matching: IL promos priced against a PA
+        slate would quote hedges a different licence answered for."""
+        from src import settings as settings_mod
+        from src.store import Store
+
+        self._seed(tmp_path, monkeypatch)
+        # The seeded odds run is #1 and ungoverned; name it explicitly.
+        assert self._run(["plan", "--odds-run", "1"]) == 0
+        out = capsys.readouterr().out
+        assert "odds run #1" in out
+
+        assert self._run(["plan", "--odds-run", "999"]) == 1
+        assert "no odds run #999 is stored" in capsys.readouterr().err
+
+        # A governed promo run against a differently-governed odds run refuses.
+        odds = Store(settings_mod.DB_PATH)
+        pa_odds = odds.start_run(datetime.now(UTC), jurisdiction="PA")
+        odds.close()
+        promos = PromoStore(settings_mod.PROMO_DB_PATH)
+        il_promos = promos.start_run(jurisdiction="IL")
+        promos.finish_run(il_promos, ok=True, offers=[], health=[])
+        promos.close()
+        assert self._run(["plan", "--run", str(il_promos), "--odds-run", str(pa_odds)]) == 1
+        err = capsys.readouterr().err
+        assert "refusing to price one state's offers against another's slate" in err
 
     def test_an_unknown_source_is_refused_not_answered_with_silence(self, seeded, capsys):
         """A typo — or the zsh trap where `--source 'a b'` is one argument —

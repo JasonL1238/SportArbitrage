@@ -181,9 +181,16 @@ _CONDITIONAL_REFUND = re.compile(
 #: operator does not hold, and attached a caveat contradicting the offer's own
 #: title ("$1500 Bonus Bets If Lose").
 _WIN_CONDITIONAL = re.compile(
-    r"\b(?:if|when|should|once)\s+(?:your|it|the)\b[^.;]{0,48}?\b(?:wins?|won)\b",
+    r"\b(?:if|when|should|once)\s+(?:your?|it|the)\b[^.;]{0,48}?\b(?:wins?|won)\b",
     re.IGNORECASE,
 )
+#: ``your?`` and not ``your`` alone: the first live offer this planner ever
+#: priced was TheLines' BetMGM "Bet $10 get $150 in bonus bets **if you win**",
+#: and the subject set missing the bare ``you`` priced conditional credit as
+#: unconditional — ev printed with no worth-once-it-lands caveat.  Admitting
+#: ``you`` re-opens the "when you place your first bet — win or lose" trap the
+#: comment below records, which is why _reward_is_win_contingent now applies
+#: the same unconditional veto the loss reading has always had.
 
 
 #: Copy that states the reward arrives *whatever* happens.  These are fixed
@@ -222,7 +229,16 @@ def _reward_is_loss_contingent(summary: str) -> bool:
 
 
 def _reward_is_win_contingent(summary: str) -> bool:
-    """Only when a win is named and no loss condition is — a loss wins ties."""
+    """Only when a win is named and no loss condition is — a loss wins ties.
+
+    The unconditional veto applies here exactly as it does to the loss reading:
+    "win or lose" names a win, but as one half of a promise about both
+    branches, not as a condition.  Without the veto, admitting the bare "you"
+    subject would have re-read the commonest bet-and-get wording in the market
+    ("when you place your first $5 bet — win or lose") as win-contingent.
+    """
+    if _UNCONDITIONAL_REWARD.search(summary):
+        return False
     return bool(
         _WIN_CONDITIONAL.search(summary) and not _CONDITIONAL_REFUND.search(summary)
     )
@@ -1410,6 +1426,30 @@ def _offer_view(offer: Any) -> dict[str, Any]:
     return dump
 
 
+def _offer_ended(view: Mapping[str, Any], as_of: datetime) -> datetime | None:
+    """The offer's stated end, when it has already passed — else ``None``.
+
+    Store rows carry ISO strings, models carry datetimes; both are accepted and
+    an unparseable or absent value reads as "no stated end", which is the
+    permissive answer — an offer is refused for being *ended*, never for being
+    vague about it.  Naive timestamps are read as UTC, matching the store's own
+    ``_iso`` convention.
+    """
+    raw = view.get("ends_at")
+    if raw is None or raw == "":
+        return None
+    if isinstance(raw, datetime):
+        ends = raw
+    else:
+        try:
+            ends = datetime.fromisoformat(str(raw))
+        except ValueError:
+            return None
+    if ends.tzinfo is None:
+        ends = ends.replace(tzinfo=as_of.tzinfo)
+    return ends if ends < as_of else None
+
+
 def _plan_for_offer(
     view: dict[str, Any],
     context: _PlanContext,
@@ -1425,6 +1465,13 @@ def _plan_for_offer(
     reward = str(view.get("reward_type") or "")
     summary = str(view.get("summary") or "")
     title = str(view.get("title") or "")
+    # What the win/loss condition classifiers read.  The enricher's canonical
+    # summary drops trailing clauses — TheLines' "Bet $10 get $150 in bonus
+    # bets if you win" is summarised without the condition — so the title rides
+    # along.  The *description* deliberately does not: TheLines describes two
+    # different BetMGM promos in one blob, and the other promo's "if you don't
+    # win" would read this one as insurance.
+    condition_text = f"{summary} {title}".strip()
 
     promo_keys = stakeable_odds_sources(source)
     out: dict[str, Any] = {
@@ -1435,6 +1482,31 @@ def _plan_for_offer(
         "caveats": [],
         "unit": None,
     }
+
+    # An offer whose own stated end has passed gets no concrete plan.  The
+    # planner used to ignore ends_at entirely, so yesterday's boost planned
+    # exactly like a live one — stakes, links and all.  The entry stays in the
+    # payload (one entry per offer is the convention) with the reason counted.
+    ended = _offer_ended(view, context.as_of)
+    if ended is not None:
+        out["strategy"] = "text_only"
+        out["skipped"] = {"expired": 1}
+        out["caveats"].append(
+            f"offer ended {ended.date().isoformat()} — nothing here is placeable; "
+            "re-collect promos before acting"
+        )
+        return out
+
+    # The state verdict rides the offer row (stamped by the collector); an
+    # unconfirmed offer still plans — the label is the safeguard, not a drop —
+    # but every card carries the warning up front, because the first live run
+    # showed the failure is real: the one "confirmed" national offer owed its
+    # stamp to another offer's state list sharing its description.
+    if context.state and not bool(view.get("state_confirmed", False)):
+        out["caveats"].append(
+            f"eligibility for {context.state} is not confirmed from the venue's "
+            "own copy — verify in the app before staking anything"
+        )
 
     if not promo_keys:
         out["strategy"] = "no_odds_coverage"
@@ -1612,7 +1684,7 @@ def _plan_for_offer(
         # Copy whose reward is conditional on losing *is* a no-sweat, whatever
         # the enricher labelled it.  Priced as a plain bonus it valued credit
         # that arrives only on a loss as credit in hand.
-        or _reward_is_loss_contingent(summary)
+        or _reward_is_loss_contingent(condition_text)
     ):
         # ``risk_free`` is the label the enricher writes for "risk-free bet"
         # copy.  The *kind* was handled and the reward was not, so those offers
@@ -1663,7 +1735,7 @@ def _plan_for_offer(
     # land, and a bet-and-get card otherwise reads as though it does.  The
     # loss-conditional case has a model (`_plan_no_sweat`); this one does not,
     # so the honest move is to price it and say what the price assumes.
-    if _reward_is_win_contingent(summary) and out["strategy"] in {
+    if _reward_is_win_contingent(condition_text) and out["strategy"] in {
         "bonus_conversion",
         "qualify_then_convert",
     }:

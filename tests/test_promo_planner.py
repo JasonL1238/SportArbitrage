@@ -332,6 +332,25 @@ class TestHedgeGates:
         assert plan["plans"] == []
         assert plan["skipped"].get("same_counterparty", 0) >= 1
 
+    def test_a_prediction_market_is_refused_as_a_hedge_and_the_gate_counts(self):
+        """The settlement-regime gate must be seen to *fire*, not just exist.
+
+        Kalshi settles a postponed game when it is eventually played
+        (``SETTLE_MAKE_UP_GAME``) while every promo-issuing sportsbook voids
+        and refunds — so a postponement leaves the cash hedge a one-sided bet
+        for its whole stake.  This was the planner's single most load-bearing
+        untested line: on the first live slate ``regime_mismatch`` fired 87
+        times, and nothing in this file had ever asserted it could.
+        """
+        quotes = [
+            make_quote(source="draftkings", selection=Selection.AWAY, decimal_odds=3.0),
+            make_quote(source="kalshi", selection=Selection.HOME, decimal_odds=1.5),
+        ]
+        out = _plans([_offer()], quotes)
+        plan = _the_plan(out)
+        assert plan["plans"] == []
+        assert plan["skipped"].get("regime_mismatch", 0) >= 1
+
     def test_stale_pairs_are_refused_with_a_counted_reason(self):
         quotes = [
             make_quote(source="draftkings", selection=Selection.AWAY, decimal_odds=3.0),
@@ -554,6 +573,79 @@ class TestPayloadDiscipline:
         )
         out = _plans([offer], self._slate())
         assert _the_plan(out)["strategy"] == "bonus_conversion"
+
+    def test_an_ended_offer_gets_no_concrete_plan(self):
+        """The planner used to ignore ``ends_at`` — yesterday's boost planned
+        exactly like a live one, stakes and links included."""
+        ended = _offer(ends_at="2026-07-27T12:00:00+00:00")
+        out = _plans([ended], self._slate())
+        entry = _the_plan(out)
+        assert entry["plans"] == []
+        assert entry["skipped"].get("expired") == 1
+        assert any("offer ended 2026-07-27" in c for c in entry["caveats"])
+
+        # A future end, an absent end, and an unparseable end all still plan:
+        # an offer is refused for being *ended*, never for being vague about it.
+        for ends_at in ("2026-07-29T12:00:00+00:00", None, "not-a-date"):
+            live = _offer(ends_at=ends_at)
+            assert _the_plan(_plans([live], self._slate()))["plans"], ends_at
+
+    def test_datetime_ends_at_from_a_model_is_read_too(self):
+        offer = PromoOffer(
+            source="draftkings", offer_id="offer-1", kind=PromoKind.BONUS_BET,
+            title="Bonus bet drop", reward_type="bonus_bets", bonus_amount=100.0,
+            observed_at=AS_OF, ends_at=datetime(2026, 7, 27, tzinfo=UTC),
+        )
+        entry = _the_plan(_plans([offer], self._slate()))
+        assert entry["plans"] == []
+        assert entry["skipped"].get("expired") == 1
+
+    def test_the_bare_you_win_condition_reaches_the_card_from_the_title(self):
+        """Regression for the first live offer this planner ever priced.
+
+        TheLines' "Bet $10 get $150 in bonus bets if you win" was priced as
+        unconditional credit twice over: the classifier's subject set missed
+        the bare "you", and the enricher's canonical summary drops the trailing
+        clause so only the *title* still carries it.  The caveat must appear,
+        and "win or lose" phrasing must not trigger it.
+        """
+        conditional = _offer(
+            title="Bet $10 get $150 in bonus bets if you win",
+            summary="Bet $10, get $150 in bonus bets",
+        )
+        entry = _the_plan(_plans([conditional], self._slate()))
+        assert any("only if the qualifying bet wins" in c for c in entry["caveats"])
+
+        unconditional = _offer(
+            title="Bet $5, get $150 when you place your first bet — win or lose",
+            summary="Bet $5, get $150 in bonus bets",
+        )
+        entry = _the_plan(_plans([unconditional], self._slate()))
+        assert not any("only if the qualifying bet wins" in c for c in entry["caveats"])
+        # And it must not have been misread as insurance either.
+        assert entry["strategy"] != "no_sweat_hedge"
+
+    def test_an_unconfirmed_offer_plans_with_the_state_warning_up_front(self):
+        """Label-don't-drop reaches the card: an offer whose copy never named
+        the governing state still plans, and its first caveat says to verify
+        eligibility in the app.  A confirmed offer carries no such caveat, and
+        an ungoverned run (state=None) has no state to warn about."""
+        unconfirmed = _offer(state_confirmed=False)
+        out = _plans([unconfirmed], self._slate(), state="IL")
+        entry = _the_plan(out)
+        assert entry["plans"], "the warning is a label, not a drop"
+        assert any("eligibility for IL is not confirmed" in c for c in entry["caveats"])
+
+        confirmed = _offer(state_confirmed=True)
+        out = _plans([confirmed], self._slate(), state="IL")
+        assert not any(
+            "not confirmed" in c for c in _the_plan(out)["caveats"]
+        )
+
+        out = _plans([unconfirmed], self._slate())
+        assert not any(
+            "not confirmed" in c for c in _the_plan(out)["caveats"]
+        )
 
     def test_at_most_max_plans_per_offer(self):
         quotes = []
