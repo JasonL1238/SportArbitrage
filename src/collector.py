@@ -3681,7 +3681,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     collect.add_argument(
         "--no-alert",
         action="store_true",
-        help="skip SMS even when Twilio is configured",
+        help="send no alert at all — without this flag a found opportunity texts the operator's phone, and the default transport (macOS Messages to ODDS_ALERT_TO) needs no configuration to fire",
     )
     _add_scope_arguments(collect)
     collect.set_defaults(func=_cmd_collect)
@@ -3725,7 +3725,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     arb.add_argument(
         "--no-alert",
         action="store_true",
-        help="skip SMS even when Twilio is configured",
+        help="send no alert at all — without this flag a found opportunity texts the operator's phone, and the default transport (macOS Messages to ODDS_ALERT_TO) needs no configuration to fire",
     )
     _add_scope_arguments(arb)
     arb.set_defaults(func=_cmd_arb)
