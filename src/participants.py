@@ -603,6 +603,10 @@ _SOCCER_ALIASES: dict[str, str] = {
     "tottenhamhotspur": "tottenham",
     "psg": "parissaintgermain",
     "parissg": "parissaintgermain",
+    # "Paris St-G": the hyphenated short form, found 2026-08-16 when the first
+    # Hard Rock soccer capture ("Paris Saint Germain") split PSG@Rennes from
+    # another book's short spelling in the committed corpus.
+    "parisstg": "parissaintgermain",
     "internazionale": "inter",
     "intermilan": "inter",
     "bayernmunich": "bayernmunchen",
@@ -696,6 +700,10 @@ _SOCCER_ALIASES: dict[str, str] = {
     # omits. "de" is not stripped as a rule — it is identity-bearing in Spanish
     # and Portuguese names — so these are decided one at a time here.
     "staderennais": "staderennes",
+    # Bare "Rennes" is Stade Rennais — a city with one professional club, so
+    # the short form is safe where bare "Deportivo" (below) is not.  Found
+    # 2026-08-16, same corpus split as "parisstg" above.
+    "rennes": "staderennes",
     "strasbourgalsace": "strasbourg",
     "olympiquedemarseille": "olympiquemarseille",
     # Two long spellings of one club. The *bare* "Deportivo" that FanDuel sends

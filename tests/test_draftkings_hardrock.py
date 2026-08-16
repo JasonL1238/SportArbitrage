@@ -644,7 +644,13 @@ def test_hardrock_refuses_unknown_root_idx() -> None:
 
 
 def _sliced_transport(total: int, *, honour_offset: bool = True):
-    """A Hard Rock GraphQL stub that serves ``total`` events one slice at a time."""
+    """A Hard Rock GraphQL stub that serves ``total`` events one slice at a time.
+
+    Each recorded window also carries the request's ``marketTypes`` under
+    ``"market_types"``, so a test can assert what was *asked for* — the
+    silent-filter trap this venue taught: a filter naming nothing it
+    recognizes drops every market without an error anywhere.
+    """
     import httpx
 
     seen: list[dict] = []
@@ -654,7 +660,8 @@ def _sliced_transport(total: int, *, honour_offset: bool = True):
             import json as _json
 
             body = _json.loads(request.content.decode())
-            window = body["variables"]["slice"]
+            window = dict(body["variables"]["slice"])
+            window["market_types"] = body["variables"].get("marketTypes")
             seen.append(window)
             start = window["from"] if honour_offset else 0
             stop = min(start + (window["to"] - window["from"]), total)
@@ -765,3 +772,66 @@ def test_hardrock_stops_if_the_venue_ignores_the_offset() -> None:
         adapter.close()
 
     assert len(windows) == 1, windows
+
+
+def test_hardrock_asks_soccer_for_the_venues_own_three_way_code() -> None:
+    """The soccer request must name ``SOCCER:FT:AXB``, the venue's real
+    three-way.
+
+    For weeks it asked only for ``SOCCER:FT:1X2`` — a code the venue's own
+    menu does not contain — and the ``marketTypes`` filter dropped every
+    moneyline *silently*: 664/544/537 soccer events on 2026-08-14/15/16
+    answered with only totals and no error anywhere.  Measured 2026-08-16 by
+    sending the venue's own null filter, which enumerated the whole soccer
+    menu: 81 of 81 events carry exactly one ``AXB`` ("Game Result (90 Minutes
+    + Stoppage Time)", selections A/X/B with X named "Tie").  A filter that
+    cannot fail loudly must be pinned to what it asks for.
+    """
+    from src.sources.hardrock import SLICE_SIZE
+
+    transport, windows = _sliced_transport(total=SLICE_SIZE - 1)
+    adapter = _soccer_only_adapter(transport)
+    try:
+        adapter.fetch_raw()
+    finally:
+        adapter.close()
+
+    soccer_requests = [w["market_types"] for w in windows]
+    assert soccer_requests, "the soccer scope must have been fetched"
+    for asked in soccer_requests:
+        assert "SOCCER:FT:AXB" in asked, asked
+        assert "SOCCER:FT:OU" in asked, asked
+
+
+def test_hardrock_parses_soccer_three_way_from_fixture() -> None:
+    """The blessed 2026-08-16 capture — the first collect that asked for
+    ``AXB`` — parses to complete three-way moneylines beside the totals.
+
+    Pinned per event key, not just in aggregate: a three-way with a leg
+    missing is the exact shape the dead ``1X2`` request produced for weeks
+    (nothing), and the shape the tennis mislabel produces (two legs of three).
+    """
+    ladder = _load("hardrock__*_ladder_*.json")
+    events = _load("hardrock__*_events-SOCCER_*.json")
+    outcome = parse_hardrock([ladder, events])
+    assert not outcome.rejections, [
+        (r.reason, r.detail) for r in outcome.rejections
+    ]
+
+    moneylines = [q for q in outcome.quotes if q.market is Market.MONEYLINE]
+    assert moneylines, "the AXB markets must parse to moneyline rows"
+    by_event: dict[str, set] = {}
+    for quote in moneylines:
+        by_event.setdefault(quote.event_key, set()).add(quote.selection)
+    from src.schema import Selection as _Selection
+
+    complete = {
+        key for key, sides in by_event.items()
+        if sides == {_Selection.HOME, _Selection.AWAY, _Selection.DRAW}
+    }
+    assert complete == set(by_event), (
+        "every parsed soccer moneyline must carry home, away and draw; "
+        f"incomplete: {sorted(set(by_event) - complete)[:3]}"
+    )
+    # And the totals kept flowing beside them.
+    assert any(q.market is Market.TOTAL for q in outcome.quotes)

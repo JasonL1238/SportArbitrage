@@ -87,6 +87,22 @@ Recorded because each was found only by reading a venue's bytes against another
 venue's, and every one of them was silent — valid rows, healthy sources, no
 finding of any kind.
 
+- **DraftKings' REST `eventsQuery` refuses every `sortOrder` predicate its own
+  subscription channel echoes** (measured live 2026-08-16, three shapes, ≥5 min
+  apart). The `subscriptionPartials` echo shows the site's client paging with
+  `… and tags/any(t: t eq 'OSB') and sortOrder gt N and sortOrder lt M`, but
+  against `sportscontent/controldata/league/primaryMarkets/v1/markets` all
+  three of `sortOrder gt N` alone, `+ tags/any(t: t eq 'OSB')`, and the fully
+  bracketed `gt N … lt M` window answer `HTTP 400 {"errorStatus":{"code":
+  "MRKTBFF-400"}}` — the same code that refuses `top=300` — while page 1
+  without any of them is served. The echoed grammar evidently belongs to the
+  subscription backend, not this REST parameter. The keyset pager stays: it
+  costs one refused request per full league, files the scope truncated with the
+  failure named, and page 1's 100 events still collect. Not yet tried, held for
+  a deliberate follow-up rather than live iteration: embedding `&$top=100`
+  *inside* `eventsQuery` the way the echo does, and reading the site's actual
+  page-2 XHR (if any) rather than its subscription echo.
+
 - **Four adapters dropped rows with no reason recorded, and the losses were
   large** (found 2026-08-15 auditing run 16's own findings). The contract calls a
   bare `continue` a violation because it makes "we collected everything"
@@ -114,6 +130,23 @@ finding of any kind.
   makes the opposite choice and says why: "a silent cap reads as 'that is the
   whole slate' when it is not." Now pages, and reports the venue's own number
   when it cannot finish.
+
+  The same scope hid a second silence (found 2026-08-15, closed 2026-08-16):
+  every soccer request also asked for `SOCCER:FT:1X2`, a market-type code the
+  venue's vocabulary does not contain, and the `marketTypes` filter dropped
+  every moneyline *silently* — 664/544/537 soccer events on 2026-08-14/15/16
+  answered with only `SOCCER:FT:OU` rows and no error anywhere, which
+  validation correctly surfaced as `core_market_absent` (the run-16 sweep's one
+  surviving ERROR). Measured 2026-08-16 by sending the venue's own null filter
+  — its web client's `GetEvents` passes `marketTypes: null` and lets the server
+  enumerate, and the adapter's `market_types or None` is the same shape — which
+  returned the whole soccer menu: `OU` ×443, `AHCP` ×289, **`AXB` ×81 on 81
+  events** ("Game Result (90 Minutes + Stoppage Time)", selections A/X/B with X
+  named "Tie"), `SPRD` ×4, `QUAL` ×4, and no `1X2` at all. `AXB` is the
+  three-way; the request table now names it, the dead `1X2` key stays beside it
+  as a harmless hedge against a rename back, and the trap to remember is that
+  **this filter cannot fail loudly** — a request-side test now pins what the
+  soccer scope asks for.
 
   **Cloudbet's** filter rested on a premise the bytes contradict. One
   `baseball.run_line` carries all four rows: `handicap=+1.5` home 1.49 / away

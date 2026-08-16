@@ -155,8 +155,18 @@ TENNIS_MARKERS: tuple[tuple[str, str], ...] = (
 #:
 #: Baseball: only the ``FTEI`` (incl. extras) codes.  ``BASEBALL:FT:RR`` is a
 #: different moneyline product that must not displace FTEI via dedup.
-#: Soccer: only ``1X2`` (three-way).  Two-way ``FT:ML`` mashed with a draw from
-#: 1X2 manufactures a false cross-book contract.
+#: Soccer: the three-way is ``AXB`` — "Game Result (90 Minutes + Stoppage
+#: Time)", selections A/X/B with X named "Tie" — measured 2026-08-16 by asking
+#: the venue's own null market filter, which enumerated the whole soccer menu
+#: (81 of 81 events carry exactly one ``AXB``; ``1X2`` appears nowhere in it).
+#: ``1X2`` had been requested for weeks and the filter ignored it *silently* —
+#: 664/544/537 soccer events on 2026-08-14/15/16 answered with only ``OU``
+#: rows and no error anywhere, because a ``marketTypes`` filter naming nothing
+#: the venue recognizes filters everything without complaint.  The dead key is
+#: kept beside the real one: requesting it is proven harmless, and it hedges a
+#: venue rename back.  Two-way ``FT:ML`` mashed with a draw from a three-way
+#: still manufactures a false cross-book contract, so it stays out.  See
+#: ``docs/evidence/adapter-lessons.md``.
 MARKET_TYPES: dict[str, tuple[Market, Period]] = {
     "BASEBALL:FTEI:ML": (Market.MONEYLINE, Period.FULL_GAME),
     "BASEBALL:FTEI:SPRD": (Market.SPREAD, Period.FULL_GAME),
@@ -171,6 +181,7 @@ MARKET_TYPES: dict[str, tuple[Market, Period]] = {
     "ICE_HOCKEY:FT:SPRD": (Market.SPREAD, Period.FULL_GAME),
     "ICE_HOCKEY:FT:OU": (Market.TOTAL, Period.FULL_GAME),
     "TENNIS:FT:ML": (Market.MONEYLINE, Period.FULL_GAME),
+    "SOCCER:FT:AXB": (Market.MONEYLINE, Period.FULL_GAME),
     "SOCCER:FT:1X2": (Market.MONEYLINE, Period.FULL_GAME),
     "SOCCER:FT:OU": (Market.TOTAL, Period.FULL_GAME),
 }
