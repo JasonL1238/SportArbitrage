@@ -297,7 +297,7 @@ def _required(
 #:   route actually produces from a Pennsylvania egress.
 REQUIRED_BOOKS: Mapping[str, tuple[RequiredBook, ...]] = {
     "IL": (
-        _required("bet365", same=("an_bet365",), other=("vi_bet365",)),
+        _required("bet365", "bet365", same=("an_bet365",), other=("vi_bet365",)),
         _required("BetMGM", "betmgm", same=("an_betmgm",), other=("vi_betmgm",)),
         _required(
             "BetRivers",
@@ -324,7 +324,7 @@ REQUIRED_BOOKS: Mapping[str, tuple[RequiredBook, ...]] = {
         _required("theScore Bet", "thescore", same=("an_thescore",)),
     ),
     "PA": (
-        _required("bet365", same=("an_bet365",), other=("vi_bet365",)),
+        _required("bet365", "bet365", same=("an_bet365",), other=("vi_bet365",)),
         _required("BetMGM", "betmgm", same=("an_betmgm",), other=("vi_betmgm",)),
         _required("betPARX", same=("an_parx",)),
         _required(

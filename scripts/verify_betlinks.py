@@ -19,6 +19,11 @@ that have **not started yet** — an id for a finished game can 404 for a reason
 that has nothing to do with the grammar being wrong, and that ambiguity is the
 whole thing this script exists to remove.
 
+**A state-partitioned book is probed against one licence and proves one.**  Its
+host comes from the stored run's own jurisdiction, so a CONFIRMED verdict earns
+``verified_states={that state}`` and nothing wider; an ungoverned run skips
+those books rather than probing whichever host happened to be written down.
+
     python scripts/verify_betlinks.py                    # every candidate, latest run
     python scripts/verify_betlinks.py --source fanduel   # one book
     python scripts/verify_betlinks.py --per-book 5       # more samples each
@@ -37,7 +42,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src import settings
-from src.betlinks import EVENT_URL, MIRROR_BOOK, team_slug
+from src.betlinks import EVENT_URL, MIRROR_BOOK, STATE_SITE, state_host, team_slug
 from src.sources._common import USER_AGENT
 
 TIMEOUT = 25.0
@@ -51,6 +56,14 @@ class Sample:
     away_team: str
     home_team: str
     commence_time: str
+    state: str | None = None
+    """The jurisdiction that governed the run this row came from.
+
+    Carried because a state-partitioned book's grammar is only proven for the
+    licence it was probed against: ``il.betrivers.com`` answering says nothing
+    about ``pa.betrivers.com``, which is why :attr:`src.betlinks._Event.
+    verified_states` is a set of states rather than one flag.
+    """
 
 
 def samples(db_path: Path, *, per_book: int, only: str | None) -> list[Sample]:
@@ -63,6 +76,16 @@ def samples(db_path: Path, *, per_book: int, only: str | None) -> list[Sample]:
         if run_id is None:
             return []
         now = datetime.now(UTC).isoformat()
+        # The run's own jurisdiction, which is what a state-partitioned book's
+        # verdict is *about*.  A GLOBAL run governs nothing, so it leaves this
+        # None and those books are skipped rather than probed against a state
+        # nobody chose.
+        governed = con.execute(
+            "select jurisdiction from collection_run where id = ?", (run_id,)
+        ).fetchone()
+        state = (governed["jurisdiction"] or "").strip().upper() if governed else ""
+        if state in {"", "GLOBAL"}:
+            state = None
         wanted = [key for key in EVENT_URL if key not in MIRROR_BOOK]
         if only:
             wanted = [key for key in wanted if key == only]
@@ -79,7 +102,7 @@ def samples(db_path: Path, *, per_book: int, only: str | None) -> list[Sample]:
                 out.append(
                     Sample(
                         r["source"], r["source_event_id"], r["league"],
-                        r["away_team"], r["home_team"], r["ct"],
+                        r["away_team"], r["home_team"], r["ct"], state,
                     )
                 )
         return out
@@ -178,12 +201,34 @@ def main(argv: list[str] | None = None) -> int:
     client, transport = _client()
     print(f"transport: {transport}\n")
     verdicts: dict[str, list[tuple[bool, int, str]]] = {}
+    skipped: set[str] = set()
     try:
         for sample in rows:
             candidate = EVENT_URL[sample.source]
+            host = ""
+            if sample.source in STATE_SITE:
+                # Which licence's board this grammar is being asked about.  With
+                # no governing state there is no answer, and probing some other
+                # state's host would file its result under this book as though
+                # it meant something here.
+                host = state_host(sample.source, sample.state or "") or ""
+                if not host:
+                    why = (
+                        "run governs no state — collect with --state first"
+                        if not sample.state
+                        else f"{sample.source} has no door for {sample.state}, "
+                        "so there is no host to probe"
+                    )
+                    print(
+                        f"  [SKIP] {sample.source:16} {sample.event_id:16} "
+                        f"state-partitioned book: {why}"
+                    )
+                    skipped.add(sample.source)
+                    continue
             url = candidate.build(
                 event_id=sample.event_id,
                 slug=team_slug(sample.away_team, sample.home_team),
+                host=host,
             )
             status = 0
             verdict = "FAIL"
@@ -208,6 +253,7 @@ def main(argv: list[str] | None = None) -> int:
                     control_url = candidate.build(
                         event_id=_corrupt(sample.event_id),
                         slug=team_slug(sample.away_team, sample.home_team),
+                        host=host,
                     )
                     try:
                         control = client.get(control_url)
@@ -237,8 +283,20 @@ def main(argv: list[str] | None = None) -> int:
         except Exception:  # noqa: BLE001
             pass
 
+    governed = next((s.state for s in rows if s.state), None)
     print("\n" + "=" * 72)
-    print("verdict per book — set verified=True in src/betlinks.py only for CONFIRMED")
+    print("verdict per book — record a CONFIRMED in src/betlinks.py, nothing less")
+    print(
+        "  a book served from one domain everywhere:  verified=True\n"
+        "  a book in STATE_SITE (per-licence hosts):  verified_states={...}\n"
+        "  — the flat flag on a state-partitioned book is refused at import"
+    )
+    if governed:
+        print(
+            f"probed from the {governed} run.  A state-partitioned book earns "
+            f"verified_states={{'{governed}'}} — that state and no other; its "
+            "other licences are separate hosts and separate evidence."
+        )
     print("=" * 72)
     exit_code = 0
     for source in sorted(verdicts):
@@ -246,17 +304,28 @@ def main(argv: list[str] | None = None) -> int:
         good = sum(1 for v, _, _ in results if v == "ok")
         unknown = sum(1 for v, _, _ in results if v in ("????", "BLOK"))
         if good == len(results):
-            state, note = "CONFIRMED", "every sample resolved and named its game"
+            outcome, note = "CONFIRMED", "every sample resolved and named its game"
+            if source in STATE_SITE:
+                note += f" (in {governed} only)"
         elif unknown == len(results):
-            state, note = "UNKNOWN", "the site never answers in HTML — cannot verify"
+            outcome, note = "UNKNOWN", "the site never answers in HTML — cannot verify"
             exit_code = 2
         elif good:
-            state, note = "PARTIAL", f"{good}/{len(results)} resolved"
+            outcome, note = "PARTIAL", f"{good}/{len(results)} resolved"
             exit_code = 2
         else:
-            state, note = "WRONG", "no sample resolved"
+            outcome, note = "WRONG", "no sample resolved"
             exit_code = 2
-        print(f"  {source:18} {state:9} {note}")
+        print(f"  {source:18} {outcome:9} {note}")
+    for source in sorted(skipped - set(verdicts)):
+        print(f"  {source:18} {'SKIPPED':9} never probed — see the SKIP lines above")
+    if not verdicts:
+        # An empty table is not a clean bill of health, and printing nothing
+        # under a "verdict per book" header reads exactly like one.  This is
+        # reachable today: with a GLOBAL run stored, every state-partitioned
+        # book skips and no other book need have future-dated rows.
+        print("\n  nothing was probed — no verdict was reached for any book")
+        exit_code = 2
     return exit_code
 
 

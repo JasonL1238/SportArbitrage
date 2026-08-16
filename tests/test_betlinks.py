@@ -7,6 +7,8 @@ book's URL, and emitting a grammar no live probe has confirmed.
 """
 from __future__ import annotations
 
+from urllib.parse import urlsplit
+
 import pytest
 
 from src.betlinks import (
@@ -20,6 +22,7 @@ from src.betlinks import (
     bet_link,
     book_for,
     link_payload,
+    state_host,
     team_slug,
 )
 from src.sources.registry import SOURCES
@@ -197,6 +200,12 @@ class TestAStatePartitionedBookLinksItsOwnState:
             ("caesars", "IL", "https://sportsbook.caesars.com/us/il/bet"),
             ("an_unibet", "PA", "https://pa.unibet.com"),
             ("an_unibet", "NJ", "https://nj.unibet.com"),
+            # bet365's three doors.  The host *is* the licence for this book —
+            # the stateless origin serves no board at all — so a wrong door is
+            # not a cosmetic slip but a link to nothing.
+            ("bet365", "IL", "https://www.il.bet365.com"),
+            ("bet365", "PA", "https://www.pa.bet365.com"),
+            ("bet365", "NJ", "https://www.nj.bet365.com"),
         ),
     )
     def test_the_governed_state_selects_the_door(
@@ -229,6 +238,7 @@ class TestAStatePartitionedBookLinksItsOwnState:
             ("betrivers_kambi", "betrivers_kambi", None),
             ("caesars", "caesars", None),
             ("unibet", "an_unibet", "https://pa.unibet.com"),
+            ("bet365", "bet365", None),
         ):
             quote = make_quote(source=quote_source, source_event_id="1", league="ATP")
             link = bet_link(quote)
@@ -242,6 +252,20 @@ class TestAStatePartitionedBookLinksItsOwnState:
             assert link.url not in STATE_SITE[book].values(), (
                 f"{book}'s ungoverned fallback is one state's own door: {link.url}"
             )
+            if book == "bet365":
+                # bet365 passes the rule above but is the one STATE_SITE book
+                # whose stateless fallback src/betlinks.py itself calls "a door
+                # onto nothing" — www.bet365.com serves no board.  Unibet buys
+                # its exemption with view-only inventory; bet365 cannot, because
+                # it is stakeable.  Its protection is the other half of the same
+                # argument: a retail key is excluded from ``global_sources()``,
+                # so an ungoverned run can never hold a bet365 leg to link.  If
+                # that ever stops being true, this book needs a real ungoverned
+                # door before it reaches a money surface.
+                from src.sources.registry import RETAIL_SOURCE_KEYS, global_sources
+
+                assert quote_source in RETAIL_SOURCE_KEYS
+                assert quote_source not in {e.key for e in global_sources()}
 
     def test_the_betrivers_doors_agree_with_the_promo_layer(self) -> None:
         """Two spellings of one door will drift; this is the pin that says so.
@@ -268,43 +292,209 @@ class TestAStatePartitionedBookLinksItsOwnState:
                 f"{state}: arb door {arb_url} and promo door {promo_url} disagree"
             )
 
-    def test_no_state_partitioned_book_hides_behind_a_league_page(self) -> None:
-        """The league-page lookup outranks the state door in ``bet_link``.
+    def test_the_first_party_doors_cover_exactly_the_licensed_states(self) -> None:
+        """A door exists for a licence iff a route does — for both directions.
 
-        Today none of the state-partitioned books has a league grammar, so the
-        state door is always reached.  A future league entry for one of them,
-        pinned to a single state's domain, would silently reintroduce the
-        Illinois-link defect one precision level up — this makes that addition
-        a loud decision instead.
+        BetRivers above is pinned against the *promo* layer because that is
+        where its second spelling lived.  The books with a first-party adapter
+        have another: ``jurisdictions`` says which states the collector may
+        fetch, ``STATE_SITE`` says which states the reader can be sent to, and
+        nothing made the two agree.  A door without a route sends a reader to a
+        board no run can price; a route without a door drops a governed run to
+        the stateless landing, which for bet365 is a door onto nothing.
         """
-        for book in STATE_SITE:
-            assert book not in LEAGUE_PAGE, (
-                f"{book} gained a league page; make it state-aware before "
-                "letting it outrank STATE_SITE"
+        from src.jurisdictions import JURISDICTIONS, RouteStatus
+
+        for book in ("bet365", "caesars"):
+            for state, jurisdiction in JURISDICTIONS.items():
+                route = jurisdiction.routes.get(book)
+                door = STATE_SITE[book].get(state)
+                licensed = route is not None and route.status is not RouteStatus.UNAVAILABLE
+                assert (door is not None) == licensed, (
+                    f"{book}/{state}: route={'yes' if licensed else 'no'} but "
+                    f"door={door!r} — these must agree, or the reader and the "
+                    "collector disagree about where this licence lives"
+                )
+
+    def test_bet365s_doors_are_the_hosts_its_routes_fetch(self) -> None:
+        """For bet365 alone, the door and the route are the *same* host.
+
+        Its pull-pod API is served from the licensed site itself, so the two
+        layers spell one string twice and will drift.  The host **is** the
+        licence here — ``www.bet365.com`` serves no board at all — so a door
+        that drifts from the route is a door onto another state's board.
+
+        Caesars is deliberately not in this pin: it fetches from
+        ``api.americanwagering.com`` and sends readers to
+        ``sportsbook.caesars.com``, which are different hosts on purpose, so
+        equality there would be asserting something false.
+        """
+        from urllib.parse import urlsplit
+
+        from src.jurisdictions import source_host
+
+        for state, door in STATE_SITE["bet365"].items():
+            assert urlsplit(door).netloc == source_host(state, "bet365"), (
+                f"bet365/{state}: door {door} and the route host "
+                f"{source_host(state, 'bet365')} disagree — for this book that "
+                "is a link to a different licence's board"
             )
 
-    def test_no_state_partitioned_book_can_verify_a_one_state_event_grammar(
-        self,
-    ) -> None:
+    def test_a_state_partitioned_league_page_resolves_in_every_state(self) -> None:
+        """The league-page lookup outranks the state door in ``bet_link``.
+
+        This used to forbid the entry outright, because nothing could spell a
+        per-state league URL.  ``{host}`` can, so the rule is now a shape: an
+        entry must take the placeholder and must produce that state's own
+        netloc for every state the book is licensed in.  A single-domain league
+        page would reintroduce the Illinois-link defect one precision level up.
+        """
+        for book, pages in LEAGUE_PAGE.items():
+            if book not in STATE_SITE:
+                continue
+            for league, url in pages.items():
+                assert "{host}" in url, (
+                    f"{book}/{league} gained a league page pinned to one "
+                    f"domain ({url}); it outranks STATE_SITE from every state"
+                )
+                doors = STATE_SITE[book]
+                built = {s: url.format(host=state_host(book, s)) for s in doors}
+                # Netloc equality is not enough on its own: Caesars' four doors
+                # are one host with four *paths*, so a {host} template gives
+                # every state the same URL while matching a netloc that never
+                # varied.  Distinctness, and sitting under the state's own
+                # door, are the checks with teeth.
+                assert len(set(built.values())) >= len(set(doors.values())), (
+                    f"{book}/{league} collapses {sorted(doors)} onto "
+                    f"{sorted(set(built.values()))}; this book is not "
+                    "partitioned by netloc, so {host} cannot carry its licence"
+                )
+                for state, door in doors.items():
+                    # netloc AND prefix: startswith is a string test, and a
+                    # door with no path (bet365's) is a prefix of
+                    # "www.il.bet365.com.elsewhere.example" too.
+                    assert urlsplit(built[state]).netloc == urlsplit(door).netloc, (
+                        f"{book}/{league} in {state} points at "
+                        f"{urlsplit(built[state]).netloc}, not at that state's "
+                        f"host {urlsplit(door).netloc}"
+                    )
+                    assert built[state].startswith(door), (
+                        f"{book}/{league} in {state} resolves to {built[state]}, "
+                        f"which is not under that state's door {door}"
+                    )
+
+    def test_a_state_partitioned_event_grammar_is_verified_per_state(self) -> None:
         """Event precision outranks everything, so it is the worst hiding place.
 
-        ``EVENT_URL["betrivers_kambi"]`` embeds ``il.betrivers.com`` in a
-        template that today cannot emit because ``verified`` is False — but
+        ``EVENT_URL["betrivers_kambi"]`` embedded ``il.betrivers.com`` in a
+        template that could not emit because ``verified`` was False — but
         ``scripts/verify_betlinks.py`` exists precisely to flip that flag, it
-        samples betrivers events from stored runs, and the day it verifies this
-        template a governed PA row links Illinois at *event* precision, above
-        both guards below it.  Demonstrated by two reviewers independently.
-        This makes the flip a test failure that names the required work.
+        samples betrivers events from stored runs, and the day it verified that
+        template a governed PA row would have linked Illinois at *event*
+        precision, above both guards below it.  Demonstrated by two reviewers
+        independently.
+
+        The template is state-aware now, so the flat flag is what is forbidden:
+        it claims every licence at once from one egress's evidence.  A probe
+        proves one state, and ``verified_states`` is the only thing that can
+        say which.  ``src.betlinks._check_link_tables`` refuses the same shapes
+        at import; this is the version that names the history.
         """
         for book in STATE_SITE:
             candidate = EVENT_URL.get(book)
             if candidate is None:
                 continue
             assert not candidate.verified, (
-                f"{book}'s event template is pinned to one state's domain "
-                f"({candidate.template}); make _Event state-aware before "
-                "verifying it, or the state door is silently outranked"
+                f"{book} set the flat verified flag; a probe runs from one "
+                "egress, so name the states it proved in verified_states"
             )
+            assert "{host}" in candidate.template, (
+                f"{book}'s event template is pinned to one state's domain "
+                f"({candidate.template}); it outranks the state door"
+            )
+            assert set(candidate.verified_states) <= set(STATE_SITE[book]), (
+                f"{book} claims a state STATE_SITE has no door for, so "
+                "nothing can resolve its host"
+            )
+            doors = STATE_SITE[book]
+            built = {
+                s: candidate.build(event_id="1", slug="a-b", host=state_host(book, s))
+                for s in doors
+            }
+            # Same trap as the league page above: matching a netloc proves
+            # nothing for a book whose licences differ by path.  Caesars is
+            # that book — one host, four state paths — so a {host} template
+            # would hand all four states one link while passing every netloc
+            # assertion in this file.
+            assert len(set(built.values())) >= len(set(doors.values())), (
+                f"{book} collapses {sorted(doors)} onto "
+                f"{sorted(set(built.values()))}; this book is not partitioned "
+                "by netloc, so {host} cannot carry its licence"
+            )
+            for state, door in doors.items():
+                assert urlsplit(built[state]).netloc == urlsplit(door).netloc, (
+                    f"{book} in {state} points at "
+                    f"{urlsplit(built[state]).netloc}, not at that state's "
+                    f"host {urlsplit(door).netloc}"
+                )
+                assert built[state].startswith(door), (
+                    f"{book} in {state} builds {built[state]}, which is not "
+                    f"under that state's door {door}"
+                )
+
+    def test_an_ungoverned_run_never_reaches_a_state_partitioned_grammar(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With no jurisdiction there is no host, and a guess is the defect.
+
+        Both branches above the state door take a ``{host}``.  If ``bet_link``
+        filled it from anything but the run's own jurisdiction it would name a
+        licence the run cannot bet on, at the precision that wins — so an
+        ungoverned run must fall through to SITE instead.  Making the templates
+        state-aware would otherwise have *created* the hole the two guards above
+        were holding shut.
+
+        The tables are patched because today no state-partitioned book holds
+        either kind of entry, so the live tables exercise neither branch and a
+        test written against them would pass without touching the gate at all.
+        These are the entries the next such book will have.
+        """
+        import src.betlinks as betlinks
+
+        monkeypatch.setitem(
+            betlinks.EVENT_URL,
+            "betrivers_kambi",
+            betlinks._Event(
+                "https://{host}/?page=sportsbook#event/{id}",
+                verified_states=frozenset({"IL", "PA", "NJ"}),
+            ),
+        )
+        monkeypatch.setitem(
+            betlinks.LEAGUE_PAGE, "betrivers_kambi", {"MLB": "https://{host}/?page=mlb"}
+        )
+        quote = make_quote(source="betrivers_kambi", source_event_id="7", league="MLB")
+
+        # Governed: event precision, on that state's own licence.
+        for state, host in (("IL", "il.betrivers.com"), ("PA", "pa.betrivers.com")):
+            governed = bet_link(quote, state=state)
+            assert governed is not None
+            assert governed.precision is Precision.EVENT
+            assert urlsplit(governed.url).netloc == host
+
+        # Ungoverned: both branches skipped, no placeholder left behind, and
+        # crucially not some other state's board at the winning precision.
+        link = bet_link(quote)
+        assert link is not None
+        assert link.precision is Precision.SITE
+        assert "{host}" not in link.url
+        assert link.url not in STATE_SITE["betrivers_kambi"].values()
+
+        # A licence the book does not hold behaves the same way: DC has no
+        # BetRivers door, so there is no host and no event link to build.
+        dc = bet_link(quote, state="DC")
+        assert dc is not None
+        assert dc.precision is Precision.SITE
+        assert "{host}" not in dc.url
 
     def test_the_payload_carries_the_state_resolved_door(self) -> None:
         quote = make_quote(source="betrivers_kambi", source_event_id="1", league="ATP")

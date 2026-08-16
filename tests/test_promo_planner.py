@@ -111,8 +111,17 @@ class TestStakeableSources:
         assert stakeable_odds_sources("fanduel") == ("fanduel",)
 
     def test_promo_only_brand_does_not_treat_republished_views_as_stakeable(self):
-        assert stakeable_odds_sources("bet365") == ()
+        """Fanatics is republished by ``an_fanatics`` and ``vi_fanatics`` and is
+        stakeable through neither: a promo can only be used at the book itself.
+
+        bet365 was the second example here until 2026-08-15, when it gained a
+        first-party adapter.  That is why the assertion below moved rather than
+        being deleted — the rule is unchanged, and bet365 simply stopped being
+        an instance of it."""
         assert stakeable_odds_sources("fanatics") == ()
+
+    def test_a_brand_with_a_first_party_adapter_is_stakeable_at_itself(self):
+        assert stakeable_odds_sources("bet365") == ("bet365",)
 
     def test_ontario_tenant_has_no_feed_and_says_so(self):
         # betmgm_on is a different licence with a different catalog; borrowing

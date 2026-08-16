@@ -5590,6 +5590,7 @@ class TestTheChargeAndTheSettlementRuleArePinnedPerVenue:
         "smarkets": '2.00% of net winnings',
         "sxbet": '5.00% of net winnings',
         "thescore": "no commission (the venue's margin is already in the price)",
+        "bet365": "no commission (the venue's margin is already in the price)",
     }
 
     REGIMES = {
@@ -5636,6 +5637,7 @@ class TestTheChargeAndTheSettlementRuleArePinnedPerVenue:
         "smarkets": 'void_and_refund',
         "sxbet": 'void_and_refund',
         "thescore": 'void_and_refund',
+        "bet365": 'void_and_refund',
     }
 
     def test_every_venues_charge_is_what_it_is(self) -> None:
@@ -6031,6 +6033,12 @@ class TestTheWomensMarkerReachesEveryVenueThatNeedsIt:
         # reads the league back off the endpoint label, so the WNBA arrives
         # under WNBA and cannot land on a men's key.
         "thescore",
+        # bet365 resolves the league through an explicit tag table
+        # (``LEAGUE_TAGS``) that names WNBA separately from NBA, and anything
+        # the table does not name is a counted skip rather than a guess.  A
+        # women's competition therefore cannot arrive under a men's key: it
+        # either maps to its own key or is not collected.
+        "bet365",
     )
 
     def test_every_catch_all_adapter_applies_the_marker(self) -> None:
@@ -12316,6 +12324,7 @@ class TestEachVenuesKindIsPinnedBecauseItPicksTheRule:
         "vi_betrivers": False,
         "vsin_circa": False,
         "thescore": False,
+        "bet365": False,
         "betmgm": False,
         "betrivers_kambi": False,
         "bovada": False,

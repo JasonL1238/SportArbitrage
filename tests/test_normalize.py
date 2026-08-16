@@ -8,6 +8,7 @@ from src.normalize import (
     MIN_DECIMAL_ODDS,
     american_to_decimal,
     decimal_to_american,
+    fractional_to_decimal,
     implied_probability,
     is_plausible_decimal_odds,
 )
@@ -110,6 +111,70 @@ class TestImpliedProbability:
 
     def test_a_fair_two_way_market_sums_to_one(self) -> None:
         assert implied_probability(3.0) + implied_probability(1.5) == pytest.approx(1.0)
+
+
+class TestFractional:
+    """bet365 publishes ``OD=`` as a true fraction and nothing else."""
+
+    @pytest.mark.parametrize(
+        ("numerator", "denominator", "decimal"),
+        [
+            # Every one of these was read off a captured bet365 pull-pod and
+            # cross-checked against the American price the page rendered:
+            # 10/13 -> -130, 100/119 -> -119... , 11/10 -> +110, 10/11 -> -110.
+            (10, 13, 1.769230769),
+            (100, 119, 1.840336134),
+            (11, 10, 2.1),
+            (10, 11, 1.909090909),
+            (1, 1, 2.0),
+            (5, 1, 6.0),
+            (1, 5, 1.2),
+        ],
+    )
+    def test_the_fraction_is_profit_over_stake(
+        self, numerator: float, denominator: float, decimal: float
+    ) -> None:
+        assert fractional_to_decimal(numerator, denominator) == pytest.approx(
+            decimal, rel=1e-9
+        )
+
+    def test_even_money_is_two_not_one(self) -> None:
+        """The regression this whole function exists to prevent.
+
+        ``thescore._decimal_odds`` divides without the ``1 +`` because theScore
+        publishes a decimal price as a rational.  Borrowing it here understates
+        every price by exactly 1.0 — and 10/13 would become 0.769, which is not
+        even a price, while 11/10 would become 1.1, which is a perfectly
+        plausible one.  The second case is the dangerous one.
+        """
+        assert fractional_to_decimal(1, 1) == 2.0
+        assert fractional_to_decimal(11, 10) != pytest.approx(1.1)
+
+    @pytest.mark.parametrize(
+        ("numerator", "denominator"),
+        [(0, 1), (1, 0), (-1, 2), (2, -1), (0, 0)],
+    )
+    def test_nonsense_terms_are_refused(
+        self, numerator: float, denominator: float
+    ) -> None:
+        with pytest.raises(ValueError):
+            fractional_to_decimal(numerator, denominator)
+
+    @pytest.mark.parametrize(
+        ("numerator", "denominator"),
+        [(10, 13), (100, 119), (11, 10), (1, 1), (25, 38), (137, 100)],
+    )
+    def test_every_real_sample_round_trips_through_american(
+        self, numerator: float, denominator: float
+    ) -> None:
+        """The contract requires all three formats to agree, and the adapter
+        derives the other two from this one — so this conversion is the single
+        point where a units error would enter unchallenged."""
+        decimal = fractional_to_decimal(numerator, denominator)
+        assert is_plausible_decimal_odds(decimal)
+        assert american_to_decimal(decimal_to_american(decimal)) == pytest.approx(
+            decimal, rel=1e-2
+        )
 
 
 class TestPlausibility:

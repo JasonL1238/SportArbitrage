@@ -559,20 +559,23 @@ class TestTheDirectRouteIsCheckedToo:
 
     def test_the_real_direct_routes_still_pass(self) -> None:
         """The check must not be so strict that the shipped table cannot express
-        a first-party route — six of PA's eleven books have one.
+        a first-party route — seven of PA's eleven books have one.
 
-        ``thescore`` joined on 2026-08-13.  Its PA route is ``TEMPLATE`` and has
-        never been asked over HTTP, which is exactly why naming it here is safe:
-        the table says *which* key would be the direct route, and ``DIRECT`` is
-        graded only on ``direct_rows > 0``, so an unproven route cannot lift the
-        grade on its own.
+        ``thescore`` joined on 2026-08-13 and ``bet365`` on 2026-08-15.  Both PA
+        routes are ``TEMPLATE`` and neither has been asked over HTTP, which is
+        exactly why naming them here is safe: the table says *which* key would be
+        the direct route, and ``DIRECT`` is graded only on ``direct_rows > 0``,
+        so an unproven route cannot lift the grade on its own.  bet365 adds a
+        second guarantee — its adapter refuses unless the host itself reports the
+        routed state's licence, so a PA route asked from the wrong egress raises
+        rather than producing rows Pennsylvania would then be graded on.
         """
         declared = {
             entry.direct for entry in REQUIRED_BOOKS["PA"] if entry.direct is not None
         }
         assert declared == {
             "fanduel", "betrivers_kambi", "draftkings", "betmgm", "caesars",
-            "thescore",
+            "thescore", "bet365",
         }
         for key in sorted(declared):
             _check_locality_declarations(

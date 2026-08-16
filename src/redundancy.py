@@ -57,6 +57,12 @@ REDUNDANT_PAIRS: tuple[tuple[str, str], ...] = (
     ("caesars", "vi_caesars"),
     ("an_caesars", "vi_caesars"),
     ("an_fanatics", "vi_fanatics"),
+    # bet365 gained a first-party adapter on 2026-08-15, so its two feeds stop
+    # being a lone pair and become the usual triangle.  Undeclared, the book
+    # would read as three counterparties and any two of them could form the
+    # opposite legs of one position.
+    ("bet365", "an_bet365"),
+    ("bet365", "vi_bet365"),
     ("an_bet365", "vi_bet365"),
     # Newly registered VegasInsider columns for books that already have an
     # Action Network feed and, for three of them, a first-party adapter.  Every
@@ -139,10 +145,12 @@ def check_redundancy(
         return republishes_state_licence(state, source_key)
 
     # Whether an offline book has usable failover is a question about the **book**,
-    # not about one pair, and it has to be answered once.  Six *primaries* here have
-    # two mirrors each — eight books carry both an ``an_*`` and a ``vi_*`` feed, but
-    # Fanatics and bet365 have no first-party adapter, so their two feeds are a
-    # single pair rather than two pairs sharing a primary.  For the other six the
+    # not about one pair, and it has to be answered once.  Seven *primaries* here
+    # have two mirrors each — eight books carry both an ``an_*`` and a ``vi_*`` feed, but
+    # Fanatics has no first-party adapter, so its two feeds are a single pair
+    # rather than two pairs sharing a primary.  bet365 was the second such book
+    # until 2026-08-15, when it gained one and its pair became a triangle.  For
+    # the others the
     # per-pair loop answered the question twice: with
     # the first-party route dark and both republishers up — the geo-blocked-retail
     # case this branch exists for — the report carried "Using the registered

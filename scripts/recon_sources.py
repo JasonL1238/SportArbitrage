@@ -15,7 +15,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src import settings
-from src.egress import detect_egress
+from src.egress import (
+    EgressDetectionError,
+    confirm_unchanged_egress,
+    detect_egress,
+    load_detection,
+)
 from src.sources.browser import BrowserSession, PageObservation
 from src.sources.research import (
     PROFILES,
@@ -38,7 +43,33 @@ class _RequestShape:
 def _detect(state: str, proxy: str | None) -> str:
     client = ImpersonatedSession(timeout=settings.HTTP_TIMEOUT, proxy=proxy)
     try:
-        detected, _provider = detect_egress(client)
+        try:
+            detected, _provider = detect_egress(client)
+        except EgressDetectionError as exc:
+            # The provider is down, not the egress.  Measured 2026-08-15:
+            # ipapi.co answers this client with a Cloudflare "Just a moment..."
+            # interstitial (HTTP 403), and passing that is defeating a challenge
+            # — out of scope permanently.  With no fallback that failure blocked
+            # every recon capture outright.
+            #
+            # So fall back to *continuity*, which is a weaker question with a
+            # stronger answer: if the public IP still hashes to the fingerprint
+            # of a stored detection, we are on the address that detection
+            # verified, and its state still describes us.  It cannot invent a
+            # state — an unrecognized address returns None and we re-raise.
+            stored = load_detection(settings.EGRESS_STATE_PATH)
+            confirmed = (
+                confirm_unchanged_egress(client, stored) if stored else None
+            )
+            if confirmed is None:
+                raise
+            print(
+                f"note: {type(exc).__name__} from the detection provider; "
+                f"egress confirmed unchanged since {stored.detected_at} "
+                f"instead (fingerprint {stored.egress_fingerprint[:12]}…)",
+                file=sys.stderr,
+            )
+            detected = confirmed
     finally:
         client.close()
     if detected.state != state:
@@ -92,7 +123,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--click-text",
-        help="after bootstrap, click the first visible element containing this text",
+        action="append",
+        help=(
+            "after bootstrap, click the first visible element containing this "
+            "text; repeatable, and the clicks are made in order, so a sport "
+            "and then a game on it are one capture rather than two page boots"
+        ),
     )
     parser.add_argument(
         "--then-hash",
@@ -133,9 +169,10 @@ def main(argv: list[str] | None = None) -> int:
     captured_raws = []
     adapter_detail = ""
     session = None
+    failure: str | None = None
     try:
         if args.mode == "adapter":
-            if args.source not in {"caesars", "hardrock", "thescore"}:
+            if args.source not in {"bet365", "caesars", "hardrock", "thescore"}:
                 raise ValueError(f"{args.source} has no first-party adapter yet")
             from src.sources._common import Tier
             from src.sources.registry import descriptor_for_state
@@ -204,8 +241,25 @@ def main(argv: list[str] | None = None) -> int:
                 if args.capture_dom:
                     responses.append(session.dom_snapshot())
     except Exception as exc:  # noqa: BLE001 - evidence is the error class/message
-        print(f"error: {type(exc).__name__}: {exc}", file=sys.stderr)
-        return 1
+        # Recorded, then written out below rather than returned on immediately.
+        # This used to `return 1` here, above `write_observations`, so a failure
+        # anywhere in the capture threw away every response already collected —
+        # and against a metered egress those responses are the expensive part.
+        # The failure is itself a finding and rides in the manifest as a row.
+        failure = f"{type(exc).__name__}: {exc}"
+        print(f"error: {failure}", file=sys.stderr)
+        responses.append(
+            PageObservation(
+                method="ERROR",
+                url=sanitize_url(target),
+                status_code=0,
+                resource_type="capture",
+                request_headers={},
+                response_headers={},
+                request_body=None,
+                response_body=sanitize_body(failure) or "",
+            )
+        )
     finally:
         if session is not None:
             try:
@@ -229,13 +283,39 @@ def main(argv: list[str] | None = None) -> int:
         raw_store = RawStore(args.raw_output)
         written = [raw_store.write(raw) for raw in captured_raws]
         raw_detail = f"; raw_envelopes={len(written)} under {args.raw_output}"
+    # An exception is no longer the only way a capture fails.  ``observe_page``
+    # deliberately turns a dead navigation, a missed click and a crashed page
+    # into ``status_code=0`` diagnostic rows instead of letting them propagate,
+    # so that the traffic already paid for survives — but that also means the
+    # only signal left here was the exception that no longer arrives.  A run
+    # whose navigation never completed was printing "EGRESS VERIFIED" and
+    # exiting 0 with a manifest full of nothing.  Judge the rows instead.
+    answered = [r for r in responses if r.status_code > 0]
+    # ``ERROR`` is deliberately not in this set: the only row carrying it is
+    # appended by the ``except`` above, which has already assigned *failure*, so
+    # the guard below never reaches this list for that case.
+    blocking = sorted(
+        {r.method for r in responses if r.method in {"NAVIGATE", "CAPTURE"}}
+    )
+    if failure is None and (blocking or not answered):
+        failure = (
+            f"{', '.join(blocking)} diagnostic recorded"
+            if blocking
+            else "no response was answered"
+        )
     label = "UNVALIDATED" if args.template_only else "EGRESS VERIFIED"
+    if failure is not None:
+        label = f"INCOMPLETE ({label})"
     print(
         f"{label}: {args.source} {state}; "
-        f"{len(responses)} response(s), {len(websockets)} websocket(s); "
+        f"{len(answered)}/{len(responses)} response(s) answered, "
+        f"{len(websockets)} websocket(s); "
         f"manifest={manifest}{adapter_detail}{raw_detail}"
     )
-    return 0
+    if failure is not None:
+        print(f"  incomplete because: {failure}", file=sys.stderr)
+    # Still a failed run for the shell, but the evidence is on disk either way.
+    return 1 if failure is not None else 0
 
 
 if __name__ == "__main__":

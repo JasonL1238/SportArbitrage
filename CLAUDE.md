@@ -181,7 +181,7 @@ written, and the grep is what is true now.
 
 | File | Lines | Where to land |
 | --- | --- | --- |
-| `tests/test_adversarial_findings.py` | 14.7k | 17 banners, one per review round — they say nothing about subject. Search the production symbol or the exact test name instead |
+| `tests/test_adversarial_findings.py` | 14.9k | 17 banners, one per review round — they say nothing about subject. Search the production symbol or the exact test name instead |
 | `src/report_assets.py` | 7.2k | 42 banners, in `/* ── … */` form. `frame`, `panels and routing`, `venues`, `arbitrage`, `overview`. Four handwritten constants — `CSS`, `BODY`, `JS`, and `EMPTY_SHELL`, the nothing-collected-yet page. Every panel count and filter decision is here, not in `src/report.py` |
 | `tests/test_promo_planner.py` | 4.0k | 8 banners |
 | `src/collector.py` | 3.7k | `coverage`, `one run`, `replay`, `CLI` |

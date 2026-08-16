@@ -14,7 +14,7 @@ import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, Sequence
 from urllib.parse import unquote, urlencode, urlsplit
 
 # Bound for the POST helper so a parameter named ``json`` cannot shadow the
@@ -88,14 +88,24 @@ class BrowserSession:
             launch_kwargs["channel"] = channel
         if proxy:
             launch_kwargs["proxy"] = _playwright_proxy(proxy)
-        context_kwargs: dict[str, Any] = {
-            "user_agent": (
+        context_kwargs: dict[str, Any] = {"locale": "en-US"}
+        if not channel:
+            # Bundled Chromium ships a user agent naming a build nobody runs, so
+            # a literal is an improvement there and this string is what every
+            # prior capture was taken with.
+            #
+            # A real ``channel`` is the opposite case: overriding the header
+            # makes the browser *lie about itself in one place only*.  Chrome
+            # 151 announces 151 in its Sec-CH-UA client hints no matter what
+            # this says, so pinning the header to 131 produces a header/hints
+            # disagreement that no real browser exhibits — a free signal for
+            # exactly the anti-automation scoring standing between this
+            # repository and Caesars.  Let real Chrome introduce itself.
+            context_kwargs["user_agent"] = (
                 "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
                 "Chrome/131.0.0.0 Safari/537.36"
-            ),
-            "locale": "en-US",
-        }
+            )
         if device_name:
             try:
                 device = dict(self._pw.devices[device_name])
@@ -202,7 +212,7 @@ class BrowserSession:
         *,
         wait_ms: float = 8_000,
         include: Callable[[str, str], bool] | None = None,
-        click_text: str | None = None,
+        click_text: str | Sequence[str] | None = None,
         then_hash: str | None = None,
     ) -> tuple[list[PageObservation], list[WebSocketObservation]]:
         """Navigate the real page and capture its XHR/fetch/GraphQL traffic.
@@ -210,6 +220,15 @@ class BrowserSession:
         This is deliberately a research primitive, not a parser.  It never
         returns cookies, authorization headers, or unsanitized tokens.  Venue
         adapters may later reproduce a proven public request directly.
+
+        *click_text* accepts a sequence as well as one string, and clicks them
+        in order with a wait between.  A single click can only reach what the
+        landing page already links to; the surface worth measuring is usually
+        one further in — a sport, *then* a game on it — and reaching it in two
+        captures costs a second page boot against an egress this repo has had
+        blocked once.  A miss does not abandon the rest: each is recorded and
+        the following clicks are still attempted, because on a menu whose text
+        is being guessed the second guess is often the right one.
 
         *then_hash* sets ``location.hash`` **after** the app has had time to
         boot — a **same-document** navigation, which is what a single-page app's
@@ -369,9 +388,27 @@ class BrowserSession:
         for event, handler in handlers:
             self._page.on(event, handler)
         try:
-            self._page.goto(
-                url, wait_until="domcontentloaded", timeout=self._timeout_ms
-            )
+            try:
+                self._page.goto(
+                    url, wait_until="domcontentloaded", timeout=self._timeout_ms
+                )
+            except Exception as exc:  # noqa: BLE001 - a navigation that did not
+                # complete is a *finding*, and the requests it already made are
+                # evidence somebody paid for.  Letting it propagate discarded the
+                # entire capture — on a metered egress that is a hundred requests
+                # spent for nothing — merely because the load event did not fire
+                # inside the timeout.  ``domcontentloaded`` timing out does not
+                # mean nothing arrived, so record why and keep listening.  Same
+                # reasoning as the missed click below, which was fixed first.
+                responses.append(
+                    diagnostic(
+                        "NAVIGATE",
+                        url,
+                        "document",
+                        f"navigation did not complete: "
+                        f"{type(exc).__name__}: {exc}",
+                    )
+                )
             remaining = max(0, wait_ms)
             if then_hash:
                 # A third of the budget to boot, then route, then the rest to
@@ -394,12 +431,15 @@ class BrowserSession:
                             f"{type(exc).__name__}: {exc}",
                         )
                     )
-            if click_text:
-                before_click = min(4_000, remaining // 3)
+            clicks = (click_text,) if isinstance(click_text, str) else tuple(click_text or ())
+            for text in clicks:
+                # A slice each, so adding a click buys depth rather than
+                # silently spending the whole budget on the first one.
+                before_click = min(4_000, remaining // (len(clicks) + 1))
                 self._page.wait_for_timeout(before_click)
                 remaining -= before_click
                 try:
-                    self._page.get_by_text(click_text, exact=False).first.click(
+                    self._page.get_by_text(text, exact=False).first.click(
                         timeout=self._timeout_ms
                     )
                 except Exception as exc:  # noqa: BLE001 - a missed selector is a
@@ -415,11 +455,23 @@ class BrowserSession:
                             "CLICK",
                             url,
                             "click",
-                            f"{click_text!r} not found: "
-                            f"{type(exc).__name__}: {exc}",
+                            f"{text!r} not found: " f"{type(exc).__name__}: {exc}",
                         )
                     )
             self._page.wait_for_timeout(remaining)
+        except Exception as exc:  # noqa: BLE001 - the page itself died mid-capture
+            # A crashed or closed page raises out of the waits and the locator
+            # calls alike.  Everything observed up to that moment is still real
+            # traffic that really happened, so it is returned rather than thrown
+            # away; the reason travels with it as a row the manifest can show.
+            responses.append(
+                diagnostic(
+                    "CAPTURE",
+                    url,
+                    "session",
+                    f"capture ended early: {type(exc).__name__}: {exc}",
+                )
+            )
         finally:
             # Handlers are per-call, so a session observed twice would otherwise
             # count every response of the second pass once per previous call.

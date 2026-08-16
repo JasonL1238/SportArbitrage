@@ -188,8 +188,9 @@ RESEARCH_CANDIDATES: tuple[Candidate, ...] = (
               {"isBatchable": "false", "eventGroupIds": "84240"},
               note="path a real browser hits for MLB markets"),
     Candidate("blocked", "caesars",
-              "https://api.americanwagering.com/regions/us/locations/nj/brands/czr/sb/v3/sports",
-              note="CloudFront WAF; first-party adapter still pending proxy open"),
+              "https://api.americanwagering.com/regions/us/locations/nj/brands/czr/sb/v3/sports-menu",
+              note="AWS WAF token gate, not egress: real Chrome gets 200 here, "
+                   "curl_cffi gets 403 from the same exit IP (2026-08-12)"),
     Candidate("blocked", "fanatics",
               "https://sportsbook.fanatics.com/",
               note="old api.sportsbook.fanatics.com is NXDOMAIN; site is Akamai bot-manager"),
@@ -238,8 +239,31 @@ def state_candidates(state: str) -> tuple[Candidate, ...]:
             url = f"{config['base_url']}/cds-api/bettingoffer/fixtures"
         elif key == "draftkings":
             url = f"{config['content_base_url']}/markets"
+        elif key == "bet365":
+            # The homepage pod, which is the board this adapter actually reads.
+            # Taken verbatim from the application's own request rather than
+            # composed: this host answered 403 to about a hundred probing
+            # requests on 2026-08-14 and the last of those was fuzzing ``pd``.
+            url = (
+                f"{config['base_url']}/pullpodapi/gethomepagepods"
+                "?lid=32&zid=0&pd=%23HO%23COL1%23&cid=198&cstid=1&tcstid=1"
+                f"&crid=54&cgid=3&ctid=198&csid={config.get('csid', '')}"
+            )
         elif key == "caesars":
-            url = f"{config['base_url']}/sports"
+            # ``sb/v3/sports-menu`` is the only odds-side path on this host the
+            # real page has ever been observed requesting, and it answers 200 to
+            # a browser.  It replaces ``/sports``, which was never observed
+            # anywhere: a probe against an invented path does not merely fail,
+            # it files a verdict.  ``src/probe_cache.py`` keys that verdict on
+            # ``(caesars, <state>, <egress fingerprint>)`` and holds it for 60
+            # days, so one guess stood as this book's recorded answer for two
+            # months.  See docs/evidence/state-routing.md § Caesars (2026-08-15).
+            #
+            # Expect ``403`` regardless: the gate is an AWS WAF token the
+            # probe's plain client does not carry.  That is the honest result
+            # for this transport, and it is now a refusal from a real path
+            # rather than a refusal from a fictional one.
+            url = f"{config['base_url']}/sports-menu"
         elif key == "hardrock":
             url = "https://api.hardrocksportsbook.com/sportsbook/api/public/events/tree"
         elif key == "thescore":

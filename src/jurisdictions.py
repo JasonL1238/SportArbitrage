@@ -328,7 +328,11 @@ IL = Jurisdiction(
             },
             RouteStatus.TEMPLATE,
             "IL",
-            "exact Illinois route still requires matching-egress validation",
+            "matching-egress validation has now been tried twice and is not the "
+            "open question: the v3 base is reachable from Illinois to a browser "
+            "holding an AWS WAF token, and refuses the repository's client from "
+            "the same exit IP.  What is unknown is the board path under it — the "
+            "adapter's own endpoint has never been observed being requested",
         ),
         "hardrock": _route(
             "hardrock",
@@ -346,6 +350,43 @@ IL = Jurisdiction(
             "IL",
             "anonymous board read from matching Illinois egress on 2026-08-13; "
             "awaiting two clean runs for VALIDATED",
+        ),
+        "bet365": _route(
+            "bet365",
+            "https://www.il.bet365.com",
+            {"base_url": "https://www.il.bet365.com", "csid": "28"},
+            RouteStatus.VALIDATED,
+            "IL",
+            # The host is the licence: www.il.bet365.com serves an Illinois
+            # board and the stateless www.bet365.com serves none.  ``csid=28``
+            # is Illinois in the application's own USStateID table and travels
+            # with the host rather than replacing it.  Read anonymously over
+            # plain HTTP from matching Illinois egress on 2026-08-15 — the
+            # ordinary client and a real browser returned byte-identical
+            # bodies, so no browser is required.
+            #
+            # Promoted 2026-08-16 on the two clean runs this comment used to
+            # await: run 23 (inside the full IL slate, 72 quotes / 16 events)
+            # and run 24 (bet365 alone, 156 quotes / 29 events / 3 requests),
+            # both with 0 rejections.  ``replay --run 24`` is PASS.
+            #
+            # ``replay --run 23`` is **FAIL**, and deliberately not claimed
+            # here: its 49 lost / 49 invented rows are all ``cloudbet``
+            # first-5-innings spreads differing by ``0`` against ``-0``, a
+            # pre-existing line-formatting difference in another adapter that
+            # touches no bet365 row.  The promotion bar is this adapter's own
+            # rows replaying clean, which they do; a whole-run verdict that a
+            # different venue fails is not evidence about this one.
+            #
+            # The two counts differ because the pods are a *same-day* surface
+            # and the runs are 80 minutes apart across a day rollover; both
+            # already carried the recovered MLS three-way. That decay is the
+            # reason to want a league board, and an anonymous session cannot
+            # reach one — measured 2026-08-16, in
+            # ``docs/evidence/state-routing.md``.
+            "anonymous pull-pod board read over plain HTTP from matching "
+            "Illinois egress; promoted 2026-08-16 on runs 23 and 24, both "
+            "replay-clean. Pull-pod scale only — no anonymous league board",
         ),
     },
     promos=PromoRoute(
@@ -451,7 +492,15 @@ PA = Jurisdiction(
             # 2026-08-08, PA egress: still blocked at the edge ("request
             # blocked" marker) before any competition id is reached, so the PA
             # egress alone did not clear the CloudFront refusal seen earlier.
-            "blocked at the CDN edge from PA egress on 2026-08-08",
+            #
+            # 2026-08-15, from the Illinois work: that refusal is now explained.
+            # The gate is an AWS WAF token rather than the egress, so no
+            # Pennsylvania exit IP will clear it either — the PA block and the
+            # IL block are one cause, and re-probing PA from PA will reproduce
+            # it rather than resolve it.  The adapter's endpoint is separately
+            # unproven on every state.
+            "blocked at the CDN edge from PA egress on 2026-08-08; the cause is "
+            "the AWS WAF token, not the egress, so a PA exit IP will not clear it",
         ),
         # PGCB's current authorized-online list has no Hard Rock book.  Retain
         # the adapter and secondary observations globally, but never invent a
@@ -482,6 +531,23 @@ PA = Jurisdiction(
             "PA",
             "PA edge confirmed by DNS with a negative control on 2026-08-13; "
             "never asked over HTTP",
+        ),
+        "bet365": _route(
+            "bet365",
+            "https://www.pa.bet365.com",
+            {"base_url": "https://www.pa.bet365.com", "csid": "56"},
+            RouteStatus.TEMPLATE,
+            "PA",
+            # Structurally known, never exercised.  The host resolves (DNS
+            # checked against a nonsense control on 2026-08-13) and ``csid=56``
+            # is Pennsylvania in the application's own USStateID table, but
+            # this machine egresses Illinois and ``ODDS_HTTP_PROXY_PA`` is
+            # unset, so no PA board has been read.  Carrying it unproven is
+            # safe because the adapter refuses on the licence the *host*
+            # reports: a PA request answered from an IL egress raises
+            # GeoRestrictedError rather than pricing Illinois as Pennsylvania.
+            "structurally known from the IL route's shape; never asked from a "
+            "Pennsylvania egress, and this machine has none",
         ),
     },
     promos=PromoRoute(
@@ -564,6 +630,15 @@ NJ = Jurisdiction(
             {"segment": "nj", "channel": "NEW_JERSEY_ONLINE"},
             RouteStatus.TEMPLATE,
             "NJ",
+        ),
+        "bet365": _route(
+            "bet365",
+            "https://www.nj.bet365.com",
+            {"base_url": "https://www.nj.bet365.com", "csid": "3"},
+            RouteStatus.TEMPLATE,
+            "NJ",
+            "structurally known from the IL route's shape; never asked from a "
+            "New Jersey egress",
         ),
     },
     promos=PromoRoute(

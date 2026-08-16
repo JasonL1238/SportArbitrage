@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
@@ -29,6 +30,24 @@ from typing import Any, Mapping
 DEFAULT_DETECTION_URLS: tuple[str, ...] = ("https://ipapi.co/json/",)
 
 
+#: Identity-only echo services, used to answer "is this the same IP as last
+#: time?" and never "which state is this?".
+#:
+#: The distinction is what makes a second provider safe here when it is not safe
+#: in ``DEFAULT_DETECTION_URLS`` above.  The hazard recorded in that comment is a
+#: provider being *wrong about the state* and failing toward a confident wrong
+#: answer; these are never asked about the state.  They return a bare public IP,
+#: it is hashed immediately, and the only thing done with the hash is compare it
+#: to one that a real detection already verified.
+#:
+#: Added 2026-08-15: ``ipapi.co`` began answering this repository's client with a
+#: Cloudflare "Just a moment..." interstitial (HTTP 403), which blocked *every*
+#: recon capture — and passing that interstitial is defeating a challenge, which
+#: is out of scope permanently.  ``checkip.amazonaws.com`` is plain text, has no
+#: bot gate, and is not in the geolocation business at all.
+CONTINUITY_URLS: tuple[str, ...] = ("https://checkip.amazonaws.com",)
+
+
 @dataclass(frozen=True)
 class EgressDetection:
     state: str
@@ -38,6 +57,19 @@ class EgressDetection:
 
 class EgressDetectionError(RuntimeError):
     """Every configured lookup provider failed or returned an invalid payload."""
+
+
+def _stamped(detected_at: datetime | None) -> str:
+    """*detected_at* as the stored UTC ``Z`` string, defaulting to now.
+
+    One spelling, because both writers of :class:`EgressDetection` persist this
+    field and a drift between them would make two records of the same instant
+    compare unequal.
+    """
+    when = detected_at or datetime.now(UTC)
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=UTC)
+    return when.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
 
 def detection_from_payload(
@@ -55,12 +87,9 @@ def detection_from_payload(
         raise ValueError("detection response did not contain a two-letter state code")
     if not ip:
         raise ValueError("detection response did not contain a public IP")
-    when = detected_at or datetime.now(UTC)
-    if when.tzinfo is None:
-        when = when.replace(tzinfo=UTC)
     return EgressDetection(
         state=state,
-        detected_at=when.astimezone(UTC).isoformat().replace("+00:00", "Z"),
+        detected_at=_stamped(detected_at),
         egress_fingerprint=hashlib.sha256(ip.encode("utf-8")).hexdigest(),
     )
 
@@ -92,6 +121,73 @@ def detect_egress(
         except Exception as exc:  # noqa: BLE001 - try the next independent provider
             failures.append(f"{url}: {type(exc).__name__}: {exc}")
     raise EgressDetectionError("; ".join(failures))
+
+
+def fingerprint_now(
+    client: Any, *, urls: tuple[str, ...] = CONTINUITY_URLS
+) -> str:
+    """Hash the current public IP, asking nothing about where it is.
+
+    The body is reduced to a digest before returning and the address itself is
+    never returned, logged, or persisted — the same discipline
+    :func:`detect_egress` applies to its richer payload.
+    """
+    if not urls:
+        raise EgressDetectionError("no continuity providers configured")
+    failures: list[str] = []
+    for url in urls:
+        try:
+            response = client.get(url, headers={"Accept": "text/plain"})
+            status = int(response.status_code)
+            if status != 200:
+                raise RuntimeError(f"HTTP {status}")
+            ip = str(response.text or "").strip()
+            # Parsed rather than trusted: an interstitial or an error page is
+            # also "200 with a body", and hashing one would produce a
+            # fingerprint that matches nothing and so read as a *changed*
+            # address — safe by luck, and misleading about why.
+            #
+            # Counting dots is not enough, which a test caught: the literal
+            # "Just a moment..." splits into exactly four parts.  Only a real
+            # parse rejects it.
+            ipaddress.ip_address(ip)
+            return hashlib.sha256(ip.encode("utf-8")).hexdigest()
+        except Exception as exc:  # noqa: BLE001 - try the next echo service
+            failures.append(f"{url}: {type(exc).__name__}: {exc}")
+    raise EgressDetectionError("; ".join(failures))
+
+
+def confirm_unchanged_egress(
+    client: Any,
+    stored: EgressDetection,
+    *,
+    urls: tuple[str, ...] = CONTINUITY_URLS,
+    detected_at: datetime | None = None,
+) -> EgressDetection | None:
+    """Carry a previously verified detection forward when the IP has not moved.
+
+    Returns *stored*'s state under a fresh timestamp when the current public IP
+    hashes to *stored*'s fingerprint, and ``None`` when it does not.
+
+    **This can only ever confirm a state, never establish one.**  The state it
+    returns is one a real detection provider already asserted about this exact
+    address; if the address has changed there is no answer and the caller is
+    expected to refuse.  So the guarantee the strict path exists to give — that a
+    state-routed capture is never taken from another state's egress — is intact:
+    an unrecognized IP still stops the run.
+
+    It is deliberately *not* wired into :func:`detect_egress`.  A caller has to
+    ask for it, having decided that a stale-but-verified record plus proof of an
+    unchanged address is evidence enough for what it is about to do.
+    """
+    current = fingerprint_now(client, urls=urls)
+    if current != stored.egress_fingerprint:
+        return None
+    return EgressDetection(
+        state=stored.state,
+        detected_at=_stamped(detected_at),
+        egress_fingerprint=stored.egress_fingerprint,
+    )
 
 
 def save_detection(path: Path, detection: EgressDetection) -> None:

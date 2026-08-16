@@ -60,6 +60,36 @@ def decimal_to_american(odds: float) -> int:
     return round(-100 / (odds - 1))
 
 
+def fractional_to_decimal(numerator: float, denominator: float) -> float:
+    """Convert UK fractional odds to decimal odds.
+
+    ``10/13`` -> 1.7692 (stake 13 to win 10, total return 23 per 13 staked)
+    ``11/10`` -> 2.1000
+    ``1/1``   -> 2.0000 (even money)
+
+    The fraction states **profit over stake**, so the decimal price — which is
+    total return over stake — is ``1 + numerator/denominator``.
+
+    That ``1 +`` is the whole reason this function exists rather than being
+    inlined.  :func:`src.sources.thescore._decimal_odds` divides without it, and
+    is right to: theScore publishes a decimal price *as a rational*
+    (``13387/2000`` is 6.6935), not a fractional price.  bet365's ``OD=`` is a
+    true fraction.  Borrowing the wrong one of those two is understating every
+    price by exactly 1.0, and the result stays inside
+    :func:`is_plausible_decimal_odds`, so nothing downstream would catch it —
+    ``10/13`` would publish as 0.769, and the pair of legs it belongs to would
+    look like a guaranteed profit.
+    """
+    numerator = float(numerator)
+    denominator = float(denominator)
+    if denominator <= 0 or numerator <= 0:
+        raise ValueError(
+            f"fractional odds must have positive terms, got "
+            f"{numerator:g}/{denominator:g}"
+        )
+    return 1 + numerator / denominator
+
+
 def implied_probability(decimal_odds: float) -> float:
     """Convert decimal odds to the probability they imply (0-1).
 

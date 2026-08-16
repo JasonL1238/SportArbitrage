@@ -46,7 +46,44 @@ python scripts/probe_sources.py --state IL
   for vintage coherence (2026-08-09) · The two endpoint versions are different
   catalogues (2026-08-08) · Two things to fix *before* the Pennsylvania recapture
   (2026-08-08) · v2 returns full-game only unless asked (2026-08-08)
-- **`evidence/state-routing.md`** — Caesars: the session that closed it never
+- **`evidence/state-routing.md`** — What bet365's pods supply by the hour, and
+  the two leagues that never arrive (2026-08-16) · The per-sport shelf does not
+  answer either — measured with a closing control · The operator's own browser
+  sees no board either — the reproduction gap was not one · Tennis was in the
+  pods all along, behind a third separator · A price could be published on
+  the wrong side once one fixture sat in two pods · bet365's anonymous app
+  crashes before it ever requests a league board (2026-08-16) · The app never
+  requested the board;
+  it died on the menu that leads to it · What that corrects, including in the
+  first draft of this section · A second delivery channel exists, and it is not
+  HTTP · The routing manifest, decoded — and the prefix theory withdrawn · What
+  this leaves, and what the next attempt should do · bet365 gets no event deep
+  link, and that is a measurement · Link tables became state-aware, which is
+  what a deep link needed first · bet365, second pass: a whole league
+  recovered, and an inverted fixture caught by the slate rather than by the
+  parser (2026-08-15) · The trap worth recording: bet365 orders fixtures two
+  different ways · MLS recovered: 33 prices from bytes already on disk · Scopes
+  are leagues now, not pods · The rest of the integration gap · Acceptance ·
+  bet365 is
+  registered: Illinois' second
+  direct route, and its first over plain HTTP (2026-08-15) · The per-league
+  endpoint, and why the adapter does not use it · What the adapter collects ·
+  Not committed, and why · bet365's clock disagrees on Pacific fixtures, and
+  that is its own answer · Acceptance · bet365 Illinois is REACHABLE: the block
+  lapsed, and the odds are on plain HTTP (2026-08-15) · Rung 1 — is the block
+  still on? One request. · Rung 2 — the board renders under automation · Rung 3 —
+  the odds are on plain HTTP, and this is the cheap branch · The payload format ·
+  Why this matters more than Caesars did · Caesars: the board route found, the board
+  endpoint named, and the wall relocated to bot classification (2026-08-15) ·
+  `/us/{state}/bet/` is a basename, not a route — and both halves are load
+  bearing · The board endpoint, named at last · The wall is bot classification,
+  not the token and not the egress · Left standing · Caesars has no anonymous
+  web board from this
+  egress: the app cannot reach its own navigation service (2026-08-15) · The SEO
+  odds pages are the app shell, byte for byte · The app boots, the click lands,
+  and the board never arrives · The one variable this did not control · Egress
+  detection had to change to run this at all · Left standing · Caesars: the
+  session that closed it never
   reached a board, and a 7th stakeable book would have added nothing
   (2026-08-15) · The value question, asked before spending anything · Five
   things the 2026-08-12 section got wrong · Two detection

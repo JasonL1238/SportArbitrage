@@ -2208,9 +2208,12 @@ def _check_coverage(
     renamed label in *this* parser.  Taken from the registry's own
     classification rather than derived from :data:`src.redundancy.REDUNDANT_PAIRS`
     tuple positions, because position encodes which feed backs up which — not
-    what a feed *is*: ``an_bet365`` and ``an_fanatics`` sit in the primary slot
-    of their only pairs (their books have no first-party adapter) and were
-    graded ERROR for bet365's own market menu.
+    what a feed *is*: ``an_fanatics`` sits in the primary slot of its only pair
+    (Fanatics has no first-party adapter) and was graded ERROR for that book's
+    own market menu.  ``an_bet365`` was the second example until 2026-08-15,
+    when bet365 gained a first-party adapter and its two feeds became the usual
+    triangle — which is exactly why this reads the registry's classification
+    rather than a tuple position that changes when a book gains a route.
     """
     from src.sources.registry import REPUBLISHED_SOURCE_KEYS
 

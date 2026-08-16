@@ -49,10 +49,43 @@ run persists jurisdiction, batch id, and route scope.
 | DraftKings | validated | template | template | template |
 | Caesars | exact-state template | template | template | template |
 | Hard Rock | exact-state template | unavailable | template | unavailable |
+| theScore Bet | template | template | no route yet | unavailable |
+| bet365 | **validated** | template | template | unavailable |
 | Promos (FD / BR) | IL / IL | PA / PA | NJ / NJ | DC / unavailable |
 
 State-agnostic feeds remain unchanged. Pennsylvania's Hard Rock absence is an
 availability fact, not a reason to unregister the adapter or secondary feeds.
+"unavailable" here means the operator holds no licence in that state, which for
+theScore and bet365 in DC is recorded in `src/sources/research.py`'s
+`unavailable_states`. theScore's New Jersey is different and says so: the
+research profile lists NJ as a state it serves, but no route has been written,
+so this is work not done rather than a wall.
+
+bet365's Illinois route was promoted on 2026-08-16 (runs 23 and 24, 0 rejections
+each). The current acceptance run is **26** — 37 events, 174 quotes, 0
+rejections, `replay --run 26` PASS. Runs 18–25 no longer replay clean and that
+is deliberate: the parser learned the tennis shelf later the same day, so each
+of them now reports 12–37 invented rows from its own stored bytes and **zero
+lost** ones. Runs 20 and 23 additionally lose 49 rows apiece to an unrelated
+`cloudbet` line-format difference that touches no bet365 row.
+
+What it collects is the homepage pull-pods: baseball, basketball, soccer and —
+since 2026-08-16 — tennis, whose rows had been declined under a reason that
+looked right because its count matched. The per-league board is **not reachable
+by an anonymous session** — measured 2026-08-16, and the wall is that the app
+crashes rendering an empty splash payload before it ever requests the board.
+A per-sport shelf (`/splashcontentapi/getsplashpods`) was probed the same day
+with a closing control and returned 200 with an empty body.
+
+**This is not an automation artefact.** The operator checked the same navigation
+in their own ordinary Chrome, on their own Illinois address, signed out: the
+board is blank there too, with zero `*contentapi/*` requests in the whole page,
+while the pull-pod shelves answered normally in that same session. So the
+browser-backed collection path is **closed rather than deferred** — there is no
+anonymous board to transport and none to read off the page. What is left
+unexamined is the Diffusion push channel and a credentialed session; see
+[`evidence/state-routing.md`](evidence/state-routing.md) before spending
+requests on either.
 
 ---
 
@@ -249,6 +282,8 @@ Use this when Step 2 fails for a venue.
 | DraftKings | `US-{ST}-SB` | Often needs licensed-state proxy from CA |
 | Caesars | `locations/{st}` | Same |
 | Hard Rock | Add a segment only when licensed in that state | PA is explicitly unavailable; never invent `segment=pa` |
+| theScore Bet | `sportsbook.us-{st}.thescore.bet` | The edge reports the licence back, so a wrong-state egress refuses rather than answering |
+| bet365 | `www.{st}.bet365.com` **and** `csid` (28 IL, 56 PA, 3 NJ, 20 DC) | The host *is* the licence — the stateless `www.bet365.com` serves no board at all, so there is no origin to fall back to. `csid` travels with the host rather than replacing it: neither alone routes a price. The shell states its own licence as `STATE_LOCALE:"US{ST}"`, and the adapter refuses on disagreement *or absence* |
 | Bovada / Cloudbet / 1xBet / Pinnacle / exchanges / Kalshi / Polymarket | Usually none | Treat as state-agnostic once ok |
 | Action Network / VegasInsider / VSiN observations | None | Diagnostic only; not a jurisdiction substitute or executable leg |
 

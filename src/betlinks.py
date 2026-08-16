@@ -33,7 +33,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Mapping, Protocol
+from typing import Callable, Mapping, Protocol
+from urllib.parse import urlsplit
 
 
 class Precision(StrEnum):
@@ -132,6 +133,16 @@ STATE_SITE: Mapping[str, Mapping[str, str]] = {
         "PA": "https://sportsbook.caesars.com/us/pa/bet",
         "NJ": "https://sportsbook.caesars.com/us/nj/bet",
         "DC": "https://sportsbook.caesars.com/us/dc/bet",
+    },
+    "bet365": {
+        # The stateless www.bet365.com serves no board at all, so the site-level
+        # fallback in SITE is a door onto nothing.  These are the hosts that
+        # actually carry a licensed board.
+        "IL": "https://www.il.bet365.com",
+        "PA": "https://www.pa.bet365.com",
+        "NJ": "https://www.nj.bet365.com",
+        # No DC entry: bet365 holds no DC licence, which src.sources.research
+        # records as an unavailable state rather than a missing route.
     },
     "unibet": {
         "PA": "https://pa.unibet.com",
@@ -248,21 +259,48 @@ LEAGUE_PAGE: Mapping[str, Mapping[str, str]] = {
 }
 
 
+def state_host(book: str, state: str) -> str | None:
+    """The netloc this book serves *this* state's board on, or None.
+
+    Derived from :data:`STATE_SITE` rather than from a table of its own.  The
+    per-state door is already spelled once there and pinned by test against
+    :attr:`src.jurisdictions.PromoRoute.betrivers_url`; a second table of hosts
+    would be a fourth spelling of the same fact, and the defect this module
+    exists to prevent is precisely two spellings of one door drifting apart.
+    """
+    door = STATE_SITE.get(book, {}).get(state.strip().upper())
+    return urlsplit(door).netloc if door else None
+
+
 @dataclass(frozen=True)
 class _Event:
     """One book's candidate event-URL grammar.
 
-    ``template`` is formatted with ``id`` (the row's ``source_event_id``) and
-    ``slug`` (dashed team names, away first).  ``verified`` is set only from a
-    live ``verify`` run — see the module docstring for why it defaults to False.
+    ``template`` is formatted with ``id`` (the row's ``source_event_id``),
+    ``slug`` (dashed team names, away first), and — for a book in
+    :data:`STATE_SITE` — ``host``, that state's own netloc.
+
+    **Verification is per state for a state-partitioned book.**  A probe runs
+    from one egress, so proving Illinois' grammar says nothing about
+    Pennsylvania's: the host differs, and so may the routing behind it.  Those
+    books therefore carry ``verified_states`` and may not set the flat
+    ``verified`` at all — :func:`_check_link_tables` refuses it at import.
+    Books served from one domain everywhere keep the plain flag.
     """
 
     template: str
     verified: bool = False
+    verified_states: frozenset[str] = frozenset()
     note: str = ""
 
-    def build(self, *, event_id: str, slug: str) -> str:
-        return self.template.format(id=event_id, slug=slug)
+    def verified_for(self, state: str | None) -> bool:
+        """Is this grammar proven for the jurisdiction governing the run?"""
+        if self.verified_states:
+            return state is not None and state.strip().upper() in self.verified_states
+        return self.verified
+
+    def build(self, *, event_id: str, slug: str, host: str = "") -> str:
+        return self.template.format(id=event_id, slug=slug, host=host)
 
 
 #: Book → candidate event grammar, with what the last live probe measured.
@@ -307,8 +345,13 @@ EVENT_URL: Mapping[str, _Event] = {
         note="2026-08-04: client-rendered, a bogus id returns the same shell",
     ),
     "betrivers_kambi": _Event(
-        "https://il.betrivers.com/?page=sportsbook#event/{id}",
-        note="2026-08-04: client-rendered; the id is in the fragment, never sent",
+        "https://{host}/?page=sportsbook#event/{id}",
+        note=(
+            "2026-08-04: client-rendered; the id is in the fragment, never sent. "
+            "Was spelled il.betrivers.com until 2026-08-15, when _Event learned "
+            "states: the Illinois host was the one the probe happened to run "
+            "from, not a property of the grammar"
+        ),
     ),
     "kalshi": _Event(
         "https://kalshi.com/markets/{id}",
@@ -330,7 +373,209 @@ EVENT_URL: Mapping[str, _Event] = {
         "https://www.leovegas.com/en-ca/sport#event/{id}",
         note="2026-08-04: HTTP 404 on every sample — this grammar is wrong",
     ),
+    # No bet365 entry, and that is a measurement rather than an omission.  Its
+    # address bar mirrors the app's own navigation token segment for segment —
+    # captured 2026-08-16 as ``#/AC/B16/C20525425/D48/E1096/F10/`` — and a
+    # fixture row's token is the same shape:
+    # ``#AC#B16#C20525425#D19#E26475424#F19#I0#P951933#H1#``.  The event id is
+    # one segment of several; class, competition, template and group are equally
+    # required, and a ``Quote`` keeps none of them.  So no ``{id}`` template can
+    # address a bet365 event: reaching event precision here is a schema change
+    # (carry the token) and not a link-table addition.  Note also that ``#E``
+    # means *two* things in that grammar — the event on a fixture row, a layout
+    # template on the league link — so the obvious pattern-match is wrong twice.
 }
+
+_HOST_PLACEHOLDER = "{host}"
+
+
+def _names_a_state(template: str) -> str | None:
+    """Does the constant part of this template name a jurisdiction?
+
+    The host checks below compare *where* a URL points, and a template can
+    satisfy them while still asking the wrong licence a question:
+    ``https://{host}/?page=sportsbook&market=US-IL#event/{id}`` resolves to
+    Pennsylvania's own host and then names Illinois' market in the query.  Only
+    the host varies per state, so every distinctness and prefix test passes.
+
+    A state-partitioned template must take its jurisdiction from ``{host}`` and
+    from nowhere else, so any state code in the surrounding literal is a
+    contradiction.  Matched as a whole token, which is why ``sportsbook`` and
+    ``il.betrivers.com`` (inside the placeholder's own expansion, not the
+    literal) do not trip it.
+    """
+    literal = template.replace(_HOST_PLACEHOLDER, "")
+    for state in {s for doors in STATE_SITE.values() for s in doors}:
+        if re.search(rf"(?<![A-Za-z0-9]){state}(?![A-Za-z0-9])", literal, re.I):
+            return state
+    return None
+
+
+def _collapses_across_states(
+    book: str, build: Callable[[str], str]
+) -> str | None:
+    """Does this template give two different licences the same URL?
+
+    ``{host}`` is a netloc, and **not every state-partitioned book is
+    partitioned by netloc**.  Caesars' four doors are one host with four paths
+    (``sportsbook.caesars.com/us/il/bet`` … ``/us/dc/bet``), so a ``{host}``
+    template resolves all four to the same URL — the Illinois-link defect
+    exactly, wearing the placeholder that was supposed to prevent it.  Worse,
+    a netloc-to-netloc assertion *passes* it, because the netloc really does
+    match in every state.
+
+    So the rule is distinctness rather than shape: states with different doors
+    must end up with different URLs.  Returns a message when they do not.
+    """
+    doors = STATE_SITE.get(book, {})
+    built = {state: build(state) for state in doors}
+    if len(set(built.values())) < len(set(doors.values())):
+        return (
+            f"resolves to {sorted(set(built.values()))} across {sorted(doors)}, "
+            f"which is fewer distinct URLs than {book} has distinct doors — "
+            "{host} is a netloc, and this book is partitioned by something else "
+            "(a path, a segment), so every state would share one link"
+        )
+    # Distinctness alone is not enough, and neither is a prefix.  Two more
+    # things have to hold, and each catches what the other misses:
+    #
+    # * the **netloc must match** that state's door.  ``startswith`` is a
+    #   string test, not a host test, and the doors of a host-partitioned book
+    #   carry no path — so ``https://www.il.bet365.com.elsewhere.example/mlb``
+    #   begins with Illinois' whole door string while pointing at a host that
+    #   is not bet365 at all.  ``…@elsewhere.example`` is the same trick made
+    #   to read as bet365 to a human.
+    # * the URL must **sit under** the door, which is what catches a template
+    #   hardcoding one state's domain while carrying ``{host}`` somewhere
+    #   decorative, and any book partitioned by path rather than by host.
+    astray = {
+        state: url
+        for state, url in built.items()
+        if urlsplit(url).netloc != urlsplit(doors[state]).netloc
+        or not url.startswith(doors[state])
+    }
+    if astray:
+        return (
+            f"builds {sorted(astray.values())} for {sorted(astray)}, which is "
+            "not on those states' own doors "
+            f"({sorted(doors[s] for s in astray)}) — a link at this precision "
+            "outranks the state door, so it must be that state's licence"
+        )
+    return None
+
+
+def _check_link_tables() -> None:
+    """Refuse, at import, a link table that outranks the state door wrongly.
+
+    Two tests used to enforce this by forbidding the entries outright — no
+    :data:`STATE_SITE` book could hold a :data:`LEAGUE_PAGE` entry, and none
+    could set ``verified``.  That was the right call while nothing could spell
+    a per-state URL; now that :class:`_Event` can, the ban becomes a shape rule,
+    and it moves here so it holds for anyone importing the module rather than
+    only for the suite.
+
+    What the checks are actually protecting: :func:`bet_link` reaches event and
+    league precision *before* the state door, so a template carrying one state's
+    literal domain sends a Pennsylvania bettor to Illinois at the precision that
+    wins.  That defect shipped once — run 32, two real opportunities whose
+    ``betrivers_kambi`` legs read ``il.betrivers.com`` under a "PLACE BOTH NOW"
+    while the prices came from ``rsiuspa``.
+    """
+    errors: list[str] = []
+    for book, candidate in EVENT_URL.items():
+        partitioned = book in STATE_SITE
+        if not partitioned:
+            if candidate.verified_states:
+                errors.append(
+                    f"{book}: verified_states is for books whose host differs "
+                    "by licence; this book serves one domain, so the plain "
+                    "verified flag is the honest claim"
+                )
+            if _HOST_PLACEHOLDER in candidate.template:
+                errors.append(
+                    f"{book}: template takes {{host}} but the book is not in "
+                    "STATE_SITE, so nothing can fill it"
+                )
+            continue
+        if candidate.verified:
+            errors.append(
+                f"{book}: the flat verified flag claims every state at once, "
+                "but a probe runs from one egress — use verified_states"
+            )
+        if _HOST_PLACEHOLDER not in candidate.template:
+            errors.append(
+                f"{book}: event template {candidate.template!r} hardcodes a "
+                "host for a book whose board is partitioned by licence; event "
+                "precision outranks the state door, so this links one state's "
+                "site from every state's run"
+            )
+        unknown = set(candidate.verified_states) - set(STATE_SITE[book])
+        if unknown:
+            errors.append(
+                f"{book}: verified_states names {sorted(unknown)}, which "
+                "STATE_SITE has no door for — nothing can resolve their host"
+            )
+        if _HOST_PLACEHOLDER in candidate.template:
+            named = _names_a_state(candidate.template)
+            if named:
+                errors.append(
+                    f"{book}: event template {candidate.template!r} names "
+                    f"{named} in its literal text; a state-partitioned grammar "
+                    "must take its jurisdiction from {host} alone"
+                )
+            collapsed = _collapses_across_states(
+                book,
+                lambda state, _b=book, _c=candidate: _c.build(
+                    event_id="1", slug="a-b", host=state_host(_b, state) or ""
+                ),
+            )
+            if collapsed:
+                errors.append(f"{book}: event template {collapsed}")
+    for book, pages in LEAGUE_PAGE.items():
+        if book not in STATE_SITE:
+            # Nothing fills ``{host}`` for a book with no per-state doors, and
+            # ``bet_link`` deliberately does not call ``.format`` on these, so
+            # the placeholder would reach the reader as literal ``{host}`` in
+            # the URL.  The EVENT_URL loop above already refuses this shape;
+            # skipping the whole book here left the same hole one table over.
+            for league, url in pages.items():
+                if _HOST_PLACEHOLDER in url:
+                    errors.append(
+                        f"{book}/{league}: league page {url!r} takes {{host}} "
+                        "but the book has no per-state doors to fill it from, "
+                        "so the placeholder ships to the reader verbatim"
+                    )
+            continue
+        for league, url in pages.items():
+            if _HOST_PLACEHOLDER not in url:
+                errors.append(
+                    f"{book}/{league}: league page {url!r} hardcodes a host for "
+                    "a book partitioned by licence, and league precision "
+                    "outranks the state door"
+                )
+                continue
+            named = _names_a_state(url)
+            if named:
+                errors.append(
+                    f"{book}/{league}: league page {url!r} names {named} in "
+                    "its literal text; a state-partitioned grammar must take "
+                    "its jurisdiction from {host} alone"
+                )
+            collapsed = _collapses_across_states(
+                book,
+                lambda state, _b=book, _u=url: _u.format(
+                    host=state_host(_b, state) or ""
+                ),
+            )
+            if collapsed:
+                errors.append(f"{book}/{league}: league page {collapsed}")
+    if errors:
+        raise RuntimeError(
+            "state-partitioned link templates are unsound:\n- " + "\n- ".join(errors)
+        )
+
+
+_check_link_tables()
 
 _SLUG_STRIP = re.compile(r"[^a-z0-9]+")
 
@@ -360,7 +605,9 @@ def bet_link(priced: _Priced, *, state: str | None = None) -> BetLink | None:
     in :data:`STATE_SITE` it selects that licence's own front door, because a
     state-partitioned book's Illinois site does not show Pennsylvania's slip.
     Left ``None`` — a legacy or global run — those books degrade to their
-    stateless landing rather than to some other state's.
+    stateless landing rather than to some other state's, at *every* precision:
+    an unresolvable host skips the event and league grammars outright instead
+    of filling the placeholder with a guess.
     """
     source = priced.source
     book = book_for(source)
@@ -368,19 +615,36 @@ def bet_link(priced: _Priced, *, state: str | None = None) -> BetLink | None:
         return None
     mirrored = source in MIRROR_BOOK
 
+    # For a state-partitioned book, both branches below outrank the state door,
+    # so an ungoverned run must not enter them: every template they hold spells
+    # a host, and with no jurisdiction to spell it from the only available
+    # answer is some *other* state's.  Falling through to SITE is the honest
+    # one — less precise, and not a link to a licence this run cannot bet on.
+    host = state_host(book, state) if state else None
+    partitioned = book in STATE_SITE
+    resolvable = host is not None if partitioned else True
+
     # A mirrored row never reaches an event page: the id belongs to the
     # aggregator that published the price, not to the book that posted it.
-    if not mirrored:
+    if not mirrored and resolvable:
         candidate = EVENT_URL.get(book)
-        if candidate is not None and candidate.verified:
+        if candidate is not None and candidate.verified_for(state):
             slug = team_slug(priced.away_team, priced.home_team)
-            url = candidate.build(event_id=priced.source_event_id, slug=slug)
+            url = candidate.build(
+                event_id=priced.source_event_id, slug=slug, host=host or ""
+            )
             return BetLink(url, Precision.EVENT, book, mirrored=False)
 
-    league_pages = LEAGUE_PAGE.get(book) or {}
-    league_url = league_pages.get(priced.league)
-    if league_url:
-        return BetLink(league_url, Precision.LEAGUE, book, mirrored=mirrored)
+    if resolvable:
+        league_pages = LEAGUE_PAGE.get(book) or {}
+        league_url = league_pages.get(priced.league)
+        if league_url:
+            # Only a partitioned book's entry is a template; the rest are plain
+            # URLs and are returned untouched.  Formatting them anyway would be
+            # a no-op today and a crash the day one carries a literal brace.
+            if partitioned:
+                league_url = league_url.format(host=host)
+            return BetLink(league_url, Precision.LEAGUE, book, mirrored=mirrored)
 
     if state:
         state_site = STATE_SITE.get(book, {}).get(state.strip().upper())

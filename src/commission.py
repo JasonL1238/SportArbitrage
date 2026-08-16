@@ -154,6 +154,7 @@ COMMISSIONS: dict[str, Commission] = {
     "draftkings": NO_COMMISSION,
     "hardrock": NO_COMMISSION,
     "thescore": NO_COMMISSION,
+    "bet365": NO_COMMISSION,
     "caesars": NO_COMMISSION,
     "cloudbet": NO_COMMISSION,
     "onexbet": NO_COMMISSION,

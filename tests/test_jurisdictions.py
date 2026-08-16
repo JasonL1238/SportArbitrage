@@ -227,6 +227,90 @@ def test_only_one_detection_provider_is_configured() -> None:
     assert DEFAULT_DETECTION_URLS == ("https://ipapi.co/json/",)
 
 
+class _EchoClient:
+    """Minimal stand-in for the transport: one canned body, one status."""
+
+    def __init__(self, body: str, status: int = 200) -> None:
+        self._body = body
+        self._status = status
+        self.asked: list[str] = []
+
+    def get(self, url, headers=None):
+        self.asked.append(url)
+
+        class _Response:
+            status_code = self._status
+            text = self._body
+
+        return _Response()
+
+    def close(self):
+        pass
+
+
+def test_continuity_confirms_a_stored_state_when_the_address_has_not_moved() -> None:
+    from src.egress import confirm_unchanged_egress
+
+    stored = detection_from_payload(
+        {"ip": "203.0.113.7", "region_code": "IL"},
+        detected_at=datetime(2026, 8, 14, tzinfo=UTC),
+    )
+    confirmed = confirm_unchanged_egress(
+        _EchoClient("203.0.113.7\n"),
+        stored,
+        detected_at=datetime(2026, 8, 15, tzinfo=UTC),
+    )
+    assert confirmed is not None
+    assert confirmed.state == "IL"
+    assert confirmed.egress_fingerprint == stored.egress_fingerprint
+    # Same address, same state, but freshly observed — that is the whole point.
+    assert confirmed.detected_at != stored.detected_at
+
+
+def test_continuity_refuses_a_different_address_rather_than_guessing() -> None:
+    """The guard the strict path exists to give has to survive the fallback.
+
+    Continuity may carry a verified state forward across an unchanged address.
+    It may never assert one about an address nobody has checked — otherwise a
+    machine that moved to another state would inherit Illinois and every route
+    pinned to Illinois would be collected from the wrong licence.
+    """
+    from src.egress import confirm_unchanged_egress
+
+    stored = detection_from_payload(
+        {"ip": "203.0.113.7", "region_code": "IL"},
+        detected_at=datetime(2026, 8, 14, tzinfo=UTC),
+    )
+    assert confirm_unchanged_egress(_EchoClient("198.51.100.9\n"), stored) is None
+
+
+def test_continuity_refuses_a_body_that_is_not_an_address() -> None:
+    """A challenge page is also "200 with a body".
+
+    Hashing one yields a digest that matches nothing, which reads as a *changed*
+    address — the safe direction, but for the wrong reason and with a misleading
+    story. The shape check makes the provider's failure legible instead.
+    """
+    from src.egress import EgressDetectionError, fingerprint_now
+
+    with pytest.raises(EgressDetectionError):
+        fingerprint_now(_EchoClient("<!DOCTYPE html><title>Just a moment...</title>"))
+
+
+def test_continuity_providers_are_never_the_detection_providers() -> None:
+    """Identity and geolocation are asked of different services, deliberately.
+
+    The recorded hazard for ``DEFAULT_DETECTION_URLS`` is a provider being wrong
+    about the *state*. A continuity provider is never asked about the state, so
+    it cannot express that failure — which is why a second one is safe here and
+    is not safe there.
+    """
+    from src.egress import CONTINUITY_URLS, DEFAULT_DETECTION_URLS
+
+    assert not set(CONTINUITY_URLS) & set(DEFAULT_DETECTION_URLS)
+    assert CONTINUITY_URLS == ("https://checkip.amazonaws.com",)
+
+
 def test_a_failed_lookup_falls_back_to_a_recent_record_and_says_so(
     monkeypatch, tmp_path
 ) -> None:

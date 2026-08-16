@@ -54,6 +54,7 @@ from src.jurisdictions import (
 from src.settlement import SETTLEMENT
 from src.sources.base import OddsSource
 from src.sources.actionnetwork import LEGACY_V1_BASE_URL, ActionNetworkAdapter
+from src.sources.bet365 import Bet365Adapter
 from src.sources.betrivers_kambi import BetRiversKambiAdapter
 from src.sources.betmgm import BetMgmAdapter
 from src.sources.bovada import BovadaAdapter
@@ -94,6 +95,7 @@ SLOW_SOURCES: frozenset[str] = frozenset({"smarkets"})
 #: with A and with B would otherwise union-find A with B).
 RETAIL_SOURCE_KEYS: frozenset[str] = frozenset(
     {
+        "bet365",
         "fanduel",
         "betrivers_kambi",
         "betmgm",
@@ -447,6 +449,11 @@ _BASE_SOURCES: tuple[SourceDescriptor, ...] = (
         kind=SourceKind.SPORTSBOOK,
     ),
     SourceDescriptor(
+        key="bet365",
+        adapter=Bet365Adapter,
+        kind=SourceKind.SPORTSBOOK,
+    ),
+    SourceDescriptor(
         key="caesars",
         adapter=CaesarsAdapter,
         kind=SourceKind.SPORTSBOOK,
@@ -465,10 +472,14 @@ _BASE_SOURCES: tuple[SourceDescriptor, ...] = (
     #
     # One public JSON feed carrying many books.  Keys that pair with a
     # first-party adapter (FanDuel, BetRivers, BetMGM, Bovada, 1xBet) are
-    # intentional failover feeds — see :mod:`src.redundancy`.  DraftKings /
-    # Caesars / Bet365 have no first-party adapter from this egress; AN is the
-    # only path until a licensed-state proxy lands.  LeoVegas Ontario on AN is
-    # not paired with ``leovegas_kambi`` (Kambi GB) — different licence.
+    # intentional failover feeds — see :mod:`src.redundancy`.  DraftKings,
+    # Caesars and bet365 used to be named here as having none; DraftKings and
+    # bet365 now do, and Caesars' first-party route exists but reaches no board
+    # (its own navigation service is refused at the edge — see
+    # ``docs/evidence/state-routing.md``).  So for Caesars the Action Network
+    # feed is still the only path that produces rows, and for the other two it
+    # is a second observation of a book already collected.  LeoVegas Ontario on
+    # AN is not paired with ``leovegas_kambi`` (Kambi GB) — different licence.
     SourceDescriptor(
         key="an_draftkings",
         adapter=ActionNetworkAdapter,

@@ -78,6 +78,16 @@ SOURCE_NOTES: dict[str, dict[str, str]] = {
         "what": "First-party GraphQL feed behind Hard Rock's own app. Needs a "
                 "licensed-state egress to answer with a slate at all.",
     },
+    "bet365": {
+        "label": "bet365",
+        "host": "www.{state}.bet365.com",
+        "kind": "sportsbook",
+        "what": "First-party pull-pod board on bet365's own per-state host, read "
+                "anonymously over plain HTTP — no browser, no cookie, no token. "
+                "The board is a compact delimited format rather than JSON, and "
+                "prices arrive as fractions. The stateless host serves no board, "
+                "so the state in the hostname is the licence.",
+    },
     "thescore": {
         "label": "theScore Bet",
         "host": "sportsbook.us-{state}.thescore.bet",
@@ -333,6 +343,60 @@ VENUE_KINDS: dict[str, str] = {
 #: Why an offer the books do publish is deliberately not collected.  Matched by
 #: prefix, longest first, so a specific reason beats the family it belongs to.
 SKIP_NOTES: list[tuple[str, str]] = [
+    # ── bet365's pull-pod coupon ─────────────────────────────────────────────
+    # The board is a column-oriented delimited stream joined on a row index
+    # rather than on ids, so its drops describe positions in a grid.  The first
+    # two are faults and the rest are routine; keeping them apart is the whole
+    # point of counting them separately.
+    ("price_without_fixture_row",
+     "A price named a row of the board that the fixture column never listed — the "
+     "shape a shifted row index makes, so the prices under it are dropped rather "
+     "than attached to whichever game happened to sit at that position."),
+    ("price_without_row_index",
+     "A price arrived carrying no row index at all, so there is nothing to attach it "
+     "to. Kept apart from the case above because that one means the grid moved and "
+     "this one means the record was incomplete."),
+    ("price_for_declined_event",
+     "A price belonging to a game this run had already set aside — started, out of "
+     "season scope, or an unlisted competition. Routine, and counted so that "
+     "'the grid moved' cannot hide inside it."),
+    ("fixture_without_both_names",
+     "A board row that named only one competitor. Without both there is no fixture "
+     "to resolve and no side to price."),
+    ("fixture_without_a_stated_host",
+     "A board row that named both teams but not which was at home. This book writes "
+     "US games as 'away @ home' and soccer as 'home v away', so the order alone does "
+     "not say — and a game whose host is unknown would price the wrong team rather "
+     "than fail to price one."),
+    ("fixture_missing_for_price",
+     "A price outlived the fixture it belonged to, which happens when the game was "
+     "dropped after its prices were read."),
+    ("event_without_start_time",
+     "A board row with no start time. Without one the game cannot be placed on a "
+     "scheduling date, so it cannot be matched to the same game at another book."),
+    ("event_without_stable_id",
+     "A board row whose navigation token carried no event id. The alternative id in "
+     "the payload is replaced when a game goes live, so a run spanning first pitch "
+     "would file one game twice — this drops the row instead."),
+    ("selection_suspended",
+     "The book had this price flagged suspended: shown on the page but not takeable, "
+     "which is not a price this application can stake."),
+    ("total_without_side",
+     "A total whose display string did not say over or under. The side lives only "
+     "there — the numeric field carries the line and no side — so a missing prefix "
+     "means the side is unknown rather than guessable."),
+    ("total_without_line",
+     "A total with no readable line."),
+    ("spread_without_line",
+     "A spread with no readable handicap."),
+    ("draw_on_a_market_that_cannot_tie",
+     "A draw column on a sport whose full game cannot end level — a column header "
+     "read wrongly rather than a market, so it is refused here."),
+    ("no_coupon_in_pod",
+     "A board section carried no two-team coupon at all. Legitimate for a section "
+     "that is all futures and boosts, and counted so that a section which *stopped* "
+     "carrying one is visible."),
+
     # ── not a single fixture ─────────────────────────────────────────────────
     ("market_on_non_game_event",
      "A market attached to a season-long container — a futures or specials page — "
@@ -436,6 +500,14 @@ SKIP_NOTES: list[tuple[str, str]] = [
     ("event_already_started",
      "The fixture is under way. Only pre-match prices are collected, because an in-play "
      "price and a pre-match price are not the same market."),
+    ("start_time_already_passed",
+     "The book still calls this fixture pre-match, but the start time it publishes has "
+     "already gone by — a match on a court or field running late. The two statements "
+     "cannot both be shown, and settlement reads the start time rather than the flag."),
+    ("same_price_in_two_pods",
+     "One fixture listed on two of this venue's shelves at the same price. It is the "
+     "same row seen twice, not two offers, so the duplicate is counted here instead of "
+     "being reported as a market the parser could not represent."),
     ("orders_response_truncated",
      "The venue returned a full page of orders and this market was not in it, so whether "
      "anyone is offering this side is unknown rather than no."),

@@ -17,7 +17,21 @@ from typing import Any, Mapping, Sequence
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 
-MAX_BODY_CHARS = 2_000_000
+#: Ceiling on a single sanitized body.  Raised from 2,000,000 on 2026-08-15:
+#: Caesars' application bundle is 1.96 MB and landed *just* under the old cap,
+#: so the copy on disk ends mid-expression and imports webpack module ids that
+#: are defined nowhere in the capture.  That silently converted the manifest
+#: from evidence into partial evidence — an "this endpoint appears nowhere in
+#: the bundle" reading over a truncated file is unsound, and one was made.
+#:
+#: The cap exists to bound disk, not to redact.  Truncation happens *first*
+#: (``sanitize_body`` slices, then redacts), so every byte that survives a
+#: larger cap is still passed through the same redactors — raising it retains
+#: more text but hides nothing less.  Never invert that order: redacting first
+#: and slicing second could cut a replacement token in half.  A
+#: modern single-page bundle is the thing being measured, so the ceiling has to
+#: clear one comfortably rather than sit at the size of the last one seen.
+MAX_BODY_CHARS = 8_000_000
 _REDACTED = "[redacted]"
 #: Field names whose value never reaches a manifest.
 #:

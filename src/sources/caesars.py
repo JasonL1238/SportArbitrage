@@ -1,12 +1,35 @@
-"""Caesars Sportsbook pregame markets, from the American Wagering API.
+"""Caesars Sportsbook pregame markets.  **This adapter does not currently work,
+and the endpoint it asks for has no provenance.**
 
-``api.americanwagering.com/regions/us/locations/{state}/brands/czr/sb/v3/`` is
-the JSON the public sportsbook page reads.  Highlights by ``competitionId``
-list events; each event detail carries ``markets`` with decimal ``price.d``.
+``fetch_raw`` requests ``{base}/sb/v3/events/highlights/`` and then
+``{base}/sb/v3/events/{id}``.  Neither path was ever observed being requested by
+the real page.  A full Illinois browser capture on 2026-08-12
+(146 responses, re-analysed 2026-08-15) shows the page touching only
+``sb/features``, ``sb/bets/configuration``, ``sb/v3/sports-menu`` and
+``sb/v3/teamMetadata`` on this host — and across all 143 captured bodies the
+string ``sb/v3`` occurs exactly once, in an unrelated ``TRANSACTION_HISTORY``
+config value.  The parser below is therefore pinned against a **synthetic**
+envelope for a payload shape with no known live producer.  Treat both the paths
+and the ``markets`` / ``price.d`` shape as unverified until a capture proves
+them.
 
-From California the CloudFront edge answers ``403`` without a licensed-state
-``ODDS_HTTP_PROXY``.  The parser is pinned against captured / synthetic
-envelopes and does not depend on that wall.
+What *is* measured, from a matching Illinois egress:
+
+* The gate is an **AWS WAF token**, not egress identity, geolocation or TLS
+  fingerprint.  Real Chrome gets ``200`` on ``sb/v3/sports-menu``; the
+  repository's Chrome-impersonating ``curl_cffi`` client gets ``403`` from the
+  same exit IP minutes later.  Deriving that token outside a browser is
+  defeating an anti-automation control and is **out of scope permanently**.
+* Every ``sb/v4`` path answers ``403`` from CloudFront's edge even to a
+  token-holding browser, thirty seconds after ``mp_verify`` succeeded.  There is
+  no v4 lever.
+* Prices are believed to arrive over a Diffusion binary push socket rather than
+  REST — the Illinois app config names four ``DIFFUSION_*`` sockets and no board
+  path.  Believed, not seen: no captured frame has ever carried a price.
+
+See ``docs/evidence/state-routing.md`` § Caesars (2026-08-15) for the literal
+results, and for why a first-party route measured **+0 opportunities** against
+stored run 16.
 """
 from __future__ import annotations
 
@@ -51,11 +74,17 @@ HOST_INTERVAL = 0.6
 
 #: competitionId → (sport, league).  UUIDs observed on the public API.
 #:
-#: All five confirmed against the Illinois sports menu captured
-#: 2026-08-04T00:43Z (``data/research/caesars/IL/20260804T004333Z``,
-#: response-010): the NFL and NBA ids already here appeared unchanged, and the
-#: menu supplied the three seasonal ids that were missing.  Seasonal ids can
-#: rotate — re-read them from a fresh menu capture, never guess.
+#: All five re-confirmed 2026-08-15 against ``sb/v3/sports-menu`` as captured on
+#: 2026-08-12, which is a surface the page really does request and which really
+#: does answer 200 to a browser.  (An earlier version of this comment cited
+#: ``data/research/caesars/IL/20260804T004333Z``; ``data/`` is gitignored and has
+#: been wiped since, so that citation pointed at nothing anybody could check.
+#: The ids themselves were correct and are unchanged.)
+#:
+#: The menu is a **catalogue skeleton**: every sport reports ``eventCount: 0``
+#: with ``events: []``, so it carries no event ids and no deep links and cannot
+#: supply a board URL.  Seasonal ids can rotate — re-read them from a fresh menu
+#: capture, never guess.
 COMPETITIONS: tuple[tuple[str, Sport, str], ...] = (
     ("007d7c61-07a7-4e18-bb40-15104b6eac92", Sport.FOOTBALL, "NFL"),
     ("5806c896-4eec-4de1-874f-afed93114b8c", Sport.BASKETBALL, "NBA"),
