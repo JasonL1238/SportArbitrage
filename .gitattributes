@@ -1,2 +1,8 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Captured fixture bodies are genuine wire bytes: never normalize their line
+# endings.  (The first promo captures were added before this rule and were
+# LF-normalized at add time — measured harmless, their parsers are
+# newline-agnostic — but every capture from here on keeps its exact bytes.)
+tests/fixtures/** -text
