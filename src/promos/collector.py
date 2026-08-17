@@ -18,7 +18,7 @@ from uuid import uuid4
 from src import settings
 from src.promos import registry
 from src.promos.base import PromoParseOutcome, PromoSource, PromoSourceHealth
-from src.promos.deepen import deepen_by_source
+from src.promos.deepen import DeepenCache, deepen_by_source
 from src.promos.enrich import enrich_offers
 from src.promos.redundancy import brand_coverage, prefer_primary_offers
 from src.promos.schema import PromoOffer
@@ -359,6 +359,7 @@ def collect_promos_once(
     jurisdiction: str | None = None,
     batch_id: str | None = None,
     built_sources: Sequence[PromoSource] | None = None,
+    deepen_cache: DeepenCache | None = None,
 ) -> PromoRunResult:
     started_at = datetime.now(UTC)
     run_state = (jurisdiction or settings.STATE).strip().upper()
@@ -460,7 +461,7 @@ def collect_promos_once(
         # Enrich/deepen before primary preference so concrete TheLines welcomes
         # are not dropped against a still-vague first-party "Welcome offer".
         offers = enrich_offers(offers)
-        offers = deepen_by_source(offers)
+        offers = deepen_by_source(offers, raw_store=raw_store, cache=deepen_cache)
         offers = enrich_offers(offers)
         offers = prefer_primary_offers(offers)
         offers = apply_usage_guidance(offers)
@@ -531,6 +532,10 @@ def collect_promos_batch_once(
     globals_built = build_sources(sources, route_scope="global")
     cached = [CachedPromoSource(source) for source in globals_built]
     runs: list[tuple[str, PromoRunResult]] = []
+    # One deepen cache for the whole batch: global catalogs are fetched once
+    # and replayed per state, and their detail/terms pages must be too — the
+    # first batch fetched the identical TheLines page 20 times through deepen.
+    deepen_cache: DeepenCache = {}
     try:
         for state in states:
             state_sources = build_sources(sources, state=state, route_scope="state")
@@ -541,6 +546,7 @@ def collect_promos_batch_once(
                 jurisdiction=state,
                 batch_id=batch_id,
                 built_sources=[*state_sources, *cached],
+                deepen_cache=deepen_cache,
             )
             runs.append((state, result))
     finally:

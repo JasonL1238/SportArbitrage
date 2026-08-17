@@ -15,7 +15,16 @@ import httpx
 
 from src.promos.base import PromoParseOutcome
 from src.promos.classify import classify_kind
-from src.promos.html_util import absolute_url, hrefs, meta_description, page_title, strip_tags
+from src.promos.html_util import (
+    absolute_url,
+    hrefs,
+    meta_description,
+    page_title,
+    strip_tags,
+    terms_links,
+    terms_slice,
+    visible_text,
+)
 from src.promos.schema import PromoKind, PromoOffer
 from src.raw_store import RawResponse
 from src.sources._common import SourceClient, envelope_source, latest_per_endpoint
@@ -141,6 +150,7 @@ class HtmlCatalogPromoAdapter:
         source = envelope_source((raw,), fallback=self.source_key)
         title = page_title(raw.body) or f"{self.source_key} promotions"
         description = meta_description(raw.body) or ""
+        page_terms_links = terms_links(self.index_url, raw.body or "")
         if _CONCRETE.search(f"{title} {description}"):
             offer = self._make_offer(
                 source=source,
@@ -150,6 +160,12 @@ class HtmlCatalogPromoAdapter:
                 url=self.index_url,
                 raw=raw,
                 raw_kind="index",
+                # A multi-card index's first T&C link belongs to one of its
+                # cards, not to the page-level offer — deepen filled a
+                # page-level welcome's empty terms from another card's
+                # conditions and confirmed that card's states.  Only an
+                # unambiguous single link is attributed.
+                terms_url=page_terms_links[0] if len(page_terms_links) == 1 else "",
             )
             by_key[offer.offer_id] = offer
             url_index[_canon_url(self.index_url)] = offer.offer_id
@@ -208,8 +224,15 @@ class HtmlCatalogPromoAdapter:
         if not title or not _CONCRETE.search(f"{title} {description}"):
             outcome.skipped["detail_without_promo_copy"] += 1
             return
-        terms = re.sub(r"<[^>]+>", " ", raw.body or "")
-        terms = re.sub(r"\s+", " ", terms).strip()[:6000]
+        # Prefer the text after a Terms heading — the whole-page strip is
+        # mostly navigation chrome and carries no eligibility signal.
+        marked = terms_slice(raw.body or "")
+        if marked is not None:
+            terms = marked
+        else:
+            terms = visible_text(raw.body or "", 6000)
+        detail_terms_links = terms_links(raw.url, raw.body or "")
+        terms_url = detail_terms_links[0] if detail_terms_links else ""
         canon = _canon_url(raw.url)
         offer_id = url_index.get(canon) or _stable_id(title)
         prior = by_key.get(offer_id)
@@ -222,13 +245,18 @@ class HtmlCatalogPromoAdapter:
             raw=raw,
             raw_kind="detail",
             terms=terms,
+            terms_url=terms_url,
         )
         if prior is not None:
+            metadata = dict(prior.metadata)
+            if terms_url:
+                metadata["terms_url"] = terms_url
             offer = prior.model_copy(
                 update={
                     "description": offer.description or prior.description,
                     "terms": offer.terms or prior.terms,
                     "url": offer.url or prior.url,
+                    "metadata": metadata,
                 }
             )
         by_key[offer_id] = offer
@@ -245,6 +273,7 @@ class HtmlCatalogPromoAdapter:
         raw: RawResponse,
         raw_kind: str,
         terms: str = "",
+        terms_url: str = "",
     ) -> PromoOffer:
         kind = classify_kind(title, description, terms)
         if kind is PromoKind.OTHER:
@@ -262,6 +291,7 @@ class HtmlCatalogPromoAdapter:
             raw_kind=raw_kind,
             product=self.product,
             eligible_regions=list(self.eligible_regions),
+            metadata={"terms_url": terms_url} if terms_url else {},
         )
 
     def close(self) -> None:

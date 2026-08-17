@@ -2295,6 +2295,42 @@ class TestSiteCreditIsNotConvertedAsABonusBet:
         ))
         assert plan["strategy"] == "rollover_grind", (kind, plan["strategy"])
 
+    def test_non_sportsbook_products_are_not_planned(self):
+        """Poker-room deposit credit cannot be staked on soccer moneylines.
+
+        The planner never read the ``product`` column: bovada's poker
+        welcome printed a 74% sportsbook "conversion" of poker credit
+        (run 43), which is not executable.
+        """
+        plan = _the_plan(_plans(
+            [_offer(kind="signup_bonus", reward_type="site_credit",
+                    bonus_amount=500.0, product="poker")],
+            self._slate(),
+        ))
+        assert plan["strategy"] == "text_only"
+        assert plan["skipped"].get("non_sportsbook_product") == 1
+        assert any("poker" in c for c in plan["caveats"])
+        # The sports-family labels the adapters deliberately admit
+        # (DraftKings serves "Sports"/"Predict" cards) are never gated.
+        plan = _the_plan(_plans(
+            [_offer(kind="bonus_bet", reward_type="bonus_bets",
+                    bonus_amount=150.0, product="Sports")],
+            self._slate(),
+        ))
+        assert plan["strategy"] != "text_only"
+
+    @pytest.mark.parametrize("kind", ["signup_bonus", "bonus_bet", "free_bet"])
+    def test_wagering_routes_bonus_like_site_credit_to_rollover(self, kind):
+        """"Always" was untested for the bonus-like kinds — exactly where it
+        failed: a signup bonus with a stored 5x rollover planned as pure
+        conversion, never consulting the requirement (bovada, run 39)."""
+        plan = _the_plan(_plans(
+            [_offer(kind=kind, reward_type="site_credit", bonus_amount=500.0,
+                    wagering_requirement="5x")],
+            self._slate(),
+        ))
+        assert plan["strategy"] == "rollover_grind", (kind, plan["strategy"])
+
     def test_a_parlay_paying_bonus_bets_still_converts(self):
         plan = _the_plan(_plans(
             [_offer(kind="parlay_boost", reward_type="bonus_bets", bonus_amount=300.0)],

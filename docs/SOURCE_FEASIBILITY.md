@@ -125,7 +125,12 @@ python scripts/probe_sources.py --state IL
   charges · Notes on settlement · Traps the adapters had to be corrected for
   (newest first: BetMGM's `sourceName` convention, and its substring league table,
   both 2026-08-14)
-- **`evidence/promos.md`** — Multi-state batch: four runs, one fetch (2026-08-16) ·
+- **`evidence/promos.md`** — Scraping fixes proven live, and four path probes
+  (2026-08-16 evening) · What the fixes changed, measured · The adversarial
+  rounds: seventeen rounds, eighty-seven numbered findings, the accepted
+  remainder listed · Path probes:
+  hardrock, fanatics, thescore, betrivers — 15 requests, no new routes ·
+  Multi-state batch: four runs, one fetch (2026-08-16) ·
   First live promo collection, Illinois (2026-08-16) ·
   Per-source results, all 24 · The unconfirmed measurement — 94% of the catalog
   eaten · The one survivor is wrong — twice · The planner worked on first

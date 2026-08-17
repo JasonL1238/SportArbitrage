@@ -1290,7 +1290,7 @@ def _solve(
         target = stake * boosted_net
         promo_leg = _Leg(promo_quote, _round_cents(stake), boosted_net, "promo", MODE_BOOSTED)
         notes.append(
-            f"priced with the stated {round(boost_percent, 2):g}% boost applied to the "
+            f"priced with the {round(boost_percent, 2):g}% boost applied to the "
             f"quoted {promo_quote.decimal_odds:.2f}"
         )
     elif mode == MODE_CASH:
@@ -1482,6 +1482,20 @@ def _plan_for_offer(
         "caveats": [],
         "unit": None,
     }
+
+    # A non-sportsbook product's credit cannot be staked on this slate: the
+    # poker welcome bonus planned a 74% "conversion" of poker-room deposit
+    # credit onto soccer moneylines, which is not executable.  Named and
+    # left unplanned rather than silently dropped.
+    product = str(view.get("product") or "").strip().lower()
+    if product and product not in {"sportsbook", "sports", "predict"}:
+        out["strategy"] = "text_only"
+        out["skipped"] = {"non_sportsbook_product": 1}
+        out["caveats"].append(
+            f"this is a {product} promotion — its credit cannot be staked on "
+            "the sportsbook slate, so no plan is computed"
+        )
+        return out
 
     # An offer whose own stated end has passed gets no concrete plan.  The
     # planner used to ignore ends_at entirely, so yesterday's boost planned
@@ -1691,7 +1705,9 @@ def _plan_for_offer(
         # fell past every branch and printed nothing at all — no plan and no
         # sentence, which is the one outcome this module exists to avoid.
         _plan_no_sweat(out, context, promo_keys, skipped, conversions, bonus_amount, min_dec)
-    elif kind is PromoKind.DEPOSIT_MATCH or (reward == "site_credit" and not bonus_like):
+    elif kind is PromoKind.DEPOSIT_MATCH or (
+        reward == "site_credit" and (not bonus_like or wagering is not None)
+    ):
         if kind is PromoKind.PARLAY_BOOST:
             # Site credit clears by rollover wherever it comes from — but the
             # leg that earns it here is a parlay this planner does not model,

@@ -10,6 +10,7 @@ import re
 from typing import Sequence
 
 from src.promos.base import PromoSourceHealth
+from src.promos.geo import merge_regions
 from src.promos.schema import PromoOffer
 
 #: ``(primary, secondary)`` — primary is the book-direct adapter when one exists.
@@ -82,6 +83,59 @@ def _overlapping_primaries(
     return out
 
 
+def _fold_evidence(
+    winner: PromoOffer, pairs: Sequence[tuple[PromoOffer, bool]]
+) -> PromoOffer:
+    """Carry a dropped row's jurisdiction evidence onto the kept row.
+
+    A collision used to discard the loser whole — an aggregator blurb with
+    dollars beat first-party terms carrying the brand's only state list, and
+    the state evidence vanished. Each pair is ``(loser, full)``: a *full*
+    fold carries eligible regions and terms; a narrow one carries only the
+    ineligible list, so an ambiguously-attributed loser (one vague primary
+    colliding with two different specific welcomes, or a loser reached
+    through a drop chain) can only narrow the fail-closed reading — its
+    eligible list describes *some* promo of the brand, not necessarily this
+    one, and folding it in would confirm states this offer's copy never
+    named.
+    """
+    if not pairs:
+        return winner
+    ineligible = merge_regions(
+        winner.ineligible_regions, *(loser.ineligible_regions for loser, _ in pairs)
+    )
+    blocked = set(ineligible)
+    full_losers = [loser for loser, full in pairs if full]
+    eligible = [
+        code
+        for code in merge_regions(
+            winner.eligible_regions, *(loser.eligible_regions for loser in full_losers)
+        )
+        if code not in blocked
+    ]
+    terms = winner.terms or next(
+        (loser.terms for loser in full_losers if loser.terms), ""
+    )
+    if (
+        eligible == winner.eligible_regions
+        and ineligible == winner.ineligible_regions
+        and terms == winner.terms
+    ):
+        return winner
+    metadata = dict(winner.metadata)
+    metadata["merged_evidence_from"] = ", ".join(
+        dict.fromkeys(loser.source for loser, _ in pairs)
+    )
+    return winner.model_copy(
+        update={
+            "eligible_regions": eligible,
+            "ineligible_regions": ineligible,
+            "terms": terms,
+            "metadata": metadata,
+        }
+    )
+
+
 def prefer_primary_offers(offers: Sequence[PromoOffer]) -> list[PromoOffer]:
     """Keep first-party rows; drop TheLines duplicates when primary covers a brand.
 
@@ -89,6 +143,7 @@ def prefer_primary_offers(offers: Sequence[PromoOffer]) -> list[PromoOffer]:
     does not) are kept so coverage stays specific.  When a vague primary welcome
     soft-overlaps a concrete TheLines welcome, keep the more specific row —
     compared only to the overlapping primary, never the brand's best promo.
+    Either way the dropped side's state evidence folds into the kept row.
     """
     primary_by_brand: dict[str, list[PromoOffer]] = {}
     for offer in offers:
@@ -100,6 +155,11 @@ def prefer_primary_offers(offers: Sequence[PromoOffer]) -> list[PromoOffer]:
     drop_primary: set[tuple[str, str]] = set()
     keep_secondary: set[tuple[str, str]] = set()
     drop_secondary: set[tuple[str, str]] = set()
+    merged_from: dict[tuple[str, str], list[PromoOffer]] = {}
+    # Who dropped whom — a merge recorded under a winner that is *itself*
+    # dropped in a later collision must follow the drop chain to the row that
+    # actually survives, or the first loser's evidence silently vanishes.
+    dropped_to: dict[tuple[str, str], list[tuple[str, str]]] = {}
 
     for offer in offers:
         if not offer.source.startswith("tl_"):
@@ -116,9 +176,51 @@ def prefer_primary_offers(offers: Sequence[PromoOffer]) -> list[PromoOffer]:
         if _specificity_score(offer) > _specificity_score(best_overlap):
             for primary in overlaps:
                 drop_primary.add(primary.dedup_key)
+                dropped_to.setdefault(primary.dedup_key, []).append(offer.dedup_key)
             keep_secondary.add(offer.dedup_key)
+            merged_from.setdefault(offer.dedup_key, []).extend(overlaps)
         else:
             drop_secondary.add(offer.dedup_key)
+            dropped_to.setdefault(offer.dedup_key, []).append(
+                best_overlap.dedup_key
+            )
+            merged_from.setdefault(best_overlap.dedup_key, []).append(offer)
+
+    # Re-route merges whose recorded winner was itself dropped, and decide how
+    # much of each loser may fold.  Full folds (eligible + terms) require an
+    # unambiguous attribution: a direct collision whose loser feeds exactly
+    # one surviving row.  A loser reached through a drop chain, or attached
+    # to several winners, folds narrow (ineligible only).
+    attachments: dict[tuple[str, str], list[tuple[PromoOffer, bool]]] = {}
+    winners_per_loser: dict[tuple[str, str], set[tuple[str, str]]] = {}
+    for key, losers in merged_from.items():
+        targets = {key}
+        expanded: set[tuple[str, str]] = set()
+        while True:
+            movable = [t for t in targets if t in dropped_to and t not in expanded]
+            if not movable:
+                break
+            for t in movable:
+                expanded.add(t)
+                targets.discard(t)
+                targets.update(w for w in dropped_to[t] if w not in expanded)
+        chained = targets != {key}
+        for target in targets:
+            for loser in losers:
+                attachments.setdefault(target, []).append((loser, not chained))
+                winners_per_loser.setdefault(loser.dedup_key, set()).add(target)
+    merged_final: dict[tuple[str, str], list[tuple[PromoOffer, bool]]] = {}
+    for target, pairs in attachments.items():
+        entries: list[tuple[PromoOffer, bool]] = []
+        for loser, direct in pairs:
+            full = direct and len(winners_per_loser[loser.dedup_key]) == 1
+            entries.append((loser, full))
+        # The mirror of the many-winners rule: a winner absorbing *two*
+        # different losers' full evidence is claiming to be two promos at
+        # once — at most one can be it, so every fold demotes to narrow.
+        if sum(1 for _, full in entries if full) > 1:
+            entries = [(loser, False) for loser, _ in entries]
+        merged_final[target] = entries
 
     out: list[PromoOffer] = []
     for offer in offers:
@@ -139,7 +241,11 @@ def prefer_primary_offers(offers: Sequence[PromoOffer]) -> list[PromoOffer]:
         if offer.dedup_key in drop_primary:
             continue
         out.append(offer)
-    return out
+    if not merged_final:
+        return out
+    return [
+        _fold_evidence(offer, merged_final.get(offer.dedup_key, ())) for offer in out
+    ]
 
 
 _BRAND_NOISE = re.compile(

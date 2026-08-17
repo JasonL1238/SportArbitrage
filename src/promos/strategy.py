@@ -23,7 +23,7 @@ def build_usage_guidance(offer: PromoOffer) -> str:
         "bonus_bets",
         "free_bet",
     }:
-        stake = f"${amount:g} " if amount is not None else ""
+        stake = f"${amount:,.10g} " if amount is not None else ""
         parts.append(
             f"Treat the {stake}{reward or 'bonus/free bet'} as stake-not-returned credit. "
             "Bet the full amount on a liquid major-market side (moneyline/spread), "
@@ -36,10 +36,10 @@ def build_usage_guidance(offer: PromoOffer) -> str:
     elif offer.kind is PromoKind.DEPOSIT_MATCH or reward_type == "site_credit":
         match_bits = summary
         if amount is not None:
-            match_bits = f"up to ${amount:g} match"
+            match_bits = f"up to ${amount:,.10g} match"
         parts.append(
             f"Deposit only what you need to unlock the match ({match_bits}"
-            + (f"; min deposit ${min_dep:g}" if min_dep is not None else "")
+            + (f"; min deposit ${min_dep:,.10g}" if min_dep is not None else "")
             + "). Convert site credit through qualifying bets, then hedge off-book."
         )
         if wagering:
@@ -56,7 +56,7 @@ def build_usage_guidance(offer: PromoOffer) -> str:
         "no_sweat",
         "risk_free",
     }:
-        cap = f"${amount:g}" if amount is not None else "the stated max"
+        cap = f"${amount:,.10g}" if amount is not None else "the stated max"
         parts.append(
             f"Stake up to {cap} on a single qualifying bet. If it loses, convert the "
             "refund/bonus bet with a hedge at a second book for near-locked EV."

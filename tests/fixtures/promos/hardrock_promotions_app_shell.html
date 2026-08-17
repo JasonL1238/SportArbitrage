@@ -1,0 +1,249 @@
+<!doctype html><html lang="en"><head><script>(function(w,i,g){w[g]=w[g]||[];if(typeof w[g].push=='function')w[g].push(i)})
+(window,'GTM-P72BVDN','google_tags_first_party');</script><script>(function(w,d,s,l){w[l]=w[l]||[];(function(){w[l].push(arguments);})('set', 'developer_id.dY2E1Nz', true);
+		var f=d.getElementsByTagName(s)[0],
+		j=d.createElement(s);j.async=true;j.src='/d4d9/';
+		f.parentNode.insertBefore(j,f);
+		})(window,document,'script','dataLayer');</script><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no"><meta name="HandheldFriendly" content="true"><meta name="mobile-web-app-capable" content="yes"><meta http-equiv="X-UA-Compatible" content="IE=edge"><title>Sports Betting Odds & Lines | Hard Rock Bet Sportsbook</title><meta name="description" content="Bet legally and securely with the Hard Rock Bet app—your top-rated sportsbook for the latest odds and live action!" data-rh="true"><meta name="twitter:card" content="summary_large_image"><meta name="twiiter:site" content="@@HardRockBet"><meta name="twitter:title" content="Sports Betting Odds & Lines | Hard Rock Bet Sportsbook" data-rh="true"><meta name="twitter:description" content="Bet legally and securely with the Hard Rock Bet app—your top-rated sportsbook for the latest odds and live action!" data-rh="true"><meta name="twitter:creator" content="@@HardRockBet"><meta name="twitter:image" content="https://cdn.hardrocksportsbook.com/images/socialShareMeta.png"><meta property="og:title" content="Sports Betting Odds & Lines | Hard Rock Bet Sportsbook" data-rh="true"><meta property="og:type" content="website"><meta property="og:site_name" content="Hard Rock Bet"><meta name="facebookURL" property="og:url" content="https://app.hardrock.bet"><meta name="facebookImage" property="og:image" content="https://cdn.hardrocksportsbook.com/images/socialShareMeta.png"><meta name="facebookDescription" property="og:description" content="Bet legally and securely with the Hard Rock Bet app—your top-rated sportsbook for the latest odds and live action!" data-rh="true"><link rel="icon" type="image/png" href="https://cdn.hardrocksportsbook.com/images/favicon.png"><link rel="manifest" href="https://cdn.hardrocksportsbook.com/json/manifest.json"/><link rel="stylesheet" href="https://use.typekit.net/wzm1pvc.css"/><script src="https://geoip-js.com/js/apis/geoip2/v2.1/geoip2.js"></script><script>/*** AF Smart Script (Build 2.0.0)*/
+      var AF_URL_SCHEME = "(https:\\/\\/)(([^\\.][^\\.]+).)(.*\\/)(.*)";
+      var VALID_AF_URL_PARTS_LENGTH = 5;
+      var GOOGLE_CLICK_ID = "gclid";
+      var ASSOCIATED_AD_KEYWORD = "keyword";
+      var AF_KEYWORDS = "af_keywords";
+      var AF_CUSTOM_EXCLUDE_PARAMS_KEYS = ["pid", "c", "af_channel", "af_ad", "af_adset", "deep_link_value", "af_sub1", "af_sub2", "af_sub3", "af_sub4", "af_sub5"];
+      var GCLID_EXCLUDE_PARAMS_KEYS = ["pid", "c", "af_channel", "af_ad", "af_adset", "deep_link_value"];
+      var stringifyParameters = function stringifyParameters() {
+        var parameters = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : {};
+        var paramStr = Object.keys(parameters).reduce(function (curr, key) {
+          if (!!parameters[key]) {
+            curr += "&".concat(key, "=").concat(parameters[key]);
+          }
+          return curr;
+        }, '');
+        console.debug("Generated OneLink parameters", paramStr);
+        return paramStr;
+      };
+      var getParameterValue = function getParameterValue(currentURLParams) {
+        var config = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : {
+          keys: [],
+          overrideValues: {},
+          defaultValue: ""
+        };
+        //exit when config object structure is not valid
+        if (!(config !== null && config !== void 0 && config.keys && Array.isArray(config.keys) || config !== null && config !== void 0 && config.defaultValue)) {
+          console.error("Parameter config structure is wrong", config);
+          return null;
+        }
+        var _config$keys = config.keys,
+          keys = _config$keys === void 0 ? [] : _config$keys,
+          _config$overrideValue = config.overrideValues,
+          overrideValues = _config$overrideValue === void 0 ? {} : _config$overrideValue,
+          _config$defaultValue = config.defaultValue,
+          defaultValue = _config$defaultValue === void 0 ? "" : _config$defaultValue;
+        var firstMatchedKey = keys.find(function (key) {
+          //set the first match of key which contains also a value
+          return !!currentURLParams[key];
+        });
+        if (!!firstMatchedKey) {
+          var value = currentURLParams[firstMatchedKey]; //in case the value exists:
+          //check if it exists in the overrideValues object, when exists - replace it
+          //otherwise return default value
+          return overrideValues[value] || value || defaultValue;
+        }
+        return defaultValue;
+      };
+      var getURLParametersKV = function getURLParametersKV(urlSearch) {
+        var currentURLParams = decodeURIComponent(urlSearch).replace("?", "").split("&").reduce(function (curr, param) {
+          var kv = param.split("=");
+          if (!!kv[0] && !!kv[1]) {
+            curr[[kv[0]]] = kv[1];
+          }
+          return curr;
+        }, {});
+        console.debug("Generated current parameters object", currentURLParams);
+        return currentURLParams;
+      };
+      var isSkippedURL = function isSkippedURL(skipKeys) {
+        // search if this page referred and contains one of the given keys
+        if (!!document.referrer) {
+          var lowerReferrer = decodeURIComponent(document.referrer.toLowerCase());
+          if (!!lowerReferrer) {
+            var skipKey = skipKeys.find(function (key) {
+              return lowerReferrer.includes(key.toLowerCase());
+            });
+            !!skipKey && console.debug("Generate url is skipped. HTTP referrer contains key: ", skipKey);
+            return !!skipKey;
+          }
+        }
+        return false;
+      };
+      var getGoogleClickIdParameters = function getGoogleClickIdParameters(gciKey, currentURLParams) {
+        var gciParam = currentURLParams[GOOGLE_CLICK_ID];
+        var result = {};
+        if (gciParam) {
+          console.debug("This user comes from Google AdWords");
+          result[gciKey] = gciParam;
+          var keywordParam = currentURLParams[ASSOCIATED_AD_KEYWORD];
+          if (keywordParam) {
+            console.debug("There is a keyword associated with the ad");
+            result[AF_KEYWORDS] = keywordParam;
+          }
+        } else {
+          console.debug("This user comes from SRN or custom network");
+        }
+        return result;
+      };
+      (function () {
+        var generateOneLinkURL = function generateOneLinkURL() {
+          var _ref, _mediaSource$keys;
+          var parameters = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : { afParameters: {} };
+          var oneLinkURL = parameters.oneLinkURL,
+            _parameters$afParamet = parameters.afParameters;
+          _parameters$afParamet = _parameters$afParamet === void 0 ? {} : _parameters$afParamet;
+          var mediaSource = _parameters$afParamet.mediaSource,
+            campaign = _parameters$afParamet.campaign,
+            channel = _parameters$afParamet.channel,
+            ad = _parameters$afParamet.ad,
+            adSet = _parameters$afParamet.adSet,
+            deepLinkValue = _parameters$afParamet.deepLinkValue,
+            afSub1 = _parameters$afParamet.afSub1,
+            afSub2 = _parameters$afParamet.afSub2,
+            afSub3 = _parameters$afParamet.afSub3,
+            afSub4 = _parameters$afParamet.afSub4,
+            afSub5 = _parameters$afParamet.afSub5,
+            afCustom = _parameters$afParamet.afCustom,
+            googleClickIdKey = _parameters$afParamet.googleClickIdKey,
+            _parameters$referrerS = parameters.referrerSkipList,
+            referrerSkipList = _parameters$referrerS === void 0 ? [] : _parameters$referrerS;
+          var oneLinkURLParts = (_ref = oneLinkURL || "") === null || _ref === void 0 ? void 0 : _ref.toString().match(AF_URL_SCHEME);
+          if (!oneLinkURLParts || (oneLinkURLParts === null || oneLinkURLParts === void 0 ? void 0 : oneLinkURLParts.length) < VALID_AF_URL_PARTS_LENGTH) {
+            console.error("oneLinkURL is missing or not in the correct format, can't generate URL", oneLinkURL);
+            return null;
+          }
+          if ((mediaSource === null || mediaSource === void 0 ? void 0 : (_mediaSource$keys = mediaSource.keys) === null || _mediaSource$keys === void 0 ? void 0 : _mediaSource$keys.length) === 0 && !(mediaSource !== null && mediaSource !== void 0 && mediaSource.defaultValue)) {
+            console.error("mediaSource is missing (default value was not supplied), can't generate URL", mediaSource);
+            return null;
+          }
+          if (isSkippedURL(referrerSkipList)) {
+            return null;
+          } // af_js_web=true and af_ss_ver=[version] will be added to every URL that was generated through this script
+          var afParams = {
+            af_js_web: true,
+            af_ss_ver: window.AF_SMART_SCRIPT.version
+          };
+          var currentURLParams = getURLParametersKV(new URL(window.location.href.replace(/\?/gm, (i => m => !i++ ? m : '&')(0))).search);
+          if (mediaSource) {
+            var pidValue = getParameterValue(currentURLParams, mediaSource);
+            if (!pidValue) {
+              console.error("mediaSource was not found in the URL and default value was not supplied, can't generate URL", mediaSource);
+              return null;
+            }
+            afParams["pid"] = pidValue;
+          }
+          if (campaign) {
+            afParams["c"] = getParameterValue(currentURLParams, campaign);
+          }
+          if (channel) {
+            afParams["af_channel"] = getParameterValue(currentURLParams, channel);
+          }
+          if (ad) {
+            afParams["af_ad"] = getParameterValue(currentURLParams, ad);
+          }
+          if (adSet) {
+            afParams["af_adset"] = getParameterValue(currentURLParams, adSet);
+          }
+          if (deepLinkValue) {
+            afParams["deep_link_value"] = getParameterValue(currentURLParams, deepLinkValue);
+          }
+          var afSubs = [afSub1, afSub2, afSub3, afSub4, afSub5];
+          afSubs.forEach(function (afSub, index) {
+            if (afSub) {
+              afParams["af_sub".concat(index + 1)] = getParameterValue(currentURLParams, afSub);
+            }
+          });
+          if (googleClickIdKey) {
+            if (!!GCLID_EXCLUDE_PARAMS_KEYS.find(function (k) {
+              return k === googleClickIdKey;
+            })) {
+              console.debug("Google Click Id ParamKey can't override AF Parameters keys", googleClickIdKey);
+            } else {
+              var googleParameters = getGoogleClickIdParameters(googleClickIdKey, currentURLParams);
+              Object.keys(googleParameters).forEach(function (gpk) {
+                afParams[gpk] = googleParameters[gpk];
+              });
+            }
+          }
+          if (Array.isArray(afCustom)) {
+            afCustom.forEach(function (customParam) {
+              if (customParam !== null && customParam !== void 0 && customParam.paramKey) {
+                if ((customParam === null || customParam === void 0 ? void 0 : customParam.paramKey) === googleClickIdKey || !!AF_CUSTOM_EXCLUDE_PARAMS_KEYS.find(function (k) {
+                  return k === (customParam === null || customParam === void 0 ? void 0 : customParam.paramKey);
+                })) {
+                  console.debug("Custom parameter ParamKey can't override Google-Click-Id or AF Parameters keys", customParam);
+                } else {
+                  afParams[[customParam.paramKey]] = getParameterValue(currentURLParams, customParam);
+                }
+              }
+            });
+          }
+          var finalParams = stringifyParameters(afParams);
+          var finalURL = oneLinkURL + finalParams.replace("&", "?");
+          console.debug("Generated OneLink URL", finalURL);
+          return { clickURL: finalURL };
+        };
+        window.AF_SMART_SCRIPT = {generateOneLinkURL: generateOneLinkURL, version: "2"};
+      })();</script><script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+        new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+      j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+      'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+    })(window,document,'script','dataLayer','GTM-P72BVDN');</script><script>const isShareMyBetURL = window.location.search.includes('sharemybet');
+
+      if(isShareMyBetURL){
+        // Change titles
+        document.title = "Hard Rock Bet: Open my shared bet"
+        document.querySelector('meta[name="twitter:title"]').setAttribute("content", "Hard Rock Bet: Open my shared bet");
+        document.querySelector('meta[property="og:title"]').setAttribute("content", "Hard Rock Bet: Open my shared bet");
+
+        // Remove OpenGraph Images
+        document.querySelector('meta[name="twitter:image"]').remove();
+        document.querySelector('meta[name="facebookImage"]').remove();
+      }</script><script>var buildNumber = "3.38.13745" || 'dev';</script><style>/* Styles for loader added here so there's not a flash while main CSS gets imported */
+      .main-site-loader {
+          height: 100vh;
+          align-items: center;
+          text-align: center;
+          display: flex;
+          flex-flow: row wrap;
+      }
+      .main-site-loader .column {
+          flex: 1 1 0;
+      }
+      .main-site-loader #loading-logo {
+          width: 200px;
+      }
+      /* Styles for Salesforce chat */
+      #salesforce-chat-wrapper {
+          z-index: 9999;
+          position: fixed;
+          bottom: -6px;
+          right: 20px;
+      }
+      #salesforce-chat {
+          border: none;
+          height: 0;
+      }
+      .embeddedMessagingMinimizedNotification {
+        z-index: 99;
+      }
+      /* hiding salesforce messaging icon by default */
+      #embedded-messaging {
+        display: none;
+      }</style></head><body><div id="root"></div><noscript>You need to enable JavaScript to run this app.</noscript><script src="https://hosted.paysafe.com/js/v1/latest/paysafe.min.js"></script><script>// iframe is dynamically resized,
+      // so it won't cover the content behind after transformations
+      window.onmessage = function(e) {
+        if (e.data.hasOwnProperty("frameHeight")) {
+          var chatFrame = document.getElementById("salesforce-chat");
+          chatFrame.style.height = e.data.frameHeight + 20 + "px";
+          chatFrame.style.width = e.data.frameWidth + 40 + "px";
+        }
+      };</script><div id="salesforce-chat-wrapper"><iframe id="salesforce-chat"></iframe></div><script defer="defer" src="/dist/bundle.3.38.13745.js"></script><script type="module" src="https://static.cloudflareinsights.com/beacon.min.js/v4513226cdae34746b4dedf0b4dfa099e1781791509496" integrity="sha512-ZE9pZaUXND66v380QUtch/5sE9tPFh2zg45pR2PB0CVkCtOREv2AJKkSidISWkysEuQ0EH8faUU5du78bx87UQ==" data-cf-beacon='{"version":"2024.11.0","token":[redacted]}' crossorigin="anonymous"></script>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a2c341860ce3a0d5',t:'MTc4NjkxMjg0NQ=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body><script src="https://websdk.socure.com/bundle.js"></script></html>

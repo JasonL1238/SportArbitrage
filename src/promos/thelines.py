@@ -223,19 +223,19 @@ def parse_thelines_offers(
 
         section_kind = _section_kind(heading, aliases)
         if section_kind == "welcome":
-            title, description = _welcome_from_section(heading, text, aliases)
-            _append_offer(
-                offers,
-                seen,
-                source_key=source_key,
-                brand_key=brand_key,
-                title=title,
-                description=description,
-                observed_at=observed_at,
-                raw_ref=raw_ref,
-                page_url=page_url,
-                raw_kind="welcome",
-            )
+            for title, description in _welcome_from_section(heading, text, aliases):
+                _append_offer(
+                    offers,
+                    seen,
+                    source_key=source_key,
+                    brand_key=brand_key,
+                    title=title,
+                    description=description,
+                    observed_at=observed_at,
+                    raw_ref=raw_ref,
+                    page_url=page_url,
+                    raw_kind="welcome",
+                )
         elif section_kind == "ongoing":
             for line in _ongoing_lines(text):
                 if not _brand_in(line, aliases) and not _brand_in(heading, aliases):
@@ -319,10 +319,64 @@ def _section_kind(heading: str, aliases: Sequence[str]) -> str | None:
     return None
 
 
+#: Explicit multi-promo markers inside one welcome review section.
+_WELCOME_ORDINAL = re.compile(r"\bThe (first|second|third|fourth):\s*", re.I)
+
+
 def _welcome_from_section(
     heading: str, text: str, aliases: Sequence[str]
+) -> list[tuple[str, str]]:
+    """Pull concrete welcome lines out of a brand review paragraph.
+
+    A review section sometimes describes several distinct promos in one blob
+    ("The first: … The second: …"), each with its own state list. Parsing the
+    whole blob attributed every list to one offer — the "$150 if you win"
+    MI/NJ/PA/WV-only promo stamped IL-confirmed on the first live run. Only
+    explicit ordinal markers split a section; anything subtler risks
+    fragmenting ordinary single-promo sections.
+    """
+    markers = list(_WELCOME_ORDINAL.finditer(text))
+    if len(markers) >= 2:
+        found: list[tuple[str, str]] = []
+        seen_titles: set[str] = set()
+        for index, marker in enumerate(markers):
+            end = markers[index + 1].start() if index + 1 < len(markers) else len(text)
+            span = text[marker.end() : end].strip()
+            got = _welcome_from_span(span)
+            if got is None:
+                # A span with no recognizable welcome line stays its *own*
+                # last-resort offer — falling through to the whole section
+                # re-merged the state lists the split exists to keep apart.
+                got = _last_resort_line(heading, span, aliases)
+            title, description = got
+            norm = re.sub(r"[^a-z0-9]+", "", title.lower())
+            if norm in seen_titles:
+                # Same mechanics offered under different state lists — the
+                # ordinal keeps the second span from vanishing in title dedupe.
+                title = f"{title} ({marker.group(1).lower()} offer)"
+            seen_titles.add(norm)
+            found.append((title, description))
+        return found
+    got = _welcome_from_span(text)
+    if got is not None:
+        return [got]
+    return [_last_resort_line(heading, text, aliases)]
+
+
+def _last_resort_line(
+    heading: str, text: str, aliases: Sequence[str]
 ) -> tuple[str, str]:
-    """Pull a concrete welcome line out of a brand review paragraph."""
+    """A snippet-titled offer so enrich/deepen still has dollars to work on."""
+    brand = next((a for a in aliases if a in heading.lower()), aliases[0])
+    snippet = re.sub(r"\s+", " ", text).strip()
+    money = re.search(r"\$[\d,]+[^.]{0,80}", snippet)
+    if money:
+        return (f"{brand.title()}: {money.group(0).strip()[:120]}", text[:500])
+    return (f"{brand.title()} sportsbook promo (details on page)", text[:500])
+
+
+def _welcome_from_span(text: str) -> tuple[str, str] | None:
+    """One concrete welcome line from one promo's own span, or None."""
     patterns = (
         r"((?:Bet|Spend) \$\d+\+?(?:\s+and)?\s+get[^.!?]{0,80}(?:Bonus Bets?|FanCash|Bonuses|Instantly)[^.!?]{0,40})",
         r"(bet \$\d+[^.!?]{0,60}get[^.!?]{0,60})",
@@ -343,6 +397,12 @@ def _welcome_from_section(
             title = re.sub(
                 r"\s+is currently available\b.*$", "", title, flags=re.I
             ).strip(" .")
+            title = re.sub(
+                r"\s+(?:which\s+is\s+)?(?:valid|available)\s+in\b.*$",
+                "",
+                title,
+                flags=re.I,
+            ).strip(" .")
             if len(title) >= 12:
                 return title[:160], text[:500]
     # Never emit a bare "welcome offer" — keep hunting for $ / reward mechanics
@@ -358,13 +418,7 @@ def _welcome_from_section(
             title = re.sub(r"\s+", " ", m.group(1)).strip(" .")
             if len(title) >= 10:
                 return title[:160], text[:500]
-    brand = next((a for a in aliases if a in heading.lower()), aliases[0])
-    # Last resort: include a short snippet so enrich/deepen still has dollars.
-    snippet = re.sub(r"\s+", " ", text).strip()
-    money = re.search(r"\$[\d,]+[^.]{0,80}", snippet)
-    if money:
-        return f"{brand.title()}: {money.group(0).strip()[:120]}", text[:500]
-    return f"{brand.title()} sportsbook promo (details on page)", text[:500]
+    return None
 
 
 def _ongoing_lines(text: str) -> list[str]:
@@ -440,7 +494,11 @@ def _append_offer(
     seen.add(norm)
     code_m = _CODE.search(title) or _CODE.search(description)
     promo_code = code_m.group(1).upper() if code_m else ""
-    kind = classify_kind(title, description)
+    # Title only: the description is TheLines' own *review* prose and names
+    # the brand's other promos — "profit-boost tokens and odds boosts
+    # routinely available" stamped kind=odds_boost on the $250 bonus-bet
+    # welcome, and a parlay note on a straight-bet offer.
+    kind = classify_kind(title)
     if kind is PromoKind.OTHER and re.search(r"welcome|sign[- ]?up|new (?:player|customer)", title, re.I):
         kind = PromoKind.SIGNUP_BONUS
     offer_id = hashlib.sha1(f"{brand_key}|{norm}".encode()).hexdigest()[:16]

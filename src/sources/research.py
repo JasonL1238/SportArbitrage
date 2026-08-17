@@ -310,6 +310,19 @@ PROFILES: Mapping[str, ResearchProfile] = {
         api_hosts=("bet365.com", "bet365.us"),
         unavailable_states=frozenset({"DC"}),
     ),
+    "betrivers": ResearchProfile(
+        source="betrivers",
+        # RSI's per-state hosts are the working odds route (``il.betrivers.com``
+        # via Kambi, `jurisdictions.py`); this profile exists for *promotions*
+        # recon — the IL landing answers 257 KiB with no parseable promo copy
+        # (2026-08-16, `docs/evidence/promos.md`), and whether a promotions
+        # path or XHR exists at all has never been measured.  DC has no
+        # BetRivers licence (`PromoRoute.betrivers_url=None`).
+        states=frozenset({"IL", "PA", "NJ"}),
+        app_url="https://{state}.betrivers.com/",
+        api_hosts=("betrivers.com",),
+        unavailable_states=frozenset({"DC"}),
+    ),
     "thescore": ResearchProfile(
         source="thescore",
         # Licences catalogued by Action Network as per-state theScore Bet ids:
