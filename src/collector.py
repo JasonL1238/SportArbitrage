@@ -77,7 +77,13 @@ from src.sources import registry
 from src.sources._common import Tier
 from src.sources.base import OddsSource, ParseOutcome, SourceHealth
 from src.sources.guards import SourceError
-from src.store import IncompatibleDatabase, MigrationError, Store, migrate_database
+from src.store import (
+    IncompatibleDatabase,
+    MigrationError,
+    Store,
+    migrate_database,
+    scope_clause,
+)
 from src.validation import Severity, ValidationReport, validate
 
 log = logging.getLogger("collector")
@@ -868,8 +874,6 @@ def collect_once(
                 f"{source.source_key} {flag} — "
                 f"{len(outcome.quotes):,} prices ({index}/{total_sources})"
             ),
-            "source": source.source_key,
-            "source_ok": health.ok,
             "done": index,
             "total": total_sources,
             "quote_count": len(all_quotes),
@@ -2904,7 +2908,7 @@ def _cmd_show(args: argparse.Namespace) -> int:
         if run_id is None:
             print(note)
             return 1
-        clause, params = _sql_scope(sports, leagues)
+        clause, params = scope_clause(sports, leagues)
         rows = store.query(
             f"""SELECT source, sport, league, event_key, home_team, away_team, commence_time,
                        market, period, side, selection, line, decimal_odds, american_odds,
@@ -2940,20 +2944,6 @@ def _cmd_show(args: argparse.Namespace) -> int:
                 f" {row['decimal_odds']:>7.3f} {row['american_odds']:>+5d}  {row['status']}"
             )
         return 0
-
-
-def _sql_scope(
-    sports: Sequence[str] | None, leagues: Sequence[str] | None
-) -> tuple[str, list[str]]:
-    clause = ""
-    params: list[str] = []
-    if sports:
-        clause += f" AND sport IN ({','.join('?' * len(sports))})"
-        params.extend(sports)
-    if leagues:
-        clause += f" AND league IN ({','.join('?' * len(leagues))})"
-        params.extend(leagues)
-    return clause, params
 
 
 def _cmd_arb(args: argparse.Namespace) -> int:

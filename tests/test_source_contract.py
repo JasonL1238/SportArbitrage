@@ -232,10 +232,9 @@ class TestInterface:
         through the other four: ``Counter.update`` (and so the constructor and
         ``copy``) bypasses ``__setitem__`` at the dict level when the counter is
         empty; an increment undone by a decrement leaves the key at zero; and
-        ``setdefault`` inserts at the C level.  ``extend`` composes from
-        ``update``, so a zero held by one outcome must not propagate either.
+        ``setdefault`` inserts at the C level.
         """
-        from src.sources.base import ParseOutcome, ReasonCounter
+        from src.sources.base import ReasonCounter
 
         assert dict(ReasonCounter({"r": 0})) == {}
         counter = ReasonCounter()
@@ -251,11 +250,6 @@ class TestInterface:
         assert dict(counter) == {}
         counter["kept"] += 3
         assert dict(counter.copy()) == {"kept": 3}
-        receiving = ParseOutcome()
-        holding = ParseOutcome()
-        holding.skipped.update({"r": 0, "kept": 1})
-        receiving.extend(holding)
-        assert dict(receiving.skipped) == {"kept": 1}
 
 
 class TestRowIdentity:

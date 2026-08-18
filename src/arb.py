@@ -222,6 +222,39 @@ def _net_implied(quote: Quote, commissions: Mapping[str, Commission] | None = No
     return 1.0 / net_decimal(quote, commissions)
 
 
+def crossed_against_itself(
+    quotes: Sequence[Quote],
+    commissions: Mapping[str, Commission] | None = None,
+    *,
+    order_driven: bool,
+) -> bool:
+    """Does one venue price every outcome of a complete market against itself?
+
+    A sportsbook holds an edge on every market it posts, so a gross sum below
+    1.0 there is evidence about the *parser*, not about the market.  An order
+    book is not that: it shows what two strangers happened to leave resting,
+    and "crossed" only means anything if somebody could take both sides at a
+    profit — a question about prices **after the venue's own commission**.  A
+    Kalshi market resting at 49c/49c sums to 0.98 gross and ~1.015 net of its
+    contract fee, so makers legitimately sit there; a flat gross tolerance
+    deletes the venue from the market for exactly that shape.
+
+    One implementation because there were two — the detector's and the promo
+    planner's — and two copies of a rule drift apart on the first market only
+    one of them has seen.
+    """
+    if order_driven:
+        # Function-level import: ``src.validation`` imports this module at
+        # module level, so the constant has to come in here.
+        from src.validation import ORDER_BOOK_CROSSING_TOLERANCE
+
+        return (
+            sum(_net_implied(quote, commissions) for quote in quotes)
+            < 1.0 - ORDER_BOOK_CROSSING_TOLERANCE
+        )
+    return arb_margin([quote.decimal_odds for quote in quotes]) > _EPSILON
+
+
 def arb_margin(decimal_odds: Sequence[float]) -> float:
     """Edge on a complete set of mutually exclusive outcomes.
 
@@ -1442,31 +1475,15 @@ def _examine_group(
         if not set(selections) >= set(shape):
             continue
         own_margin = arb_margin([selections[selection].decimal_odds for selection in shape])
-        # A sportsbook holds an edge on every market it posts, so a sum below
-        # 1.0 there is evidence about the parser.  An order book is not that: it
-        # shows what two strangers happened to leave resting, and "crossed" only
-        # means anything if somebody could take both sides at a profit — which
-        # is a question about prices **after the venue's own commission**.  A
-        # Kalshi market resting at 49¢/49¢ sums to 0.98 gross and ~1.015 net of
-        # its contract fee, so makers legitimately sit there; the flat one-cent
-        # tolerance this used to import deleted the venue from the market for
-        # exactly that shape.  ``src.validation`` judges the same boundary the
-        # same way — the same *rule* rather than the same constant, which is a
-        # stronger form of the agreement the old import bought: two copies of a
-        # rule cannot drift apart on a market neither has seen.
-        if source in order_driven:
-            # Function-level import: ``src.validation`` imports this module at
-            # module level, so the constant has to come in here — the same
-            # cycle-shaped reason the retired flat floor was imported here too.
-            from src.validation import ORDER_BOOK_CROSSING_TOLERANCE
-
-            net_sum = sum(
-                _net_implied(selections[selection], commissions) for selection in shape
-            )
-            crossed_after_fees = net_sum < 1.0 - ORDER_BOOK_CROSSING_TOLERANCE
-        else:
-            crossed_after_fees = own_margin > _EPSILON
-        if crossed_after_fees:
+        # ``src.validation`` judges the same boundary the same way — the same
+        # *rule* rather than the same constant, which is a stronger form of
+        # agreement than a shared floor: two copies cannot drift apart on a
+        # market neither has seen.
+        if crossed_against_itself(
+            [selections[selection] for selection in shape],
+            commissions,
+            order_driven=source in order_driven,
+        ):
             reject(
                 "source_prices_itself_to_lose",
                 f"{source} prices every outcome of this market at a "

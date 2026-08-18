@@ -351,4 +351,21 @@ finding of any kind.
   array is real and echoes the request exactly, so a shortfall there is the same
   signal against bytes that exist.
 
+- **Three shared label-parsing guards outlived their only callers by a week.**
+  The ProphetX and Novig adapters they were written for went on 2026-08-11
+  (`exchanges-and-mirrors.md` § "ProphetX and Novig"); the helpers in
+  `src/sources/_common.py` were left behind and removed on 2026-08-18, which is
+  the gap this entry exists to record — a shared module does not notice losing
+  its last caller. Each encodes a trap worth keeping, and every surviving
+  adapter already avoids it by
+  reading its venue's own vocabulary — an explicit `"OVER": Selection.OVER` map
+  or an anchored regex — rather than screening prose, which is why nothing
+  called them:
+
+  | the guard | the trap it encoded |
+  | --- | --- |
+  | `resolve_over_under` | `"over" in text` reads `Under 220.5 (Incl. Overtime)` as an **Over**: the Under's price is published under the Over's identity and the genuine Over collides with it. Whole tokens, and check both before believing either. |
+  | `signed_handicap` | A `±100`-or-larger signed token is an American price, not a line — `Phillies -110` read as a -110 handicap faults on MLB and passes as junk in high-total leagues. Two *different* handicap tokens say nothing about which is the line; two *identical* ones agree, and counting them as ambiguous is how a corroboration check defeats itself. |
+  | `MARKET_LABEL_KEYS` / `market_label_text` | Screening one chosen field is too narrow (Novig's period guard read a `description` its own docs never document, so it was inert); screening every string is worse, because settlement prose tokenises — a `rules` field reading "void if suspended before the end of the regulation **period**" deletes an ordinary full-game market, invisibly. Curate the label-bearing fields. |
+
 ---

@@ -346,7 +346,7 @@ def _values(items: Sequence[str] | str | None) -> tuple[str, ...]:
     return tuple(str(getattr(item, "value", item)) for item in items)
 
 
-def _scope(
+def scope_clause(
     sports: Sequence[str] | str | None,
     leagues: Sequence[str] | str | None,
     *,
@@ -1372,7 +1372,7 @@ class Store:
         leagues: Sequence[str] | str | None = None,
     ) -> list[Quote]:
         """Every stored row of a run, optionally narrowed to sports/leagues."""
-        clause, params = _scope(sports, leagues)
+        clause, params = scope_clause(sports, leagues)
         rows = self._conn.execute(
             f"SELECT * FROM quote WHERE run_id = ?{clause} ORDER BY id", (run_id, *params)
         ).fetchall()
@@ -1387,7 +1387,7 @@ class Store:
         ]
 
     def leagues_for_run(self, run_id: int, *, sports: Sequence[str] | str | None = None) -> list[str]:
-        clause, params = _scope(sports, None)
+        clause, params = scope_clause(sports, None)
         return [
             row["league"]
             for row in self._conn.execute(
@@ -1497,14 +1497,14 @@ class Store:
             (run_id,),
         ).fetchall()
 
-    def raw_paths(self, run_id: int, source: str | None = None) -> list[tuple[str, Path]]:
-        sql = "SELECT source, path FROM raw_response WHERE run_id = ?"
-        params: list[Any] = [run_id]
-        if source:
-            sql += " AND source = ?"
-            params.append(source)
-        sql += " ORDER BY id"
-        return [(row["source"], Path(row["path"])) for row in self._conn.execute(sql, params)]
+    def raw_paths(self, run_id: int) -> list[tuple[str, Path]]:
+        return [
+            (row["source"], Path(row["path"]))
+            for row in self._conn.execute(
+                "SELECT source, path FROM raw_response WHERE run_id = ? ORDER BY id",
+                (run_id,),
+            )
+        ]
 
     def run_row(self, run_id: int) -> sqlite3.Row | None:
         """One run's own record, or ``None`` if there is no such run.
@@ -1524,7 +1524,6 @@ class Store:
     def latest_run_id(
         self,
         *,
-        only_ok: bool = False,
         sports: Sequence[str] | str | None = None,
         leagues: Sequence[str] | str | None = None,
         jurisdiction: str | None = None,
@@ -1544,7 +1543,7 @@ class Store:
             state_params: list[Any] = [jurisdiction.strip().upper()]
         else:
             state_params = []
-        clause, params = _scope(sports, leagues, prefix="q.")
+        clause, params = scope_clause(sports, leagues, prefix="q.")
         params = [*state_params, *params]
         if clause:
             # ``status = 'active'``: a suspended price is a row, not a price
@@ -1558,8 +1557,6 @@ class Store:
                 " AND EXISTS (SELECT 1 FROM quote q WHERE q.run_id = r.id"
                 f"{clause} AND q.status = 'active')"
             )
-        if only_ok:
-            sql += " AND ok = 1"
         sql += " ORDER BY id DESC LIMIT 1"
         row = self._conn.execute(sql, params).fetchone()
         return int(row["id"]) if row else None
@@ -1576,7 +1573,7 @@ class Store:
         With a sport or league scope, only runs that stored a matching row are
         listed — a run that collected no hockey is not a hockey run.
         """
-        clause, params = _scope(sports, leagues, prefix="q.")
+        clause, params = scope_clause(sports, leagues, prefix="q.")
         where = ""
         if clause:
             where = (
@@ -1667,7 +1664,7 @@ class Store:
         self, run_id: int, *, sports: Sequence[str] | str | None = None
     ) -> list[sqlite3.Row]:
         """Per-source, per-sport row counts for one run."""
-        clause, params = _scope(sports, None)
+        clause, params = scope_clause(sports, None)
         return self._conn.execute(
             f"""SELECT source, sport,
                        COUNT(DISTINCT event_key) AS event_count,

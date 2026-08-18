@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -172,6 +173,183 @@ def test_the_real_repository_keeps_its_entry_point_and_boundaries() -> None:
         assert (root / boundary / "AGENTS.md").is_file(), boundary
 
     assert check(root) == []
+
+
+class TestCiRunsWhatTheDocsPromise:
+    """`.github/workflows/` and `docs/testing.md` are required to state the same
+    commands and change together (AGENTS.md, Edit).
+
+    The case that motivated this: every executable check over
+    `src/report_assets.py` runs through `tests/dashboard_smoke.mjs`, and
+    `tests/test_report.py` *skips* those cases when Node is absent rather than
+    failing. CI installed no Node, so those checks ran only because the runner
+    image happened to ship one — a green job that would have stayed green the day
+    it stopped.
+    """
+
+    @staticmethod
+    def _workflow() -> str:
+        root = Path(__file__).resolve().parents[1]
+        return (root / ".github/workflows/tests.yml").read_text(encoding="utf-8")
+
+    @staticmethod
+    def _steps() -> list[dict]:
+        """The steps CI would actually execute, parsed rather than grepped.
+
+        A substring search over the file text cannot tell a step that runs from
+        one that does not, and every way of disabling a step leaves the command
+        sitting in the file: a full-line comment, a trailing ``# was: …``, an
+        ``if: false``, or the command moved into ``name:`` with ``run: true``.
+        All four kept the earlier version of this test green while CI ran
+        nothing. Steps carrying any ``if:`` are excluded because this test
+        cannot evaluate the expression — a conditional step is not a step this
+        check may count on.
+        """
+        import yaml
+
+        root = Path(__file__).resolve().parents[1]
+        text = (root / ".github/workflows/tests.yml").read_text(encoding="utf-8")
+        workflow = yaml.safe_load(text)
+        steps = [
+            step
+            # A **job**-level ``if:`` disables every step under it, and reading
+            # only the step-level one missed that entirely: adding ``if: false``
+            # to the job turned off pytest, ruff, compileall, the doc check and
+            # node at once, and this class stayed green.
+            for job in workflow["jobs"].values()
+            if "if" not in job
+            for step in job.get("steps", [])
+            if "if" not in step
+        ]
+        assert steps, "the workflow parsed no unconditional steps"
+        return steps
+
+    @classmethod
+    def _runs(cls) -> list[str]:
+        """What those steps run — ``run:`` values only, never ``name:``.
+
+        Shell comments are stripped, because a block scalar is the last place a
+        command can sit and look like it runs::
+
+            - run: |
+                # python -m pytest tests/ -q
+                echo skipping
+        """
+        out = []
+        for step in cls._steps():
+            if "run" not in step:
+                continue
+            out.append("\n".join(
+                line for line in str(step["run"]).splitlines()
+                if not line.lstrip().startswith("#")
+            ))
+        return out
+
+    @classmethod
+    def _uses(cls) -> list[str]:
+        return [str(step["uses"]) for step in cls._steps() if "uses" in step]
+
+    def test_ci_installs_node_because_the_dashboard_checks_need_it(self) -> None:
+        assert any(u.startswith("actions/setup-node") for u in self._uses()), (
+            "tests/test_report.py skips its dashboard checks when node is missing, "
+            "so CI must install node or those checks silently do not run"
+        )
+
+    def test_ci_runs_every_command_the_testing_doc_calls_full_validation(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        doc = (root / "docs/testing.md").read_text(encoding="utf-8")
+        block = doc.split("## Full validation")[1].split("```")[1]
+        commands = [
+            line.strip() for line in block.splitlines()[1:]  # drop the ```bash fence's language
+            if line.strip()
+        ]
+        assert len(commands) > 2, "the full-validation block parsed empty"
+        runs = self._runs()
+        for command in commands:
+            assert any(command in run for run in runs), (
+                f"docs/testing.md calls {command!r} full validation, and CI does not run it"
+            )
+
+
+class TestTheReadmeSourceCountsAreTrue:
+    """The README's headline is the first thing anybody reads, and it was wrong.
+
+    It said 40 registered sources, 16 first-party, 11 sportsbooks, 24 republished,
+    when the registry held 41 / 18 / 13 / 23 — and its per-source table had never
+    gained rows for `bet365` or `thescore`, two venues the collector had been
+    fetching first-party for months. Nothing checked it, because every path in it
+    resolved: the numbers were the part that rotted, and a stale count in the
+    opening paragraph misinforms every reader before they reach anything true.
+    """
+
+    @staticmethod
+    def _readme() -> str:
+        return (Path(__file__).resolve().parents[1] / "README.md").read_text(encoding="utf-8")
+
+    def test_the_headline_counts_are_the_registry_s(self) -> None:
+        from src.sources import registry
+
+        first_party = set(registry.BY_KEY) - set(registry.REPUBLISHED_SOURCE_KEYS)
+        kinds = Counter(registry.BY_KEY[key].kind.value for key in first_party)
+        # Everything above the Sources table: the opening paragraph AND the
+        # sentence that opens `## Sources`, which states the first-party count a
+        # second time and was wrong in exactly the same way.
+        readme = self._readme()
+        marker = "| Source | Kind | Endpoints |"
+        assert marker in readme, "the Sources table header moved — this slice is now the whole file"
+        head = readme.split(marker)[0]
+        for count, what in (
+            (len(registry.BY_KEY), "registered sources"),
+            (len(first_party), "venues read first-party"),
+            (kinds["sportsbook"], "sportsbooks"),
+            (kinds["exchange"], "betting exchanges"),
+            (kinds["prediction_market"], "prediction markets"),
+            (len(registry.REPUBLISHED_SOURCE_KEYS), "republished feeds"),
+        ):
+            # Exactly this number, and no other, in front of that phrase: a
+            # presence test is satisfied by a correct sentence sitting beside
+            # the stale one it replaced, which is the shape this whole class
+            # exists to catch.
+            # `what` is a multi-word phrase and the README wraps its paragraphs
+            # by hand, so each of its spaces has to match a line break too — a
+            # pure reflow was otherwise reported as a stale count.
+            phrase = r"\s+".join(re.escape(word) for word in what.split())
+            said = re.findall(rf"(\d[\d,]*)\s+(?:\*\*)?{phrase}", head)
+            said = {int(n.replace(",", "")) for n in said}
+            assert said == {count}, (
+                f"README says {sorted(said) or 'nothing'} {what} above the Sources "
+                f"table; the registry holds {count}"
+            )
+        # The count is also spelled out in words at the top of `## Sources`.
+        words = {13: "Thirteen", 16: "Sixteen", 17: "Seventeen", 18: "Eighteen",
+                 19: "Nineteen", 20: "Twenty"}
+        spelled = words.get(len(first_party))
+        assert spelled is not None, (
+            f"no spelled form for {len(first_party)} first-party venues — extend this table"
+        )
+        opener = self._readme().split("## Sources")[1].split("| Source |")[0]
+        assert f"{spelled} venues read first-party" in opener, (
+            f"`## Sources` opens with {opener.strip()[:60]!r}, not "
+            f"{spelled!r} venues read first-party"
+        )
+
+    def test_the_sources_table_lists_every_first_party_venue(self) -> None:
+        """The table is the reader's map of what is read directly, so a venue
+        missing from it is a venue they do not know the pipeline collects."""
+        from src.sources import registry
+
+        section = self._readme().split("## Sources")[1].split("\n### Request budget")[0]
+        listed = {
+            line.strip().strip("|").split("|")[0].strip().strip("`")
+            for line in section.splitlines()
+            if line.startswith("| `")
+        }
+        assert len(listed) > 5, "the Sources table parsed empty — has the section moved?"
+        expected = set(registry.BY_KEY) - set(registry.REPUBLISHED_SOURCE_KEYS)
+        assert listed == expected, (
+            f"missing from the table: {sorted(expected - listed)}; "
+            f"listed but not registered first-party: {sorted(listed - expected)}"
+        )
 
 
 class TestTheHotspotTableIsTrue:

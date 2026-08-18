@@ -77,11 +77,13 @@ from src.schema import (
 from src.sources._common import (
     ScopeTally,
     SourceClient,
+    TENNIS_TOURS_BY_GENDER,
     Tier,
     capabilities_from,
     envelope_source,
     latest_per_endpoint,
     parse_iso_time,
+    tennis_tour,
 )
 from src.sources.base import ParseOutcome
 from src.sources.guards import (
@@ -393,35 +395,11 @@ SOCCER_LEAGUE_BY_COMPETITION: Mapping[str, str] = {
 
 SOCCER_FALLBACK_LEAGUE = "SOCCER_OTHER"
 
-#: Ordered substring rules mapping a FanDuel tennis competition name onto a tour.
-#: The **tour** first; the tier only refines a men's answer.
-#:
-#: Order is load-bearing, and it was wrong in the one direction that matters:
-#: testing "challenger" first filed every *women's* Challenger as
-#: ``ATP_CHALLENGER``.  ``src/sources/matchbook.py`` and ``src/sources/sxbet.py``
-#: both record the live cost of exactly that — 252 markets on one capture — and
-#: were fixed; this table kept the original order and happened to dodge it only
-#: because FanDuel writes "WTA Vancouver 2026" and "West Vancouver Challenger
-#: 2026" rather than combining the two.
-#:
-#: "women's" must still win before "men's", because "men's" is a substring of
-#: it.
-TENNIS_LEAGUE_RULES: tuple[tuple[str, str], ...] = (
-    ("itf", "ITF"),
-    ("wta", "WTA"),
-    ("women", "WTA"),
-    ("atp", "ATP"),
-    ("men", "ATP"),
-)
-
-#: Refines a men's answer only, and is the answer on its own when no tour is
-#: named: the women's tour always names itself.
-TENNIS_SECOND_TIER = "challenger"
-
-#: Tennis competitions that match none of the rules above.  ITF is the safe
-#: default: it is the one tour registered for both genders, and because league is
-#: **not** part of event identity (see :mod:`src.leagues`) the choice affects
-#: coverage labelling only — never whether two books' prices join.
+#: Where a tennis competition goes when :func:`_common.tennis_tour` reads no tour
+#: out of its name.  ITF is the safe default: it is the one tour registered for
+#: both genders, and because league is **not** part of event identity (see
+#: :mod:`src.leagues`) the choice affects coverage labelling only — never whether
+#: two books' prices join.
 TENNIS_FALLBACK_LEAGUE = "ITF"
 
 
@@ -432,17 +410,9 @@ def soccer_league_for(competition_name: str) -> str:
 
 
 def tennis_league_for(competition_name: str) -> str:
-    lowered = competition_name.lower()
-    for needle, league_key in TENNIS_LEAGUE_RULES:
-        if needle in lowered:
-            # The tier refines a men's answer and never a women's one.
-            if league_key == "ATP" and TENNIS_SECOND_TIER in lowered:
-                return "ATP_CHALLENGER"
-            return league_key
-    # A tier marker with no tour named at all is a men's Challenger by
-    # convention, exactly as the two sibling adapters read it.
-    if TENNIS_SECOND_TIER in lowered:
-        return "ATP_CHALLENGER"
+    found = tennis_tour(competition_name, markers=TENNIS_TOURS_BY_GENDER)
+    if found is not None:
+        return found
     log.debug(
         "fanduel: tennis competition %r matched no tour rule; filing under %s",
         competition_name,

@@ -292,10 +292,6 @@ def is_view_only(key: str) -> bool:
     return key in VIEW_ONLY_SOURCES
 
 
-def is_us_unavailable(key: str) -> bool:
-    return key in US_UNAVAILABLE_SOURCE_KEYS
-
-
 class SourceKind(StrEnum):
     """What kind of counterparty this is, which decides how a price behaves.
 
@@ -1188,8 +1184,8 @@ def _check_reachability_is_declared() -> None:
             "US-unavailable. Retail means a first-party book the operator can "
             "bet at, per state routes; a copy of somebody else's board or a "
             "venue no US customer can reach cannot be that. With both set, "
-            "takeable_from_state would serve the key while is_us_unavailable "
-            "or view-only filtering disowned it, and which one a surface "
+            "takeable_from_state would serve the key while view-only and "
+            "US-unavailable filtering disowned it, and which one a surface "
             "believed would depend on which it asked first"
         )
 
@@ -1217,7 +1213,6 @@ __all__ = [
     "descriptor",
     "descriptor_for_state",
     "global_sources",
-    "is_us_unavailable",
     "is_view_only",
     "keys",
     "replay_descriptor_for_state",

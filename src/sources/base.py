@@ -110,12 +110,6 @@ class ParseOutcome:
     data-quality signal, and burying it in a bucket labelled "not collected"
     loses it twice over."""
 
-    def extend(self, other: ParseOutcome) -> None:
-        self.quotes.extend(other.quotes)
-        self.rejections.extend(other.rejections)
-        self.skipped.update(other.skipped)
-        self.repaired.update(other.repaired)
-
     def reject(self, source: str, reason: str, detail: str, **context: Any) -> None:
         self.rejections.append(Rejection(source=source, reason=reason, detail=detail, context=context))
 

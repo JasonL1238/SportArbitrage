@@ -289,11 +289,15 @@ do not persist.
   **unknown**. Two defences, in order: the `_MARKET_TYPES` allowlist is the
   primary one (the enum's other documented members — `TEAM_TOTAL`,
   `PLAYER_GOALS` — are their own types, so a half plausibly is too), and a
-  text screen is the secondary one. Both adapters screen the market's
-  **label-bearing** fields (`_common.MARKET_LABEL_KEYS` — `name`, `label`,
+  text screen is the secondary one. Both adapters screened the market's
+  **label-bearing** fields (a curated `MARKET_LABEL_KEYS` set — `name`, `label`,
   `description`, `group_name`, `sub_type`, …) *and* each outcome's own label
   against one shared vocabulary (`_common.PERIOD_MARKERS`, compact spellings
-  in both orders). Not every string field: settlement prose is prose, and a
+  in both orders). These two adapters were that key set's only
+  callers; it outlived them by a week and was removed on 2026-08-18. What it
+  encoded is kept in
+  `docs/evidence/adapter-lessons.md` § "Three shared label-parsing guards
+  outlived their only callers by a week". Not every string field: settlement prose is prose, and a
   `rules` note reading "void if the game is suspended before the end of the
   regulation **period**" tokenises into a marker and silently deletes a live
   full-game market — invisibly at fetch time, where a screened-out market has

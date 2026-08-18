@@ -20,8 +20,13 @@ Live collection can require a licensed-region exit. Use
 `ODDS_HTTP_PROXY` remains a fallback. Live calls are intentionally excluded from
 automated validation. Tests use tracked captures under `tests/fixtures/raw/`
 and narrow current-shape captures under `tests/fixtures/live_regressions/`.
-Node.js is optional; `tests/test_report.py` skips its dashboard JavaScript smoke
-coverage when Node is unavailable.
+Node.js is **required in CI and expected locally**: every executable check over
+`src/report_assets.py` runs through `tests/dashboard_smoke.mjs`, and
+`tests/test_report.py` *skips* those cases when Node is missing rather than
+failing — so a machine without it reports a green suite that never executed the
+dashboard at all. `.github/workflows/tests.yml` pins it with `actions/setup-node`
+for that reason. Locally, install Node 20+ before claiming the suite passed, and
+say so explicitly if you ran without it.
 
 Manual browser research requires Playwright. `ODDS_BROWSER_CHANNEL=chrome` may
 select an installed stable Chrome channel when the bundled Chromium differs,
@@ -100,17 +105,16 @@ The full suite currently contains thousands of cases and exercises real captured
 
 ### Baseline
 
-The suite is expected fully green. The long-standing blocker — registered
-`an_fliff`, `an_circa`, and `an_superbook` with no genuine non-empty captures,
-which errored ~1600 session-scoped fixture-dependent cases — ended on
-2026-08-09 when the operator approved deregistering all three (measurements
-and the re-registration condition are in `docs/evidence/action-network.md`
-§ "Three registered ids carry no odds on either endpoint"). The
-rule that produced the blocker still stands: never synthesize a fixture, and
-never unregister a source *to hide* a failure — this removal was a recorded
-operator decision about feeds Action Network had dropped, not a cleanup of red
-tests. Report the full suite's exact result; any failure is now a regression,
-not baseline.
+The suite is expected fully green, so any failure is a regression rather than
+baseline. Report the full suite's exact result.
+
+Two rules survive the blocker that used to sit here (three Action Network ids
+with no genuine captures, deregistered 2026-08-09 — the measurements and the
+re-registration condition are in `docs/evidence/action-network.md`
+§ "Three registered ids carry no odds on either endpoint"): **never synthesize a
+fixture**, and **never unregister a source to hide a failure**. That removal was
+a recorded operator decision about feeds Action Network had dropped, which is
+what makes it different from clearing red tests.
 
 ## Build and smoke checks
 

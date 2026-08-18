@@ -13,9 +13,8 @@ as ``OTHER_LICENCE`` context.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Mapping, Sequence
+from typing import Mapping, Sequence
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -24,10 +23,11 @@ from bs4 import BeautifulSoup, Tag
 from src import leagues as league_registry
 from src.events import build_event_key, orient, resolve_doubleheaders
 from src.normalize import american_to_decimal, implied_probability
-from src.participants import Participant, canonical_participant
+from src.participants import canonical_participant
 from src.raw_store import RawResponse
-from src.schema import Market, Period, Quote, QuoteStatus, Selection
+from src.schema import Market, Period, QuoteStatus, Selection
 from src.sources._common import (
+    Fixture,
     ScopeTally,
     SourceClient,
     Tier,
@@ -35,6 +35,7 @@ from src.sources._common import (
     drop_duplicate_selections,
     envelope_source,
     latest_per_endpoint,
+    priced_quote,
     refuse_mid_move_pairings,
 )
 from src.sources.base import ParseOutcome
@@ -57,16 +58,6 @@ _CLOCK = re.compile(r"(\d{1,2}:\d{2}\s+[AP]M)\s+ET", re.IGNORECASE)
 _PAGE_DATE = re.compile(r"[A-Z][a-z]{2},\s+([A-Z][a-z]{2})\s+(\d{1,2})")
 _AMERICAN = re.compile(r"^[+-]\d+$")
 _EASTERN = ZoneInfo("America/New_York")
-
-
-@dataclass(frozen=True)
-class _Fixture:
-    event_id: str
-    competition: Any
-    home: Participant
-    away: Participant
-    commence_time: datetime
-    base_key: str
 
 
 class VsinCircaAdapter:
@@ -159,7 +150,7 @@ def parse_vsin_circa(raws: Sequence[RawResponse]) -> ParseOutcome:
         if "Circa" not in [cell.get_text(" ", strip=True) for cell in table.select("thead th")]:
             raise FormatChangeError(f"{source}:{raw.endpoint}: no named Circa column")
         page_date = _page_date(table, raw)
-        fixtures: dict[str, _Fixture] = {}
+        fixtures: dict[str, Fixture] = {}
         pending: list[tuple[str, Market, Selection, float | None, int]] = []
         rows = body.find_all("tr", recursive=False)
         index = 0
@@ -192,13 +183,14 @@ def parse_vsin_circa(raws: Sequence[RawResponse]) -> ParseOutcome:
                 index += 3
                 continue
             away_side, home_side = orient(away, home, competition, home=home)
-            fixture = _Fixture(
-                event_id,
-                competition,
-                home_side,
-                away_side,
-                commence,
-                build_event_key(away_side.key, home_side.key, commence, competition),
+            fixture = Fixture(
+                event_id=event_id,
+                sport=competition.sport,
+                competition=competition,
+                home=home_side,
+                away=away_side,
+                commence_time=commence,
+                base_key=build_event_key(away_side.key, home_side.key, commence, competition),
             )
             fixtures[event_id] = fixture
             for side_index, row in enumerate((away_row, home_row)):
@@ -221,19 +213,11 @@ def parse_vsin_circa(raws: Sequence[RawResponse]) -> ParseOutcome:
             fixture = fixtures[event_id]
             decimal = american_to_decimal(american)
             outcome.quotes.append(
-                Quote(
+                priced_quote(
+                    fixture,
                     source=source,
-                    observed_at=raw.fetched_at,
-                    raw_ref=raw.ref,
-                    sport=competition.sport,
-                    league=competition.key,
+                    raw=raw,
                     event_key=resolved[event_id],
-                    source_event_id=event_id,
-                    home_participant=fixture.home.key,
-                    away_participant=fixture.away.key,
-                    home_team=fixture.home.name,
-                    away_team=fixture.away.name,
-                    commence_time=fixture.commence_time,
                     market=market,
                     period=Period.FULL_GAME,
                     selection=selection,

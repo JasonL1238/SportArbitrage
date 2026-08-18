@@ -40,7 +40,7 @@ from src.arb import (
     find_opportunities,
     merge_counterparty_groups,
 )
-from src.betlinks import link_payload
+from src.betlinks import book_for, link_payload
 from src.betlog import BetLog, BetLogError, empty_payload as empty_bet_payload
 from src.betlog import slip_from_payload
 from src.commission import commission_for, net_decimal_odds
@@ -52,11 +52,11 @@ from src.leagues import is_known
 from src.leagues import league as get_league
 from src.report_assets import BODY, CSS, EMPTY_SHELL, JS
 from src.report_copy import (
+    BRAND_LABELS,
     GLOSSARY,
     SCHEMA_FIELDS,
     SKIP_NOTES,
     SOURCE_NOTES,
-    VENUE_KINDS,
     VOCAB_NOTE,
 )
 from src.schema import (
@@ -147,6 +147,9 @@ _INTERNED = frozenset({
     "away_participant", "home_team", "away_team", "commence_time", "market", "period",
     "selection", "side", "source_market_id", "status", "last_change_at",
 })
+
+
+# ── the payload ──────────────────────────────────────────────────────────────
 
 
 def build_report(
@@ -332,11 +335,6 @@ def build_report(
             "db_name": store.path.name,
             "latest_run_id": latest_run_id,
             "jurisdiction": latest_jurisdiction,
-            "jurisdiction_live_validated": (
-                JURISDICTIONS[latest_jurisdiction].live_validated
-                if latest_jurisdiction in JURISDICTIONS
-                else False
-            ),
             "jurisdiction_warnings": jurisdiction_warnings,
             "detected_state": detected.state if detected is not None else None,
             "lede": _lede(runs[0]),
@@ -384,7 +382,6 @@ def build_report(
             ]
             for state in (*JURISDICTIONS, "GLOBAL", "")
         },
-        "venue_kinds": VENUE_KINDS,
         "runs": runs,
         "quotes": quotes,
         "participants": _participants(quotes, strings),
@@ -493,6 +490,9 @@ def build_report(
 BET_EMBED_LIMIT = 1000
 
 
+# ── the placed-bet ledger ────────────────────────────────────────────────────
+
+
 def _bets_payload(limit: int = BET_EMBED_LIMIT) -> dict[str, Any]:
     """The placed-bet ledger, or an empty one with the reason it is empty.
 
@@ -584,6 +584,9 @@ _BET_WRITERS: dict[str, Any] = {
     "/api/bets/settle": _settle_bet,
     "/api/bets/delete": _delete_bet,
 }
+
+
+# ── promotions ───────────────────────────────────────────────────────────────
 
 
 def _promo_payload(
@@ -833,6 +836,9 @@ def _blank_sport(sport: str) -> dict[str, Any]:
     }
 
 
+# ── arbitrage ────────────────────────────────────────────────────────────────
+
+
 def _arb_payload(
     store: Store,
     run_ids: Sequence[int],
@@ -1010,9 +1016,6 @@ def _opportunity_entry(
             else round(opportunity.max_total_stake, 2)
         ),
         "sum_implied": round(opportunity.sum_implied, 6),
-        "is_risk_free": opportunity.is_risk_free,
-        "can_push": opportunity.can_push,
-        "can_half_push": opportunity.can_half_push,
         "notes": list(opportunity.notes),
         "legs": [
             {
@@ -1049,6 +1052,9 @@ def _opportunity_entry(
             for label, profit in opportunity.outcome_profits
         ],
     }
+
+
+# ── coverage and quotes ──────────────────────────────────────────────────────
 
 
 def _coverage_for_run(
@@ -1266,6 +1272,9 @@ def _net_odds(source: str, decimal_odds: Any) -> float | None:
         return None
 
 
+# ── identity, vocabulary and labels ──────────────────────────────────────────
+
+
 def _participants(quotes: dict[str, Any], strings: Sequence[str]) -> dict[str, dict[str, str]]:
     """Map each participant key onto a display name and a short label.
 
@@ -1385,6 +1394,9 @@ def _fixture_tolerances(store: Store) -> dict[str, int]:
     return seconds
 
 
+# ── venues ───────────────────────────────────────────────────────────────────
+
+
 def _unknown_source(key: str) -> dict[str, str]:
     return {
         "label": key,
@@ -1501,6 +1513,17 @@ def _source_entry(key: str, *, state: str | None = None) -> dict[str, Any]:
     entry["order_driven"] = bool(
         registry_entry is not None and registry_entry.kind.has_stated_liquidity
     )
+    # Which counterparty this feed reads.  ``book_for`` is the one source-key →
+    # brand fold in the repository (`betlinks.MIRROR_BOOK` + `CONSENSUS_FEEDS`),
+    # so the page's sportsbook picker groups feeds exactly the way a bet would
+    # be placed — never by the ``an_``/``vi_`` spelling of the key.  ``an_open``
+    # folds to ``""`` because a consensus line is not a venue, and a ghost key
+    # the registry no longer knows is its own brand (``book_for`` passes it
+    # through) rather than being guessed at.  Computed from the key alone: a
+    # brand that varied by ``state`` would let the seven per-jurisdiction
+    # emissions of this entry disagree.
+    entry["brand"] = book_for(key) or ""
+    entry["brand_label"] = BRAND_LABELS.get(entry["brand"], entry["label"])
     return entry
 
 
@@ -1516,6 +1539,9 @@ _SETTLEMENT_WORDS: dict[SettlementRegime, str] = {
         "you paid."
     ),
 }
+
+
+# ── small readings off a run ─────────────────────────────────────────────────
 
 
 def _duration_ms(started_at: str, finished_at: str | None) -> float | None:
@@ -1836,6 +1862,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     return 0
 
 
+# ── the serve control plane ──────────────────────────────────────────────────
+
+
 def _rebuild_dashboard(
     out: Path,
     *,
@@ -1957,10 +1986,6 @@ def _run_promos_from_ui(
         persist_raw=True,
         on_progress=on_progress,
     )
-    by_source: dict[str, int] = {}
-    for _, result in batch.runs:
-        for offer in result.offers:
-            by_source[offer.source] = by_source.get(offer.source, 0) + 1
     return {
         "batch_id": batch.batch_id,
         "detected_state": batch.detected_state,
@@ -1968,9 +1993,7 @@ def _run_promos_from_ui(
         "runs": {state: result.run_id for state, result in batch.runs},
         "ok": batch.ok,
         "offer_count": sum(len(result.offers) for _, result in batch.runs),
-        "source_ok": sum(sum(1 for h in result.health if h.ok) for _, result in batch.runs),
         "source_count": sum(len(result.health) for _, result in batch.runs),
-        "by_source": by_source,
         "started_at": min(result.started_at for _, result in batch.runs).isoformat(),
         "finished_at": max(result.finished_at for _, result in batch.runs).isoformat(),
     }
@@ -2141,15 +2164,8 @@ def _serve(
                 return None, "body must be a JSON object"
             return body, None
 
-        def _handle_odds_collect(self) -> None:
-            body, err = self._read_json_body()
-            if body is None:
-                self._json(400, {"ok": False, "error": err})
-                return
-
-            tier = str(body.get("tier") or "core")
-            sport = body.get("sport") or None
-            league = body.get("league") or None
+        def _requested_states(self, body: Mapping[str, Any]) -> list[str] | None:
+            """The ``states`` list, or ``None`` after answering 400 itself."""
             states = body.get("states") or []
             if not isinstance(states, list) or not all(
                 isinstance(item, str) and item.upper() in JURISDICTIONS
@@ -2160,6 +2176,38 @@ def _serve(
                     "error": "states must be a list containing only "
                              + ", ".join(sorted(JURISDICTIONS)),
                 })
+                return None
+            return states
+
+        def _refuse_busy(self) -> None:
+            """409 for the scrape that lost the race, naming who holds the lock."""
+            self._json(409, {
+                "ok": False,
+                "error": "a scrape is already running; wait for it to finish",
+                "busy": True,
+                "busy_kind": status_payload().get("busy_kind"),
+                "progress": status_payload().get("progress"),
+            })
+
+        def _fail_scrape(self, exc: Exception, kind: str) -> None:
+            """Record the failure where the poller reads it, then answer 500."""
+            err = f"{type(exc).__name__}: {exc}"
+            with state_lock:
+                state["last_error"] = err
+                state["progress"] = {"phase": "error", "message": err, "kind": kind}
+            self._json(500, {"ok": False, "error": err, "busy": False})
+
+        def _handle_odds_collect(self) -> None:
+            body, err = self._read_json_body()
+            if body is None:
+                self._json(400, {"ok": False, "error": err})
+                return
+
+            tier = str(body.get("tier") or "core")
+            sport = body.get("sport") or None
+            league = body.get("league") or None
+            states = self._requested_states(body)
+            if states is None:
                 return
             if sport is not None:
                 sport = str(sport)
@@ -2174,13 +2222,7 @@ def _serve(
                 "quote_count": 0,
                 "kind": "odds",
             }):
-                self._json(409, {
-                    "ok": False,
-                    "error": "a scrape is already running; wait for it to finish",
-                    "busy": True,
-                    "busy_kind": status_payload().get("busy_kind"),
-                    "progress": status_payload().get("progress"),
-                })
+                self._refuse_busy()
                 return
             try:
                 collected = _run_collect_from_ui(
@@ -2221,19 +2263,7 @@ def _serve(
                     "reload": True,
                 })
             except Exception as exc:  # noqa: BLE001
-                err = f"{type(exc).__name__}: {exc}"
-                with state_lock:
-                    state["last_error"] = err
-                    state["progress"] = {
-                        "phase": "error",
-                        "message": err,
-                        "kind": "odds",
-                    }
-                self._json(500, {
-                    "ok": False,
-                    "error": err,
-                    "busy": False,
-                })
+                self._fail_scrape(exc, "odds")
             finally:
                 _end()
 
@@ -2244,16 +2274,8 @@ def _serve(
                 return
 
             sources = body.get("sources")
-            states = body.get("states") or []
-            if not isinstance(states, list) or not all(
-                isinstance(item, str) and item.upper() in JURISDICTIONS
-                for item in states
-            ):
-                self._json(400, {
-                    "ok": False,
-                    "error": "states must be a list containing only "
-                             + ", ".join(sorted(JURISDICTIONS)),
-                })
+            states = self._requested_states(body)
+            if states is None:
                 return
             if sources is not None:
                 if not isinstance(sources, list) or not all(
@@ -2273,13 +2295,7 @@ def _serve(
                 "offer_count": 0,
                 "kind": "promos",
             }):
-                self._json(409, {
-                    "ok": False,
-                    "error": "a scrape is already running; wait for it to finish",
-                    "busy": True,
-                    "busy_kind": status_payload().get("busy_kind"),
-                    "progress": status_payload().get("progress"),
-                })
+                self._refuse_busy()
                 return
             try:
                 collected = _run_promos_from_ui(
@@ -2332,19 +2348,7 @@ def _serve(
                     "promos": _promo_payload_for_serve(),
                 })
             except Exception as exc:  # noqa: BLE001
-                err = f"{type(exc).__name__}: {exc}"
-                with state_lock:
-                    state["last_error"] = err
-                    state["progress"] = {
-                        "phase": "error",
-                        "message": err,
-                        "kind": "promos",
-                    }
-                self._json(500, {
-                    "ok": False,
-                    "error": err,
-                    "busy": False,
-                })
+                self._fail_scrape(exc, "promos")
             finally:
                 _end()
 

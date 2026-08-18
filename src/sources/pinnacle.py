@@ -74,11 +74,12 @@ from src.schema import (
 )
 from src.sources._common import (
     ScopeTally,
-    latest_capture,
     SourceClient,
     Tier,
+    accepted_leagues,
     capabilities_from,
     envelope_source,
+    latest_capture,
     parse_iso_time,
 )
 from src.sources.base import ParseOutcome
@@ -370,16 +371,7 @@ class PinnacleAdapter:
         max_fallback_leagues: int = 20,
         request_pause: float = 0.1,
     ) -> None:
-        keys: list[str] = []
-        for key in leagues:
-            # Fail at construction rather than mid-run: an unknown key here
-            # would otherwise surface as a league that silently collects nothing.
-            league_registry.league(key)
-            if key not in keys:
-                keys.append(key)
-        if not keys:
-            raise ValueError("PinnacleAdapter needs at least one league to collect")
-        self._leagues: tuple[str, ...] = tuple(keys)
+        self._leagues = accepted_leagues("PinnacleAdapter", leagues)
         self._source_key = source_key
         self.base_url = base_url.rstrip("/")
         self.max_fallback_leagues = max_fallback_leagues

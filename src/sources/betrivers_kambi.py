@@ -118,6 +118,7 @@ from src.sources._common import (
     SourceClient,
     Tier,
     capabilities_from,
+    drop_duplicate_selections,
     envelope_source,
     parse_iso_time,
     priced_quote,
@@ -924,7 +925,7 @@ def parse_kambi(raws: Sequence[RawResponse]) -> ParseOutcome:
         for raw, owned in responses:
             _parse_betoffer_response(raw, owned, fixtures, event_keys, source, outcome)
 
-    _drop_duplicate_selections(source, outcome)
+    drop_duplicate_selections(source, outcome)
     return outcome
 
 
@@ -1522,34 +1523,6 @@ def _selection(raw_outcome: dict[str, Any], fixture: _Fixture) -> Selection | No
         if who.key == fixture.away.key:
             return Selection.AWAY
     return None
-
-
-def _drop_duplicate_selections(source: str, outcome: ParseOutcome) -> None:
-    """Keep one row per ``dedup_key``, rejecting the rest.
-
-    Storage enforces ``dedup_key`` with a UNIQUE constraint, so a single
-    collision aborts the insert of the whole run.  Nothing in the payload
-    guarantees two offers in the same group cannot land on the same line, so the
-    invariant is enforced here rather than hoped for — and a collision is a
-    parser failure worth surfacing, not a silent drop.
-    """
-    seen: dict[tuple[str, ...], Quote] = {}
-    kept: list[Quote] = []
-    for quote in outcome.quotes:
-        first = seen.get(quote.dedup_key)
-        if first is not None:
-            outcome.reject(
-                source,
-                "duplicate_dedup_key",
-                f"{quote.dedup_key} priced twice: offers "
-                f"{first.source_market_id} and {quote.source_market_id} on event "
-                f"{quote.source_event_id}",
-                event_id=quote.source_event_id,
-            )
-            continue
-        seen[quote.dedup_key] = quote
-        kept.append(quote)
-    outcome.quotes = kept
 
 
 def _optional_str(value: Any) -> str | None:

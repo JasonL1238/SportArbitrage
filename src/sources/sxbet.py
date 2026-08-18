@@ -66,6 +66,7 @@ from src.sources._common import (
     ScopeTally,
     SourceClient,
     Tier,
+    accepted_leagues,
     capabilities_from,
     drop_duplicate_selections,
     envelope_source,
@@ -73,6 +74,7 @@ from src.sources._common import (
     latest_per_endpoint,
     parse_epoch_time,
     priced_quote,
+    tennis_tour,
 )
 from src.sources.base import ParseOutcome
 from src.sources.guards import CoverageCappedError, FormatChangeError, SourceError, require_mapping
@@ -193,42 +195,6 @@ CATCH_ALL: dict[Sport, str] = {
     Sport.HOCKEY: "HOCKEY_OTHER",
 }
 
-#: Tennis tour, read as a **tour** and a **tier** rather than as one string.
-#:
-#: Matched anywhere in the name, because that is not where these venues put the
-#: word: Matchbook writes ``"ATP Vancouver Challenger"`` and SX Bet writes
-#: ``"Vancouver Challenger ATP"``.  A single ordered list of markers cannot
-#: express that: testing ``"challenger"`` before ``"wta"`` filed every *women's*
-#: Challenger — ``"Vancouver Challenger WTA"``, 252 markets on one capture — as
-#: ``ATP_CHALLENGER``, the men's tour, and produced a fresh cross-source
-#: disagreement with Matchbook, which calls the same event ``WTA``.
-#:
-#: So the tour is decided first and the tier only narrows it.  There is no
-#: ``WTA_CHALLENGER`` key, so a women's Challenger stays ``WTA``: the same
-#: governing body and a lower tier is a far smaller error than the wrong tour,
-#: and it agrees with what the other sources call it.
-TENNIS_TOURS: tuple[tuple[str, str], ...] = (
-    ("itf", "ITF"),
-    ("wta", "WTA"),
-    ("atp", "ATP"),
-)
-
-#: The tier marker, which only refines :data:`TENNIS_TOURS`' ATP answer.
-TENNIS_SECOND_TIER = "challenger"
-
-
-def _tennis_league(label: str) -> str | None:
-    """The tour a tennis competition name names, or ``None``."""
-    lowered = label.strip().casefold()
-    for marker, tour in TENNIS_TOURS:
-        if marker in lowered:
-            if tour == "ATP" and TENNIS_SECOND_TIER in lowered:
-                return "ATP_CHALLENGER"
-            return tour
-    # A tier marker with no tour named at all is a men's Challenger by
-    # convention; the women's tour always names itself.
-    return "ATP_CHALLENGER" if TENNIS_SECOND_TIER in lowered else None
-
 
 #: The sports :data:`MARKET_TYPES` can actually read.
 #:
@@ -288,14 +254,7 @@ class SxBetAdapter:
         timeout: float = 20.0,
         client: httpx.Client | None = None,
     ) -> None:
-        keys: list[str] = []
-        for key in leagues:
-            league_registry.league(key)
-            if key not in keys:
-                keys.append(key)
-        if not keys:
-            raise ValueError("SxBetAdapter needs at least one league to collect")
-        self._leagues: tuple[str, ...] = tuple(keys)
+        self._leagues = accepted_leagues("SxBetAdapter", leagues)
         self._source_key = source_key
         self.base_url = base_url.rstrip("/")
         self._http = SourceClient(source_key, timeout=timeout, client=client)
@@ -891,7 +850,7 @@ def _league_for(sport: Sport, label: str) -> str | None:
         if known.casefold() == lowered:
             return canonical
     if sport is Sport.TENNIS:
-        found = _tennis_league(label)
+        found = tennis_tour(label)
         if found is not None:
             return found
     return CATCH_ALL.get(sport)

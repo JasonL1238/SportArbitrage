@@ -25,11 +25,11 @@ dashboard. No live network in tests; parsers run against tracked captures.
 | If you are… | Open | Cost |
 | --- | --- | --- |
 | making a routine change | nothing — this file is enough | — |
-| crossing a boundary, or unsure which module owns a behavior | `docs/architecture.md` | ~175 lines |
+| crossing a boundary, or unsure which module owns a behavior | `docs/architecture.md` | ~210 lines |
 | deciding what to run, or reporting a result | `docs/testing.md` | ~120 lines |
-| asking "did we already try this venue?" | `docs/SOURCE_FEASIBILITY.md` — an index — then the one `docs/evidence/` file it names | ~60-line index, then 90-420 lines |
+| asking "did we already try this venue?" | `docs/SOURCE_FEASIBILITY.md` — an index — then the one `docs/evidence/` file it names | ~140-line index, then 160-2,180 lines — `docs/evidence/state-routing.md` and `docs/evidence/promos.md` are the expensive two, so read the index first |
 | adding a source, or changing the normalized quote contract or a field's meaning | `docs/INPUT_CONTRACT.md` — it states what a new adapter must deliver, not only what the fields mean | ~390 lines |
-| changing state routing, licences, or which state a run may fetch | `docs/MULTI_STATE.md` | ~260 lines |
+| changing state routing, licences, or which state a run may fetch | `docs/MULTI_STATE.md` | ~330 lines |
 | how the operator spends promo offers — ordering, execution, rules | `docs/PROMO_CAMPAIGN.md` — operator playbook; the Campaign table renders its numbers | ~130 lines |
 
 Search for the symbol and its closest test before opening any large file, and read
@@ -60,6 +60,26 @@ only the range you need. Do not read a file listed as a hotspot end to end.
   `_common.priced_quote(fixture, …)` and resolve events onto `_common.Fixture` rather
   than restating either. Which market a label means and how a line is signed stay in
   the venue adapter, where a per-book trap can be documented beside the code.
+- Two more things are *this repository's* vocabulary rather than a venue's, so they
+  are shared and not copied: `_common.accepted_leagues(adapter, leagues)` validates a
+  league set at construction, and `_common.tennis_tour(label)` reads a tour off a
+  competition name. Five adapters had copies of that scan in two groups, agreeing
+  on the *table* within each group and differing only in incidentals around it
+  (matchbook and sxbet were byte-identical outright; cloudbet's skipped the
+  case-fold its caller had already done; betmgm and fanduel differed by a name
+  and a `log.debug`) — so `tennis_tour` takes the marker table (`TENNIS_TOURS`, or
+  `TENNIS_TOURS_BY_GENDER` where the venue spells a tour as a gender) and returns
+  `None` when nothing matches, because *what to file an unrecognised competition
+  under* is a venue's policy and stays with the venue. pinnacle, smarkets, hardrock
+  and onexbet keep their own: theirs give different answers, not the same answer
+  twice. An adapter that resolves a league to its venue's own path, route or series
+  keeps that loop too — what it refuses is a route it cannot build.
+- One rule, one implementation, when two modules would otherwise judge the same
+  thing: `store.scope_clause` builds every scoped read's SQL, and
+  `arb.crossed_against_itself` decides "this venue prices itself to lose" for both
+  the detector and the promo planner. Each of these was written twice and the copies
+  had begun to disagree — the planner's had a hardcoded kind list where the
+  registry's own `SourceKind.has_stated_liquidity` belonged.
 - Keep promotions isolated from the odds database and collection lifecycle.
 - Never hand-edit runtime data under `data/`, caches, or generated output.
 - Update `docs/architecture.md`, `docs/testing.md`, this file, and the contract docs
@@ -183,16 +203,16 @@ written, and the grep is what is true now.
 | File | Lines | Where to land |
 | --- | --- | --- |
 | `tests/test_adversarial_findings.py` | 14.9k | 17 banners, one per review round — they say nothing about subject. Search the production symbol or the exact test name instead |
-| `src/report_assets.py` | 7.4k | 43 banners, in `/* ── … */` form. `frame`, `panels and routing`, `venues`, `arbitrage`, `overview`. Four handwritten constants — `CSS`, `BODY`, `JS`, and `EMPTY_SHELL`, the nothing-collected-yet page. Every panel count and filter decision is here, not in `src/report.py` |
-| `tests/test_promo_planner.py` | 4.0k | 8 banners |
-| `src/collector.py` | 3.7k | `coverage`, `one run`, `replay`, `CLI` |
+| `src/report_assets.py` | 7.7k | 42 banners, in `/* ── … */` form. `frame`, `panels and routing`, `venues`, `arbitrage`, `overview`. Four handwritten constants — `CSS`, `BODY`, `JS`, and `EMPTY_SHELL`, the nothing-collected-yet page. Every panel count and filter decision is here, not in `src/report.py` |
+| `tests/test_promo_planner.py` | 4.1k | 8 banners |
+| `src/collector.py` | 3.8k | `coverage`, `one run`, `replay`, `CLI` |
 | `src/arb.py` | 2.7k | `the arithmetic`, `settlement model`, `grouping`, `detection`, `best-price surface` |
-| `tests/test_report.py` | 2.7k | 8 banners |
-| `src/report.py` | 2.3k | `build_report` and `_serve` are the two entry points, and `build_report`'s own 1.4k-line body has no banner inside it. The only two, `rendering` and `CLI`, start at line 1577 |
+| `tests/test_report.py` | 3.0k | 9 banners |
+| `src/report.py` | 2.4k | 11 banners now, one per region of the payload half — `the payload`, `the placed-bet ledger`, `promotions`, `arbitrage`, `coverage and quotes`, `identity, vocabulary and labels`, `venues`, `small readings off a run` — then `rendering`, `CLI` and `the serve control plane` |
 | `src/validation.py` | 2.5k | `consensus`, `row-level`, `market-level`, `cross-source` |
-| `src/promos/planner.py` | 2.2k | `offer-text parsing`, `brand → stakeable odds feeds`, `slate context`, `stake solving and outcome evaluation`, `the scan`, `plan payloads` |
+| `src/promos/planner.py` | 2.3k | `offer-text parsing`, `brand → stakeable odds feeds`, `slate context`, `stake solving and outcome evaluation`, `the scan`, `plan payloads` |
 | `src/store.py` | 1.7k | `schema compatibility`, `the store`, then `runs`, `writes`, `reads` inside it |
-| `src/sources/registry.py` | 1.3k | mostly one long descriptor list — grep the source key. Three banners group it: `exchanges`, `Action Network multi-book scoreboard`, `prediction markets` |
+| `src/sources/registry.py` | 1.2k | mostly one long descriptor list — grep the source key. Three banners group it: `exchanges`, `Action Network multi-book scoreboard`, `prediction markets` |
 
 ## Where a change belongs
 
@@ -227,9 +247,19 @@ written, and the grep is what is true now.
 - **Dashboard** → the payload and the localhost server are in `src/report.py`, the
   literal copy in `src/report_copy.py`, and everything the reader sees — layout,
   interaction, **and every count, filter and total on the page** — in
-  `src/report_assets.py`. A number that disagrees with the run is computed client-side;
-  `src/report.py` serializes rows and does not count them. Validate with
-  `tests/test_report.py`.
+  `src/report_assets.py`. Both scrape buttons drive one state machine there
+  (`SCRAPE_KINDS` + `wireScrape`), and every `localStorage` touch goes through
+  `storedValue`/`storeValue` — a value stored in the wrong format reads back as
+  "not set" and is indistinguishable from a browser that refuses storage, which is
+  why the smoke harness now carries a real store. Keep each request's URL a literal
+  at its call site: `test_page_reaches_no_network` audits the page for same-origin
+  `/api/` string literals and a target read out of a table cannot be audited.
+  A number that disagrees with the run is computed client-side;
+  `src/report.py` serializes rows and does not count them. Which sportsbook a feed
+  belongs to has exactly two authorities — `betlinks.book_for` for the source-key →
+  brand fold and `report_copy.BRAND_LABELS` for the brand's one display name; never
+  add a third vocabulary or derive either from an `an_`/`vi_`/`tl_` key prefix.
+  Validate with `tests/test_report.py`.
 - **State routing** → `src/jurisdictions.py`, `src/state_selection.py`, scoped registry
   builders, and focused jurisdiction/probe tests. Two more places hardcode the states
   and neither is reachable by searching `JURISDICTIONS`: the scrape form's checkboxes

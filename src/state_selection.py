@@ -73,8 +73,6 @@ def requested_states(values: Sequence[str] | None) -> tuple[str, ...]:
 def select_states(
     detected_state: str,
     requested: Sequence[str] | None = None,
-    *,
-    include_configured: bool = True,
 ) -> tuple[str, ...]:
     """Explicitly chosen states win; detection only fills an empty choice.
 
@@ -90,7 +88,7 @@ def select_states(
     # than a choice: the default IL must not make every PA/NJ/DC scrape collect
     # Illinois accidentally, and equally must not become the only state a run
     # collects when detection has already named the one the operator is in.
-    if include_configured and "ODDS_STATE" in os.environ:
+    if "ODDS_STATE" in os.environ:
         configured = normalize_state(settings.STATE)
         if configured not in chosen:
             chosen.append(configured)

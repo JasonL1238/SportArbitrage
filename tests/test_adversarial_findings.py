@@ -17,10 +17,11 @@ back the same competitor, reported as a guarantee.
 """
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import glob
-import pathlib
 import json
+import pathlib
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -35,6 +36,31 @@ from src.sources.sxbet import parse_sxbet
 from tests.conftest import make_quote
 
 FETCHED = datetime(2026, 7, 28, 12, 0, tzinfo=UTC)
+
+
+@contextlib.contextmanager
+def rigged_source(key: str, factory):
+    """Swap one ``collector.SOURCE_FACTORIES`` entry for the block's duration.
+
+    Replay resolves a parser by key through that dict, so every "what if the
+    parser changed under a stored run" test has to put a rigged factory there
+    and take it out again.  Written out longhand thirteen times — a get, a set,
+    a try, and a four-line finally that has to tell "there was no entry" from
+    "there was one" — which is thirteen chances to leave a rigged parser
+    installed for whatever runs next.
+    """
+    from src.collector import SOURCE_FACTORIES
+
+    saved = SOURCE_FACTORIES.get(key)
+    SOURCE_FACTORIES[key] = factory
+    try:
+        yield
+    finally:
+        if saved is None:
+            SOURCE_FACTORIES.pop(key, None)
+        else:
+            SOURCE_FACTORIES[key] = saved
+
 LATER = FETCHED + timedelta(hours=6)
 
 #: Alcaraz sorts before Zverev by participant key, so ``orient`` makes Zverev the
@@ -603,7 +629,7 @@ def _print_lines(quotes, capsys) -> list[str]:
         def __exit__(self, *exc):
             return False
 
-        def latest_run_id(self, *, only_ok=False, sports=None, leagues=None):
+        def latest_run_id(self, *, sports=None, leagues=None, jurisdiction=None):
             return 1
 
         def run_scope(self, run_id):
@@ -4315,7 +4341,7 @@ class TestReplayComparesTheWholeRow:
     """
 
     def _run(self, tmp_path, mutate=None):
-        from src.collector import SOURCE_FACTORIES, collect_once, replay_run
+        from src.collector import collect_once, replay_run
         from src.raw_store import RawStore
         from src.sources.base import ParseOutcome
         from src.store import Store
@@ -4353,15 +4379,8 @@ class TestReplayComparesTheWholeRow:
                 [Rigged()], raw_store=raw_store, store=store, as_of=FETCHED
             )
             assert result.quotes, "the fixture produced no rows to compare"
-            saved = SOURCE_FACTORIES.get("book_a")
-            SOURCE_FACTORIES["book_a"] = lambda: Rigged(mutate)
-            try:
+            with rigged_source("book_a", lambda: Rigged(mutate)):
                 return replay_run(result.run_id, store=store, raw_store=raw_store)
-            finally:
-                if saved is None:
-                    SOURCE_FACTORIES.pop("book_a", None)
-                else:
-                    SOURCE_FACTORIES["book_a"] = saved
 
     def test_an_unchanged_parser_still_reproduces_the_run(self, tmp_path) -> None:
         ok, problems = self._run(tmp_path)
@@ -4434,7 +4453,7 @@ class TestReplayComparesTheWholeRow:
         failure to read stored bytes is always a problem (never a log note),
         so all-comparison genuinely means every read succeeded.
         """
-        from src.collector import SOURCE_FACTORIES, collect_once, replay_run
+        from src.collector import collect_once, replay_run
         from src.raw_store import RawStore
         from src.store import Store
 
@@ -4447,15 +4466,8 @@ class TestReplayComparesTheWholeRow:
             assert result.quotes
             raw_path = next((tmp_path / "raw").rglob("*.json"))
             raw_path.write_text(raw_path.read_text()[: len(raw_path.read_text()) // 2])
-            saved = SOURCE_FACTORIES.get("book_a")
-            SOURCE_FACTORIES["book_a"] = rigged
-            try:
+            with rigged_source("book_a", rigged):
                 ok, problems = replay_run(result.run_id, store=store, raw_store=raw_store)
-            finally:
-                if saved is None:
-                    SOURCE_FACTORIES.pop("book_a", None)
-                else:
-                    SOURCE_FACTORIES["book_a"] = saved
         assert not ok
         assert any("stored bytes unreadable" in p for p in problems), problems
         assert not any("verified against their recorded sha256s" in p for p in problems), (
@@ -4472,7 +4484,7 @@ class TestReplayComparesTheWholeRow:
         """
         import json
 
-        from src.collector import SOURCE_FACTORIES, collect_once, replay_run
+        from src.collector import collect_once, replay_run
         from src.raw_store import RawStore
         from src.store import Store
 
@@ -4490,15 +4502,8 @@ class TestReplayComparesTheWholeRow:
             envelope = json.loads(raw_path.read_text())
             envelope["body"] = envelope["body"] + " "
             raw_path.write_text(json.dumps(envelope))
-            saved = SOURCE_FACTORIES.get("book_a")
-            SOURCE_FACTORIES["book_a"] = self._make_rigged()
-            try:
+            with rigged_source("book_a", self._make_rigged()):
                 ok, problems = replay_run(result.run_id, store=store, raw_store=raw_store)
-            finally:
-                if saved is None:
-                    SOURCE_FACTORIES.pop("book_a", None)
-                else:
-                    SOURCE_FACTORIES["book_a"] = saved
         assert not ok
         assert any("sha256" in p for p in problems), problems
 
@@ -4553,7 +4558,7 @@ class TestReplayComparesTheWholeRow:
         the run's DB lists the file (the read was attempted), the archive has
         rotted, and replay reported PASS with no problems at all.
         """
-        from src.collector import SOURCE_FACTORIES, collect_once, replay_run
+        from src.collector import collect_once, replay_run
         from src.raw_store import RawStore
         from src.store import Store
 
@@ -4570,15 +4575,8 @@ class TestReplayComparesTheWholeRow:
             )
             store._conn.commit()
             next((tmp_path / "raw").rglob("*.json")).unlink()
-            saved = SOURCE_FACTORIES.get("book_a")
-            SOURCE_FACTORIES["book_a"] = rigged
-            try:
+            with rigged_source("book_a", rigged):
                 ok, problems = replay_run(result.run_id, store=store, raw_store=raw_store)
-            finally:
-                if saved is None:
-                    SOURCE_FACTORIES.pop("book_a", None)
-                else:
-                    SOURCE_FACTORIES["book_a"] = saved
         assert not ok
         assert any(
             "book_a" in p and "stored bytes unreadable" in p for p in problems
@@ -4666,7 +4664,7 @@ class TestReplayComparesTheWholeRow:
         """
         import json
 
-        from src.collector import SOURCE_FACTORIES, collect_once, replay_run
+        from src.collector import collect_once, replay_run
         from src.raw_store import RawStore
         from src.store import Store
 
@@ -4682,15 +4680,8 @@ class TestReplayComparesTheWholeRow:
             envelope["body"] = envelope["body"] + " "
             del envelope["sha256"]
             raw_path.write_text(json.dumps(envelope))
-            saved = SOURCE_FACTORIES.get("book_a")
-            SOURCE_FACTORIES["book_a"] = rigged
-            try:
+            with rigged_source("book_a", rigged):
                 ok, problems = replay_run(result.run_id, store=store, raw_store=raw_store)
-            finally:
-                if saved is None:
-                    SOURCE_FACTORIES.pop("book_a", None)
-                else:
-                    SOURCE_FACTORIES["book_a"] = saved
         assert not ok
         assert any(
             "stored bytes unreadable" in p and "sha256" in p for p in problems
@@ -4711,7 +4702,7 @@ class TestReplayComparesTheWholeRow:
         verdict its verified-bytes preamble — asserted here alongside the
         marker itself.
         """
-        from src.collector import SOURCE_FACTORIES, collect_once, replay_run
+        from src.collector import collect_once, replay_run
         from src.raw_store import RawStore
         from src.sources.base import ParseOutcome
         from src.store import Store
@@ -4754,15 +4745,8 @@ class TestReplayComparesTheWholeRow:
                 (result.run_id,),
             )
             store._conn.commit()
-            saved = SOURCE_FACTORIES.get("book_a")
-            SOURCE_FACTORIES["book_a"] = Wide
-            try:
+            with rigged_source("book_a", Wide):
                 ok, problems = replay_run(result.run_id, store=store, raw_store=raw_store)
-            finally:
-                if saved is None:
-                    SOURCE_FACTORIES.pop("book_a", None)
-                else:
-                    SOURCE_FACTORIES["book_a"] = saved
         assert not ok
         assert any(
             "replay invented rows: 2 more beyond the 5 shown" in p for p in problems
@@ -4782,7 +4766,7 @@ class TestReplayComparesTheWholeRow:
         """
         import json
 
-        from src.collector import SOURCE_FACTORIES, collect_once, replay_run
+        from src.collector import collect_once, replay_run
         from src.raw_store import RawStore
         from src.store import Store
 
@@ -4797,15 +4781,8 @@ class TestReplayComparesTheWholeRow:
             envelope = json.loads(raw_path.read_text())
             envelope["envelope_version"] = "9 replay lost row"
             raw_path.write_text(json.dumps(envelope))
-            saved = SOURCE_FACTORIES.get("book_a")
-            SOURCE_FACTORIES["book_a"] = rigged
-            try:
+            with rigged_source("book_a", rigged):
                 ok, problems = replay_run(result.run_id, store=store, raw_store=raw_store)
-            finally:
-                if saved is None:
-                    SOURCE_FACTORIES.pop("book_a", None)
-                else:
-                    SOURCE_FACTORIES["book_a"] = saved
         assert not ok
         assert any("stored bytes unreadable" in p for p in problems), problems
         assert not any("verified against" in p for p in problems), problems
@@ -4821,7 +4798,7 @@ class TestReplayComparesTheWholeRow:
         marker's number is exact; and because the marker summarizes real
         comparisons, the evolution preamble survives above it.
         """
-        from src.collector import SOURCE_FACTORIES, collect_once, replay_run
+        from src.collector import collect_once, replay_run
         from src.raw_store import RawStore
         from src.sources.base import ParseOutcome
         from src.store import Store
@@ -4865,15 +4842,8 @@ class TestReplayComparesTheWholeRow:
                 (result.run_id,),
             )
             store._conn.commit()
-            saved = SOURCE_FACTORIES.get("book_a")
-            SOURCE_FACTORIES["book_a"] = Wide
-            try:
+            with rigged_source("book_a", Wide):
                 ok, problems = replay_run(result.run_id, store=store, raw_store=raw_store)
-            finally:
-                if saved is None:
-                    SOURCE_FACTORIES.pop("book_a", None)
-                else:
-                    SOURCE_FACTORIES["book_a"] = saved
         assert not ok
         assert any(
             "1 more field difference(s) changed on replay beyond the 20 shown" in p
@@ -8295,13 +8265,37 @@ class TestAWomensChallengerIsNotAMensOne:
 
         assert tennis_league_for(name) == expected
 
-    def test_all_three_adapters_agree(self) -> None:
-        """The same string must not file three ways across three books."""
+    def test_every_adapter_that_reads_a_tour_off_a_name_agrees(self) -> None:
+        """The same string must not file different ways across books.
+
+        Five adapters had copies of this scan in two groups, and this test only
+        ever compared one of them against one other — so betmgm and fanduel could
+        (and did) carry byte-identical tables that nothing held together. Both
+        groups are now the shared scan under their own marker table, and both
+        are compared here.
+        """
+        from src.sources._common import (
+            TENNIS_TOURS_BY_GENDER,
+            tennis_tour,
+        )
+        from src.sources.betmgm import _tennis_league as betmgm_tennis
         from src.sources.fanduel import tennis_league_for
-        from src.sources.matchbook import _tennis_league
 
         for name in ("WTA Challenger Tampico", "ATP Challenger Liberec", "ITF Monastir"):
-            assert tennis_league_for(name) == _tennis_league(name), name
+            # The plain table, as matchbook, sxbet and cloudbet read it — reached
+            # through `_common.tennis_tour` itself rather than through one of the
+            # three, because all three call it with no arguments and there is no
+            # per-adapter answer left to disagree.
+            assert tennis_tour(name) == tennis_league_for(name), name
+        for name in ("WTA Challenger Tampico", "ATP Challenger Liberec", "ITF Monastir",
+                     "Womens Singles", "Mens Challenger", "Some Invitational"):
+            # The gender-spelling table, and its venue-side fallback: betmgm and
+            # fanduel must answer identically on every one of these, including
+            # the name that matches nothing.
+            assert betmgm_tennis(name) == tennis_league_for(name), name
+            assert betmgm_tennis(name) == (
+                tennis_tour(name, markers=TENNIS_TOURS_BY_GENDER) or "ITF"
+            ), name
 
 
 class TestTheGatesAreSearchedTogetherNotInSequence:
@@ -9760,8 +9754,11 @@ class TestThePageDoesNotClaimNothingHappenedInTablesItNeverLoaded:
             index = text.index(claim)
             preceding = text[max(0, index - 260): index]
             assert "detailLoaded(currentRunId)" in preceding, claim
+        # The claim is the tail of the ``empty:`` ternary, behind both the cap
+        # check and the brand branch, so the window is the option itself rather
+        # than a character count that a new branch between them would break.
         index = text.index("Nothing was flagged in this collection")
-        assert "findingsShort" in text[max(0, index - 400): index]
+        assert "findingsShort" in text[text.rindex("empty:", 0, index): index]
 
     def test_render_raw_can_reach_the_run_it_names(self) -> None:
         """The qualified message quotes ``run.raw_count``; ``renderRaw`` did not
@@ -10518,7 +10515,7 @@ class TestAMigratedRunsReplayNamesTheParserNotCorruption:
         FileNotFoundError — the oldest runs, whose archives are the
         likeliest to have rotted, wore the most confident preamble.
         """
-        from src.collector import SOURCE_FACTORIES, collect_once, replay_run
+        from src.collector import collect_once, replay_run
         from src.raw_store import RawStore
         from src.store import Store
 
@@ -10538,15 +10535,8 @@ class TestAMigratedRunsReplayNamesTheParserNotCorruption:
             )
             store._conn.commit()
             next((tmp_path / "raw").rglob("*.json")).unlink()
-            saved = SOURCE_FACTORIES.get("book_a")
-            SOURCE_FACTORIES["book_a"] = rigged
-            try:
+            with rigged_source("book_a", rigged):
                 ok, problems = replay_run(result.run_id, store=store, raw_store=raw_store)
-            finally:
-                if saved is None:
-                    SOURCE_FACTORIES.pop("book_a", None)
-                else:
-                    SOURCE_FACTORIES["book_a"] = saved
         assert not ok
         assert "collected under schema v3" in problems[0], problems
         assert "nothing here vouches" in problems[0], problems
@@ -10559,7 +10549,7 @@ class TestAMigratedRunsReplayNamesTheParserNotCorruption:
         the non-migrated preamble carries (an edited stored row looks the
         same, and no sha256 covers the quote table).
         """
-        from src.collector import SOURCE_FACTORIES, collect_once, replay_run
+        from src.collector import collect_once, replay_run
         from src.raw_store import RawStore
         from src.store import Store
 
@@ -10580,15 +10570,8 @@ class TestAMigratedRunsReplayNamesTheParserNotCorruption:
                 (result.run_id,),
             )
             store._conn.commit()
-            saved = SOURCE_FACTORIES.get("book_a")
-            SOURCE_FACTORIES["book_a"] = rigged
-            try:
+            with rigged_source("book_a", rigged):
                 ok, problems = replay_run(result.run_id, store=store, raw_store=raw_store)
-            finally:
-                if saved is None:
-                    SOURCE_FACTORIES.pop("book_a", None)
-                else:
-                    SOURCE_FACTORIES["book_a"] = saved
         assert not ok
         assert "collected under schema v3" in problems[0], problems
         assert "verified against its recorded sha256" in problems[0], problems
@@ -11201,7 +11184,7 @@ class TestAPreUpgradeScopedRunKeepsItsScope:
         through the real ``_replay_note``.
         """
         from src import settings
-        from src.collector import SOURCE_FACTORIES, collect_once
+        from src.collector import collect_once
         from src.raw_store import RawStore
         from src.report import _replay_note
         from src.store import Store
@@ -11224,9 +11207,7 @@ class TestAPreUpgradeScopedRunKeepsItsScope:
                 (result.run_id,),
             )
             store._conn.commit()
-            saved = SOURCE_FACTORIES.get("book_a")
-            SOURCE_FACTORIES["book_a"] = rigged
-            try:
+            with rigged_source("book_a", rigged):
                 benign = _replay_note(store, result.run_id)
                 next((tmp_path / "raw").rglob("*.json")).unlink()
                 rotted = _replay_note(store, result.run_id)
@@ -11235,11 +11216,6 @@ class TestAPreUpgradeScopedRunKeepsItsScope:
                 _, rotted_problems = replay_run(
                     result.run_id, store=store, raw_store=raw_store
                 )
-            finally:
-                if saved is None:
-                    SOURCE_FACTORIES.pop("book_a", None)
-                else:
-                    SOURCE_FACTORIES["book_a"] = saved
         assert benign.startswith("DIFFERS"), benign
         assert rotted.startswith("FAIL"), rotted
         # The FAIL count names real problems, not the code-authored preamble
@@ -11264,7 +11240,7 @@ class TestAPreUpgradeScopedRunKeepsItsScope:
         import json
 
         from src import settings
-        from src.collector import MIGRATED_EVOLUTION_NOTE, SOURCE_FACTORIES, collect_once
+        from src.collector import MIGRATED_EVOLUTION_NOTE, collect_once
         from src.raw_store import RawStore
         from src.report import _replay_note
         from src.store import Store
@@ -11281,15 +11257,8 @@ class TestAPreUpgradeScopedRunKeepsItsScope:
             envelope = json.loads(raw_path.read_text())
             envelope["envelope_version"] = f"9 {MIGRATED_EVOLUTION_NOTE}"
             raw_path.write_text(json.dumps(envelope))
-            saved = SOURCE_FACTORIES.get("book_a")
-            SOURCE_FACTORIES["book_a"] = rigged
-            try:
+            with rigged_source("book_a", rigged):
                 note = _replay_note(store, result.run_id)
-            finally:
-                if saved is None:
-                    SOURCE_FACTORIES.pop("book_a", None)
-                else:
-                    SOURCE_FACTORIES["book_a"] = saved
         assert note.startswith("FAIL"), note
 
     def test_a_tampered_lone_problem_still_counts_as_one(
@@ -11304,7 +11273,7 @@ class TestAPreUpgradeScopedRunKeepsItsScope:
         import json
 
         from src import settings
-        from src.collector import NATIVE_EVOLUTION_NOTE, SOURCE_FACTORIES, collect_once
+        from src.collector import NATIVE_EVOLUTION_NOTE, collect_once
         from src.raw_store import RawStore
         from src.report import _replay_note
         from src.store import Store
@@ -11327,15 +11296,8 @@ class TestAPreUpgradeScopedRunKeepsItsScope:
             envelope = json.loads(raw_path.read_text())
             envelope["envelope_version"] = f"9 {NATIVE_EVOLUTION_NOTE}"
             raw_path.write_text(json.dumps(envelope))
-            saved = SOURCE_FACTORIES.get("book_a")
-            SOURCE_FACTORIES["book_a"] = rigged
-            try:
+            with rigged_source("book_a", rigged):
                 note = _replay_note(store, result.run_id)
-            finally:
-                if saved is None:
-                    SOURCE_FACTORIES.pop("book_a", None)
-                else:
-                    SOURCE_FACTORIES["book_a"] = saved
         assert note == "FAIL (1)", note
 
 

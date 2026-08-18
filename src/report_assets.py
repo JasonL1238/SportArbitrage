@@ -34,16 +34,12 @@ CSS = """
   --ink-2:       #b5b5ae;
   --muted:       #8a8a82;
   --accent:      #7aa3c9;
-  --accent-soft: #1e2a33;
   --up:          #5cb88a;
   --down:        #e07a70;
   --warn:        #d0b45a;
   --warn-soft:   #2a2618;
-  --bad-soft:    #2a1c1a;
-  --good-soft:   #1a2620;
   --best:        #5a4e22;
   --best-ink:    #f5edd0;
-  --best-soft:   #2e2914;
 
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
   --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -57,10 +53,10 @@ CSS = """
   color-scheme: light;
   --ground: #f7f7f5; --surface: #ffffff; --surface-2: #f1f1ee;
   --line: #dddcd6; --line-soft: #ebeae4; --ink: #1c1c1a; --ink-2: #4a4a45;
-  --muted: #6e6e67; --accent: #2f5d8c; --accent-soft: #eef3f8;
+  --muted: #6e6e67; --accent: #2f5d8c;
   --up: #1f6b45; --down: #a33a30; --warn: #8a6a14;
-  --warn-soft: #f7f1de; --bad-soft: #f8ecea; --good-soft: #e8f3ec;
-  --best: #f0e2a8; --best-ink: #3a3208; --best-soft: #faf4d8;
+  --warn-soft: #f7f1de;
+  --best: #f0e2a8; --best-ink: #3a3208;
 }
 :root[data-theme="dark"] {
   color-scheme: dark;
@@ -191,7 +187,6 @@ select, input[type="search"], input[type="text"] {
   margin: 0 0 12px;
 }
 
-.campaign-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 .campaign-table th {
   text-align: left; padding: 6px 10px; white-space: nowrap;
   font: 500 10px/1.3 var(--mono); text-transform: uppercase;
@@ -370,7 +365,6 @@ tbody tr.go:focus-visible { outline: 2px solid var(--accent); outline-offset: -2
   font: 400 12px/1.35 var(--sans); color: var(--ink-2);
 }
 .arb-kpis strong { color: var(--ink); font-family: var(--mono); font-variant-numeric: tabular-nums; }
-.arb-legs { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 .arb-legs th {
   text-align: left; font: 500 11px/1.2 var(--sans);
   color: var(--muted); padding: 0 10px 5px 0;
@@ -415,7 +409,6 @@ tbody tr.go:focus-visible { outline: 2px solid var(--accent); outline-offset: -2
 .bl-drawer { margin-top: 10px; padding: 10px; border: 1px dashed var(--line);
   border-radius: var(--radius); background: var(--surface-2); }
 .bl-drawer[hidden] { display: none; }
-.bl-drawer .bl-legs { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 .bl-drawer .bl-legs td { padding: 4px 8px 4px 0; border-bottom: 1px solid var(--line-soft); }
 .bl-drawer .bl-legs td.num { text-align: right; font-family: var(--mono); }
 
@@ -445,7 +438,6 @@ tbody tr.go:focus-visible { outline: 2px solid var(--accent); outline-offset: -2
   font: 400 12px/1.45 var(--sans); color: var(--ink-2); }
 .bl-slip .bl-kpis strong { color: var(--ink); font-family: var(--mono);
   font-variant-numeric: tabular-nums; }
-.bl-slip table.bl-legs { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 .bl-slip table.bl-legs th {
   text-align: left; font: 500 10.5px/1.2 var(--sans); color: var(--muted);
   text-transform: uppercase; letter-spacing: 0.04em;
@@ -473,6 +465,7 @@ tbody tr.go:focus-visible { outline: 2px solid var(--accent); outline-offset: -2
 .bl-books { display: flex; flex-wrap: wrap; gap: 6px 14px; font: 400 12px/1.5 var(--sans);
   color: var(--ink-2); }
 .bl-books span { display: inline-flex; gap: 6px; align-items: baseline; }
+.bl-books > span.picked { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
 .bl-books b { font-family: var(--mono); color: var(--ink); font-weight: 600; }
 
 .card {
@@ -670,6 +663,10 @@ td.wrap { white-space: normal; min-width: 22ch; }
   font: 500 11px/1.3 var(--sans);
   color: var(--muted); border-bottom: 1px solid var(--line); padding: 8px 8px;
 }
+/* The sportsbook picker's columns, led and marked — the same underline the
+   market tabs use for the active pick. */
+.oj-board th.book.picked, .oj-board td.book.picked { background: var(--surface-2); }
+.oj-board th.book.picked { color: var(--ink); box-shadow: inset 0 -2px 0 var(--ink); }
 .oj-board th.book, .oj-board td.book {
   text-align: center; min-width: 68px; border-left: 1px solid var(--line-soft);
 }
@@ -740,6 +737,9 @@ td.wrap { white-space: normal; min-width: 22ch; }
   color: inherit; text-decoration: none;
 }
 .src:hover { border-color: var(--muted); background: var(--surface-2); }
+/* The picked book's own cards, marked rather than the rest being hidden —
+   Books deliberately lists every venue whatever the sportsbook picker says. */
+.src.picked { border-left: 3px solid var(--ink); padding-left: 10px; }
 .src-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
 .src-top b { font: 600 13.5px/1.25 var(--sans); }
 .src-top code { display: block; font: 400 10.5px/1.45 var(--mono); color: var(--muted); word-break: break-all; }
@@ -880,6 +880,12 @@ BODY = """
       <label for="sport-pick">Sport</label>
       <select id="sport-pick"></select>
       <span class="rail-foot" id="sport-meta" style="margin:0"></span>
+    </div>
+
+    <div class="rail-block">
+      <label for="book-pick">Sportsbook</label>
+      <select id="book-pick" aria-label="Narrow the page to one sportsbook"></select>
+      <span class="rail-foot" id="book-meta" style="margin:0"></span>
     </div>
 
     <div class="rail-block">
@@ -1275,6 +1281,7 @@ BODY = """
         <p><b>click a card</b> to open that venue on its own — what it published, what it
         skipped, and every page saved from it.</p>
       </div>
+      <p class="note" id="sources-note"></p>
       <div class="sources" id="source-cards"></div>
       <div class="card">
         <div class="card-head">
@@ -1731,6 +1738,32 @@ const feedKind = (key) => (isRepublished(key) ? 'republished' : 'first');
  *  quotes both sides itself, so its two sides summing below 1.0 means the rows are
  *  mispaired, not that it is paying out more than it takes. */
 const orderDriven = (key) => Boolean(sourceInfo(key).order_driven);
+/** Which counterparty a feed reads — `draftkings` for all three DraftKings
+ *  feeds, `''` for a consensus column that names no venue at all.
+ *
+ *  Read off the payload's `brand`, which the server sets from
+ *  `betlinks.book_for` — the same fold that decides where a bet link points —
+ *  so the sportsbook picker and the bet slip cannot disagree about which
+ *  company a row belongs to. Never derived from the `an_`/`vi_` spelling of
+ *  the key, for the same reason `isRepublished` refuses the prefix. */
+const brandOf = (key) => sourceInfo(key).brand || '';
+const BRAND_NAME = new Map((DATA.sources || [])
+  .map((s) => [s.brand || s.key, s.brand_label || s.label || s.key]));
+const brandLabel = (b) => BRAND_NAME.get(b) || b;
+/** The one place the sportsbook picker's comparison is spelled. Every panel
+ *  asks this rather than comparing `brandOf(x)` with the picked brand itself,
+ *  so the filter cannot mean different things on different tabs. */
+const keepBrand = (key) => !currentBrand || brandOf(key) === currentBrand;
+/** Which counterparty a hand-typed ledger book belongs to. Exact arms only: a
+ *  registered source key folds to its brand; any other string is its own
+ *  bucket, shown verbatim (a string that happens to be a brand key IS that
+ *  brand's bucket). Never a guess — no lowercasing, no prefixes, no substring
+ *  match — because the ledger records real money, and "DK app" silently
+ *  becoming DraftKings would re-attribute profit to the wrong book. */
+const ledgerBrand = (name) => brandOf(name) || String(name || '');
+/** The picker's comparison for the ledger's key space — `keepBrand`'s third
+ *  twin, spelled once so three key spaces cannot drift into three meanings. */
+const keepLedgerBook = (name) => !currentBrand || ledgerBrand(name) === currentBrand;
 
 /*  The price after the venue's cut — what you are actually paid.
  *
@@ -1856,6 +1889,10 @@ function marketOf(key, sport) {
 }
 const periodOf = (key) => PERIODS[key] || { plain: txt(key).replace(/_/g, ' '), term: key };
 const label = (v) => txt(v).replace(/_/g, ' ');
+/* A skip reason as the reader sees it: the two panels with a skips table
+   spelled this chain inline, so a new prefix had to be added in both. */
+const skipReasonLabel = (reason) =>
+  String(reason).replace(/^criterion:/, '').replace(/^matchup_type:/, '').replace(/_/g, ' ');
 
 // Participants are addressed by the identity the pipeline resolved — "MLB-CIN",
 // "TENNIS-humbertugo" — not by the book's spelling, because two books spell the
@@ -2221,10 +2258,64 @@ function fillInChunks(host, tbody, rows, make, opts = {}) {
   watchTail();
 }
 
+/* Sort state per table, keyed on the region id rather than the node: `table()`
+   replaces its node outright when a filter empties it, so a node-keyed map
+   would forget the sort exactly while the reader refines filters. One entry
+   per table — the four sortable tables (`findings` and `rejections` opt in
+   through `opts.sort`; `odds-table` and `promo-campaign` call `applySort`
+   themselves) sharing one key/dir pair would sort each other. Not persisted,
+   and not reset on a run, sport or book change: unlike a league or a book, a
+   column cannot be made impossible by a new scope. */
+const SORTS = new Map();
+const sortOf = (id) => SORTS.get(id) || { key: null, dir: 1 };
+
+/** Rows in the table's remembered order — the comparator `renderOdds` carried
+ *  when it was the page's only sortable table. */
+function applySort(id, columns, rows) {
+  const state = sortOf(id);
+  if (!state.key) return rows;
+  const col = columns.find((c) => c && c.key === state.key && c.sort);
+  if (!col) return rows;
+  return rows.slice().sort((a, b) => {
+    const x = col.sort(a), y = col.sort(b);
+    return (x < y ? -1 : x > y ? 1 : 0) * state.dir;
+  });
+}
+
+/** Clickable headings on the last header row — the one holding the columns;
+ *  above it sits the band row. Columns without a `sort` extractor are skipped,
+ *  so a heading is never clickable and inert. The handler re-reads `sortOf`
+ *  rather than closing over wire-time state, because `rerender` rebuilds the
+ *  table and this wiring with it. */
+function wireSort(node, columns, id, rerender) {
+  if (!node) return; // table() returns undefined when a filter emptied it
+  node.querySelectorAll('thead tr:last-child th').forEach((th, i) => {
+    const col = columns[i];
+    if (!col || !col.sort) return;
+    th.classList.add('sortable');
+    const state = sortOf(id);
+    th.setAttribute('aria-sort',
+      state.key === col.key ? (state.dir === 1 ? 'ascending' : 'descending') : 'none');
+    th.tabIndex = 0;
+    const activate = () => {
+      const now = sortOf(id);
+      SORTS.set(id, now.key === col.key
+        ? { key: col.key, dir: -now.dir }
+        : { key: col.key, dir: 1 });
+      rerender();
+    };
+    th.addEventListener('click', activate);
+    th.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') activate(); });
+  });
+}
+
 function table(node, columns, rows, opts = {}) {
   // Before anything replaces this node: the control lives beside it and would
   // otherwise outlive it, describing rows that are no longer on screen.
   dropChunkControl(node);
+  // Opt-in sorting: pass `sort` (the table's region id) and `rerender`, and
+  // every column carrying a `sort` extractor becomes a clickable heading.
+  if (opts.sort) rows = applySort(opts.sort, columns, rows);
   if (!rows.length) {
     node.innerHTML = '';
     const box = document.createElement('div');
@@ -2284,6 +2375,7 @@ function table(node, columns, rows, opts = {}) {
   fillInChunks(node, node.querySelector('tbody') || node, rows, makeRow,
     { noun: opts.noun || 'rows' });
   if (opts.go) wireRowLinks(node);
+  if (opts.sort && opts.rerender) wireSort(node, columns, opts.sort, opts.rerender);
   return node;
 }
 
@@ -2368,23 +2460,37 @@ for (const row of Q.rows) {
    rather than about the scrape they happen to be looking at. `localStorage`
    throws on some file:// configurations, so both sides are guarded — a browser
    that refuses storage still gets a working toggle, just not a sticky one. */
-const OFFSHORE_KEY = 'sportarb.showOffshore';
-
-function readStoredOffshore() {
+/* Every `localStorage` read and write on this page goes through these two.
+   Storage throws outright on some file:// configurations and in some private
+   modes, so a browser that refuses it still gets a working page — just not a
+   sticky one. Six hand-written try/catch pairs spelled this same guard before
+   they were folded here, and the newest of them was a copy of the oldest. */
+function storedValue(key, fallback) {
   try {
-    return window.localStorage.getItem(OFFSHORE_KEY) === '1';
+    return window.localStorage.getItem(key) ?? fallback;
   } catch (err) {
-    return false;
+    return fallback;
   }
 }
 
-let showOffshore = readStoredOffshore();
-
-function storeOffshore(on) {
+function storeValue(key, value) {
   try {
-    window.localStorage.setItem(OFFSHORE_KEY, on ? '1' : '0');
-  } catch (err) { /* private mode or file://; the toggle still works this session */ }
+    window.localStorage.setItem(key, value);
+  } catch (err) { /* private mode or file://; the control still works this session */ }
 }
+
+const OFFSHORE_KEY = 'sportarb.showOffshore';
+
+let showOffshore = storedValue(OFFSHORE_KEY, '') === '1';
+
+/* The sportsbook picker's choice — a *brand* key from `brandOf`, '' for every
+   sportsbook. Remembered like the offshore switch, because which books the
+   reader holds accounts at is a fact about the reader; `buildBookPicker`
+   forgets a stored brand this page cannot offer, so a pick made against last
+   month's scrape cannot silently narrow this one forever. */
+const BOOK_KEY = 'sportarb.book';
+
+let currentBrand = storedValue(BOOK_KEY, '');
 
 // '' means every sport.  The filter is applied at the one place the rest of the
 // page reads its rows from, so no section can forget to honour it and show a
@@ -2392,12 +2498,27 @@ function storeOffshore(on) {
 // along here for exactly that reason: the board, the games list, the coverage
 // grid, movement and quality all read this, and a panel that reached past it
 // would quietly disagree with the count in the nav beside it.
+//
+// The sportsbook picker is the third layer, and the split into `sportRows` /
+// `currentRows` is load-bearing: a surface whose *subject* is "compare the
+// books" — the odds board, the coverage grid, the games lists, one game —
+// cannot be narrowed to one book's rows, because a comparison of one thing is
+// not a comparison. Those surfaces read `sportRows()` and narrow *games*
+// through `brandGames` instead, keeping every book's column for the games the
+// picked book prices. Everything else reads `currentRows()` and inherits the
+// brand cut row by row.
 let currentSport = '';
 const rawRunRows = () => rowsByRun.get(currentRunId) || [];
 const runRows = () =>
   showOffshore ? rawRunRows() : rawRunRows().filter((r) => !isUsUnavailable(str(r[COL.source])));
-const currentRows = () =>
+const sportRows = () =>
   currentSport ? runRows().filter((r) => str(r[COL.sport]) === currentSport) : runRows();
+const currentRows = () =>
+  currentBrand ? sportRows().filter((r) => keepBrand(str(r[COL.source]))) : sportRows();
+/** Games the picked book priced, with every other book's column kept. */
+const brandGames = (events) => (currentBrand
+  ? events.filter((e) => [...e.bySource.keys()].some(keepBrand))
+  : events);
 
 function runOptionLabel(r, i) {
   const when = fmtClock(r.started_at);
@@ -2525,6 +2646,77 @@ function buildSportPicker() {
             ? `${chosen.books.length} books but no fixture both priced — nothing to compare`
             : sportGap(chosen).meta))
     : `${offered.filter((e) => e.comparable).length} of ${offered.length} sport(s) comparable across books`;
+}
+
+/** Sportsbooks the page can narrow to: every counterparty this scrape priced,
+ *  every brand with a promo offer, and every book a bet was logged at — one
+ *  control spanning all three, because "what is there at DraftKings?" does not
+ *  care which subsystem answers.
+ *
+ *  The pool reads `runRows()` rather than `currentRows()` for the same reason
+ *  `buildSportPicker` does: two global filters must not strangle each other.
+ *  Consensus feeds fold to no brand and are skipped — a picker offering "Open"
+ *  as a peer of DraftKings would narrow the arbitrage panel by a feed that can
+ *  never be a leg. */
+function buildBookPicker() {
+  const pick = el('book-pick');
+  if (!pick) return;
+  const feedsByBrand = new Map();
+  for (const key of new Set(runRows().map((r) => str(r[COL.source])))) {
+    const b = brandOf(key);
+    if (!b) continue;
+    if (!feedsByBrand.has(b)) feedsByBrand.set(b, []);
+    feedsByBrand.get(b).push(key);
+  }
+  const offered = new Set(feedsByBrand.keys());
+  for (const o of (PROMOS.offers || [])) {
+    const b = promoBrandKey(o.source);
+    if (b) offered.add(b);
+  }
+  for (const slip of betSlips()) {
+    for (const leg of (slip.legs || [])) {
+      if (leg.book) offered.add(ledgerBrand(leg.book));
+    }
+  }
+  // A stored pick this page cannot offer is forgotten, not kept: the choice is
+  // persisted, and a brand picked against last month's scrape must not narrow
+  // every future page invisibly.
+  if (currentBrand && !offered.has(currentBrand)) { currentBrand = ''; storeValue(BOOK_KEY, ''); }
+  const names = [...offered].sort((a, b) => brandLabel(a).localeCompare(brandLabel(b)));
+  pick.innerHTML = ['<option value="">every sportsbook</option>'].concat(
+    names.map((b) => {
+      const feeds = (feedsByBrand.get(b) || []).length;
+      const flag = feeds ? `  — ${feeds} feed${feeds === 1 ? '' : 's'}` : '';
+      return `<option value="${escapeHtml(b)}">${escapeHtml(brandLabel(b))}${flag}</option>`;
+    })
+  ).join('');
+  pick.value = currentBrand;
+  paintBookMeta(feedsByBrand);
+}
+
+/** The rail's line under the sportsbook picker: what the page is narrowed to,
+ *  named feed by feed — scanned from `runRows()`, upstream of its own filter,
+ *  exactly as `paintOffshoreMeta` reads `rawRunRows()`. */
+function paintBookMeta(feedsByBrand) {
+  const node = el('book-meta');
+  if (!node) return;
+  if (!feedsByBrand.size) {
+    node.textContent = 'no prices in this scrape yet';
+    return;
+  }
+  if (!currentBrand) {
+    const feeds = [...feedsByBrand.values()].reduce((n, list) => n + list.length, 0);
+    node.textContent = `${feedsByBrand.size} sportsbook${feedsByBrand.size === 1 ? '' : 's'} in this scrape, across ${feeds} feed${feeds === 1 ? '' : 's'}`;
+    return;
+  }
+  const mine = (feedsByBrand.get(currentBrand) || []).map(book).sort();
+  if (!mine.length) {
+    // A promo- or ledger-only pick: nothing in this scrape's price rows.
+    node.textContent = `${brandLabel(currentBrand)} only · no price feeds in this scrape`;
+    return;
+  }
+  const list = mine.slice(0, 3).join(', ') + (mine.length > 3 ? `, +${mine.length - 3} more` : '');
+  node.textContent = `${brandLabel(currentBrand)} only · ${mine.length} feed${mine.length === 1 ? '' : 's'}: ${list}`;
 }
 
 /* ── panels and routing ──────────────────────────────────────────────────────
@@ -2774,7 +2966,12 @@ function marketGroups(rows) {
  *  cheap enough to repaint on every run and sport change. */
 function renderChrome() {
   const run = runById.get(currentRunId);
-  // Before the early return: the rail line describes the switch, which is on
+  // First, before anything reads the choice: rebuilding the picker forgets a
+  // stored brand this page cannot offer, and renderChrome is the first line of
+  // renderRunScoped — so the impossible pick is cleared before the per-panel
+  // filters rebuild off it and before the nav counts read it.
+  buildBookPicker();
+  // Before the early return: the rail lines describe the controls, which are on
   // screen and meaningful even on a page with no scrape to show yet.
   paintOffshoreMeta();
   if (!run) {
@@ -3157,9 +3354,12 @@ function renderOddsScreen() {
   const host = el('odds-screen');
   const note = el('screen-note');
   const nav = el('nav-screen');
-  const rows = currentRows().filter((r) =>
+  // `sportRows()` + `brandGames`, never the row-narrowed accessor: the board's
+  // subject is the comparison, so the sportsbook picker narrows which *games*
+  // show and keeps every book's column on the games that survive.
+  const rows = sportRows().filter((r) =>
     !currentLeague || str(r[COL.league]) === currentLeague);
-  const events = eventSummaries(rows);
+  const events = brandGames(eventSummaries(rows));
   if (nav) nav.textContent = events.length;
   buildLeaguePicker();
   wireMarketTabs();
@@ -3173,23 +3373,37 @@ function renderOddsScreen() {
         ? 'this scrape has prices, but they are not embedded in this page'
         : 'scrape first to fill the board';
     }
+    const brandEmptied = currentBrand && eventSummaries(rows).length > 0;
     host.innerHTML = thin
       ? `<div class="empty">This scrape's ${(run.quote_count || 0).toLocaleString()} prices are not
          embedded here — only the newest few scrapes carry the board. Rebuild with
          <code>--quote-runs</code> larger, or open <a href="#history">History</a> for an embedded scrape.</div>`
-      : `<div class="empty">No games in the latest scrape. Hit <b>Scrape now</b>.</div>`;
+      : (brandEmptied
+        ? `<div class="empty">${escapeHtml(brandLabel(currentBrand))} priced nothing in this scrape
+           under these filters. Pick another sportsbook in the left sidebar to fill the board.</div>`
+        : `<div class="empty">No games in the latest scrape. Hit <b>Scrape now</b>.</div>`);
     return;
   }
 
-  const sources = [...new Set(rows.map((r) => str(r[COL.source])))].sort();
+  // Columns come from the surviving games' own rows, so a book that priced none
+  // of them gets no empty column; the picked book's feeds lead, the rest keep
+  // their alphabetical order.
+  const sources = [...new Set(events.flatMap((e) => e.rows.map((r) => str(r[COL.source]))))].sort();
+  if (currentBrand) {
+    const rank = (s) => (keepBrand(s) ? 0 : 1);
+    sources.sort((a, b) => rank(a) - rank(b) || (a < b ? -1 : a > b ? 1 : 0));
+  }
   if (note) {
-    note.textContent = `${events.length} game${events.length === 1 ? '' : 's'} · ${
+    note.textContent = `${events.length} game${events.length === 1 ? '' : 's'}${
+      currentBrand ? ` ${brandLabel(currentBrand)} prices` : ''} · ${
       sources.length} feed${sources.length === 1 ? '' : 's'} · ${
-      currentMarket} · American odds · highlight = best on the same line`;
+      currentMarket} · American odds · highlight = best on the same line${
+      currentBrand ? ` · ${brandLabel(currentBrand)} first` : ''}`;
   }
 
   const head = ['<th class="oj-game">Game</th>']
-    .concat(sources.map((s) => `<th class="book">${escapeHtml(book(s))}</th>`))
+    .concat(sources.map((s) => `<th class="book${currentBrand && keepBrand(s) ? ' picked' : ''}">${
+      escapeHtml(book(s))}</th>`))
     .join('');
   const boardRow = (event) => {
     const byBook = boardQuotes(event, currentMarket);
@@ -3230,7 +3444,7 @@ function renderOddsScreen() {
         return `<div class="row"><span class="lbl">${escapeHtml(label)}</span>${
           priceCell(q, bestBySide.get(sel), comparableBySide.get(sel))}</div>`;
       }).join('');
-      return `<td class="book"><div class="oj-side">${stack}</div></td>`;
+      return `<td class="book${currentBrand && keepBrand(src) ? ' picked' : ''}"><div class="oj-side">${stack}</div></td>`;
     }).join('');
     return `<tr data-go="${escapeHtml(href('fixture', event.key))}" tabindex="0">
       <td class="oj-game">
@@ -3246,12 +3460,14 @@ function renderOddsScreen() {
 }
 
 function renderBrowseGames(node, noteNode, events) {
-  events = events || eventSummaries(currentRows());
+  events = events || brandGames(eventSummaries(sportRows()));
   dropChunkControl(node);
   if (!events.length) {
     const run = runById.get(currentRunId);
     const thin = run && (run.quote_count || 0) > 0 && !detailLoaded(currentRunId);
-    const filteredOut = !thin && eventSummaries(currentRows()).length > 0;
+    // Upstream of the sportsbook picker as well as the panel's own filters, so
+    // a brand that emptied the list still reads as "filtered", not "no games".
+    const filteredOut = !thin && eventSummaries(sportRows()).length > 0;
     if (noteNode) {
       noteNode.textContent = thin
         ? 'prices not embedded in this page'
@@ -3261,7 +3477,8 @@ function renderBrowseGames(node, noteNode, events) {
       ? `<div class="empty">This scrape's ${(run.quote_count || 0).toLocaleString()} prices are not
          embedded here. Rebuild with a larger <code>--quote-runs</code>, or pick a newer scrape.</div>`
       : (filteredOut
-        ? `<div class="empty">No games match these filters. Clear the search, league, or book filter above.</div>`
+        ? `<div class="empty">No games match these filters. Clear the search, league, or book filter above${
+            currentBrand ? ', or the sportsbook picker in the left sidebar' : ''}.</div>`
         : `<div class="empty">No games in this scrape yet. Hit <b>Scrape now</b> in the left sidebar, then pick the newest scrape.</div>`);
     return;
   }
@@ -3351,6 +3568,22 @@ function promoBookLabel(key) {
   return k.startsWith('tl_') ? `${base} (via TheLines)` : base;
 }
 
+/** The sportsbook picker's comparison for the promo key space — `keepBrand`'s
+ *  twin, spelled once for the same reason. The promo key space already meets
+ *  the odds side's brand keys (`promoBrandKey('tl_betrivers_kambi')` is
+ *  `betrivers_kambi`, exactly `brandOf`'s key), which is what makes one picker
+ *  able to span both. */
+function keepPromoBrand(key) {
+  return !currentBrand || promoBrandKey(key) === currentBrand;
+}
+
+/** Offers inside the sportsbook picker's scope — the one list the nav badge,
+ *  the panel headline and the browsing list all count, so they cannot drift. */
+function promoOffers() {
+  const offers = PROMOS.offers || [];
+  return currentBrand ? offers.filter((o) => keepPromoBrand(o.source)) : offers;
+}
+
 function promoBrandCoverage(healthRows) {
   const byBrand = new Map();
   for (const h of (healthRows || [])) {
@@ -3372,8 +3605,14 @@ function ensurePromoFilters() {
   const regionSel = el('promo-region');
   if (!kindSel || !sourceSel) return;
   const kinds = new Set((PROMOS.kinds || []).concat((PROMOS.offers || []).map((o) => o.kind)));
-  const sources = new Set((PROMOS.offers || []).map((o) => o.source));
-  for (const h of (PROMOS.health || [])) sources.add(h.source_key);
+  // The book list follows the sportsbook picker, so the two compose: under a
+  // DraftKings pick this select lists DraftKings' own feeds, and a feed left
+  // selected from before cannot silently empty the panel. Health keys join
+  // only when no brand narrows them — a failed feed has no offers to find.
+  const sources = new Set(promoOffers().map((o) => o.source));
+  for (const h of (PROMOS.health || [])) {
+    if (keepPromoBrand(h.source_key)) sources.add(h.source_key);
+  }
   const regions = new Set();
   for (const o of (PROMOS.offers || [])) {
     for (const r of (o.eligible_regions || [])) regions.add(r);
@@ -3600,11 +3839,14 @@ function promoDetailHtml(o) {
    Anything unpriceable this run sinks to an unranked tail rather than being
    dressed up with a number. */
 
-function promoClaimKey(o) { return 'promoClaimed:' + promoOfferKey(o); }
+/* One spelling of the stored key. The reader built it from an offer and the
+   writer pasted the prefix onto a row's `data-campaign-key`; they agreed, and
+   nothing made them. */
+const promoClaimKeyFor = (key) => 'promoClaimed:' + key;
+function promoClaimKey(o) { return promoClaimKeyFor(promoOfferKey(o)); }
 
 function promoIsClaimed(o) {
-  try { return localStorage.getItem(promoClaimKey(o)) === '1'; }
-  catch (err) { return false; }
+  return storedValue(promoClaimKey(o), '') === '1';
 }
 
 function promoCampaignEV(o) {
@@ -3653,9 +3895,31 @@ function renderPromoCampaign(offers) {
     if ((av === null) !== (bv === null)) return av === null ? 1 : -1;
     return (bv || 0) - (av || 0);
   });
+  // Rank over the whole set, then narrow which ranked rows render: spending
+  // order is a question about every offer, so under the sportsbook picker #4
+  // stays #4 — renumbering a filtered row to #1 would assert it is the best
+  // offer available, which it is not.
+  rows.forEach((r, index) => {
+    r.rank = r.claimed || r.value === null ? null : index + 1;
+  });
+  const shown = currentBrand
+    ? rows.filter((r) => keepPromoBrand(r.o.source))
+    : rows;
+  // Positional, aligned with the handwritten <thead> below — this renderer
+  // shadows the shared `table` helper with its own node, so it wires headings
+  // through `wireSort` directly. Only Book and EV sort; a click reorders the
+  // display while the campaign's own ranking above stays what it was.
+  const campaignColumns = [
+    null,
+    { key: 'book', sort: (r) => promoBookLabel(r.o.source).toLowerCase() },
+    null, null, null,
+    { key: 'ev', sort: (r) => (r.value ? r.value.ev : -Infinity) },
+    null, null, null, null,
+  ];
+  const ordered = applySort('promo-campaign', campaignColumns, shown);
   const soon = Date.now() + 7 * 24 * 3600 * 1000;
   const runState = (PROMOS.run && PROMOS.run.jurisdiction ? String(PROMOS.run.jurisdiction) : '').toUpperCase();
-  const body = rows.map(({ o, entry, value, claimed }, index) => {
+  const body = ordered.map(({ o, entry, value, claimed, rank }) => {
     const key = promoOfferKey(o);
     const regions = (o.eligible_regions || []);
     const states = regions.length ? regions.slice(0, 4).join(' ') + (regions.length > 4 ? '…' : '') : '—';
@@ -3675,7 +3939,7 @@ function renderPromoCampaign(offers) {
       : '<span class="dim">—</span>';
     const confirmed = o.state_confirmed || !runState ? '' : ' <span class="pill warn">?</span>';
     return `<tr class="${claimed ? 'is-claimed' : ''}" data-campaign-key="${escapeHtml(key)}">
-      <td class="num dim">${claimed || value === null ? '' : index + 1}</td>
+      <td class="num dim">${rank === null ? '' : rank}</td>
       <td>${escapeHtml(promoBookLabel(o.source))}${confirmed}</td>
       <td class="dim">${escapeHtml(states)}</td>
       <td>${escapeHtml((o.summary || o.title).slice(0, 60))}</td>
@@ -3687,23 +3951,30 @@ function renderPromoCampaign(offers) {
       <td class="claim-cell"><input type="checkbox" aria-label="claimed" ${claimed ? 'checked' : ''}/></td>
     </tr>`;
   }).join('');
+  const emptyBody = shown.length ? '' : `<tr><td colspan="10" class="dim">${
+    currentBrand && rows.length
+      ? `No ${escapeHtml(brandLabel(currentBrand))} offers in this promo scrape.`
+      : 'No offers in this promo scrape.'}</td></tr>`;
   table.innerHTML = `<thead><tr>
       <th>#</th><th>Book</th><th>States</th><th>Offer</th><th>Strategy</th>
       <th>EV</th><th>Qual cost</th><th>Conv</th><th>Ends</th><th>Done</th>
-    </tr></thead><tbody>${body}</tbody>`;
+    </tr></thead><tbody>${body || emptyBody}</tbody>`;
   if (note) {
-    const ranked = rows.filter((r) => !r.claimed && r.value !== null).length;
-    const claimed = rows.filter((r) => r.claimed).length;
-    note.textContent = `${ranked} priceable · ${claimed} done · checkbox is per-browser`;
+    const ranked = shown.filter((r) => !r.claimed && r.value !== null).length;
+    const claimed = shown.filter((r) => r.claimed).length;
+    const against = currentBrand && rows.length !== shown.length
+      ? ` · ranked against all ${rows.length} offers`
+      : '';
+    note.textContent = `${ranked} priceable · ${claimed} done${against} · checkbox is per-browser · click Book or EV to sort`;
   }
+  wireSort(table, campaignColumns, 'promo-campaign', renderPromos);
   table.querySelectorAll('tbody tr').forEach((tr) => {
     const key = tr.getAttribute('data-campaign-key');
     const box = tr.querySelector('input[type="checkbox"]');
     if (box) {
       box.addEventListener('click', (ev) => {
         ev.stopPropagation();
-        try { localStorage.setItem('promoClaimed:' + key, box.checked ? '1' : '0'); }
-        catch (err) { /* private browsing: the checkbox simply does not stick */ }
+        storeValue(promoClaimKeyFor(key), box.checked ? '1' : '0');
         renderPromos();
       });
     }
@@ -3729,15 +4000,20 @@ function renderPromos() {
   ensurePromoFilters();
   const run = PROMOS.run;
   const offers = PROMOS.offers || [];
+  // The sportsbook picker's cut. The campaign below still receives the whole
+  // set — spending order is ranked against every offer — while the counts, the
+  // browsing list and the nav badge describe what the reader is narrowed to.
+  const scoped = promoOffers();
   const healthRows = PROMOS.health || [];
   const brands = promoBrandCoverage(healthRows);
 
   if (nav) {
-    nav.textContent = String(offers.length);
+    nav.textContent = String(scoped.length);
   }
   if (summary) {
     summary.textContent = run
-      ? `${offers.length.toLocaleString()} offer${offers.length === 1 ? '' : 's'}`
+      ? `${scoped.length.toLocaleString()} offer${scoped.length === 1 ? '' : 's'}${
+          currentBrand ? ` at ${brandLabel(currentBrand)}` : ''}`
       : 'no scrape yet';
   }
   if (note) {
@@ -3764,19 +4040,21 @@ function renderPromos() {
   }
 
   stats.innerHTML = `
-    <div class="stat"><b>${offers.length.toLocaleString()}</b><span>offers</span></div>
+    <div class="stat"><b>${scoped.length.toLocaleString()}</b><span>offers</span></div>
     <div class="stat"><b>${escapeHtml(fmtClock(run.started_at))}</b><span>scraped</span></div>
     <div class="stat"><b>${brands.ok}/${brands.total || 0}</b><span>brands ok</span></div>`;
 
-  // The campaign ranks every offer, unfiltered: the toolbar narrows the
-  // browsing list below, but spending order is a question about the whole set.
+  // The campaign ranks every offer, always: the toolbar never narrows the
+  // ranking, and the sportsbook picker narrows only which ranked rows the
+  // table shows — a book the reader holds no account at is not somewhere they
+  // can spend, but hiding it must not renumber what remains.
   renderPromoCampaign(offers);
 
   const kindFilter = (el('promo-kind') && el('promo-kind').value) || '';
   const sourceFilter = (el('promo-source') && el('promo-source').value) || '';
   const regionFilter = (el('promo-region') && el('promo-region').value) || '';
   const q = ((el('promo-q') && el('promo-q').value) || '').trim().toLowerCase();
-  const filtered = offers.filter((o) => {
+  const filtered = scoped.filter((o) => {
     if (kindFilter && o.kind !== kindFilter) return false;
     if (sourceFilter && o.source !== sourceFilter) return false;
     if (regionFilter) {
@@ -3811,9 +4089,9 @@ function renderPromos() {
         : (meta.odds_run_id
           ? ` · plans priced from odds run #${meta.odds_run_id}`
           : ''));
-    listNote.textContent = (filtered.length === offers.length
-      ? `${offers.length} total · click a row for usage tips`
-      : `${filtered.length} of ${offers.length} · click a row for usage tips`) + planNote;
+    listNote.textContent = (filtered.length === scoped.length
+      ? `${scoped.length} total · click a row for usage tips`
+      : `${filtered.length} of ${scoped.length} · click a row for usage tips`) + planNote;
   }
 
   if (!filtered.length) {
@@ -3923,8 +4201,12 @@ function offshoreDelta() {
   const bags = DATA.arbs || {};
   const bag = bags[String(currentRunId)] || bags[currentRunId] || null;
   if (!bag || !bag.with_offshore) return '';
+  // The sportsbook picker's clause matches renderArb's, or this invitation
+  // would count positions the panel it invites the reader to is not showing.
   const sportOf = (list) => (list || []).filter((o) =>
-    (!currentSport || o.sport === currentSport) && !o.no_local_leg);
+    (!currentSport || o.sport === currentSport)
+    && (!currentBrand || (o.legs || []).some((leg) => keepBrand(leg.source)))
+    && !o.no_local_leg);
   const here = sportOf(bag.opportunities).length;
   const all = sportOf(bag.with_offshore.opportunities).length;
   if (all === here) return '';
@@ -3966,6 +4248,10 @@ function renderArb() {
 
   const opps = (bag.opportunities || []).filter((o) => {
     if (currentSport && o.sport !== currentSport) return false;
+    // "Has a leg at the picked book", never "entirely at it": an arbitrage
+    // always spans two counterparties, so the whole position is kept — every
+    // leg rendered, origin marks intact — or dropped.
+    if (currentBrand && !(o.legs || []).some((leg) => keepBrand(leg.source))) return false;
     return true;
   });
   // The headline numbers are money claims, so they count only positions with a
@@ -3973,17 +4259,19 @@ function renderArb() {
   // is rendered below with its labels, but calling it "takeable" or adding its
   // profit to "guaranteed $" would make the labels a footnote to a lie.
   const takeable = opps.filter((o) => !o.no_local_leg);
+  const withLeg = currentBrand ? ` with a ${brandLabel(currentBrand)} leg` : '';
   if (nav) nav.textContent = String(takeable.length);
   summary.textContent = takeable.length
-    ? `${takeable.length} takeable · ${bag.comparable_group_count} cross-book markets`
-    : `none takeable · ${bag.comparable_group_count} cross-book markets checked`;
+    ? `${takeable.length} takeable${withLeg} · ${bag.comparable_group_count} cross-book markets`
+    : `none takeable${withLeg} · ${bag.comparable_group_count} cross-book markets checked`;
   if (note) {
     // The delta is the answer to "am I leaving money on the table by staying
     // US-only", and it is worth saying whether the switch is on or off — one
     // way it warns, the other way it invites.
     const delta = offshoreDelta();
     const base = takeable.length
-      ? `stakes sized to $${Number(bag.stake || 100).toFixed(0)} total · sport filter applies`
+      ? `stakes sized to $${Number(bag.stake || 100).toFixed(0)} total · sport filter applies${
+          currentBrand ? ` · ${brandLabel(currentBrand)} legs only` : ''}`
       : (opps.length
         ? "nothing takeable from this jurisdiction — the positions below are somewhere else's prices"
         // "no edge today" is a claim about prices and needs something to have
@@ -4031,15 +4319,23 @@ function renderArb() {
   // total cannot silently disagree.
   const flagged = opps.filter((o) => o.no_local_leg).length;
   const flaggedHidden = Number(bag.non_local_flagged || 0) - flagged;
+  // Which reader-side filter is doing the hiding, named. The whole-run total
+  // (`bag.non_local_flagged`, composed in Python) is never recomputed here, so
+  // narrowing the board can only move flagged positions into `flaggedHidden` —
+  // the page cannot under-report unreachability, and this sentence says where
+  // the difference went.
+  const narrowedBy = [currentSport ? 'sport' : '', currentBrand ? 'book' : '']
+    .filter(Boolean).join(' and ');
   const flaggedNote = flagged
     ? `<div class="arb-empty">${flagged} ${flagged === 1 ? 'position has' : 'positions have'}
        no leg at a venue you can reach from this jurisdiction — no licence here and
        no nationwide US access. They are shown below with labels: informational,
        somewhere else's prices, not an edge you can take from here.${
-         flaggedHidden > 0 ? ` (${flaggedHidden} more under other sports.)` : ''}</div>`
-    : (flaggedHidden > 0
+         flaggedHidden > 0 ? ` (${flaggedHidden} more ${
+           narrowedBy ? `outside the ${narrowedBy} filter` : 'in the whole scrape'}.)` : ''}</div>`
+    : (flaggedHidden > 0 && narrowedBy
       ? `<div class="arb-empty">${flaggedHidden} flagged position(s) with no reachable leg
-         are hidden by the sport filter.</div>`
+         are hidden by the ${narrowedBy} filter.</div>`
       : '');
 
   if (!opps.length) {
@@ -4060,6 +4356,7 @@ function renderArb() {
     const offshoreWouldHelp =
       !showOffshore && ((bag.with_offshore || {}).comparable_group_count || 0) > checked;
     const sportName = currentSport ? escapeHtml(sportLabel(currentSport)) : '';
+    const brandName = currentBrand ? escapeHtml(brandLabel(currentBrand)) : '';
     list.innerHTML = flaggedNote + (checked === 0
       ? `<div class="arb-empty">Nothing was compared in this scrape.
         Arbitrage needs one market priced at two venues you can bet at, at the same
@@ -4067,14 +4364,20 @@ function renderArb() {
         not evidence that the board is tight.${
           offshoreWouldHelp ? ` Books you can't bet from the US are excluded; turn them on to
           see the comparison as context.` : ''}</div>`
-      : currentSport
-        ? `<div class="arb-empty">No takeable arbitrage in ${sportName}.
-          The detector looked at ${checked} cross-book markets across the whole scrape;
-          how many of those were ${sportName} is not broken out, so this says nothing
-          about how tight that board is. The refusals below cover every sport.</div>`
-        : `<div class="arb-empty">No takeable arbitrage in this scrape.
-          The detector looked at ${checked} cross-book markets and refused the
-          rest for the reasons below — that is a clean board, not a missing feature.</div>`);
+      : currentBrand
+        ? `<div class="arb-empty">No takeable arbitrage has a ${brandName} leg${
+            sportName ? ` in ${sportName}` : ''} in this scrape.
+          An arbitrage always needs two books, so this asks which positions you could
+          place part of at ${brandName} — not which are entirely there. The refusals
+          below cover every book.</div>`
+        : currentSport
+          ? `<div class="arb-empty">No takeable arbitrage in ${sportName}.
+            The detector looked at ${checked} cross-book markets across the whole scrape;
+            how many of those were ${sportName} is not broken out, so this says nothing
+            about how tight that board is. The refusals below cover every sport.</div>`
+          : `<div class="arb-empty">No takeable arbitrage in this scrape.
+            The detector looked at ${checked} cross-book markets and refused the
+            rest for the reasons below — that is a clean board, not a missing feature.</div>`);
   } else {
     list.innerHTML = flaggedNote + opps.map((o, i) => arbCard(o, i)).join('');
   }
@@ -4319,6 +4622,15 @@ function renderBets() {
   const nav = el('nav-bets');
   const summary = betSummary();
   const slips = betSlips();
+  // The sportsbook picker narrows which *slips* are listed — a slip with at
+  // least one leg at the picked book, folded through `ledgerBrand`, exact arms
+  // only. The nav badge, the bankroll strip and the per-book row stay whole:
+  // `betSummary()` is settlement arithmetic computed in Python, the ledger is
+  // a record of what was placed rather than a view of a scrape, and re-deriving
+  // money figures client-side is the failure the movement table already taught.
+  const shown = currentBrand
+    ? slips.filter((slip) => (slip.legs || []).some((leg) => keepLedgerBook(leg.book)))
+    : slips;
   if (nav) nav.textContent = slips.length ? String(slips.length) : '';
 
   const note = el('bets-summary');
@@ -4350,27 +4662,39 @@ function renderBets() {
 
   const listNote = el('bets-list-note');
   if (listNote) {
-    listNote.textContent = BETS_WRITABLE
+    const narrowed = currentBrand && slips.length
+      ? ` · ${shown.length} of ${slips.length} position${slips.length === 1 ? '' : 's'} ${
+          shown.length === 1 ? 'has' : 'have'} a ${brandLabel(currentBrand)} leg`
+      : '';
+    listNote.textContent = (BETS_WRITABLE
       ? 'newest first · change a stake, price or result and it saves'
-      : 'newest first · view only — start with --serve to edit';
+      : 'newest first · view only — start with --serve to edit') + narrowed;
   }
 
   const list = el('bets-list');
   if (list) {
-    list.innerHTML = slips.length
-      ? slips.map((slip) => slipCard(slip)).join('')
-      : `<div class="arb-empty">No bets logged yet. The quickest way in is the
-        <a href="#arb">Arbitrage</a> panel — every card there has a
-        <b>Log this bet</b> button that carries the books, prices and stakes across.
-        ${BETS_WRITABLE ? '' : '<br/>This page was opened from a file, so the ledger is read-only. Start it with <code>python -m src.report --serve 8765 --open</code> to log bets.'}</div>`;
+    list.innerHTML = shown.length
+      ? shown.map((slip) => slipCard(slip)).join('')
+      : (currentBrand && slips.length
+        ? `<div class="arb-empty">No logged bets have a ${escapeHtml(brandLabel(currentBrand))} leg.
+          The ledger records what you typed, so a bet logged as "DK app" sits under its own
+          name — pick it in the sidebar, or clear the sportsbook picker to see every position.</div>`
+        : `<div class="arb-empty">No bets logged yet. The quickest way in is the
+          <a href="#arb">Arbitrage</a> panel — every card there has a
+          <b>Log this bet</b> button that carries the books, prices and stakes across.
+          ${BETS_WRITABLE ? '' : '<br/>This page was opened from a file, so the ledger is read-only. Start it with <code>python -m src.report --serve 8765 --open</code> to log bets.'}</div>`);
   }
 
   const books = el('bets-books');
   if (books) {
     const rows = summary.by_book || [];
+    // Whole, deliberately, with the picked book's row marked: this strip is the
+    // per-book ledger total, and hiding a row would make it disagree with the
+    // bankroll figures above it.
     books.innerHTML = rows.length
       ? rows.map((row) =>
-        `<span>${escapeHtml(book(row.book))} <b>${escapeHtml(usdSigned(row.profit))}</b>`
+        `<span${currentBrand && keepLedgerBook(row.book) ? ' class="picked"' : ''}>${
+          escapeHtml(book(row.book))} <b>${escapeHtml(usdSigned(row.profit))}</b>`
         + ` <span class="dim">${row.bets} bet${row.bets === 1 ? '' : 's'},`
         + ` ${escapeHtml(usd(row.staked))} staked`
         + `${row.pending ? `, ${escapeHtml(usd(row.open))} open` : ''}</span></span>`
@@ -4916,6 +5240,20 @@ function scopesFailedOf(h) {
 
 function renderSources() {
   const run = runById.get(currentRunId);
+  // Books is the one panel the sportsbook picker does not narrow, and this
+  // says so where the reader is looking. A venue that failed produced no rows
+  // at all, so a row-based filter would erase exactly the venues this panel
+  // exists to report — the picked book's cards are marked instead of the rest
+  // being hidden. Written in both states: the region must never render empty.
+  const sourcesNote = el('sources-note');
+  if (sourcesNote) {
+    sourcesNote.textContent = currentBrand
+      ? 'Every venue that answered this scrape. The sportsbook picker does not hide any of '
+        + 'them: a venue you filtered out still answered, and hiding it here would make this '
+        + `page's health count disagree with the scrape it describes. ${
+          brandLabel(currentBrand)}'s own feeds are marked.`
+      : 'Every venue that answered this scrape.';
+  }
   if (!run) {
     el('nav-sources').textContent = '';
     el('source-cards').innerHTML = '<div class="empty">No scrapes yet.</div>';
@@ -4990,7 +5328,8 @@ function renderSources() {
             ? ' — its prices are being included anyway, so a position using it cannot be placed.'
             : " — its prices are excluded from the board and from arbitrage. Turn on “Include books you can't bet from the US” to see them."}</p>`
       : '';
-    return `<a class="src${offshore ? ' is-us-off' : ''}" href="${escapeHtml(href('book', src.key))}">
+    return `<a class="src${offshore ? ' is-us-off' : ''}${
+      currentBrand && keepBrand(src.key) ? ' picked' : ''}" href="${escapeHtml(href('book', src.key))}">
       <div class="src-top"><div><b>${escapeHtml(src.label)}</b>${offshoreMark}<code>${escapeHtml(src.host)}</code></div>${kindPill}${pill}</div>
       <p>${escapeHtml(src.what)}</p>
       ${offshoreNote}
@@ -5005,7 +5344,7 @@ function renderSources() {
     .sort((a, b) => b.count - a.count);
   table(el('skips'), [
     { label: 'Venue', cell: (r) => cell(book(r.source)) },
-    { label: 'What it was', cell: (r) => cell(r.reason.replace(/^criterion:/, '').replace(/^matchup_type:/, '').replace(/_/g, ' ')) },
+    { label: 'What it was', cell: (r) => cell(skipReasonLabel(r.reason)) },
     { label: 'How many', num: true, cell: (r) => cell(r.count.toLocaleString()) },
     { label: 'Why it was left alone', cell: (r) => cell(skipNote(r.reason), 'dim wrap') },
   ], skips, { empty: detailLoaded(currentRunId)
@@ -5055,14 +5394,16 @@ function eventSummaries(rows) {
 function feedFilteredRows() {
   const node = el('events-feed');
   const want = (node && node.value) || '';
-  const rows = currentRows();
+  // `sportRows()`: the Games tab compares the books, so the sportsbook picker
+  // narrows its *games* (in `filteredGameEvents`) and never its rows.
+  const rows = sportRows();
   if (!want) return rows;
   return rows.filter((r) => feedKind(str(r[COL.source])) === want);
 }
 
 /** Games on the Games tab after search / league / feed / book filters. */
 function filteredGameEvents() {
-  const all = eventSummaries(feedFilteredRows());
+  const all = brandGames(eventSummaries(feedFilteredRows()));
   const qNode = el('events-q');
   const bookNode = el('events-book');
   const q = ((qNode && qNode.value) || '').trim().toLowerCase();
@@ -5095,9 +5436,13 @@ function buildEventsFilters() {
 }
 
 function renderEvents() {
-  const rows = currentRows();
+  // `sportRows()` + `brandGames`: the coverage grid's columns are the books, so
+  // the sportsbook picker narrows which games are listed and keeps every
+  // column — a one-column heat matrix of one book against itself answers
+  // nothing.
+  const rows = sportRows();
   buildEventsFilters();
-  const all = eventSummaries(rows);
+  const all = brandGames(eventSummaries(rows));
   const events = filteredGameEvents();
   el('nav-events').textContent = events.length;
   const note = el('events-filter-note');
@@ -5163,7 +5508,9 @@ function renderEvents() {
 }
 
 function selectEvent(key) {
-  const events = eventSummaries(currentRows());
+  // One game across every book: the picker narrows which games exist, and the
+  // fixture keeps every book's price for a game that does.
+  const events = brandGames(eventSummaries(sportRows()));
   selectedEvent = key;
   // The `shownChild` tag for this panel is set by showCurrentPanel, the only caller.
   // A second caller would have to set it too, or showCurrentPanel's dedupe would
@@ -5669,7 +6016,12 @@ function renderBook(key) {
   const note = sourceInfo(key);
   const health = (run.sources || []).find((h) => h.key === key);
 
-  if (!note && !health) {
+  // `sourceInfo` ends `|| {}`, so `note` is never falsy and this arm was
+  // unreachable: with no venue to show, the panel fell through and wrote
+  // `book(null)` — which is `null` — into its own headline, so a reader arriving
+  // at #book on a run with no per-venue health rows got a blank title where this
+  // sentence belongs. Ask what the arm was always asking: is there a venue.
+  if (!key || (!note.label && !health)) {
     el('book-title').textContent = 'Pick a venue';
     el('book-what').textContent = 'Open “Where the prices come from” and click a card.';
     el('book-host').textContent = '';
@@ -5682,7 +6034,7 @@ function renderBook(key) {
     return;
   }
 
-  el('book-title').textContent = (note && note.label) || book(key);
+  el('book-title').textContent = note.label || book(key);
   el('book-what').textContent = [
     (note && note.what) || '',
     note && note.commission ? `Commission: ${note.commission}.` : '',
@@ -5715,8 +6067,14 @@ function renderBook(key) {
     : '<span class="pill flat">nothing recorded for this collection</span>')
     + (routeBadges ? ' ' + routeBadges : '');
 
-  const mine = currentRows().filter((r) => str(r[COL.source]) === key);
-  // `mine` is empty; this works out which of `currentRows`' two filters emptied
+  // `sportRows()`, never the row-narrowed accessor: this page's whole subject
+  // is the venue in its heading, so the sportsbook picker naming a *different*
+  // venue must not empty it — every other book's page would otherwise claim
+  // "stored no prices" about a book that stored plenty, and the diagnostic
+  // below, which only knows the offshore and sport filters, would blame the
+  // wrong one.
+  const mine = sportRows().filter((r) => str(r[COL.source]) === key);
+  // `mine` is empty; this works out which of the row filters emptied
   // it, by asking the unfiltered rows the same question. Counting rows rather
   // than reading `health.quote_count` is the point: the health figure is
   // all-sports and all-books, so a book whose baseball rows exist but whose
@@ -5809,7 +6167,7 @@ function renderBook(key) {
     : detailLoaded(currentRunId) ? 'nothing skipped'
     : `${((health && health.skipped_count) || 0).toLocaleString()} recorded — breakdown not in this page`;
   table(el('book-skips'), [
-    { label: 'What it was', cell: (r) => cell(r.reason.replace(/^criterion:/, '').replace(/^matchup_type:/, '').replace(/_/g, ' ')) },
+    { label: 'What it was', cell: (r) => cell(skipReasonLabel(r.reason)) },
     { label: 'How many', num: true, cell: (r) => cell(r.count.toLocaleString()) },
     { label: 'Why it was left alone', cell: (r) => cell(skipNote(r.reason), 'dim wrap') },
   ], skips, { empty: detailLoaded(currentRunId)
@@ -5846,9 +6204,6 @@ function renderBook(key) {
 }
 
 /* ── all prices ──────────────────────────────────────────────────────────── */
-
-let sortKey = null;
-let sortDir = 1;
 
 function fillSelect(node, values, keepAll, naming) {
   const current = node.value;
@@ -5914,8 +6269,10 @@ function renderOdds() {
 
   const WHAT = 'what the bet is', PAYS = 'what it pays', CAN = 'can you place it';
   const columns = [
+    // Brand first, then feed, so one book's three feeds sit together instead
+    // of scattering to wherever `an_`/`vi_` lands alphabetically.
     { band: WHAT, key: 'source', label: 'Sportsbook', cell: (r) => cell(book(str(r[COL.source]))),
-      sort: (r) => str(r[COL.source]) },
+      sort: (r) => { const k = str(r[COL.source]); return brandOf(k) + '\x1f' + k; } },
     { band: WHAT, key: 'sport', label: 'Sport', cell: (r) => cell(sportLabel(str(r[COL.sport])), 'dim'),
       sort: (r) => str(r[COL.sport]) },
     { band: WHAT, key: 'league', label: 'League',
@@ -5956,15 +6313,10 @@ function renderOdds() {
       sort: (r) => str(r[COL.last_change_at]) || '' },
   ];
 
-  if (sortKey) {
-    const col = columns.find((c) => c.key === sortKey);
-    if (col) {
-      filtered = filtered.slice().sort((a, b) => {
-        const x = col.sort(a), y = col.sort(b);
-        return (x < y ? -1 : x > y ? 1 : 0) * sortDir;
-      });
-    }
-  }
+  // Before the cap, not through table()'s own opt: the sort ranks the whole
+  // filtered set and the cap then shows its top, so "sort by price" surfaces
+  // the best prices rather than reordering whichever 500 happened to show.
+  filtered = applySort('odds-table', columns, filtered);
 
   const cap = 500;
   const shown = filtered.slice(0, cap);
@@ -5996,21 +6348,7 @@ function renderOdds() {
 
   const node = table(el('odds-table'), columns, shown,
     { empty: 'No prices match those filters.', go: (r) => href('bet', betKeyOf(r)) });
-  if (node) {
-    // The last header row is the one holding the columns; above it sits the band row.
-    node.querySelectorAll('thead tr:last-child th').forEach((th, i) => {
-      const col = columns[i];
-      th.classList.add('sortable');
-      th.setAttribute('aria-sort', sortKey === col.key ? (sortDir === 1 ? 'ascending' : 'descending') : 'none');
-      th.tabIndex = 0;
-      const activate = () => {
-        if (sortKey === col.key) sortDir = -sortDir; else { sortKey = col.key; sortDir = 1; }
-        renderOdds();
-      };
-      th.addEventListener('click', activate);
-      th.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') activate(); });
-    });
-  }
+  wireSort(node, columns, 'odds-table', renderOdds);
 }
 
 /* ── price changes ───────────────────────────────────────────────────────── */
@@ -6274,7 +6612,13 @@ function detailLoaded(runId) {
 function renderQuality() {
   const run = runById.get(currentRunId);
   const rows = currentRows();
-  const findings = DATA.findings.filter((f) => f.run_id === currentRunId);
+  // The sportsbook picker applies here — a finding row carries a `source` — but
+  // the sport filter cannot: a finding carries no sport. A run-level or
+  // cross-source finding carries no source either, and those are *kept* under a
+  // brand pick, because a check about the whole run belongs to no book and
+  // dropping it would let a filtered view read as a cleaner scrape.
+  const findings = DATA.findings.filter((f) => f.run_id === currentRunId)
+    .filter((f) => !f.source || keepBrand(f.source));
   // Findings and prices are both embedded only for the newest few runs, while the
   // picker lists many more.  For the rest, "0 problems / 0 impossible prices /
   // nothing flagged" is not a clean bill of health — it is four positive claims
@@ -6363,12 +6707,17 @@ function renderQuality() {
   // The findings cap is shared across every embedded run, so a run can have its
   // prices on the page and its notes cut from it.  "0 problems / nothing flagged"
   // then contradicts the stat strip above, which counts from the run's own row.
+  // Under a brand pick the truncation test is forced off: the run summary has
+  // no per-book breakdown, so a filtered count below the whole-run total says
+  // nothing about embedding, and claiming truncation would be a guess.
   const recordedFindings = run ? (run.error_count || 0) + (run.warning_count || 0) : 0;
-  const findingsShort = findings.length < recordedFindings;
+  const findingsShort = !currentBrand && findings.length < recordedFindings;
   const items = [
     ['problems found', findingsShort ? recordedFindings : findings.length,
       findingsShort ? 'recorded — not embedded in this page'
-        : findings.length ? 'listed below' : 'nothing flagged',
+        : findings.length
+          ? (currentBrand ? `about ${brandLabel(currentBrand)} or the whole run` : 'listed below')
+          : 'nothing flagged',
       findingsShort || findings.length ? 'is-warn' : 'is-good'],
     ['prices tested', rows.length.toLocaleString(), 'teams, times, numbers, duplicates'],
     ['bets fully priced', overrounds.length.toLocaleString(), 'every side present'],
@@ -6399,15 +6748,23 @@ function renderQuality() {
   ).join('');
 
   table(el('findings'), [
-    { label: 'How serious', cell: (f) => html(`<span class="pill ${f.severity === 'error' ? 'bad' : 'warn'}"><i></i>${
+    { key: 'severity', label: 'How serious', sort: (f) => f.severity,
+      cell: (f) => html(`<span class="pill ${f.severity === 'error' ? 'bad' : 'warn'}"><i></i>${
         f.severity === 'error' ? 'problem' : 'worth a look'}</span>`) },
-    { label: 'Check', cell: (f) => cell(label(f.code)) },
-    { label: 'Sportsbook', cell: (f) => cell(f.source ? book(f.source) : '—', 'dim') },
-    { label: 'Fixture', cell: (f) => cell(f.event_key || '—', 'mono dim') },
-    { label: 'What it says', cell: (f) => cell(f.message, 'wrap') },
-  ], findings, { empty: findingsShort
+    { key: 'code', label: 'Check', sort: (f) => f.code, cell: (f) => cell(label(f.code)) },
+    // Brand first, then feed, so one book's mirrors sort beside it.
+    { key: 'source', label: 'Sportsbook',
+      sort: (f) => (f.source ? brandOf(f.source) + '\x1f' + f.source : ''),
+      cell: (f) => cell(f.source ? book(f.source) : '—', 'dim') },
+    { key: 'fixture', label: 'Fixture', sort: (f) => f.event_key || '',
+      cell: (f) => cell(f.event_key || '—', 'mono dim') },
+    { key: 'message', label: 'What it says', sort: (f) => f.message,
+      cell: (f) => cell(f.message, 'wrap') },
+  ], findings, { sort: 'findings', rerender: renderQuality, empty: findingsShort
                    ? `This collection's ${recordedFindings.toLocaleString()} notes are not in this page — the 500 embedded here were used up by other collections. Rebuild with fewer --quote-runs to include them.`
-                   : 'Nothing was flagged in this collection — no problems, nothing worth a look.',
+                   : currentBrand
+                     ? `Nothing at ${brandLabel(currentBrand)} was flagged in this collection. Checks that aren't about one book are still listed.`
+                     : 'Nothing was flagged in this collection — no problems, nothing worth a look.',
                  go: (f) => (f.event_key ? href('fixture', f.event_key) : null) });
 
   const perSource = new Map();
@@ -6436,26 +6793,34 @@ function renderQuality() {
   <p class="note">Each row is a slice of that book's bets: how many of them carried a cut in
   that range. Most sit in one or two buckets — a book prices its whole slate to a house style.</p>`;
 
-  const rejections = DATA.rejections.filter((r) => r.run_id === currentRunId);
+  const rejections = DATA.rejections.filter((r) => r.run_id === currentRunId)
+    .filter((r) => !r.source || keepBrand(r.source));
   // The 500-row cap is shared across every embedded run and the health rows
   // carry each source's true rejection count, so the page can always tell a
   // clean run from one whose rejections were cut — the findings table above
   // makes exactly this check, and this table said "nothing had to be thrown
   // away" about 60 rejections the cap had squeezed out.  (``run`` is the
-  // function-level binding from the top of renderQuality.)
+  // function-level binding from the top of renderQuality.)  The recorded total
+  // follows the sportsbook picker — health rows are per-source, so unlike the
+  // findings tile this figure stays exact rather than guessed under a brand.
   const recordedRejections = run
-    ? run.sources.reduce((total, h) => total + (h.rejection_count || 0), 0) : 0;
+    ? run.sources.filter((h) => keepBrand(h.key))
+        .reduce((total, h) => total + (h.rejection_count || 0), 0) : 0;
   const rejectionsShort = rejections.length < recordedRejections;
-  el('rejections-note').textContent = rejectionsShort && rejections.length
-    ? `${rejections.length.toLocaleString()} of ${recordedRejections.toLocaleString()} rejected rows shown — the rest did not fit this page's 500-row cap. Rebuild with fewer --quote-runs to include them.`
-    : '';
+  el('rejections-note').textContent = (rejectionsShort && rejections.length
+    ? `${rejections.length.toLocaleString()} of ${recordedRejections.toLocaleString()} rejected rows shown — the rest did not fit this page's 500-row cap. Rebuild with fewer --quote-runs to include them. `
+    : '') + 'Click any column heading to sort.';
   table(el('rejections'), [
-    { label: 'Venue', cell: (r) => cell(book(r.source)) },
-    { label: 'Why', cell: (r) => cell(label(r.reason)) },
-    { label: 'Detail', cell: (r) => cell(r.detail, 'wrap') },
-  ], rejections, { empty: rejectionsShort
+    { key: 'source', label: 'Venue',
+      sort: (r) => (r.source ? brandOf(r.source) + '\x1f' + r.source : ''),
+      cell: (r) => cell(book(r.source)) },
+    { key: 'reason', label: 'Why', sort: (r) => r.reason, cell: (r) => cell(label(r.reason)) },
+    { key: 'detail', label: 'Detail', sort: (r) => r.detail || '', cell: (r) => cell(r.detail, 'wrap') },
+  ], rejections, { sort: 'rejections', rerender: renderQuality, empty: rejectionsShort
       ? `This collection's ${recordedRejections.toLocaleString()} rejected rows are not in this page — the 500 embedded here were used up by other collections. Rebuild with fewer --quote-runs to include them.`
-      : 'Nothing had to be thrown away in this collection.',
+      : currentBrand
+        ? `Nothing from ${brandLabel(currentBrand)} had to be thrown away in this collection.`
+        : 'Nothing had to be thrown away in this collection.',
   });
 }
 
@@ -6731,22 +7096,29 @@ function renderNavCounts() {
     : (!bag ? '—'
       : String((bag.opportunities || [])
         .filter((o) => !currentSport || o.sport === currentSport)
+        .filter((o) => !currentBrand || (o.legs || []).some((leg) => keepBrand(leg.source)))
         .filter((o) => !o.no_local_leg).length)));
   // Unconditional, as renderPromos has it: with no promo scrape the honest count
-  // is 0, and a blank would read as "not counted yet".
-  setCount('nav-promos', String((PROMOS.offers || []).length));
-  const findings = DATA.findings.filter((f) => f.run_id === currentRunId);
+  // is 0, and a blank would read as "not counted yet". `promoOffers()` is the
+  // same list the panel counts, so the badge and the headline cannot drift.
+  setCount('nav-promos', String(promoOffers().length));
+  // The same brand clause as renderQuality's, sourceless findings kept, so the
+  // badge counts exactly what the panel lists.
+  const findings = DATA.findings.filter((f) => f.run_id === currentRunId)
+    .filter((f) => !f.source || keepBrand(f.source));
   setCount('nav-quality', !runRows().length && !detailLoaded(currentRunId)
     ? '—' : (findings.length ? String(findings.length) : 'clear'));
   setCount('nav-raw', detailLoaded(currentRunId)
     ? DATA.raws.filter((r) => r.run_id === currentRunId).length
     : ((run && run.raw_count) || 0));
 
-  // One row scan shared by the two counts that need one.
-  const rows = currentRows();
-  setCount('nav-odds', rows.length.toLocaleString());
-  setCount('nav-screen', eventSummaries(
-    rows.filter((r) => !currentLeague || str(r[COL.league]) === currentLeague)).length);
+  // Two scans, because the two counts answer different questions under the
+  // sportsbook picker: All prices counts the picked book's own rows, while the
+  // board counts games — narrowed through `brandGames` exactly as the board is,
+  // so the badge and the panel cannot disagree.
+  setCount('nav-odds', currentRows().length.toLocaleString());
+  setCount('nav-screen', brandGames(eventSummaries(
+    sportRows().filter((r) => !currentLeague || str(r[COL.league]) === currentLeague))).length);
   setCount('nav-events', filteredGameEvents().length);
 
   // Movement is counted separately, and last. It has to join every embedded run's
@@ -6790,7 +7162,7 @@ function defaultBook() {
 }
 function defaultFixture() {
   if (selectedEvent) return selectedEvent;
-  const first = filteredGameEvents()[0] || eventSummaries(currentRows())[0];
+  const first = filteredGameEvents()[0] || brandGames(eventSummaries(sportRows()))[0];
   return first ? first.key : null;
 }
 function defaultBet() {
@@ -6860,9 +7232,27 @@ if (offshoreToggle) {
   offshoreToggle.checked = showOffshore;
   offshoreToggle.addEventListener('change', () => {
     showOffshore = offshoreToggle.checked;
-    storeOffshore(showOffshore);
+    storeValue(OFFSHORE_KEY, showOffshore ? '1' : '0');
     selectedEvent = null;
     buildSportPicker();
+    renderRunScoped();
+  });
+}
+
+/* The sportsbook picker. Global for the same reason as the two above: it
+   changes which rows and games exist on nearly every panel, so the whole
+   reconcile-then-rebuild path runs rather than repainting the panel on screen.
+   The selected game is dropped because a game only this book priced stops
+   existing when the pick changes. The sport list deliberately does not narrow
+   to the picked book's sports — it reads `runRows()`, like this picker's own
+   pool, so the two global filters cannot strangle each other.
+   Guarded: the empty scrape shell does not carry the control. */
+const bookPick = el('book-pick');
+if (bookPick) {
+  bookPick.addEventListener('change', () => {
+    currentBrand = bookPick.value;
+    storeValue(BOOK_KEY, currentBrand || '');
+    selectedEvent = null;
     renderRunScoped();
   });
 }
@@ -6913,16 +7303,13 @@ function selectedScrapeStates() {
 const SCRAPE_STATES_KEY = 'lineshop.scrape.states';
 
 function rememberScrapeStates() {
-  try {
-    window.localStorage.setItem(
-      SCRAPE_STATES_KEY, JSON.stringify(selectedScrapeStates()));
-  } catch (err) { /* private browsing, or a full quota — the picker still works */ }
+  storeValue(SCRAPE_STATES_KEY, JSON.stringify(selectedScrapeStates()));
 }
 
 function rememberedScrapeStates() {
+  const raw = storedValue(SCRAPE_STATES_KEY, '');
+  if (!raw) return null;
   try {
-    const raw = window.localStorage.getItem(SCRAPE_STATES_KEY);
-    if (!raw) return null;
     const parsed = JSON.parse(raw);
     /* An empty remembered array is NOT a choice to scrape nothing — it is what a
        stray click leaves behind, and honouring it would disable the button with
@@ -6972,11 +7359,112 @@ function takeCarriedStateNote() {
   }
 }
 
-function paintScrapeProgress(progress, busy) {
-  const box = el('scrape-progress');
-  const fill = el('scrape-bar-fill');
-  const msg = el('scrape-msg');
-  const meta = el('scrape-meta');
+/* Both scrape buttons drive one state machine: poll a status endpoint, paint a
+   bar, POST a collect endpoint, then either reload or repaint in place. It was
+   written out twice — 292 lines for one machine — and the copies had already
+   drifted apart in ways nothing on the page explains: only the promo half
+   guarded its own nodes before touching them, and only the odds half told the
+   reader when the *other* kind of scrape was holding the lock. Neither
+   difference was a decision.
+
+   What genuinely differs per kind lives in SCRAPE_KINDS below, and nothing
+   else does. The two hooks exist because the tails really are different work:
+   an odds scrape always reloads onto its new snapshot, while a promo scrape
+   may repaint the panel it is already on. */
+const SCRAPE_KINDS = {
+  odds: {
+    kind: 'odds',
+    ids: {
+      btn: 'scrape-btn', status: 'scrape-status', box: 'scrape-progress',
+      fill: 'scrape-bar-fill', msg: 'scrape-msg', meta: 'scrape-meta',
+    },
+    // The requests live here, with literal targets, because
+    // ``test_page_reaches_no_network`` audits every call on the page for a
+    // same-origin ``/api/`` string literal — a target read out of a table is
+    // exactly what it refuses, and rightly: a variable target cannot be
+    // audited at all. Two short thunks per kind is what the fold costs to keep
+    // that guard intact, against the 292 lines it replaces.
+    askStatus: () => fetch('/api/status', { cache: 'no-store' }),
+    postCollect: (payload) => fetch('/api/collect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+    countKey: 'quote_count',
+    countNoun: 'prices',
+    busyText: 'Scraping…',
+    startText: 'Starting scrape…',
+    runningText: 'Scraping in progress…',
+    readyText: 'Ready — scrapes the venues, then reloads this page on the new snapshot.',
+    fileText: 'View only. Run with --serve 8765 --open to scrape from here.',
+    failPrefix: 'Scrape failed: ',
+    // Said only by the odds half, because the odds scrape is the one that
+    // waits: a promo scrape holds the lock and this is where the reader is.
+    // Named, not "anything that is not me" — the sentence claims *which* scrape
+    // is running, so it may only be said about the kind it names. A third kind
+    // added later gets its own entry here or stays unannounced; it does not
+    // inherit this one's wording by default.
+    heldBy: 'promos',
+    heldText: 'Promo scrape running — odds scrape waits until it finishes.',
+    payload: () => scrapeScopePayload(),
+    /* A scrape that ran on a stood-in state says so on the page built FROM it.
+       The success path reloads immediately, so a note written into this line
+       before the reload would flash and vanish — it is carried across instead. */
+    onReady: (status) => {
+      const carried = takeCarriedStateNote();
+      if (carried) status.textContent = carried + ' Ready to scrape again.';
+    },
+    onDone: (body, count, status) => {
+      carryStateNote(body.collect && body.collect.state_note);
+      status.textContent = `Got ${count.toLocaleString()} prices — reloading…`;
+      return { message: `Got ${count.toLocaleString()} prices — reloading…`, reload: true };
+    },
+  },
+  promos: {
+    kind: 'promos',
+    ids: {
+      btn: 'promo-scrape-btn', status: 'promo-scrape-status', box: 'promo-scrape-progress',
+      fill: 'promo-scrape-bar-fill', msg: 'promo-scrape-msg', meta: 'promo-scrape-meta',
+    },
+    askStatus: () => fetch('/api/promos/status', { cache: 'no-store' }),
+    postCollect: (payload) => fetch('/api/promos/collect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+    countKey: 'offer_count',
+    countNoun: 'offers',
+    busyText: 'Scraping promos…',
+    startText: 'Starting promo scrape…',
+    runningText: 'Promo scrape in progress…',
+    readyText: 'Ready — scrapes public bonuses/promos, then reloads this page.',
+    fileText: 'View only. Run with --serve 8765 --open to scrape bonuses here.',
+    failPrefix: 'Promo scrape failed: ',
+    heldBy: '',
+    heldText: '',
+    payload: () => ({ states: selectedScrapeStates() }),
+    onReady: () => {},
+    onDone: (body, count, status) => {
+      if (body.promos) PROMOS = body.promos;
+      status.textContent = `Got ${count.toLocaleString()} promo offer(s)`
+        + (body.reload ? ' — reloading…' : '.');
+      if (body.reload) {
+        return { message: `Got ${count.toLocaleString()} promo offer(s)`, reload: true, hash: '#promos' };
+      }
+      return {
+        message: `Got ${count.toLocaleString()} promo offer(s)`,
+        reload: false,
+        after: () => { renderPromos(); go('#promos'); },
+      };
+    },
+  },
+};
+
+function paintScrape(spec, progress, busy) {
+  const box = el(spec.ids.box);
+  const fill = el(spec.ids.fill);
+  const msg = el(spec.ids.msg);
+  const meta = el(spec.ids.meta);
   if (!box || !fill || !msg || !meta) return;
   if (!busy && !(progress && progress.phase === 'done')) {
     box.classList.remove('on', 'is-indeterminate');
@@ -6996,33 +7484,30 @@ function paintScrapeProgress(progress, busy) {
   } else {
     fill.style.width = '35%';
   }
-  msg.textContent = (progress && progress.message) || (busy ? 'Scraping…' : '');
+  msg.textContent = (progress && progress.message) || (busy ? spec.busyText : '');
   const bits = [];
   if (total > 0) bits.push(`${done}/${total} feeds`);
-  if (progress && progress.quote_count != null) {
-    bits.push(`${Number(progress.quote_count).toLocaleString()} prices`);
-  }
+  const count = progress && progress[spec.countKey];
+  if (count != null) bits.push(`${Number(count).toLocaleString()} ${spec.countNoun}`);
   if (phase && phase !== 'fetching' && phase !== 'fetched') bits.push(phase);
   meta.textContent = bits.join(' · ');
 }
 
-function wireScrapeButton() {
-  const btn = el('scrape-btn');
-  const status = el('scrape-status');
+function wireScrape(spec) {
+  const btn = el(spec.ids.btn);
+  const status = el(spec.ids.status);
+  if (!btn || !status) return;
+  const paint = (progress, busy) => paintScrape(spec, progress, busy);
   const served = typeof location !== 'undefined' && location.protocol === 'http:';
   if (!served) {
     btn.disabled = true;
     btn.classList.add('is-file');
     btn.title = 'Start the dashboard with: python -m src.report --serve 8765 --open';
-    status.textContent = 'View only. Run with --serve 8765 --open to scrape from here.';
+    status.textContent = spec.fileText;
     return;
   }
-  status.textContent = 'Ready — scrapes the venues, then reloads this page on the new snapshot.';
-  /* A scrape that ran on a stood-in state says so on the page built FROM it.
-     The success path reloads immediately, so a note written into this line
-     before the reload would flash and vanish — it is carried across instead. */
-  const carried = takeCarriedStateNote();
-  if (carried) status.textContent = carried + ' Ready to scrape again.';
+  status.textContent = spec.readyText;
+  spec.onReady(status);
 
   let pollTimer = null;
   const stopPoll = () => {
@@ -7035,15 +7520,21 @@ function wireScrapeButton() {
     stopPoll();
     const tick = async () => {
       try {
-        const res = await fetch('/api/status', { cache: 'no-store' });
+        const res = await spec.askStatus();
         const body = await res.json().catch(() => ({}));
-        const mine = !body.busy_kind || body.busy_kind === 'odds';
-        if (mine) paintScrapeProgress(body.progress, !!body.busy && mine);
-        if (body.busy && body.busy_kind === 'odds') {
+        const mine = !body.busy_kind || body.busy_kind === spec.kind;
+        if (mine) paint(body.progress, !!body.busy && mine);
+        if (body.busy && body.busy_kind === spec.kind) {
           btn.disabled = true;
-          status.textContent = 'Scraping in progress…';
-        } else if (body.busy && body.busy_kind === 'promos') {
-          status.textContent = 'Promo scrape running — odds scrape waits until it finishes.';
+          status.textContent = spec.runningText;
+        } else if (body.busy && body.busy_kind === spec.heldBy && spec.heldText) {
+          // The lock-holder must be the kind `heldText` actually names. The fold
+          // first wrote this as a bare `body.busy`, which let an unnamed busy
+          // state ("", null) claim a promo scrape was running — overwriting
+          // whatever the line said, including a failure the reader needs — and
+          // then as `body.busy_kind &&`, which did the same for any third kind
+          // under a sentence that names the second.
+          status.textContent = spec.heldText;
         }
       } catch (_) { /* keep last paint */ }
     };
@@ -7052,218 +7543,69 @@ function wireScrapeButton() {
   };
 
   // Resume the progress UI if this tab opened while a scrape was already running.
-  fetch('/api/status', { cache: 'no-store' })
+  spec.askStatus()
     .then((r) => r.json())
     .then((body) => {
-      if (body && body.busy && body.busy_kind === 'odds') {
+      if (body && body.busy && body.busy_kind === spec.kind) {
         btn.disabled = true;
-        status.textContent = 'Scraping in progress…';
+        status.textContent = spec.runningText;
         startPoll();
       }
     })
     .catch(() => {});
 
-  btn.addEventListener('click', async () => {
-    if (btn.disabled) return;
-    btn.disabled = true;
-    status.textContent = 'Scraping…';
-    paintScrapeProgress({
-      phase: 'starting',
-      message: 'Starting scrape…',
-      done: 0,
-      total: 0,
-      quote_count: 0,
-    }, true);
-    startPoll();
-    try {
-      const res = await fetch('/api/collect', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(scrapeScopePayload()),
-      });
-      const body = await res.json().catch(() => ({}));
-      stopPoll();
-      if (!res.ok || !body.ok) {
-        const err = body.error || res.statusText || res.status;
-        status.textContent = 'Scrape failed: ' + err;
-        paintScrapeProgress({ phase: 'error', message: String(err) }, false);
-        el('scrape-progress').classList.add('on');
-        btn.disabled = false;
-        return;
-      }
-      const quotes = (body.collect && body.collect.quote_count) || 0;
-      carryStateNote(body.collect && body.collect.state_note);
-      status.textContent = `Got ${quotes.toLocaleString()} prices — reloading…`;
-      paintScrapeProgress({
-        phase: 'done',
-        message: `Got ${quotes.toLocaleString()} prices — reloading…`,
-        quote_count: quotes,
-        done: 1,
-        total: 1,
-      }, false);
-      location.reload();
-    } catch (err) {
-      stopPoll();
-      status.textContent = 'Scrape failed: ' + (err && err.message ? err.message : err);
-      paintScrapeProgress({
-        phase: 'error',
-        message: String(err && err.message ? err.message : err),
-      }, false);
-      el('scrape-progress').classList.add('on');
-      btn.disabled = false;
-    }
-  });
-}
-wireScrapeButton();
-
-/* ── promo / bonus scrape from the UI ─────────────────────────────────────── */
-
-function paintPromoScrapeProgress(progress, busy) {
-  const box = el('promo-scrape-progress');
-  const fill = el('promo-scrape-bar-fill');
-  const msg = el('promo-scrape-msg');
-  const meta = el('promo-scrape-meta');
-  if (!box || !fill || !msg || !meta) return;
-  if (!busy && !(progress && progress.phase === 'done')) {
-    box.classList.remove('on', 'is-indeterminate');
-    return;
-  }
-  box.classList.add('on');
-  const done = Number(progress && progress.done) || 0;
-  const total = Number(progress && progress.total) || 0;
-  const phase = (progress && progress.phase) || '';
-  const known = total > 0 && (phase === 'fetching' || phase === 'fetched' || phase === 'starting');
-  box.classList.toggle('is-indeterminate', busy && !known);
-  if (known) {
-    fill.style.width = Math.max(4, Math.min(100, Math.round((done / total) * 100))) + '%';
-  } else if (phase === 'rebuilding' || phase === 'done') {
-    fill.style.width = '100%';
-    box.classList.remove('is-indeterminate');
-  } else {
-    fill.style.width = '35%';
-  }
-  msg.textContent = (progress && progress.message) || (busy ? 'Scraping promos…' : '');
-  const bits = [];
-  if (total > 0) bits.push(`${done}/${total} feeds`);
-  if (progress && progress.offer_count != null) {
-    bits.push(`${Number(progress.offer_count).toLocaleString()} offers`);
-  }
-  if (phase && phase !== 'fetching' && phase !== 'fetched') bits.push(phase);
-  meta.textContent = bits.join(' · ');
-}
-
-function wirePromoScrapeButton() {
-  const btn = el('promo-scrape-btn');
-  const status = el('promo-scrape-status');
-  if (!btn || !status) return;
-  const served = typeof location !== 'undefined' && location.protocol === 'http:';
-  if (!served) {
-    btn.disabled = true;
-    btn.classList.add('is-file');
-    btn.title = 'Start the dashboard with: python -m src.report --serve 8765 --open';
-    status.textContent = 'View only. Run with --serve 8765 --open to scrape bonuses here.';
-    return;
-  }
-  status.textContent = 'Ready — scrapes public bonuses/promos, then reloads this page.';
-
-  let pollTimer = null;
-  const stopPoll = () => {
-    if (pollTimer != null) {
-      clearInterval(pollTimer);
-      pollTimer = null;
-    }
-  };
-  const startPoll = () => {
+  const fail = (err) => {
     stopPoll();
-    const tick = async () => {
-      try {
-        const res = await fetch('/api/promos/status', { cache: 'no-store' });
-        const body = await res.json().catch(() => ({}));
-        const mine = !body.busy_kind || body.busy_kind === 'promos';
-        if (mine) paintPromoScrapeProgress(body.progress, !!body.busy && mine);
-        if (body.busy && body.busy_kind === 'promos') {
-          btn.disabled = true;
-          status.textContent = 'Promo scrape in progress…';
-        }
-      } catch (_) { /* keep last paint */ }
-    };
-    tick();
-    pollTimer = setInterval(tick, 500);
+    status.textContent = spec.failPrefix + err;
+    paint({ phase: 'error', message: String(err) }, false);
+    el(spec.ids.box).classList.add('on');
+    btn.disabled = false;
   };
-
-  fetch('/api/promos/status', { cache: 'no-store' })
-    .then((r) => r.json())
-    .then((body) => {
-      if (body && body.busy && body.busy_kind === 'promos') {
-        btn.disabled = true;
-        status.textContent = 'Promo scrape in progress…';
-        startPoll();
-      }
-    })
-    .catch(() => {});
 
   btn.addEventListener('click', async () => {
     if (btn.disabled) return;
     btn.disabled = true;
-    status.textContent = 'Scraping promos…';
-    paintPromoScrapeProgress({
+    status.textContent = spec.busyText;
+    paint({
       phase: 'starting',
-      message: 'Starting promo scrape…',
+      message: spec.startText,
       done: 0,
       total: 0,
-      offer_count: 0,
-      kind: 'promos',
+      [spec.countKey]: 0,
     }, true);
     startPoll();
     try {
-      const res = await fetch('/api/promos/collect', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ states: selectedScrapeStates() }),
-      });
+      const res = await spec.postCollect(spec.payload());
       const body = await res.json().catch(() => ({}));
       stopPoll();
       if (!res.ok || !body.ok) {
-        const err = body.error || res.statusText || res.status;
-        status.textContent = 'Promo scrape failed: ' + err;
-        paintPromoScrapeProgress({ phase: 'error', message: String(err) }, false);
-        el('promo-scrape-progress').classList.add('on');
-        btn.disabled = false;
+        fail(body.error || res.statusText || res.status);
         return;
       }
-      const offers = (body.collect && body.collect.offer_count) || 0;
-      if (body.promos) PROMOS = body.promos;
-      status.textContent = `Got ${offers.toLocaleString()} promo offer(s)`
-        + (body.reload ? ' — reloading…' : '.');
-      paintPromoScrapeProgress({
+      const count = (body.collect && body.collect[spec.countKey]) || 0;
+      const done = spec.onDone(body, count, status);
+      paint({
         phase: 'done',
-        message: `Got ${offers.toLocaleString()} promo offer(s)`,
-        offer_count: offers,
+        message: done.message,
+        [spec.countKey]: count,
         done: 1,
         total: 1,
-        kind: 'promos',
       }, false);
-      if (body.reload) {
-        location.hash = '#promos';
+      if (done.reload) {
+        if (done.hash) location.hash = done.hash;
         location.reload();
         return;
       }
-      renderPromos();
-      go('#promos');
+      if (done.after) done.after();
       btn.disabled = false;
     } catch (err) {
-      stopPoll();
-      status.textContent = 'Promo scrape failed: ' + (err && err.message ? err.message : err);
-      paintPromoScrapeProgress({
-        phase: 'error',
-        message: String(err && err.message ? err.message : err),
-      }, false);
-      el('promo-scrape-progress').classList.add('on');
-      btn.disabled = false;
+      fail(err && err.message ? err.message : err);
     }
   });
 }
-wirePromoScrapeButton();
+
+wireScrape(SCRAPE_KINDS.odds);
+wireScrape(SCRAPE_KINDS.promos);
 
 /* The ledger's controls span three panels, so they are wired once at the body
    rather than by any one renderer. */

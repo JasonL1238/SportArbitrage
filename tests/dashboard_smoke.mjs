@@ -184,6 +184,30 @@ globalThis.IntersectionObserver = class {
 // to live. Nothing here fires hashchange; the checks below call applyRoute, which
 // is what the real listener does.
 globalThis.location = { hash: '' };
+// A real store, because the page's remembered choices (the offshore switch, the
+// sportsbook pick, the scrape states, a claimed promo) are only exercised if
+// there is somewhere for them to land. With no `localStorage` at all every
+// read and write is swallowed by the storage guard, so a value written in the
+// wrong *format* — a raw boolean where the reader compares against '1' — reads
+// back as "not set" and looks exactly like a browser that refuses storage.
+// That defect shipped once and the suite stayed green through it.
+globalThis.localStorage = {
+  _v: new Map(),
+  getItem(k) { return this._v.has(k) ? this._v.get(k) : null; },
+  setItem(k, v) { this._v.set(k, String(v)); },
+  removeItem(k) { this._v.delete(k); },
+};
+// Seeded mode. The page reads its remembered choices ONCE, while the script is
+// being evaluated, so the read half cannot be proved by a process that started
+// with an empty store — which is why the write-only version of this check
+// passed with `let showOffshore = false` hardcoded. A seeded run is therefore a
+// separate process: seed, evaluate, assert what the page woke up holding, and
+// stop before the ordinary checks, which are all written for the default state.
+const SEED = process.env.SPORTARB_SMOKE_SEED
+  ? JSON.parse(process.env.SPORTARB_SMOKE_SEED) : null;
+if (SEED) {
+  for (const [k, v] of Object.entries(SEED)) globalThis.localStorage.setItem(k, v);
+}
 globalThis.window = globalThis;
 
 const errors = [];
@@ -225,6 +249,27 @@ try {
       buildSportPicker();
       renderRunScoped();
     };
+    globalThis.__currentBrand = () => currentBrand;
+    // Mirrors the real listener: set, sync the control, then the whole
+    // reconcile-then-rebuild path — which is also where an impossible brand
+    // gets forgotten, so setting one is itself an assertion opportunity.
+    globalThis.__setBrand = (b) => {
+      currentBrand = b;
+      const pick = el('book-pick');
+      if (pick) pick.value = b;
+      renderRunScoped();
+    };
+    globalThis.__sportRows = sportRows;
+    globalThis.__brandOf = brandOf;
+    globalThis.__book = book;
+    globalThis.__brandGames = brandGames;
+    globalThis.__eventSummaries = eventSummaries;
+    globalThis.__wireScrape = wireScrape;
+    globalThis.__SCRAPE_KINDS = SCRAPE_KINDS;
+    globalThis.__currentLeague = () => currentLeague;
+    globalThis.__ledgerBrand = ledgerBrand;
+    globalThis.__SORTS = SORTS;
+    globalThis.__renderQuality = renderQuality;
     globalThis.__renderBook = renderBook;
     globalThis.__renderSources = renderSources;
     globalThis.__scopesFailedOf = scopesFailedOf;
@@ -299,6 +344,34 @@ try {
 if (errors.length) {
   for (const e of errors) console.error('RUNTIME ERROR:', e.stack);
   process.exit(1);
+}
+
+if (SEED) {
+  const problems = [];
+  if ('sportarb.showOffshore' in SEED) {
+    const want = SEED['sportarb.showOffshore'] === '1';
+    if (globalThis.__showOffshore() !== want) {
+      problems.push(`the offshore switch woke up ${globalThis.__showOffshore()} with '${SEED['sportarb.showOffshore']}' in storage`);
+    }
+  }
+  if ('sportarb.book' in SEED) {
+    const seeded = SEED['sportarb.book'];
+    const offered = new Set(globalThis.__currentRows()
+      .map((r) => globalThis.__DATA.strings[r[globalThis.__COL.source]])
+      .map((k) => globalThis.__brandOf(k)).filter(Boolean));
+    // A stored brand this page cannot offer is *supposed* to be forgotten, so
+    // only a brand the run actually prices proves the read.
+    const want = offered.has(seeded) ? seeded : '';
+    if (globalThis.__currentBrand() !== want) {
+      problems.push(`the sportsbook picker woke up '${globalThis.__currentBrand()}' with '${seeded}' in storage (expected '${want}')`);
+    }
+  }
+  if (problems.length) {
+    console.error('REMEMBERED WRONG: ' + problems.join('; '));
+    process.exit(1);
+  }
+  console.log('the page wakes up holding what was left in storage');
+  process.exit(0);
 }
 
 // Panels are built on arrival rather than all at once, so the harness has to do
@@ -1079,6 +1152,7 @@ const required = ['stat-strip', 'flow', 'matrix', 'sports-grid', 'leagues-grid',
   'source-cards', 'skips', 'coverage', 'event-detail', 'odds-table', 'runs-chart',
   'move-table', 'quality-strip', 'findings', 'overround', 'rejections', 'raws',
   'schema-table', 'vocab', 'sport-pick', 'sport-meta',
+  'book-pick', 'book-meta', 'sources-note',
   'run-list', 'run-pick', 'scrape-status', 'nav-history',
   'home-stats', 'browse-games', 'events-games',
   'events-league', 'events-book',
@@ -2144,6 +2218,426 @@ if (process.argv[3]) {
       : `offshore switch moves rows (${usOnlyRows} -> ${withRows}); ${arbNote}`);
     if (problems.length) process.exit(1);
   }
+}
+
+// ── THE SPORTSBOOK PICKER IS GLOBAL, BRAND-FOLDED, AND EXEMPTS THE RIGHT PANELS ──
+//
+// Global-shaped like the offshore switch, so it is checked the offshore way:
+// pick, assert every surface moved together, clear, assert everything came
+// back. Not in the synchronous-repaint control table — that table routes to
+// one panel and measures one region's write delta, which is why sport-pick and
+// offshore-toggle are absent from it too.
+{
+  const data = globalThis.__DATA;
+  const COL = globalThis.__COL;
+  const problems = [];
+
+  // A brand the pick can be *seen* to narrow: it must keep rows (so the busiest
+  // wins ties) but it must also leave a game out, or "narrowing" is unobservable
+  // and a `brandGames` that returned every game unchanged passed this whole
+  // block. Where no brand leaves a game out, the block says so rather than
+  // quietly grading the axis it cannot see.
+  const perBrand = new Map();
+  for (const r of globalThis.__currentRows()) {
+    const b = globalThis.__brandOf(data.strings[r[COL.source]]);
+    if (b) perBrand.set(b, (perBrand.get(b) || 0) + 1);
+  }
+  const byBusiest = [...perBrand.entries()].sort((a, z) => z[1] - a[1]).map(([b]) => b);
+  const allGames = globalThis.__eventSummaries(globalThis.__sportRows());
+  const pricedBy = (b) => allGames
+    .filter((e) => [...e.bySource.keys()].some((s) => globalThis.__brandOf(s) === b)).length;
+  const narrowing = byBusiest.filter((b) => pricedBy(b) > 0 && pricedBy(b) < allGames.length);
+  const brand = narrowing[0] || byBusiest[0];
+  if (brand && !narrowing.length) {
+    console.log(`sportsbook picker: every brand in this scrape prices every game, so narrowing is not exercised here (using ${brand})`);
+  }
+  if (!brand) {
+    console.log('sportsbook picker check skipped; no run rows fold to a brand');
+  } else {
+    globalThis.location.hash = '#odds';
+    globalThis.__applyRoute();
+    const allRows = globalThis.__currentRows().length;
+    const upstream = globalThis.__sportRows().length;
+    globalThis.location.hash = '#screen';
+    globalThis.__applyRoute();
+    globalThis.__visitPanel('bets', null);
+    const statsBefore = ((nodes.get('bets-stats') || {}).innerHTML) || '';
+
+    globalThis.location.hash = '#odds';
+    globalThis.__applyRoute();
+    globalThis.__setBrand(brand);
+    if (globalThis.__currentBrand() !== brand) {
+      problems.push(`picking ${brand} did not stick — the picker forgot a brand this run prices`);
+    }
+    const off = globalThis.__currentRows()
+      .map((r) => data.strings[r[COL.source]])
+      .filter((k) => globalThis.__brandOf(k) !== brand);
+    if (off.length) {
+      problems.push(`narrowed to ${brand}, currentRows still held ${[...new Set(off)].join(', ')}`);
+    }
+    if (globalThis.__sportRows().length !== upstream) {
+      problems.push(`the pick drained sportRows (${upstream} -> ${globalThis.__sportRows().length}); the compare-the-books surfaces read it`);
+    }
+
+    // The board narrows games and keeps every book's column, the brand's first.
+    globalThis.location.hash = '#screen';
+    globalThis.__applyRoute();
+    const board = ((nodes.get('odds-screen') || {}).innerHTML) || '';
+    const bookHeads = board.match(/<th class="book[^"]*"/g) || [];
+    // Every book that priced a surviving game keeps its column: the pick
+    // narrows *games*, never columns. The expectation is computed from the
+    // surviving games rather than from the column count before the pick — a
+    // one-column board is the truthful answer when the picked book's games
+    // carry nobody else's prices, and a run that thin is exactly what the
+    // adversarial payloads embed.
+    //
+    // "Surviving" is restated here from its definition — a game the picked book
+    // priced — and deliberately NOT taken from `brandGames`, which is the
+    // production function under test. Routing the expectation through it let
+    // `brandGames = () => []` empty the board, both Games lists, the coverage
+    // grid and the nav count while this check read `0 !== 0` and passed.
+    const league = globalThis.__currentLeague();
+    const scoped = globalThis.__sportRows()
+      .filter((r) => !league || data.strings[r[COL.league]] === league);
+    const survivors = globalThis.__eventSummaries(scoped)
+      .filter((e) => [...e.bySource.keys()].some((s) => globalThis.__brandOf(s) === brand));
+    const expected = new Set(survivors.flatMap((e) => [...e.bySource.keys()]));
+    // The floor the borrowed expectation never had. `brand` is chosen above as a
+    // brand that prices *some* game (`pricedBy(b) > 0`) — the busiest only when
+    // no brand narrows — so it priced something and the board must show it.
+    if (!survivors.length) {
+      problems.push(`${brand} was chosen as a brand that prices at least one game, and the board kept none of them`);
+    } else if (!bookHeads.length) {
+      problems.push(`the board is empty under ${brand}, which prices ${survivors.length} game(s) here`);
+    }
+    if (bookHeads.length !== expected.size) {
+      problems.push(`the board shows ${bookHeads.length} book column(s) for games priced by ${expected.size}`);
+    }
+    // How many GAMES the board rendered, which is the axis `brandGames` decides
+    // and the axis the column checks are blind to. Without it, a board that kept
+    // every column and rendered one of four games passed everything above while
+    // its own note and nav count still said four.
+    //
+    // Capped at ROW_CHUNK, because `fillInChunks` renders the first chunk on
+    // arrival and hands the tail to an IntersectionObserver the harness stubs.
+    // Comparing against the whole slate instead convicted a *correct* 202-game
+    // board of drawing 120 rows — and contradicted the chunking check above,
+    // which requires exactly that. The note is the other way round: it is an
+    // account of the whole slate, not of the chunk.
+    //
+    // WHICH games, not how many: two integers agreeing says nothing about the
+    // set behind them. Swapping one game the picked book prices for one it does
+    // not — count preserved, columns unchanged — passed every count-based form
+    // of this check, on a 4-game fixture and on a 518-game page alike. Each row
+    // carries its own event key in `data-go`, so the identity is right there.
+    // Anchored on `#fixture/`, because where a row *goes* is half of what a row
+    // is: pointing every board row at `#bet/<game key>` — a bet panel handed a
+    // game — left the game list identical and passed a panel-blind oracle.
+    const drawnKeys = [...board.matchAll(/data-go="#fixture\/([^"]*)"/g)]
+      .map((m) => decodeURIComponent(m[1]));
+    const anyGo = (board.match(/data-go="/g) || []).length;
+    if (anyGo !== drawnKeys.length) {
+      problems.push(`${anyGo - drawnKeys.length} board row(s) navigate somewhere other than a fixture`);
+    }
+    const wantKeys = survivors.slice(0, globalThis.__ROW_CHUNK).map((e) => e.key);
+    const drawn = drawnKeys.length;
+    if (drawn !== wantKeys.length || drawnKeys.some((k, i) => k !== wantKeys[i])) {
+      const extra = drawnKeys.filter((k) => !wantKeys.includes(k));
+      const missing = wantKeys.filter((k) => !drawnKeys.includes(k));
+      problems.push(`the board drew ${drawn} game row(s) on arrival for the ${survivors.length} game(s) ${brand} priced`
+        + ` (want ${wantKeys.length})${extra.length ? `; drew games ${brand} does not price: ${extra.join(', ')}` : ''}`
+        + `${missing.length ? `; left out: ${missing.join(', ')}` : ''}`
+        + `${!extra.length && !missing.length && drawn === wantKeys.length ? '; same games, wrong order' : ''}`);
+    }
+    // Say when the chunk cap was not exercised, the way every other unexercised
+    // axis in this file says so — the cap only engages past ROW_CHUNK games, and
+    // the brand chosen above is deliberately one that narrows.
+    if (survivors.length <= globalThis.__ROW_CHUNK) {
+      console.log(`board chunk cap not exercised; ${brand} prices ${survivors.length} game(s), under the ${globalThis.__ROW_CHUNK}-row chunk`);
+    }
+    const noted = Number((String((nodes.get('screen-note') || {}).textContent).match(/^(\d[\d,]*) game/) || [])[1]?.replace(/,/g, ''));
+    if (Number.isFinite(noted)) {
+      if (noted !== survivors.length) {
+        problems.push(`the board says ${noted} games and ${brand} priced ${survivors.length}`);
+      }
+    } else {
+      console.log(`board game-count note not asserted; it holds an empty state, not a count`);
+    }
+    // Column identity, not just the count: the right number of the wrong books
+    // is still the wrong board.
+    // Both sides in the same encoding: the board holds `escapeHtml`'d labels, so
+    // comparing them against raw ones convicts a correct page the first time a
+    // book's name contains an ampersand or an apostrophe. No registered label
+    // does today, which is exactly why it would not be noticed.
+    const unescape = (s) => s.replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&');
+    const shown = new Set([...board.matchAll(/<th class="book[^"]*">([^<]*)</g)]
+      .map((m) => unescape(m[1]).trim()));
+    const wanted = new Set([...expected].map((s) => globalThis.__book(s)));
+    for (const name of wanted) {
+      if (!shown.has(name)) {
+        problems.push(`${name} priced a game the board kept but has no column (columns: ${[...shown].join(', ')})`);
+      }
+    }
+    if (bookHeads.length && !bookHeads[0].includes('picked')) {
+      problems.push(`the picked book's column is not first on the board (saw ${bookHeads[0]})`);
+    }
+
+    // The bankroll strip is settlement arithmetic, outside every reader filter.
+    globalThis.__visitPanel('bets', null);
+    const statsAfter = ((nodes.get('bets-stats') || {}).innerHTML) || '';
+    if (statsAfter !== statsBefore) {
+      problems.push('the bankroll strip changed under a sportsbook pick — money totals must not follow a view filter');
+    }
+
+    globalThis.location.hash = '#odds';
+    globalThis.__applyRoute();
+    globalThis.__setBrand('');
+    if (globalThis.__currentRows().length !== allRows) {
+      problems.push(`clearing the pick did not restore the rows (${allRows} -> ${globalThis.__currentRows().length})`);
+    }
+
+    if (problems.length) {
+      console.error('SPORTSBOOK PICKER WRONG: ' + problems.join('; '));
+      process.exit(1);
+    }
+    console.log(`the sportsbook picker narrows every surface to ${brand} and restores them (${allRows} rows)`);
+  }
+
+  // ── WHAT IS REMEMBERED IS WRITTEN IN THE FORMAT THE READER COMPARES AGAINST ──
+  //
+  // Both stored choices are read back with a string comparison, so storing a
+  // raw boolean (`setItem(k, true)` -> "true") silently disables persistence
+  // while leaving every in-session behaviour above correct. Driving the real
+  // controls is what makes this a round trip rather than a restatement.
+  {
+    const store = globalThis.localStorage;
+    const toggle = nodes.get('offshore-toggle');
+    const before = globalThis.__showOffshore();
+    if (toggle) {
+      toggle.checked = !before;
+      toggle.dispatch('change');
+      const kept = store.getItem('sportarb.showOffshore');
+      if (kept !== (!before ? '1' : '0')) {
+        console.error(`REMEMBERED WRONG: the offshore switch stored ${JSON.stringify(kept)}, which does not read back as a switch position`);
+        process.exit(1);
+      }
+      toggle.checked = before;
+      toggle.dispatch('change');
+    }
+    const pick = nodes.get('book-pick');
+    if (pick && brand) {
+      pick.value = brand;
+      pick.dispatch('change');
+      if (store.getItem('sportarb.book') !== brand) {
+        console.error(`REMEMBERED WRONG: the sportsbook picker stored ${JSON.stringify(store.getItem('sportarb.book'))}, not ${brand}`);
+        process.exit(1);
+      }
+      pick.value = '';
+      pick.dispatch('change');
+      if (store.getItem('sportarb.book') !== '') {
+        console.error('REMEMBERED WRONG: clearing the sportsbook pick did not clear what was stored');
+        process.exit(1);
+      }
+    }
+    // Say which halves actually ran: both controls are guarded, and the file's
+    // convention is that a skipped check announces itself rather than borrowing
+    // its neighbour's success line.
+    const ran = [toggle ? 'switch' : null, (pick && brand) ? 'pick' : null].filter(Boolean);
+    console.log(ran.length
+      ? `the remembered switch and pick round-trip through storage (wrote: ${ran.join(', ')})`
+      : 'the remembered switch and pick round-trip through storage — neither control is on this page, not asserted');
+  }
+
+  // An impossible pick is forgotten on the change itself, before nav counts read it.
+  globalThis.__setBrand('books_r_us');
+  if (globalThis.__currentBrand() !== '') {
+    console.error('SPORTSBOOK PICKER WRONG: a brand this page cannot offer survived reconciliation');
+    process.exit(1);
+  }
+  console.log('an impossible sportsbook pick is forgotten on the change itself');
+}
+
+// ── ONE SCRAPE MACHINE, DRIVEN FOR BOTH KINDS ───────────────────────────────
+//
+// The odds and promo scrape controllers were 292 lines of one state machine
+// written twice, and NOTHING executed either of them: the page wires them at
+// load, `location.protocol` is undefined here, and both took the file:// early
+// return. Every check in this file passed with the whole control plane dead.
+// So the machine is driven directly, once per kind, against a stubbed control
+// plane — which is also the only thing that would have caught the two copies
+// drifting apart while they existed.
+{
+  const problems = [];
+  const realFetch = globalThis.fetch;
+  const realProtocol = globalThis.location.protocol;
+  const calls = [];
+  let reloaded = 0;
+  // The machine polls on a real 500ms interval, so a lost `clearInterval` keeps
+  // the event loop alive and the harness never exits — which under pytest is a
+  // six-minute `TimeoutExpired` with no diagnostic, not a failure anyone can
+  // read. Tracking the ids turns that hang into a named defect, and clears them
+  // so the process can still exit and report it.
+  const realSetInterval = globalThis.setInterval;
+  const realClearInterval = globalThis.clearInterval;
+  const live = new Set();
+  globalThis.setInterval = (fn, ms) => { const id = realSetInterval(fn, ms); live.add(id); return id; };
+  globalThis.clearInterval = (id) => { live.delete(id); return realClearInterval(id); };
+  globalThis.location.protocol = 'http:';
+  globalThis.location.reload = () => { reloaded += 1; };
+
+  // A control plane that answers idle, then whatever the case under test wants.
+  let collectAnswer = { ok: true, collect: { quote_count: 12, offer_count: 3 } };
+  let collectOk = true;
+  globalThis.fetch = async (url, init) => {
+    calls.push({ url, method: (init && init.method) || 'GET', body: init && init.body });
+    if (String(url).endsWith('/status')) {
+      return { ok: true, json: async () => ({ busy: false, busy_kind: null, progress: null }) };
+    }
+    return { ok: collectOk, status: 500, statusText: 'boom', json: async () => collectAnswer };
+  };
+
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  for (const kind of ['odds', 'promos']) {
+    const spec = globalThis.__SCRAPE_KINDS[kind];
+    const btn = nodes.get(spec.ids.btn);
+    const status = nodes.get(spec.ids.status);
+    calls.length = 0;
+    collectOk = true;
+    // The page already wired this button at load, where `location.protocol` was
+    // undefined and it took the file:// branch — which disables it. Clear that
+    // first, so "the served path leaves the button usable" is a real assertion.
+    btn.disabled = false;
+    globalThis.__wireScrape(spec);
+    if (!/^Ready/.test(String(status.textContent))) {
+      problems.push(`${kind}: served page did not arm the button (status "${status.textContent}")`);
+    }
+    if (btn.disabled) problems.push(`${kind}: served page left the button disabled`);
+
+    // The happy path: POSTs its own collect endpoint and reports its own noun.
+    btn.dispatch('click');
+    await settle();
+    await settle();
+    await settle();
+    const posted = calls.filter((c) => c.method === 'POST');
+    if (posted.length !== 1) {
+      problems.push(`${kind}: expected one POST, saw ${posted.length} (${posted.map((c) => c.url).join(', ')})`);
+    } else if (!String(posted[0].url).includes(kind === 'odds' ? '/api/collect' : '/api/promos/collect')) {
+      problems.push(`${kind}: posted to ${posted[0].url}`);
+    }
+    const said = String(status.textContent);
+    const wantCount = kind === 'odds' ? '12' : '3';
+    if (!said.includes(wantCount)) {
+      problems.push(`${kind}: success line "${said}" does not report the ${wantCount} it was given`);
+    }
+    if (kind === 'promos' && said.includes('prices')) {
+      problems.push('promos: the promo scrape reported prices — the two kinds share a count field');
+    }
+  }
+  // Odds always reloads onto its new snapshot; promos without `reload` does not.
+  if (reloaded !== 1) {
+    problems.push(`expected exactly the odds scrape to reload, saw ${reloaded} reload(s)`);
+  }
+
+  // The cross-message names a specific scrape, so it may only be said about that
+  // scrape. Two wrong versions of this shipped during one fold: a bare
+  // `body.busy` (any busy state, named or not) and then `body.busy_kind &&`
+  // (any *named* kind), both of which print "Promo scrape running" over whatever
+  // the line said — including a failure the reader needs — for a lock somebody
+  // else holds. Only `promos` may produce that sentence.
+  {
+    const spec = globalThis.__SCRAPE_KINDS.odds;
+    const status = nodes.get(spec.ids.status);
+    for (const kind of [null, '', 'something_else', 'promos']) {
+      const saved = globalThis.fetch;
+      // The cross-message is written by the *poll*, and the poll only starts on
+      // a click (the resume-on-open path deliberately starts it only for this
+      // kind), so the click is what has to happen — with a collect that never
+      // answers, leaving the poll's line as the last thing written.
+      globalThis.fetch = (url) => (String(url).endsWith('/status')
+        ? Promise.resolve({ ok: true, json: async () => ({ busy: true, busy_kind: kind, progress: null }) })
+        : new Promise(() => {}));
+      const btn = nodes.get(spec.ids.btn);
+      btn.disabled = false;
+      globalThis.__wireScrape(spec);
+      btn.dispatch('click');
+      await settle();
+      await settle();
+      globalThis.fetch = saved;
+      const said = String(status.textContent);
+      // `promos` is the one kind this sentence names, so it is also the one kind
+      // that must produce it — without this half, deleting `heldText` outright
+      // would satisfy every case above.
+      if (kind === 'promos') {
+        if (!said.includes('Promo scrape running')) {
+          problems.push(`a promo scrape holds the lock and the odds line does not say so: "${said}"`);
+        }
+      } else if (said.includes('Promo scrape running')) {
+        problems.push(`busy_kind ${JSON.stringify(kind)} is not a promo scrape, but the line says one holds the lock`);
+      }
+    }
+  }
+
+  // The failure tail re-arms the button rather than stranding it disabled.
+  {
+    const spec = globalThis.__SCRAPE_KINDS.odds;
+    const btn = nodes.get(spec.ids.btn);
+    const status = nodes.get(spec.ids.status);
+    collectOk = false;
+    collectAnswer = { ok: false, error: 'no egress in IL' };
+    // Re-arm the button the happy path left disabled on its way to a reload,
+    // rather than wiring a second listener onto the same node.
+    btn.disabled = false;
+    btn.dispatch('click');
+    await settle();
+    await settle();
+    await settle();
+    if (btn.disabled) problems.push('a failed scrape left the button disabled with no way back');
+    if (!String(status.textContent).includes('no egress in IL')) {
+      problems.push(`a failed scrape hid the reason: "${status.textContent}"`);
+    }
+  }
+
+  globalThis.fetch = realFetch;
+  globalThis.location.protocol = realProtocol;
+  delete globalThis.location.reload;
+  const leaked = live.size;
+  for (const id of live) realClearInterval(id);
+  globalThis.setInterval = realSetInterval;
+  globalThis.clearInterval = realClearInterval;
+  if (leaked) {
+    problems.push(`${leaked} status poll(s) still running after the scrape settled — a page that leaks these polls the control plane forever`);
+  }
+  if (problems.length) {
+    console.error('SCRAPE CONTROL WRONG: ' + problems.join('; '));
+    process.exit(1);
+  }
+  console.log('the scrape machine drives both kinds: posts, reports, reloads, and re-arms on failure');
+}
+
+// ── A RUN WITH NO PER-VENUE DETAIL STILL SAYS SO, RATHER THAN GOING BLANK ────
+//
+// `renderBook`'s "Pick a venue" arm tested `!note && !health`, and `sourceInfo`
+// ends `|| {}` — so `note` is never falsy and the arm was unreachable. The panel
+// fell through instead and wrote `book(null)`, which is `null`, into its own
+// headline: a reader arriving at #book on a run with no source-health rows got a
+// blank title where that sentence belongs.
+{
+  const problems = [];
+  globalThis.__renderBook(null);
+  const title = String((nodes.get('book-title') || {}).textContent);
+  if (title === 'null' || title === 'undefined' || !title.trim()) {
+    problems.push(`#book with no venue titled itself ${JSON.stringify(title)}`);
+  }
+  if (!title.includes('Pick a venue')) {
+    problems.push(`#book with no venue says ${JSON.stringify(title)} instead of asking for one`);
+  }
+  if (problems.length) {
+    console.error('EMPTY VENUE PANEL WRONG: ' + problems.join('; '));
+    process.exit(1);
+  }
+  console.log('a venue page with nothing to show asks for a venue instead of going blank');
 }
 
 // "refused N of M" must use the distinct-scope count, not the message list.
@@ -3743,6 +4237,31 @@ function onAnEmbeddedRun() {   // a declaration, so block order cannot matter
         sportNode.dispatch('change');
       }
     }
+
+    // The same honesty under the sportsbook picker: narrow to a brand no
+    // flagged position has a leg at, and the note must blame the book filter —
+    // never claim labels are shown below a list that holds none of them.
+    if (flagged.length) {
+      const flaggedBrands = new Set(flagged.flatMap((o) =>
+        (o.legs || []).map((l) => globalThis.__brandOf(l.source))));
+      const rowBrands = new Set(globalThis.__currentRows()
+        .map((r) => globalThis.__brandOf(globalThis.__DATA.strings[r[globalThis.__COL.source]]))
+        .filter(Boolean));
+      const candidate = [...rowBrands].find((b) => !flaggedBrands.has(b));
+      if (!candidate) {
+        console.log('  (book-filtered-note check skipped; every brand on this page holds a flagged leg)');
+      } else {
+        globalThis.__setBrand(candidate);
+        const bookList = ((nodes.get('arb-list') || {}).innerHTML) || '';
+        if (!bookList.includes('hidden by the book filter')) {
+          problems.push(`narrowed to ${candidate}, the flagged positions left the page but the note does not say the book filter hid them`);
+        }
+        if (bookList.includes('shown below with labels')) {
+          problems.push('the note claims labels are shown below while the book filter hides every flagged card');
+        }
+        globalThis.__setBrand('');
+      }
+    }
     if (problems.length) {
       console.error('LOCALITY LABELS DO NOT RENDER:', problems.join('; '));
       process.exit(1);
@@ -3750,6 +4269,100 @@ function onAnEmbeddedRun() {   // a declaration, so block order cannot matter
     console.log(`locality labels render (${labelled.length} labelled, ${flagged.length} wholly foreign)`);
   }
   globalThis.__setShowOffshore(false);
+}
+
+// ── EACH SORTABLE TABLE HOLDS ITS OWN SORT ───────────────────────────────────
+//
+// The page used to keep one module-global sortKey/sortDir pair, read only by
+// the All prices table. With four sortable tables that pair would make sorting
+// one table silently reorder another, so the state moved into a per-region-id
+// map — and this proves the isolation by sorting Checks and asserting All
+// prices did not move. Driven through the state map directly: this harness's
+// node stub returns [] from querySelectorAll, so header clicks are out of its
+// reach, exactly as they were for the old renderOdds wiring.
+{
+  const data = globalThis.__DATA;
+  // Renders are driven explicitly: __visitPanel does not evict the panel it
+  // leaves, so a second visit would trust whatever content is already there.
+  globalThis.__invalidatePanels();
+  globalThis.__visitPanel('odds', null);
+  const oddsBefore = ((nodes.get('odds-table') || {}).innerHTML) || '';
+
+  globalThis.__renderQuality();
+  const plain = ((nodes.get('findings') || {}).innerHTML) || '';
+  const problems = [];
+  const current = globalThis.__currentRun();
+  const messages = new Set((data.findings || [])
+    .filter((f) => f.run_id === current).map((f) => f.message));
+  if (messages.size < 2) {
+    console.log('sort check inert; fewer than two distinct findings in this run');
+  } else {
+    globalThis.__SORTS.set('findings', { key: 'message', dir: 1 });
+    globalThis.__renderQuality();
+    const asc = ((nodes.get('findings') || {}).innerHTML) || '';
+    globalThis.__SORTS.set('findings', { key: 'message', dir: -1 });
+    globalThis.__renderQuality();
+    const desc = ((nodes.get('findings') || {}).innerHTML) || '';
+    if (asc === desc) {
+      problems.push('flipping the findings sort direction changed nothing');
+    }
+    if ((asc.match(/<tr/g) || []).length !== (desc.match(/<tr/g) || []).length) {
+      problems.push('sorting the findings table changed how many rows it holds');
+    }
+    // The other table's state is untouched, so a rebuild must not move it.
+    globalThis.__invalidatePanels();
+    globalThis.__visitPanel('odds', null);
+    const oddsAfter = ((nodes.get('odds-table') || {}).innerHTML) || '';
+    if (oddsAfter !== oddsBefore) {
+      problems.push('sorting the findings table reordered the All prices table');
+    }
+    globalThis.__SORTS.delete('findings');
+    globalThis.__renderQuality();
+    const restored = ((nodes.get('findings') || {}).innerHTML) || '';
+    if (restored !== plain) {
+      problems.push('clearing the findings sort did not restore its original order');
+    }
+  }
+  if (problems.length) {
+    console.error('TABLE SORTS LEAK OR LOSE ROWS:', problems.join('; '));
+    process.exit(1);
+  }
+  console.log(messages.size < 2
+    ? 'table-sort isolation not asserted'
+    : 'each sortable table holds its own sort; sorting Checks left All prices alone');
+}
+
+// ── ANOTHER VENUE'S OWN PAGE SURVIVES A SPORTSBOOK PICK ──────────────────────
+//
+// The one-venue drill-down's subject is the venue in its heading, so the
+// sportsbook picker naming a different venue must not empty it — every other
+// book's page would otherwise claim "stored no prices" about a book that
+// stored plenty, and its own diagnostic would blame a filter it cannot name.
+{
+  const data = globalThis.__DATA;
+  const COL = globalThis.__COL;
+  const counts = new Map();
+  for (const r of globalThis.__currentRows()) {
+    const k = data.strings[r[COL.source]];
+    if (globalThis.__brandOf(k)) counts.set(k, (counts.get(k) || 0) + 1);
+  }
+  const keys = [...counts.keys()];
+  const pick = keys[0];
+  const other = keys.find((k) => globalThis.__brandOf(k) !== globalThis.__brandOf(pick));
+  if (!pick || !other) {
+    console.log('drill-down-vs-pick check skipped; this run prices fewer than two brands');
+  } else {
+    globalThis.__setBrand(globalThis.__brandOf(pick));
+    globalThis.__visitPanel('book', other);
+    const mix = (((nodes.get('book-mix') || {}).textContent) || '')
+      + (((nodes.get('book-mix') || {}).innerHTML) || '');
+    globalThis.__setBrand('');
+    if (mix.includes('stored no prices')) {
+      console.error(`ANOTHER VENUE'S PAGE EMPTIED BY THE SPORTSBOOK PICKER: ${other} read as empty under a ${globalThis.__brandOf(pick)} pick`);
+      process.exit(1);
+    }
+    console.log(`another venue's page (${other}) keeps its prices under a ${globalThis.__brandOf(pick)} pick`);
+  }
 }
 
 // ── THE ARB PANEL DOES NOT CALL A BOARD CLEAN THAT NOBODY MEASURED ───────────

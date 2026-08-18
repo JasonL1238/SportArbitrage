@@ -6,3 +6,8 @@ ruff==0.15.*         # MIT: linter; rules and exemptions live in pyproject.toml.
                      # Pinned to a minor: CI gates on a clean report, and a new
                      # rule under a selected prefix would fail a build nobody
                      # changed. Bump deliberately, with the fixes in the same commit.
+pyyaml>=6.0,<7.0     # MIT: reads .github/workflows/tests.yml in
+                     # tests/test_agent_docs.py.  A substring search over that
+                     # file cannot tell a step that runs from one disabled by a
+                     # trailing comment, an `if: false`, or a command moved into
+                     # `name:` — and the test exists to catch exactly that.

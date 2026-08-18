@@ -41,14 +41,17 @@ BetMGM, DraftKings, Caesars, Hard Rock, and their promo landings.
 detection/selection. Registries retain stable source keys. Every odds and promo
 run persists jurisdiction, batch id, and route scope.
 
+`src/jurisdictions.py` is authoritative and `tests/test_jurisdictions.py` pins it;
+this table is a summary, and the prose under it is the part the code cannot state.
+
 | Venue | IL | PA | NJ | DC |
 |---|---|---|---|---|
-| FanDuel | validated | template | template | template |
-| BetRivers | validated | template | template | unavailable |
+| FanDuel | validated | validated | template | template |
+| BetRivers | validated | validated | template | unavailable |
 | BetMGM | validated | template | template | template |
 | DraftKings | validated | template | template | template |
 | Caesars | exact-state template | template | template | template |
-| Hard Rock | exact-state template | unavailable | template | unavailable |
+| Hard Rock | validated | unavailable | template | unavailable |
 | theScore Bet | template | template | no route yet | unavailable |
 | bet365 | **validated** | template | template | unavailable |
 | Promos (FD / BR) | IL / IL | PA / PA | NJ / NJ | DC / unavailable |
@@ -303,6 +306,9 @@ Use this when Step 2 fails for a venue.
   BetRivers and DraftKings were promoted to `validated` (evidence in
   `evidence/state-routing.md` § "Pennsylvania first-party routes promoted").
   BetMGM and Caesars remain `template` — access id and CDN block respectively.
+  DraftKings was demoted back to `template` on 2026-08-14: that promotion was
+  earned by the since-retired `leagueSubcategory` route, so the evidence no
+  longer describes the request the adapter makes.
 - Resolved 2026-08-09: the three retained Action Network source keys
   (`an_fliff`, `an_circa`, `an_superbook`) that carried ids with no odds on
   either endpoint version were deregistered with the operator's approval,

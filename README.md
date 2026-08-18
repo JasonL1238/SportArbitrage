@@ -1,8 +1,8 @@
 # Multi-sport odds collector
 
 A local pipeline that continuously collects real pregame betting data for **six
-sports** from **40 registered sources** — 16 venues read first-party (11 sportsbooks,
-3 betting exchanges, 2 prediction markets) plus 24 republished feeds that watch a
+sports** from **41 registered sources** — 18 venues read first-party (13 sportsbooks,
+3 betting exchanges, 2 prediction markets) plus 23 republished feeds that watch a
 book from outside it — and normalizes it into one validated schema.
 
 Every source is a **public endpoint of the venue's own website**. The goal is
@@ -54,7 +54,7 @@ containers only and produces no rows until October. See **Support status**.
 
 ## Sources
 
-Sixteen venues read first-party, of three kinds. The kind is not decoration: a sportsbook
+Eighteen venues read first-party, of three kinds. The kind is not decoration: a sportsbook
 posts a price it will take the other side of, an exchange shows you somebody
 else's order with a size and a commission, and a prediction market shows a
 contract price with an entry fee. The arbitrage engine prices all three
@@ -84,6 +84,8 @@ disappears and what is left is a one-sided bet for the whole stake.
 | `hardrock` | sportsbook | `api.hardrocksportsbook.com` — an Amelco platform; its `A`/`B` selection labels are positional, not home/away |
 | `cloudbet` | sportsbook | `www.cloudbet.com/sports-api/c/v6` — offshore; every market keyed by sport (`baseball.moneyline`) |
 | `onexbet` | sportsbook | `1xbet.com/service-api/LineFeed` — offshore |
+| `bet365` | sportsbook | `www.il.bet365.com/pullpodapi/gethomepagepods` — the state subdomain *is* the licence; `csid` selects the sport shelf, and the board is a column-oriented stream joined on a row index rather than on ids |
+| `thescore` | sportsbook | `sportsbook.us-il.thescore.bet` GraphQL, keyed by the venue's own `canonicalUrl` per competition — prefer its stated participant id over name matching |
 | `matchbook` | exchange | `www.matchbook.com/edge/rest/{navigation,events}` — moneyline, totals and handicaps in one call, **with the money behind each price** |
 | `smarkets` | exchange | `api.smarkets.com/v3/{events,markets,contracts,quotes}` — fully typed; moneyline only, within the venue's 20/min limit |
 | `sxbet` | exchange | `api.sx.bet/{markets/active,orders}` — a resting order book; every price is one counterparty's offer, with its own size |

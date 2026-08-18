@@ -14,6 +14,7 @@ can read them without importing the report layer.
 from __future__ import annotations
 
 
+# ── what each feed is, and what it is not ────────────────────────────────────
 #: What each source is, in the reader's terms rather than the parser's.
 SOURCE_NOTES: dict[str, dict[str, str]] = {
     "fanduel": {
@@ -325,21 +326,45 @@ SOURCE_NOTES: dict[str, dict[str, str]] = {
     },
 }
 
-#: What each kind of venue is, in the reader's terms.  The distinction is not
-#: decoration: it decides whether the number on the screen is the number you are
-#: paid, whether there is a stated amount behind it, and what happens to your
-#: stake if the game is called off.
-VENUE_KINDS: dict[str, str] = {
-    "sportsbook": "Takes the other side of your bet itself. Its margin is already inside "
-                  "the price shown, and it refunds a cancelled game.",
-    "exchange": "Matches you against another customer. The price is somebody's actual "
-                "offer, with an amount behind it, and the venue charges a commission on "
-                "your winnings — so the price shown is not the price you are paid.",
-    "prediction market": "Trades contracts that pay 1 if the thing happens. There is a "
-                         "fee per contract, each side is its own order book, and a "
-                         "cancelled game is resolved rather than refunded.",
+
+# ── one name per counterparty ────────────────────────────────────────────────
+#: One name per *counterparty*, keyed by the brand keys ``betlinks.book_for``
+#: folds the source keys into — which are ``betlinks.SITE``'s keys, one per
+#: venue that actually takes a bet.  ``draftkings``, ``an_draftkings`` and
+#: ``vi_draftkings`` are three feeds reading one company, and the sportsbook
+#: picker offers that company once, under this name.  Where a brand key is
+#: itself a registered source key the name here must equal that source's
+#: ``label`` above (a test pins it), so a brand cannot acquire a second
+#: spelling; the rest are the mirror labels with the feed parenthetical
+#: dropped, because the brand is the book, not the route to it.
+BRAND_LABELS: dict[str, str] = {
+    "bally": "Bally Bet",
+    "bet365": "bet365",
+    "betmgm": "BetMGM",
+    "betrivers_kambi": "BetRivers",
+    "bovada": "Bovada",
+    "caesars": "Caesars",
+    "circa": "Circa",
+    "cloudbet": "Cloudbet",
+    "draftkings": "DraftKings",
+    "fanatics": "Fanatics",
+    "fanduel": "FanDuel",
+    "hardrock": "Hard Rock Bet",
+    "kalshi": "Kalshi",
+    "leovegas_kambi": "LeoVegas",
+    "matchbook": "Matchbook",
+    "onexbet": "1xBet",
+    "parx": "betPARX",
+    "pinnacle": "Pinnacle",
+    "polymarket_us": "Polymarket US",
+    "smarkets": "Smarkets",
+    "sxbet": "SX Bet",
+    "thescore": "theScore Bet",
+    "unibet": "Unibet",
 }
 
+
+# ── why an offer the books publish was not collected (indented banners below are inside this list) ─
 #: Why an offer the books do publish is deliberately not collected.  Matched by
 #: prefix, longest first, so a specific reason beats the family it belongs to.
 SKIP_NOTES: list[tuple[str, str]] = [
@@ -794,10 +819,6 @@ SKIP_NOTES: list[tuple[str, str]] = [
      "A price below the lowest plausible decimal odds."),
     ("selection_disabled",
      "The venue marked this selection as not currently bettable."),
-    ("unmapped_outcome_label",
-     "An outcome label that could not be matched to home or away."),
-    ("offer_suspended",
-     "The bet offer is suspended."),
     ("odds_not_an_object",
      "An odds entry that was not a JSON object."),
     ("game_not_an_object",
@@ -809,12 +830,6 @@ SKIP_NOTES: list[tuple[str, str]] = [
      "where that decides the fixture. Skipped rather than guessed."),
     ("bad_price_row",
      "A price row missing a usable type or coefficient."),
-    ("bad_spread_line",
-     "A spread line that could not be read as a number."),
-    ("bad_total_line",
-     "A total line that could not be read as a number."),
-    ("unreadable_american_odds",
-     "American odds that could not be parsed as an integer."),
     ("implausible_odds",
      "Odds outside the plausible decimal range."),
     ("missing_line",
@@ -833,6 +848,8 @@ SKIP_NOTES: list[tuple[str, str]] = [
      "A venue state value outside the collectable set."),
 ]
 
+
+# ── the stored row, field by field ───────────────────────────────────────────
 #: Field-by-field reference, shown so "one consistent schema" is inspectable.
 #: Every field of :class:`~src.schema.Quote` must appear — a field with no
 #: explanation would render as a blank row in the page's own answer to "what is
@@ -886,6 +903,8 @@ SCHEMA_FIELDS: list[tuple[str, str, bool, str]] = [
     ("last_change_at", "datetime", False, "When the book says the price last moved, where it says so."),
 ]
 
+
+# ── the glossary ─────────────────────────────────────────────────────────────
 #: Plain-language glossary.  Betting notation is compact but opaque, and this page is
 #: meant to be readable by someone who has never placed a bet, so every term the
 #: tables use is spelled out here alongside the word a sportsbook would use.
@@ -1034,6 +1053,9 @@ GLOSSARY: list[dict[str, str]] = [
                  "something is wrong. Its verdict is on the Checks page.",
     },
 ]
+
+
+# ── the vocabulary note ──────────────────────────────────────────────────────
 
 VOCAB_NOTE = (
     "These lists are closed. A source value that cannot be mapped onto one of them is "

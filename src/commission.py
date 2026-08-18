@@ -224,7 +224,5 @@ def commission_for(source_key: str, table: Mapping[str, Commission] | None = Non
     return (table if table is not None else COMMISSIONS).get(source_key, NO_COMMISSION)
 
 
-def net_decimal_odds(
-    source_key: str, decimal_odds: float, table: Mapping[str, Commission] | None = None
-) -> float:
-    return commission_for(source_key, table).net_decimal(decimal_odds)
+def net_decimal_odds(source_key: str, decimal_odds: float) -> float:
+    return commission_for(source_key).net_decimal(decimal_odds)

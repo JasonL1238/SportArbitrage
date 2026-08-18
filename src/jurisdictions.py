@@ -86,7 +86,6 @@ class Jurisdiction:
     label: str
     routes: Mapping[str, RetailRoute]
     promos: PromoRoute
-    live_validated: bool
     view_only_sources: frozenset[str] = frozenset()
     republished: Mapping[str, RepublishedRoute] = MappingProxyType({})
 
@@ -278,7 +277,6 @@ def _republished_for(state: str) -> Mapping[str, RepublishedRoute]:
 IL = Jurisdiction(
     state="IL",
     label="Illinois",
-    live_validated=True,
     routes={
         "fanduel": _route(
             "fanduel",
@@ -404,7 +402,6 @@ PA = Jurisdiction(
     # Same standard IL met: routes promoted on live matching-egress evidence.
     # Not a claim about every route — betmgm and caesars are still TEMPLATE,
     # exactly as IL's caesars is.
-    live_validated=True,
     routes={
         # The three VALIDATED routes below earned it the same way on 2026-08-08:
         # two parser-clean runs each from a detected-PA egress, runs 29/30/31
@@ -573,7 +570,6 @@ PA = Jurisdiction(
 NJ = Jurisdiction(
     state="NJ",
     label="New Jersey",
-    live_validated=False,
     routes={
         "fanduel": _route(
             "fanduel",
@@ -653,7 +649,6 @@ NJ = Jurisdiction(
 DC = Jurisdiction(
     state="DC",
     label="District of Columbia",
-    live_validated=False,
     routes={
         "fanduel": _route(
             "fanduel",

@@ -245,12 +245,8 @@ class RawStore:
         for path in self.paths(source):
             yield self.read(path)
 
-    def latest(self, source: str, endpoint_prefix: str | None = None) -> RawResponse | None:
-        candidates = [
-            raw
-            for raw in self.iter_responses(source)
-            if endpoint_prefix is None or raw.endpoint.startswith(endpoint_prefix)
-        ]
+    def latest(self, source: str) -> RawResponse | None:
+        candidates = list(self.iter_responses(source))
         if not candidates:
             return None
         return max(candidates, key=lambda raw: raw.fetched_at)

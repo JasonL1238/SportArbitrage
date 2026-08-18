@@ -271,20 +271,10 @@ def promo_sources_for_state(state: str) -> tuple[PromoSourceDescriptor, ...]:
 
 
 PROMO_SOURCES: tuple[PromoSourceDescriptor, ...] = promo_sources_for_state(settings.STATE)
-BY_KEY: dict[str, PromoSourceDescriptor] = {entry.key: entry for entry in PROMO_SOURCES}
 
 
 def keys() -> tuple[str, ...]:
     return tuple(entry.key for entry in PROMO_SOURCES)
-
-
-def descriptor(key: str) -> PromoSourceDescriptor:
-    try:
-        return BY_KEY[key]
-    except KeyError as exc:
-        raise KeyError(
-            f"unknown promo source {key!r}; registered: {sorted(BY_KEY)}"
-        ) from exc
 
 
 def _check() -> None:
@@ -299,11 +289,9 @@ _check()
 
 
 __all__ = [
-    "BY_KEY",
     "PROMO_SOURCES",
     "STATE_PROMO_SOURCE_KEYS",
     "PromoSourceDescriptor",
-    "descriptor",
     "global_promo_sources",
     "keys",
     "promo_sources_for_state",

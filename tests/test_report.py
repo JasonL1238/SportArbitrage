@@ -9,6 +9,7 @@ in this file is invented; none of it is observed data.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -750,6 +751,53 @@ def test_the_page_script_runs_and_fills_every_region(populated: Store, tmp_path)
     # This page embeds every run, so the truncation branch is unreachable here
     # and the harness says so rather than passing silently.
     assert "truncation not exercised" in result.stdout
+    # Same reason as the promo-plan line above, for the blocks added since: each
+    # of these is a whole check whose deletion would otherwise leave this driver
+    # green, because it only ever asserts its neighbours' output.
+    for marker in (
+        "the sportsbook picker narrows every surface",
+        "the remembered switch and pick round-trip through storage",
+        "the scrape machine drives both kinds",
+        "an impossible sportsbook pick is forgotten",
+        "each sortable table holds its own sort",
+        "a venue page with nothing to show asks for a venue",
+    ):
+        assert marker in result.stdout, f"the harness never reported: {marker}"
+
+
+def test_the_page_wakes_up_holding_what_was_left_in_storage(
+    populated: Store, tmp_path
+) -> None:
+    """The remembered offshore switch and sportsbook pick are read exactly once,
+    while the page's script is being evaluated.
+
+    A harness process that starts with an empty store can therefore only ever
+    prove the *write* half: with ``let showOffshore = false`` hardcoded in place
+    of the read, every write still lands in the right place in the right format
+    and the ordinary smoke run stays green. Proving the read needs a process that
+    was already holding something when the page loaded, which is what the seed
+    is.
+    """
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    page = tmp_path / "dashboard.html"
+    page.write_text(render_page(build_report(populated)), encoding="utf-8")
+    harness = Path(__file__).parent / "dashboard_smoke.mjs"
+    result = subprocess.run(
+        [node, str(harness), str(page)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env={
+            **os.environ,
+            "SPORTARB_SMOKE_SEED": json.dumps(
+                {"sportarb.showOffshore": "1", "sportarb.book": "book_a"}
+            ),
+        },
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "the page wakes up holding what was left in storage" in result.stdout
 
 
 def test_the_page_script_runs_against_a_truncated_payload(
@@ -1043,16 +1091,17 @@ def test_the_scrape_controls_are_on_the_page() -> None:
 
     for needle in (
         "scrape-btn", "scrape-scope", "scrape-status", "scrape-progress",
-        "run-list", "/api/collect", "/api/status", "paintScrapeProgress",
+        "run-list", "/api/collect", "/api/status", "paintScrape",
         "promo-scrape-btn", "promo-scrape-status", "/api/promos/collect",
         "promo-region", "promo-detail", "usage_guidance", "selectedPromoKey",
-        "/api/promos/status", "wirePromoScrapeButton", 'id="promos"',
+        "/api/promos/status", "SCRAPE_KINDS", 'id="promos"',
     ):
         assert needle in BODY or needle in JS, needle
     assert 'id="history"' in BODY
     assert "PRIMARY_PANELS" in JS
     assert "selectRun" in JS
-    assert "wireScrapeButton" in JS
+    assert "wireScrape(SCRAPE_KINDS.odds)" in JS
+    assert "wireScrape(SCRAPE_KINDS.promos)" in JS
     # Front door is arbitrage; past scrapes live under History, not the rail.
     assert BODY.index('href="#arb"') < BODY.index('href="#history"')
     assert BODY.index('href="#promos"') < BODY.index('href="#history"')
@@ -2674,3 +2723,342 @@ def test_a_run_whose_state_disagrees_with_the_detected_egress_says_so(
     with Store(path) as store:
         agreeing = build_report(store)["meta"]["jurisdiction_warnings"]
     assert not any("CA" in note for note in agreeing), agreeing
+
+
+# ── sort and filter by sportsbook ────────────────────────────────────────────
+#
+# The rail's Sportsbook picker folds feeds to the counterparty a bet would be
+# placed at, and that fold has exactly one authority: ``betlinks.book_for``.
+# These tests pin the payload's brand fields to it, pin the display names to
+# one spelling, and pin the page's wiring — one predicate, one row pipeline
+# split, and the panels that must NOT narrow.
+
+
+def test_every_venue_the_page_names_has_a_brand() -> None:
+    """``_source_entry``'s brand is ``book_for``'s answer for every registered key.
+
+    The fold is never derived from the ``an_``/``vi_`` spelling of the key —
+    ``vsin_circa`` is the counterexample with no prefix to derive from — and
+    one shared Kambi adapter does not make BetRivers and LeoVegas one company.
+    """
+    from src.betlinks import book_for
+    from src.report import _source_entry
+    from src.sources.registry import keys
+
+    for key in keys():
+        entry = _source_entry(key)
+        assert entry["brand"] == (book_for(key) or ""), key
+        assert "brand_label" in entry, key
+
+    assert _source_entry("draftkings")["brand"] == "draftkings"
+    assert _source_entry("an_draftkings")["brand"] == "draftkings"
+    assert _source_entry("vi_draftkings")["brand"] == "draftkings"
+    assert _source_entry("an_draftkings")["brand_label"] == "DraftKings"
+    assert _source_entry("vsin_circa")["brand"] == "circa"
+    assert _source_entry("leovegas_kambi")["brand"] != _source_entry("betrivers_kambi")["brand"]
+    # A consensus line is not a book, so it folds to nothing and the picker
+    # never offers it as a peer of DraftKings.
+    assert _source_entry("an_open")["brand"] == ""
+
+
+def test_a_brand_is_the_same_in_every_jurisdiction() -> None:
+    """The brand is a fact about the key, never about the run's state.
+
+    ``_source_entry`` is emitted once per jurisdiction column; a state-varying
+    brand would let those seven emissions disagree about which company a feed
+    reads, on the one control that spans every panel.
+    """
+    from src.jurisdictions import JURISDICTIONS
+    from src.report import _source_entry
+    from src.sources.registry import keys
+
+    for key in keys():
+        seen = {
+            (_source_entry(key, state=state)["brand"], _source_entry(key, state=state)["brand_label"])
+            for state in (*JURISDICTIONS, "GLOBAL", None)
+        }
+        assert len(seen) == 1, (key, seen)
+
+
+def test_every_brand_has_one_name() -> None:
+    """``BRAND_LABELS`` covers every brand and never re-spells a source label.
+
+    Hard Rock is already spelled three ways across the mirrors' labels; the
+    brand table exists so the fold cannot add a fourth.
+    """
+    from src.betlinks import SITE, book_for
+    from src.report_copy import BRAND_LABELS, SOURCE_NOTES
+    from src.sources.registry import keys
+
+    reachable = {book_for(key) for key in keys()} - {None}
+    assert reachable <= set(BRAND_LABELS), reachable - set(BRAND_LABELS)
+    # One entry per venue that takes a bet, no strays.
+    assert set(BRAND_LABELS) == set(SITE)
+    for brand, label in BRAND_LABELS.items():
+        if brand in SOURCE_NOTES:
+            assert label == SOURCE_NOTES[brand]["label"], (
+                f"{brand}: BRAND_LABELS says {label!r}, SOURCE_NOTES says "
+                f"{SOURCE_NOTES[brand]['label']!r} — one book, two spellings"
+            )
+
+
+def test_a_ghost_key_still_gets_a_brand() -> None:
+    """Rows outlive registrations; a deregistered key is its own bucket.
+
+    ``book_for`` passes an unknown key through, so the page shows it under its
+    own name rather than dropping its rows from a brand-narrowed view or
+    guessing which company it used to read.
+    """
+    from src.report import _source_entry
+
+    entry = _source_entry("unibet_au")
+    assert entry["brand"] == "unibet_au"
+    assert entry["brand_label"] == "unibet_au"
+
+
+def test_the_brand_fold_agrees_with_the_redundancy_pairs() -> None:
+    """Two vocabularies, one claim: same brand ⇔ redundant feed pair.
+
+    ``distinctness``'s redundancy table and ``betlinks``' fold were written
+    independently; a pair they disagree on is a bug in one of them, found here
+    rather than by a reader noticing the picker groups what the sources page
+    calls distinct.
+    """
+    from src.betlinks import book_for
+    from src.redundancy import REDUNDANT_PAIRS, is_redundant_pair
+    from src.sources.registry import keys
+
+    for a, b in REDUNDANT_PAIRS:
+        if book_for(a) is None or book_for(b) is None:
+            continue
+        assert book_for(a) == book_for(b), (a, b)
+
+    registered = [k for k in keys() if book_for(k)]
+    for a in registered:
+        for b in registered:
+            if a < b and book_for(a) == book_for(b):
+                assert is_redundant_pair(a, b), (
+                    f"{a} and {b} fold to one brand but are not a redundant pair"
+                )
+
+
+def test_the_promo_and_odds_brand_keys_meet() -> None:
+    """The promo key space folds to the same brand keys as the odds side.
+
+    The Campaign filter joins the two spaces (``promoBrandKey(o.source)``
+    against the picked odds-side brand), so a promo brand key that is not the
+    odds side's key for the same book silently empties the filter.  BetRivers
+    and LeoVegas are the keys an invented brand vocabulary got wrong twice in
+    design review — ``betrivers``/``leovegas`` instead of the ``_kambi`` keys.
+    """
+    from src.betlinks import book_for
+    from src.promos.registry import PROMO_SOURCES
+    from src.sources.registry import BY_BASE_KEY
+
+    for descriptor in PROMO_SOURCES:
+        key = descriptor.key
+        brand = key[3:] if key.startswith("tl_") else key  # promoBrandKey's fold
+        odds_key = brand[:-3] if brand.endswith("_on") else brand
+        if odds_key in BY_BASE_KEY and book_for(odds_key):
+            assert brand == book_for(odds_key) or brand.endswith("_on"), (
+                f"promo key {key} folds to {brand}, but the odds side calls "
+                f"this book {book_for(odds_key)} — the campaign filter would "
+                f"match nothing"
+            )
+
+
+def test_the_book_picker_is_wired_to_every_section() -> None:
+    """The rail control exists, one predicate spells the comparison, one pipeline.
+
+    A control can ship rendered-but-inert; a predicate can be re-spelled per
+    panel until two tabs disagree about what a brand means.  Both are string
+    facts about the page source, pinned here the way the feed filter is.
+    """
+    from src.report_assets import BODY, JS
+
+    assert 'id="book-pick"' in BODY
+    assert 'id="book-meta"' in BODY
+    assert "el('book-pick')" in JS, "book-pick is rendered but nothing reads it"
+    assert "bookPick.addEventListener" in JS
+
+    # One predicate per key space — odds source keys, promo keys, ledger
+    # prose — each spelled exactly once, and nothing else compares against the
+    # picked brand directly.
+    assert "const keepBrand = (key) =>" in JS
+    assert "function keepPromoBrand(key)" in JS
+    assert "const keepLedgerBook = (name) =>" in JS
+    assert JS.count("keepBrand(") >= 6
+    assert JS.count("=== currentBrand") == 3
+    # One pipeline: the split exists and nothing re-derives it.
+    assert JS.count("const currentRows = ()") == 1
+    assert JS.count("const sportRows = ()") == 1
+    assert JS.count("const brandGames = ") == 1
+
+    # Global control, not a per-panel one: it must NOT be in the per-panel
+    # refresh wiring list the literal below anchors (see the f-feed test).
+    assert "'f-feed', 'f-source'" in JS
+    assert "'book-pick'" not in JS.split("const refreshOdds")[1].split("afterTyping")[0]
+
+
+def test_the_compare_the_books_surfaces_keep_every_book() -> None:
+    """A surface whose subject is "compare the books" narrows games, not rows.
+
+    The odds board, the coverage grid, the games lists and the fixture panel
+    read ``sportRows()`` and narrow through ``brandGames``; ``renderBook`` is
+    exempt entirely, because its subject is the venue in its own heading and
+    the picker naming a *different* venue must not empty it.
+    """
+    from src.report_assets import JS
+
+    def slice_of(name: str, until: str) -> str:
+        return JS.split(f"function {name}(")[1].split(f"function {until}(")[0]
+
+    board = slice_of("renderOddsScreen", "renderBrowseGames")
+    assert "sportRows()" in board and "brandGames(" in board
+    assert "currentRows()" not in board
+
+    events = slice_of("renderEvents", "selectEvent")
+    assert "currentRows()" not in events
+
+    fixture = slice_of("selectEvent", "renderEventDetail") if "function renderEventDetail(" in JS \
+        else JS.split("function selectEvent(")[1].split("\nfunction ")[0]
+    assert "sportRows()" in fixture
+    assert "currentRows()" not in fixture
+
+    feed_rows = JS.split("function feedFilteredRows(")[1].split("\nfunction ")[0]
+    assert "sportRows()" in feed_rows and "currentRows()" not in feed_rows
+
+    book_panel = slice_of("renderBook", "renderOdds")
+    assert "sportRows()" in book_panel
+    assert "currentRows()" not in book_panel
+    assert "keepBrand(" not in book_panel
+
+
+def test_the_books_panel_says_the_filter_does_not_apply_there() -> None:
+    """Books lists every venue whatever the picker says, and says so on screen.
+
+    A venue that failed produced no rows at all, so a row-based filter would
+    erase exactly the venues the panel exists to report — and a deliberate
+    exemption that is not stated reads as a bug to the next person.
+    """
+    from src.report_assets import BODY, JS
+
+    assert 'id="sources-note"' in BODY
+    sources = JS.split("function renderSources(")[1].split("function renderBook(")[0]
+    assert "currentRows()" not in sources
+    assert "does not hide" in sources
+
+
+def test_a_position_survives_on_one_matching_leg() -> None:
+    """Filtering arbitrage by book means "has a leg here", never "entirely here".
+
+    Every opportunity spans two counterparties by construction, so requiring
+    every leg would return nothing for every book, every time — and the empty
+    state explains the semantics so a reader cannot mistake it.
+    """
+    from src.report_assets import JS
+
+    arb = JS.split("function renderArb(")[1].split("function originPill(")[0]
+    assert ".some((leg) => keepBrand(leg.source))" in arb
+    assert ".every((leg) => keepBrand" not in arb
+    assert "not which are entirely there" in JS
+
+
+def test_the_unreachable_total_is_never_recomputed() -> None:
+    """A reader-side filter may hide a flagged position, never shrink the total.
+
+    ``non_local_flagged`` is composed in Python over the whole run; the page
+    subtracts what it rendered and names the filter hiding the rest, so
+    narrowing the board cannot under-report unreachability.
+    """
+    from src.report_assets import JS
+
+    assert "Number(bag.non_local_flagged || 0) - flagged" in JS
+    assert "const narrowedBy = " in JS
+    # Reachability vocabulary, not licensing — the Kalshi inversion.
+    assert "no leg at a venue you can reach from this jurisdiction" in JS
+
+
+def test_a_hand_typed_book_is_never_guessed_at() -> None:
+    """The ledger fold has exact arms only — no case-folding, no substrings.
+
+    ``leg.book`` is operator prose on the record of real money; "DK app"
+    silently becoming DraftKings would re-attribute profit, so the fold is a
+    lookup and a fallback to the string itself, nothing fuzzier.
+    """
+    from src.report_assets import JS
+
+    fold = JS.split("const ledgerBrand = ")[1].split("\n")[0]
+    for guess in (".startsWith(", ".includes(", ".toLowerCase(", ".replace("):
+        assert guess not in fold, f"ledgerBrand guesses via {guess}"
+    # And the bets panel folds through it rather than comparing raw strings.
+    bets = JS.split("function renderBets(")[1].split("function slipCard(")[0]
+    assert "keepLedgerBook(leg.book)" in bets
+
+
+def test_the_number_of_sortable_tables_the_comments_claim_is_the_real_one() -> None:
+    """The prose beside this mechanism named a table count that was one too many,
+    in five places at once, and every one of them was new.
+
+    The mechanism was right and the number was decoration, which is exactly the
+    shape that survives a review — so it is counted from the code instead.
+    Sorting is opt-in: a table either passes ``sort`` in its options or calls
+    ``applySort`` itself, and both are grep-able.
+    """
+    import re
+
+    from src.report_assets import JS
+
+    opted = set(re.findall(r"\bsort:\s*'([a-z-]+)'", JS))
+    direct = set(re.findall(r"applySort\(\s*'([a-z-]+)'", JS))
+    tables = opted | direct
+    assert tables == {"findings", "rejections", "odds-table", "promo-campaign"}, tables
+    spelled = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6}
+    root = Path(__file__).resolve().parents[1]
+    for name in ("src/report_assets.py", "docs/architecture.md",
+                 "tests/dashboard_smoke.mjs", "tests/test_report.py"):
+        text = (root / name).read_text(encoding="utf-8").lower()
+        for word, value in spelled.items():
+            for phrase in (f"{word} sortable table", f"{word} tables sharing",
+                           f"shared by {word} it would"):
+                if phrase in text:
+                    assert value == len(tables), (
+                        f"{name} says {phrase!r}; there are {len(tables)} sortable tables"
+                    )
+
+
+def test_each_table_holds_its_own_sort() -> None:
+    """Four sortable tables, four sorts — keyed on the region id.
+
+    The old module-global ``sortKey``/``sortDir`` pair was read by one table;
+    shared by four it would make sorting one reorder another.  The map replaces
+    it, the shared wiring is applied exactly once, and each table passes its
+    own id.
+    """
+    from src.report_assets import JS
+
+    assert "let sortKey" not in JS
+    assert "let sortDir" not in JS
+    assert "const SORTS = new Map()" in JS
+    assert JS.count("th.classList.add('sortable')") == 1
+    for region in ("'odds-table'", "'findings'", "'rejections'", "'promo-campaign'"):
+        assert f"applySort({region}" in JS or f"sort: {region}" in JS, region
+
+
+def test_the_bankroll_totals_are_outside_the_book_filter() -> None:
+    """Money summaries never follow a view filter.
+
+    ``betSummary()`` is settlement arithmetic computed in Python; the slips
+    list narrows under a pick, but the bankroll strip, the per-book strip and
+    the nav badge stay whole — a filtered profit figure would be a different
+    (and wrong) claim about the ledger.
+    """
+    from src.report_assets import JS
+
+    bets = JS.split("function renderBets(")[1].split("function slipCard(")[0]
+    stats_part = bets.split("const stats = el('bets-stats')")[1].split("const listNote")[0]
+    assert "keepBrand(" not in stats_part
+    assert "shown" not in stats_part, "the bankroll strip reads the narrowed slips"
+    nav = JS.split("function renderNavCounts(")[1].split("\nfunction ")[0]
+    nav_bets = nav.split("nav-bets")[1].split("if (!run)")[0]
+    assert "keepBrand(" not in nav_bets and "ledgerBrand(" not in nav_bets

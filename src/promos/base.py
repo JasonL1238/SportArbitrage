@@ -29,11 +29,6 @@ class PromoParseOutcome:
     #: switch this to ReasonCounter in the same change.
     skipped: Counter[str] = field(default_factory=Counter)
 
-    def extend(self, other: "PromoParseOutcome") -> None:
-        self.offers.extend(other.offers)
-        self.rejections.extend(other.rejections)
-        self.skipped.update(other.skipped)
-
     def reject(self, source: str, reason: str, detail: str, **context: Any) -> None:
         self.rejections.append(
             Rejection(source=source, reason=reason, detail=detail, context=context)

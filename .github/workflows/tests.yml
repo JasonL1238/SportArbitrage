@@ -21,7 +21,18 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
+      # Node is pinned, not assumed. Every executable check over
+      # src/report_assets.py — 7.7k lines that own every count, filter and total
+      # on the dashboard — runs through tests/dashboard_smoke.mjs, and
+      # tests/test_report.py *skips* those cases when node is absent rather than
+      # failing. Without this step the job stayed green on whatever node the
+      # runner image happened to ship, and would have gone on being green the
+      # day it shipped none.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
       - run: pip install -r requirements-dev.txt
+      - run: node --version
       - run: python scripts/check_agent_docs.py
       - run: ruff check src scripts tests
       - run: python -m compileall -q src scripts

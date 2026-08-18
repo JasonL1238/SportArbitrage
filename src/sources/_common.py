@@ -32,6 +32,7 @@ from enum import Enum
 from typing import Any, Callable, Iterable, Mapping, Protocol, Sequence
 from urllib.parse import urlsplit
 
+from src import leagues as league_registry
 from src.leagues import League
 from src.participants import Participant
 from src.raw_store import RawResponse
@@ -772,53 +773,6 @@ def mentions_a_sub_period(*labels: Any) -> bool:
     return bool(set(text.split()) & PERIOD_MARKERS)
 
 
-def resolve_over_under(description: str) -> Selection | None:
-    """``OVER``/``UNDER`` from a total's label, or ``None`` if it says neither.
-
-    Whole tokens, and both checked before either is believed.  A substring
-    test in the obvious order — ``"over" in text`` first — reads the ordinary
-    total label ``"Under 220.5 (Incl. Overtime)"`` as an **Over**, because
-    "overtime" contains "over": the Under's price is then published under the
-    Over's identity, and the genuine Over row collides with it.  That is a
-    wrong number published from a payload that is not malformed at all.
-    """
-    tokens = {token.strip(".") for token in _screening_text((description,)).split()}
-    over, under = "over" in tokens, "under" in tokens
-    if over is under:  # neither, or a label claiming both
-        return None
-    return Selection.OVER if over else Selection.UNDER
-
-
-def signed_handicap(description: str, *, price_shaped: float = 100.0) -> float | None:
-    """The one explicitly signed handicap in *description*, or ``None``.
-
-    Exactly one handicap-shaped token, or nothing.  Two of them ("Phils -1.5
-    -2.5") do not say which is the line — taking the first, or the last, is a
-    coin flip wearing a rule's clothes — and a token of ``±price_shaped`` or
-    more is an American price, not a handicap: exchange rows display prices
-    ("Phillies -110"), and reading one as a line publishes a -110 handicap
-    that validation faults on MLB and accepts as junk in the high-total
-    leagues.  A price *beside* a handicap is unambiguous once discounted.
-    """
-    found: set[float] = set()
-    for token in description.replace("(", " ").replace(")", " ").split():
-        if token[:1] in "+-" and len(token) > 1:
-            try:
-                value = float(token)
-            except ValueError:
-                continue
-            if abs(value) >= price_shaped:
-                continue
-            found.add(value)
-    # A *set*: two tokens saying the same number agree about the line, and
-    # counting them as a disagreement is how a corroboration check defeats
-    # itself.  ProphetX joins ``display_name`` and ``name`` before asking, and
-    # a venue that fills both fields identically — an ordinary API shape —
-    # produced "+1.5 +1.5", two tokens, and the guard read that as ambiguous
-    # and published the market as a pick'em.
-    return found.pop() if len(found) == 1 else None
-
-
 def refuse_one_sided_market(
     source: str, outcome: Any, first_index: int, *, market_id: Any, event_id: str
 ) -> None:
@@ -950,57 +904,6 @@ def refuse_mid_move_pairings(source: str, outcome: Any) -> None:
         ]
 
 
-#: Field names that carry a market's **label** — the human-readable name of
-#: what is being priced.  Curated, and deliberately not "every string field".
-#:
-#: Reading one chosen field is too narrow: Novig's first period guard read
-#: ``description``, a field absent from the shape its own docs document, so on
-#: the documented payload it was inert.  But reading *everything* is worse in
-#: the other direction, because settlement prose is prose: a ``rules`` field
-#: saying "void if the game is suspended before the end of the regulation
-#: **period**", or a note reading "the **first** listed team is the away team",
-#: tokenises straight into a period marker and deletes an ordinary full-game
-#: market.  At fetch time that loss is invisible — no counter, no rejection,
-#: just a book never requested — and one such field on every market emptied a
-#: whole league and failed the pass.
-#:
-#: So: the fields a venue puts a *label* in, and no others.  A venue naming its
-#: window somewhere else entirely is a gap the first genuine capture closes by
-#: adding the key here, which is a smaller and louder failure than silently
-#: dropping live markets.
-MARKET_LABEL_KEYS: frozenset[str] = frozenset(
-    {
-        "name", "label", "title", "caption", "heading",
-        "description", "short_description", "shortdescription",
-        "group_name", "groupname", "group", "market_group", "marketgroup",
-        "market_name", "marketname", "market_label",
-        "display_name", "displayname",
-        "sub_type", "subtype", "sub_market", "submarket",
-        "category", "segment", "scope",
-        # ``period`` and not only ``period_name``: a venue naming its window in
-        # the bare field and nowhere in prose slipped both screens, and
-        # including one spelling while excluding the other is not a line
-        # anybody could defend.
-        "period", "period_name", "periodname",
-    }
-)
-
-
-def market_label_text(entry: Any) -> str:
-    """The label-bearing string fields of a market payload, joined.
-
-    See :data:`MARKET_LABEL_KEYS` for why this is a curated set rather than
-    every string on the record.
-    """
-    if not isinstance(entry, Mapping):
-        return ""
-    return " ".join(
-        value
-        for key, value in entry.items()
-        if isinstance(value, str) and str(key).strip().lower() in MARKET_LABEL_KEYS
-    )
-
-
 def drop_duplicate_selections(source: str, outcome: Any) -> None:
     """Keep one row per ``dedup_key``, rejecting the rest.
 
@@ -1112,6 +1015,92 @@ def latest_capture(
         for raw in raws
         if not raw.capture_id and newest.fetched_at - raw.fetched_at <= separation
     ]
+
+
+# ── competition identity from a venue's own label ────────────────────────────
+
+
+#: Substrings that name a tennis tour, most specific first.  Not venue
+#: vocabulary — these are this repository's league keys and the tours spell
+#: themselves the same way everywhere — which is why three adapters carried this
+#: exact table, and two of the three the scan below byte for byte.
+#:
+#: Matched anywhere in the name, because that is not where the venues put the
+#: word: Matchbook writes ``"ATP Vancouver Challenger"`` and SX Bet writes
+#: ``"Vancouver Challenger ATP"``.  There is no ``WTA_CHALLENGER`` key, so a
+#: women's Challenger stays ``WTA``: the same governing body at a lower tier is
+#: a far smaller error than the wrong tour, and it agrees with what the other
+#: sources call the same event.
+TENNIS_TOURS: tuple[tuple[str, str], ...] = (
+    ("itf", "ITF"),
+    ("wta", "WTA"),
+    ("atp", "ATP"),
+)
+
+#: The tier marker, which only refines :data:`TENNIS_TOURS`' ATP answer.
+TENNIS_SECOND_TIER = "challenger"
+
+
+def accepted_leagues(adapter: str, leagues: Iterable[str]) -> tuple[str, ...]:
+    """Registry-known league keys, de-duplicated in order, and never empty.
+
+    Fails at construction rather than mid-run: an unknown key would otherwise
+    surface as a league that silently collects nothing, which reads as a thin
+    slate rather than as a typo.  Adapters that resolve a league to a venue's
+    own path, route or series keep their own loop — the thing they have to
+    refuse is a *route* they cannot build, not a key the registry rejects.
+    """
+    keys: list[str] = []
+    for key in leagues:
+        league_registry.league(key)
+        if key not in keys:
+            keys.append(key)
+    if not keys:
+        raise ValueError(f"{adapter} needs at least one league to collect")
+    return tuple(keys)
+
+
+#: The same scan, plus the two venues that spell the tour as a *gender*.  Kept
+#: separate rather than merged into the table above because "women" is not a
+#: tour name: a venue that says ``WTA`` and a venue that says ``Women`` are
+#: making different statements, and only some of them make the second one.
+#:
+#: Order is load-bearing in both tables, and it was wrong once in the direction
+#: that matters: testing "challenger" before the tour filed every *women's*
+#: Challenger as ``ATP_CHALLENGER`` — 252 markets on one capture.  Here,
+#: ``women`` must also win before ``men``, because "men" is a substring of
+#: "women".
+TENNIS_TOURS_BY_GENDER: tuple[tuple[str, str], ...] = (
+    ("itf", "ITF"),
+    ("wta", "WTA"),
+    ("women", "WTA"),
+    ("atp", "ATP"),
+    ("men", "ATP"),
+)
+
+
+def tennis_tour(
+    label: str, *, markers: tuple[tuple[str, str], ...] = TENNIS_TOURS
+) -> str | None:
+    """The tour a tennis competition name names, or ``None`` if it names none.
+
+    Case-folded here rather than by the caller, so a venue that already lowers
+    its labels and one that does not get the same answer.
+
+    ``None`` rather than a default: what to file an unrecognised competition
+    under *is* a venue's policy — betmgm and fanduel both choose ITF and fanduel
+    logs the guess — so the scan reports what it found and each caller decides
+    what that is worth.
+    """
+    lowered = label.strip().casefold()
+    for marker, tour in markers:
+        if marker in lowered:
+            if tour == "ATP" and TENNIS_SECOND_TIER in lowered:
+                return "ATP_CHALLENGER"
+            return tour
+    # A tier marker with no tour named at all is a men's Challenger by
+    # convention; the women's tour always names itself.
+    return "ATP_CHALLENGER" if TENNIS_SECOND_TIER in lowered else None
 
 
 # ── the identity half of a row ───────────────────────────────────────────────

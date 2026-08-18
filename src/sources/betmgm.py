@@ -67,12 +67,14 @@ from src.sources._common import (
     Fixture,
     ScopeTally,
     SourceClient,
+    TENNIS_TOURS_BY_GENDER,
     Tier,
     capabilities_from,
     drop_duplicate_selections,
     envelope_source,
     latest_per_endpoint,
     priced_quote,
+    tennis_tour,
 )
 from src.sources.base import ParseOutcome
 from src.sources.guards import FormatChangeError, SourceError
@@ -174,14 +176,9 @@ SOCCER_CATCH_ALL = "SOCCER_OTHER"
 
 #: Tennis competition-name markers, order-sensitive: women's / ITF before ATP so
 #: a "WTA Challenger" cannot land as ATP_CHALLENGER.
-TENNIS_MARKERS: tuple[tuple[str, str], ...] = (
-    ("itf", "ITF"),
-    ("wta", "WTA"),
-    ("women", "WTA"),
-    ("atp", "ATP"),
-    ("men", "ATP"),
-)
-TENNIS_SECOND_TIER = "challenger"
+#: What an unrecognised tennis competition is filed under.  A venue's policy,
+#: not a fact about tennis, which is why the shared scan reports ``None`` and
+#: this is applied here.
 TENNIS_FALLBACK_LEAGUE = "ITF"
 
 
@@ -672,15 +669,7 @@ def _competition_name(event: Mapping[str, Any]) -> str:
 
 
 def _tennis_league(name: str) -> str:
-    lowered = name.lower()
-    for marker, league_key in TENNIS_MARKERS:
-        if marker in lowered:
-            if league_key == "ATP" and TENNIS_SECOND_TIER in lowered:
-                return "ATP_CHALLENGER"
-            return league_key
-    if TENNIS_SECOND_TIER in lowered:
-        return "ATP_CHALLENGER"
-    return TENNIS_FALLBACK_LEAGUE
+    return tennis_tour(name, markers=TENNIS_TOURS_BY_GENDER) or TENNIS_FALLBACK_LEAGUE
 
 
 def _sides(

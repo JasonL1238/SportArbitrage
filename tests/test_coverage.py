@@ -1164,8 +1164,8 @@ def test_retail_cannot_also_be_view_only_or_unreachable():
     """The overlap the first cut of the guard never looked at.
 
     Adding ``hardrock`` to US_UNAVAILABLE passed the invariant while
-    ``takeable_from_state("IL")`` still served it and ``is_us_unavailable``
-    disowned it — a self-contradiction the guard's own error message describes,
+    ``takeable_from_state("IL")`` still served it while view-only and
+    US-unavailable filtering disowned it — a self-contradiction the guard's own error message describes,
     arriving through a RETAIL overlap rather than a NATIONWIDE one.
     """
     from src.sources import registry

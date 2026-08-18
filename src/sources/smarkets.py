@@ -76,6 +76,7 @@ from src.sources._common import (
     ScopeTally,
     SourceClient,
     Tier,
+    accepted_leagues,
     capabilities_from,
     drop_duplicate_selections,
     envelope_source,
@@ -320,14 +321,7 @@ class SmarketsAdapter:
         timeout: float = 20.0,
         client: httpx.Client | None = None,
     ) -> None:
-        keys: list[str] = []
-        for key in leagues:
-            league_registry.league(key)
-            if key not in keys:
-                keys.append(key)
-        if not keys:
-            raise ValueError("SmarketsAdapter needs at least one league to collect")
-        self._leagues: tuple[str, ...] = tuple(keys)
+        self._leagues = accepted_leagues("SmarketsAdapter", leagues)
         self._source_key = source_key
         self.base_url = base_url.rstrip("/")
         self.page_size = page_size

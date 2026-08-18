@@ -164,11 +164,37 @@ server exposes the same-origin endpoints used to log, edit, settle, and delete.
 - Filter state (league, book) is reconciled on the run or sport change itself, not
   inside a panel renderer, because only one panel renders. The nav counts read that
   state, so a choice left impossible by the new scope has to be cleared before them.
+  The rail's sportsbook picker reconciles the same way but earlier still — inside
+  `buildBookPicker`, called first from `renderChrome`, the first line of
+  `renderRunScoped` — because its choice is persisted, so an impossible brand is
+  *forgotten* rather than merely deselected, before the per-panel pickers rebuild
+  off it and before the nav counts read it.
 - The US-only switch filters at `currentRows()`, the one place every panel reads its
   rows from, and therefore goes through the same reconcile-then-rebuild path as a
   sport change rather than repainting the panel on screen. Books is the deliberate
   exception: it lists every venue and marks the unbettable ones, because hiding one
   there would make its own health count disagree with the run it describes.
+- The sportsbook picker filters there too, but through a split the switch does not
+  need: `sportRows()` (offshore + sport) feeds `currentRows()` (plus the brand),
+  because a surface whose subject is "compare the books" cannot be narrowed to one
+  book's rows — a comparison of one thing is not a comparison. Those surfaces — the
+  odds board, the coverage grid, the games lists and the fixture panel — read
+  `sportRows()` and narrow *games* through `brandGames`, keeping every book's column
+  for the games the picked book prices. One venue's own page reads `sportRows()`
+  with no brand at all (naming a different venue must not empty it), and Books is
+  exempt as above, saying so on screen. The picker's choice is a *brand*:
+  `betlinks.book_for` is the one source-key → brand fold (the same fold that decides
+  where a bet link points), `report_copy.BRAND_LABELS` the one brand → name table,
+  and neither is ever derived from an `an_`/`vi_`/`tl_` key prefix. Money summaries
+  stay whole under the pick — the bankroll strip and the per-book ledger totals are
+  settlement arithmetic, not a view of a scrape — and the arbitrage panel keeps
+  whole positions ("has a leg at the picked book", never "entirely at it"). A
+  reader-side filter may hide a flagged no-reachable-leg position but never reduces
+  the run-level `non_local_flagged` total; the difference is named on screen.
+- Each sortable table holds its own sort, keyed on its region id in one `SORTS`
+  map — the four sortable tables sharing the old module-global key/dir pair
+  would sort each other. Sort state is not persisted and survives a run, sport or book change:
+  unlike a league or a book, a column cannot be made impossible by a new scope.
 - A control shared by two panels renders only the panel on screen, so it also has to
   reschedule the nav counts: the panel left unbuilt has no renderer to write its own
   count, and would otherwise keep the number from before the filter.

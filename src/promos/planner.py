@@ -53,10 +53,11 @@ from src.arb import (
     MarketGroup,
     _counterparties,
     _fixture_outliers,
+    _order_driven_sources,
     _return_multiplier,
     _uses_both_failover_feeds,
-    arb_margin,
     contract_shape,
+    crossed_against_itself,
     counterparty_groups,
     group_key,
     line_granularity,
@@ -101,6 +102,11 @@ MODE_BONUS = "bonus"
 MODE_CASH = "cash"
 MODE_BOOSTED = "boosted"
 
+#: The planner's own tolerance, used by ten comparisons here.  The eleventh —
+#: "this venue prices itself to lose" — now runs inside
+#: :func:`arb.crossed_against_itself` and therefore follows *arb's* epsilon, not
+#: this one.  The two are equal today; if either moves, that one comparison
+#: moves with arb rather than with its neighbours here.
 _EPSILON = 1e-9
 
 
@@ -334,12 +340,12 @@ _REGISTERED_KEYS = frozenset(descriptor.key for descriptor in SOURCES)
 #: sportsbook is evidence about the parser, but at an order book it only means
 #: two strangers left orders there, and "crossed" is a question about prices
 #: **after** the venue's charge.
-_ORDER_DRIVEN = frozenset(
-    descriptor.key for descriptor in SOURCES
-    if getattr(descriptor, "kind", None) is not None
-    and str(getattr(descriptor.kind, "value", descriptor.kind))
-    in {"exchange", "prediction_market"}
-)
+#: Read through :func:`arb._order_driven_sources`, not re-derived: this used to
+#: string-match ``kind.value`` against a literal ``{"exchange",
+#: "prediction_market"}``, which is a second spelling of the registry's own
+#: ``SourceKind.has_stated_liquidity`` and would silently disagree with the
+#: arbitrage engine the first time a kind was added.
+_ORDER_DRIVEN = _order_driven_sources()
 
 
 def stakeable_odds_sources(promo_source: str) -> tuple[str, ...]:
@@ -745,19 +751,11 @@ def _build_context(
             selections = best[source]
             if not shape or not set(selections) >= set(shape):
                 continue
-            if source in _ORDER_DRIVEN:
-                from src.validation import ORDER_BOOK_CROSSING_TOLERANCE
-
-                net_sum = sum(
-                    1.0 / net_decimal(selections[selection], context.commissions)
-                    for selection in shape
-                )
-                crossed = net_sum < 1.0 - ORDER_BOOK_CROSSING_TOLERANCE
-            else:
-                crossed = arb_margin(
-                    [selections[selection].decimal_odds for selection in shape]
-                ) > _EPSILON
-            if crossed:
+            if crossed_against_itself(
+                [selections[selection] for selection in shape],
+                context.commissions,
+                order_driven=source in _ORDER_DRIVEN,
+            ):
                 self_crossed.add(source)
         for source in outliers | self_crossed:
             best.pop(source, None)

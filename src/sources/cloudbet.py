@@ -46,6 +46,7 @@ from src.sources._common import (
     parse_iso_time,
     priced_quote,
     squashed_label,
+    tennis_tour,
 )
 from src.sources.base import ParseOutcome
 from src.sources.guards import FormatChangeError, SourceError
@@ -77,12 +78,6 @@ COMPETITION_LEAGUES: dict[str, str] = {
     "soccer-usa-mls": "MLS",
 }
 
-TENNIS_TOURS: tuple[tuple[str, str], ...] = (
-    ("itf", "ITF"),
-    ("wta", "WTA"),
-    ("atp", "ATP"),
-)
-TENNIS_SECOND_TIER = "challenger"
 
 DEFAULT_LEAGUES: tuple[str, ...] = (
     "MLB", "WNBA", "NBA", "NFL", "NHL",
@@ -297,7 +292,7 @@ def _competition_league(comp: Mapping[str, Any]) -> str | None:
     if found:
         return found
     if "tennis" in key or "atp" in haystack or "wta" in haystack or "itf" in haystack:
-        return _tennis_league(haystack)
+        return tennis_tour(haystack)
     if key.startswith("soccer-"):
         # Tier on the raw text, where the separators still carry the ordinal
         # ("2. Bundesliga", "la-liga-2"); the league name on the squashed text,
@@ -313,15 +308,6 @@ def _competition_league(comp: Mapping[str, Any]) -> str | None:
     if name in DEFAULT_LEAGUES:
         return name
     return None
-
-
-def _tennis_league(label: str) -> str | None:
-    for marker, tour in TENNIS_TOURS:
-        if marker in label:
-            if tour == "ATP" and TENNIS_SECOND_TIER in label:
-                return "ATP_CHALLENGER"
-            return tour
-    return "ATP_CHALLENGER" if TENNIS_SECOND_TIER in label else None
 
 
 def parse_cloudbet(raws: Sequence[RawResponse]) -> ParseOutcome:
