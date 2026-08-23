@@ -135,7 +135,8 @@ python scripts/probe_sources.py --state IL
   first-party promo feeds (2026-08-23) · betPARX — `betparx_kambi`, a JSON catalogue
   per state lobby · theScore Bet — `thescore`, the help centre's promotional-terms
   section · One classifier change, because both catalogues are whole T&C documents ·
-  What this does not change · Scraping fixes proven live, and four path probes
+  Contests are a kind now, and the planner refuses them · Spending a promo from the
+  dashboard (2026-08-23) · Scraping fixes proven live, and four path probes
   (2026-08-16 evening) · What the fixes changed, measured · The adversarial
   rounds: seventeen rounds, eighty-seven numbered findings, the accepted
   remainder listed · Path probes:

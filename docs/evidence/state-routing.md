@@ -6,8 +6,9 @@ which routes were promoted on it, and which feeds cover which book.
 ## Pennsylvania arrival: seven of nine books first-party in one night — 2026-08-23
 
 The operator physically relocated to Philadelphia. Everything below was measured
-from the machine's own residential egress — IPv4 `165.123.231.162`
-(AS55, University of Pennsylvania), fingerprint `013576ce4de8…` — with **no
+from the machine's own residential egress — AS55, University of
+Pennsylvania; fingerprint `013576ce4de8…`, the address itself is not recorded
+here, per `docs/MULTI_STATE.md` — with **no
 `ODDS_HTTP_PROXY_*` set**. The task was first-party access to FanDuel,
 DraftKings, BetMGM, Fanatics, bet365, Caesars, BetRivers, betPARX and theScore
 Bet; re-test what worked before, iterate from the Illinois results.
@@ -25,7 +26,7 @@ still said IL. Three providers were asked once each by hand and agreed:
 | `ip-api.com` | PA | Philadelphia | IPv4; its field is `region`, which `detection_from_payload` does not read |
 
 Stored with `ODDS_STATE=PA python scripts/detect_state.py --url
-https://ipwho.is/165.123.231.162` — the explicit address because the repository
+https://ipwho.is/<the IPv4 checkip.amazonaws.com reports>` — the explicit address because the repository
 client reaches `ipwho.is` over IPv6 while `CONTINUITY_URLS`
 (`checkip.amazonaws.com`) fingerprints the IPv4, and a record that the
 continuity check cannot confirm is a record `recon_sources.py` refuses.

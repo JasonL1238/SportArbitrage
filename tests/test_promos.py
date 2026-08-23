@@ -3857,6 +3857,66 @@ def test_thescore_parse_fixture() -> None:
     assert second.url.endswith("/47882363775501-Live-Bet-Get")
 
 
+def test_every_promo_key_is_nameable_on_the_cli_whatever_the_default_state(monkeypatch) -> None:
+    """``PROMO_FACTORIES`` is resolved for ``settings.STATE``; under the default
+    Illinois it has no betPARX lobby, and the CLI's ``--source`` choices used to
+    be that resolved set — so ``collect --state PA --source betparx_kambi`` was
+    refused as unknown from the one state it is for."""
+    from src.promos import collector, registry
+
+    assert "betparx_kambi" in registry.base_keys()
+    assert "betparx_kambi" in collector.KNOWN_PROMO_KEYS
+    assert set(registry.keys()) <= set(registry.base_keys())
+    # A real key the scope cannot build is said, not dropped silently.
+    caught: list[str] = []
+    monkeypatch.setattr(collector.log, "warning", lambda msg, *args: caught.append(msg % args))
+    built = collector.build_sources(["betparx_kambi"], state="IL", route_scope="state")
+    for source in built:
+        source.close()
+    assert built == []
+    assert caught and "betparx_kambi" in caught[0]
+    with pytest.raises(KeyError):
+        collector.build_sources(["no_such_book"], state="PA", route_scope="state")
+
+
+def test_betparx_fetches_each_public_block_once_and_never_an_empty_id() -> None:
+    """Three weekly boosts share one terms block and the promo-code stub has
+    none (``TERMS_FROM_IMS``); fetching per promotion asked for the shared
+    block three times and for ``webContent/en_US_`` once."""
+    from src.promos.betparx import BetParxPromoAdapter
+
+    promos = [
+        {"product": "sportsbook", "detailedDescriptionWebcontentId": "WK1_LEARN_MORE",
+         "termsConditionsWebcontentId": "TC_SHARED"},
+        {"product": "sportsbook", "detailedDescriptionWebcontentId": "WK2_LEARN_MORE",
+         "termsConditionsWebcontentId": "TC_SHARED"},
+        {"product": "", "detailedDescriptionWebcontentId": "PROMO_CODE_LEARN_MORE",
+         "termsConditionsWebcontentId": "TERMS_FROM_IMS"},
+        {"product": "sportsbook", "detailedDescriptionWebcontentId": "",
+         "termsConditionsWebcontentId": ""},
+    ]
+    assert BetParxPromoAdapter._content_ids_to_fetch(promos) == [
+        "WK1_LEARN_MORE", "TC_SHARED", "WK2_LEARN_MORE", "PROMO_CODE_LEARN_MORE",
+    ]
+
+
+def test_the_playbook_names_a_contest_instead_of_pricing_its_pool() -> None:
+    """A contest's title promises bonus bets and its reward type reads
+    ``bonus_bets``; the bonus-bet branch told the operator to hedge a prize
+    pool they do not hold."""
+    from src.promos.strategy import build_usage_guidance
+
+    offer = PromoOffer(
+        source="betmgm", offer_id="frenzy", kind=PromoKind.CONTEST,
+        title="BetMGM $100k Football Frenzy: Win Bonus Bets",
+        observed_at=datetime(2026, 8, 23, 5, 0, tzinfo=UTC),
+        reward_type="bonus_bets", bonus_amount=500000.0,
+    )
+    text = build_usage_guidance(offer)
+    assert "contest or free-to-play" in text
+    assert "stake-not-returned" not in text and "hedge the opposite" not in text
+
+
 def test_registry_routes_betparx_per_state_and_thescore_globally() -> None:
     from src.promos.registry import global_promo_sources, state_promo_sources_for_state
 

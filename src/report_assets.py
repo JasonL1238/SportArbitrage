@@ -3532,25 +3532,10 @@ function promoKindLabel(kind) {
   return PROMO_KIND_LABEL[kind] || String(kind || 'other').replace(/_/g, ' ');
 }
 
-const PROMO_BRAND_LABEL = {
-  fanduel: 'FanDuel',
-  draftkings: 'DraftKings',
-  betmgm: 'BetMGM',
-  betmgm_on: 'BetMGM Ontario',
-  caesars: 'Caesars',
-  bet365: 'bet365',
-  hardrock: 'Hard Rock',
-  fanatics: 'Fanatics',
-  bovada: 'Bovada',
-  cloudbet: 'Cloudbet',
-  leovegas_kambi: 'LeoVegas',
-  leovegas_on: 'LeoVegas Ontario',
-  betrivers_kambi: 'BetRivers',
-  onexbet: '1xBet',
-  pinnacle: 'Pinnacle',
-  smarkets: 'Smarkets',
-  matchbook: 'Matchbook',
-};
+/** A promo source's display name: the payload's ``labels`` (one entry per
+ *  promo key, folded to the brand by the server from `BRAND_LABELS`), then the
+ *  odds side's own brand name for a key it also trades.  No table of its own —
+ *  the one this replaced had drifted and never learned ``thescore``. */
 
 let selectedPromoKey = null;
 
@@ -3562,9 +3547,8 @@ function promoBrandKey(key) {
 function promoBookLabel(key) {
   const k = String(key || '');
   const brand = promoBrandKey(k);
-  const base = PROMO_BRAND_LABEL[brand]
-    || (book(brand) !== brand ? book(brand) : null)
-    || (book(k) !== k ? book(k) : null)
+  const base = (PROMOS.labels || {})[k]
+    || (brandLabel(brand) !== brand ? brandLabel(brand) : null)
     || brand.replace(/_/g, ' ');
   return k.startsWith('tl_') ? `${base} (via TheLines)` : base;
 }
@@ -3672,7 +3656,55 @@ function promoSelectionLabel(plan, leg) {
   return String(leg.selection || '').replace(/^./, (c) => c.toUpperCase());
 }
 
-function promoPlanCardHtml(plan) {
+/** The ledger slip a promo plan would log: the planner's legs as placed —
+ *  the promo leg as credit (or a boosted stake) and the hedges as cash — with
+ *  the offer named on the slip so My bets can say which promotion a position
+ *  was spending. ``expected_profit`` is the settled floor, the figure the
+ *  Campaign table ranks by for these strategies. */
+function promoSlipFor(o, plan) {
+  const meta = PROMOS.plan_meta || {};
+  return {
+    kind: 'promo',
+    promo_source: o.source,
+    promo_offer_id: o.offer_id,
+    sport: plan.sport,
+    league: plan.league,
+    event_key: plan.event_key,
+    home_team: plan.home_team,
+    away_team: plan.away_team,
+    commence_time: plan.commence_time,
+    market: plan.market,
+    period: plan.period,
+    side: plan.side || '',
+    line: plan.line,
+    expected_profit: plan.settled_cash,
+    source_run_id: meta.odds_run_id === undefined ? null : meta.odds_run_id,
+    note: `${o.summary || o.title || ''}`.slice(0, 200),
+    legs: (plan.legs || []).map((leg) => ({
+      book: leg.source,
+      selection: leg.selection,
+      line: leg.line,
+      american_odds: leg.american_odds,
+      decimal_odds: leg.decimal_odds,
+      stake: leg.stake,
+      // The ledger says which stake kinds it takes; the page keeps no list of
+      // its own.  With no ledger vocabulary on the page, the planner's kind is
+      // posted as-is and the ledger's own refusal is the answer.
+      stake_kind: BETS && BETS.stake_kinds && !BETS.stake_kinds.includes(leg.stake_kind)
+        ? 'cash' : leg.stake_kind,
+      link_url: (leg.link && leg.link.url) || '',
+    })),
+  };
+}
+
+/** A drawer id that survives ``querySelector``: the offer key can hold any
+ *  character a venue put in an id, so only the plan's position and a slug of
+ *  the key are used. */
+function promoDrawerIndex(o, planIndex) {
+  return `promo-${planIndex}-${promoOfferKey(o).replace(/[^a-z0-9]+/gi, '-')}`;
+}
+
+function promoPlanCardHtml(plan, o, planIndex) {
   const stepBadge = plan.step
     ? `<span class="pill flat">${plan.step === 'qualify' ? 'step 1 · qualify' : 'step 2 · convert'}</span> `
     : '';
@@ -3724,6 +3756,16 @@ function promoPlanCardHtml(plan) {
     .join(' · ');
   const notes = (plan.notes || [])
     .map((n) => `<p class="plan-sub">${escapeHtml(n)}</p>`).join('');
+  // Logging is the plan's last step: every leg the card shows, pre-filled,
+  // with the offer on the slip.  Only when the page is served, like every
+  // other ledger control — a file:// page is view-only.
+  const index = promoDrawerIndex(o, planIndex);
+  const logging = BETS_WRITABLE
+    ? `<div class="bl-acts" style="justify-content:flex-start;margin-top:8px">
+        <button type="button" class="bl-btn" data-bl="toggle" data-bl-index="${escapeHtml(index)}"
+          title="Pre-fill these legs into My bets">Log this plan</button>
+      </div>${slipDrawerHtml(promoSlipFor(o, plan), index, { total: null })}`
+    : '';
   return `<div class="plan-card">
     <h5>${stepBadge}${escapeHtml(plan.away_team || '')} at ${escapeHtml(plan.home_team || '')}</h5>
     <p class="plan-sub">${escapeHtml(marketBits.filter(Boolean).join(' · '))}
@@ -3732,6 +3774,7 @@ function promoPlanCardHtml(plan) {
     <div class="pill-row">${metrics.map((m) => `<span class="pill flat">${escapeHtml(m)}</span>`).join('')}</div>
     ${outcomes ? `<p class="plan-outcomes">outcomes: ${escapeHtml(outcomes)}</p>` : ''}
     ${notes}
+    ${logging}
   </div>`;
 }
 
@@ -3770,7 +3813,7 @@ function promoPlanHtml(o) {
   }
   return `<h4>${escapeHtml(label)}</h4>
     ${bits.length ? `<p class="plan-sub">${escapeHtml(bits.join(' · '))}</p>` : ''}
-    ${(entry.plans || []).map(promoPlanCardHtml).join('')}
+    ${(entry.plans || []).map((plan, i) => promoPlanCardHtml(plan, o, i)).join('')}
     ${caveats}
     ${skippedHtml}`;
 }
@@ -3846,8 +3889,15 @@ function promoDetailHtml(o) {
 const promoClaimKeyFor = (key) => 'promoClaimed:' + key;
 function promoClaimKey(o) { return promoClaimKeyFor(promoOfferKey(o)); }
 
+/** The ledger slips that spent this offer — kind ``promo`` with the offer
+ *  named on them.  Unlike the checkbox, this is true in every browser. */
+function promoLoggedSlips(o) {
+  return betSlips().filter((s) => s.kind === 'promo'
+    && s.promo_source === o.source && String(s.promo_offer_id) === String(o.offer_id));
+}
+
 function promoIsClaimed(o) {
-  return storedValue(promoClaimKey(o), '') === '1';
+  return storedValue(promoClaimKey(o), '') === '1' || promoLoggedSlips(o).length > 0;
 }
 
 function promoCampaignEV(o) {
@@ -3949,7 +3999,9 @@ function renderPromoCampaign(offers) {
       <td class="num dim">${escapeHtml(qual)}</td>
       <td class="num">${escapeHtml(conv)}</td>
       <td>${ends}</td>
-      <td class="claim-cell"><input type="checkbox" aria-label="claimed" ${claimed ? 'checked' : ''}/></td>
+      <td class="claim-cell">${promoLoggedSlips(o).length
+        ? '<input type="checkbox" aria-label="claimed" checked disabled title="Logged in My bets"/> <span class="pill flat">logged</span>'
+        : `<input type="checkbox" aria-label="claimed" ${claimed ? 'checked' : ''}/>`}</td>
     </tr>`;
   }).join('');
   const emptyBody = shown.length ? '' : `<tr><td colspan="10" class="dim">${
@@ -3966,7 +4018,7 @@ function renderPromoCampaign(offers) {
     const against = currentBrand && rows.length !== shown.length
       ? ` · ranked against all ${rows.length} offers`
       : '';
-    note.textContent = `${ranked} priceable · ${claimed} done${against} · checkbox is per-browser · click Book or EV to sort`;
+    note.textContent = `${ranked} priceable · ${claimed} done${against} · checkbox is per-browser, "logged" is from My bets · click Book or EV to sort`;
   }
   wireSort(table, campaignColumns, 'promo-campaign', renderPromos);
   table.querySelectorAll('tbody tr').forEach((tr) => {
@@ -4544,7 +4596,8 @@ function slipTitle(slip) {
   if (home || away) return home || away;
   const first = (slip.legs || [])[0];
   if (first && first.selection) return first.selection;
-  return slip.kind === 'arb' ? 'Arbitrage position' : 'Bet';
+  if (slip.kind === 'arb') return 'Arbitrage position';
+  return slip.kind === 'promo' ? 'Promo play' : 'Bet';
 }
 
 function slipMeta(slip) {
@@ -4557,6 +4610,7 @@ function slipMeta(slip) {
   }
   if (slip.line !== null && slip.line !== undefined) bits.push(fmtLine(slip.line, slip.market));
   if (slip.commence_time) bits.push(fmtClock(slip.commence_time));
+  if (slip.kind === 'promo' && slip.promo_source) bits.push(`promo at ${promoBookLabel(slip.promo_source)}`);
   bits.push('placed ' + fmtClock(slip.placed_at));
   return bits.join(' · ');
 }
@@ -4772,7 +4826,8 @@ function slipCard(slip) {
       <td>${selectionCell}${leg.line === null || leg.line === undefined
         ? '' : ' ' + escapeHtml(fmtLine(leg.line, slip.market))}</td>
       <td class="num">${priceCell}</td>
-      <td class="num">${stakeCell}</td>
+      <td class="num">${stakeCell}${leg.stake_kind && leg.stake_kind !== 'cash'
+        ? ` <span class="dim">${escapeHtml(leg.stake_kind === 'bonus' ? 'credit' : leg.stake_kind)}</span>` : ''}</td>
       <td class="num">${escapeHtml(usd(leg.to_return))}</td>
       <td>${statusCell}</td>
       <td class="num">${backCell}</td>
@@ -4829,7 +4884,7 @@ function slipCard(slip) {
         <div class="bl-meta">${escapeHtml(slipMeta(slip))}${openGame}</div>
       </div>
       <span class="bl-status ${escapeHtml(slip.status)}">${escapeHtml(
-        slip.kind === 'arb' ? `arb · ${slip.status}` : slip.status)}</span>
+        slip.kind === 'arb' || slip.kind === 'promo' ? `${slip.kind} · ${slip.status}` : slip.status)}</span>
     </div>
     <div class="bl-kpis">${kpis.join('')}</div>
     <table class="bl-legs">
@@ -4885,29 +4940,42 @@ function arbLogDrawer(o, index) {
     source_run_id: currentRunId,
     legs: legs,
   };
+  return slipDrawerHtml(slip, index, { total: o.total_stake });
+}
+
+/** The drawer itself: one row per leg with an editable stake, and the slip
+ *  the reader posts carried on the node so the handler never rebuilds it.
+ *  Shared by the arbitrage card and the promo plan card; ``total`` adds the
+ *  bankroll box that rescales every leg in the detector's ratio, which only
+ *  an arbitrage position wants — a promo's credit leg is the offer's size. */
+function slipDrawerHtml(slip, index, { total }) {
+  const legs = slip.legs || [];
   const rows = legs.map((leg, i) =>
     `<tr>
       <td>${escapeHtml(book(leg.book))}</td>
       <td>${escapeHtml(leg.selection)}${leg.line === null || leg.line === undefined
-        ? '' : ' ' + escapeHtml(fmtLine(leg.line, o.market))}</td>
+        ? '' : ' ' + escapeHtml(fmtLine(leg.line, slip.market))}</td>
       <td class="num">${escapeHtml(fmtAmerican(leg.american_odds))}</td>
       <td class="num"><label class="bl-field"><span class="sr-only">Stake at ${
         escapeHtml(book(leg.book))}</span>
         <input class="money" data-bl-stake="${i}" inputmode="decimal"
-          value="${Number(leg.stake).toFixed(2)}"/></label></td>
+          value="${Number(leg.stake).toFixed(2)}"/></label>${
+        leg.stake_kind && leg.stake_kind !== 'cash'
+          ? ` <span class="dim">${escapeHtml(leg.stake_kind === 'bonus' ? 'credit' : leg.stake_kind)}</span>` : ''}</td>
     </tr>`).join('');
+  const totalBox = total === null || total === undefined ? '' : `<label class="bl-field"><span>Total $</span>
+        <input class="money" data-bl-total="${index}" inputmode="decimal"
+          value="${Number(total).toFixed(2)}"/></label>`;
   return `<div class="bl-drawer" hidden data-bl-drawer="${index}"
       data-bl-payload="${escapeHtml(JSON.stringify(slip))}">
     <table class="bl-legs"><tbody>${rows}</tbody></table>
     <div class="bl-form" style="margin-top:8px">
-      <label class="bl-field"><span>Total $</span>
-        <input class="money" data-bl-total="${index}" inputmode="decimal"
-          value="${Number(o.total_stake).toFixed(2)}"/></label>
-      <button type="button" class="bl-btn primary" data-bl="log-arb" data-bl-index="${index}"
+      ${totalBox}
+      <button type="button" class="bl-btn primary" data-bl="log-slip" data-bl-index="${index}"
         >Log ${legs.length} leg${legs.length === 1 ? '' : 's'}</button>
       <button type="button" class="bl-btn" data-bl="cancel" data-bl-index="${index}">Cancel</button>
     </div>
-    <p class="bl-msg" data-bl-msg="arb-${index}"></p>
+    <p class="bl-msg" data-bl-msg="slip-${index}"></p>
   </div>`;
 }
 
@@ -4941,7 +5009,7 @@ function rescaleArbStakes(drawer) {
 }
 
 /** Read a drawer back out: the scraped payload, with the stakes as edited. */
-function arbDrawerPayload(drawer) {
+function drawerPayload(drawer) {
   const slip = JSON.parse(drawer.getAttribute('data-bl-payload'));
   for (const boxNode of drawer.querySelectorAll('[data-bl-stake]')) {
     const i = Number(boxNode.getAttribute('data-bl-stake'));
@@ -4978,7 +5046,7 @@ function wireBetControls() {
       if (drawer) drawer.hidden = kind === 'cancel' ? true : !drawer.hidden;
       return;
     }
-    if (kind === 'log-arb') return void logArbBet(node);
+    if (kind === 'log-slip') return void logDrawerSlip(node);
     if (kind === 'log-single') return void logSingleBet(node);
     if (kind === 'settle') return void settleSlip(node);
     if (kind === 'delete') return void deleteSlip(node);
@@ -5002,22 +5070,26 @@ function wireBetControls() {
   });
 }
 
-async function logArbBet(node) {
+async function logDrawerSlip(node) {
   const index = node.getAttribute('data-bl-index');
   const drawer = document.querySelector(`[data-bl-drawer="${index}"]`);
   if (!drawer) return;
   node.disabled = true;
-  const box = drawer.querySelector(`[data-bl-msg="arb-${index}"]`);
+  const box = drawer.querySelector(`[data-bl-msg="slip-${index}"]`);
   if (box) { box.textContent = 'Saving…'; box.classList.remove('bad', 'good'); }
-  const res = await betApi('/api/bets/log', arbDrawerPayload(drawer));
+  const slip = drawerPayload(drawer);
+  const res = await betApi('/api/bets/log', slip);
   node.disabled = false;
   if (!res.ok) {
     if (box) { box.textContent = res.error; box.classList.add('bad'); }
     return;
   }
-  // The drawer belongs to the arbitrage panel, which this write did not rebuild.
+  // The drawer belongs to the panel it was drawn in, which this write did not rebuild.
   if (box) { box.textContent = 'Logged — see My bets.'; box.classList.add('good'); }
   drawer.hidden = true;
+  // Spending a promo is what "done" means.  ``betApi`` already adopted the
+  // ledger's echo, so the offer reads as logged; repaint the Campaign table.
+  if (slip.kind === 'promo') renderPromos();
 }
 
 async function logSingleBet(node) {

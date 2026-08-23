@@ -54,7 +54,7 @@ this table is a summary, and the prose under it is the part the code cannot stat
 | DraftKings | validated | **validated** (2026-08-23, `primaryMarkets`) | template | template |
 | Caesars | exact-state template | template (WAF-blocked from PA too, 2026-08-23) | template | template |
 | Hard Rock | validated | unavailable | template | unavailable |
-| theScore Bet | validated | **validated** (2026-08-23, edge reported US-PA) | no route yet | unavailable |
+| theScore Bet | template | **validated** (2026-08-23, edge reported US-PA) | no route yet | unavailable |
 | bet365 | **validated** | **validated** (2026-08-23, shell reported USPA) | template | unavailable |
 | betPARX | unavailable | **validated** (2026-08-23, Kambi `parxuspa`) | template (`parxusnj`) | unavailable |
 | Promos (FD / BR) | IL / IL | PA / PA | NJ / NJ | DC / unavailable |
@@ -299,7 +299,7 @@ Use this when Step 2 fails for a venue.
 | Caesars | `locations/{st}` | Same |
 | Hard Rock | Add a segment only when licensed in that state | PA is explicitly unavailable; never invent `segment=pa` |
 | theScore Bet | `sportsbook.us-{st}.thescore.bet` | The edge reports the licence back, so a wrong-state egress refuses rather than answering |
-| betPARX | Kambi operator `parxus{st}` (`parxuspa`, `parxusnj`), market `US-{ST}` | Read off `window._kc` on `{st}.betparx.com/kambi`; one feed with BetRivers on Kambi-managed competitions, its own book on US sports — the per-competition counterparty gate handles it, as for LeoVegas |
+| betPARX | Kambi operator `parxus{st}` (`parxuspa`, `parxusnj`), market `US-{ST}` | Read off `window._kc` on `{st}.betparx.com/kambi`; one feed with BetRivers on Kambi-managed competitions, its own book on US sports — a measured mirror anywhere makes the pair one counterparty for the whole run, as for LeoVegas |
 | bet365 | `www.{st}.bet365.com` **and** `csid` (28 IL, 56 PA, 3 NJ, 20 DC) | The host *is* the licence — the stateless `www.bet365.com` serves no board at all, so there is no origin to fall back to. `csid` travels with the host rather than replacing it: neither alone routes a price. The shell states its own licence as `STATE_LOCALE:"US{ST}"`, and the adapter refuses on disagreement *or absence* |
 | Bovada / Cloudbet / 1xBet / Pinnacle / exchanges / Kalshi / Polymarket | Usually none | Treat as state-agnostic once ok |
 | Action Network / VegasInsider / VSiN observations | None | Diagnostic only; not a jurisdiction substitute or executable leg |

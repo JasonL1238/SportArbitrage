@@ -32,7 +32,8 @@ window and the tile now carries the Eagles boost as "Sports Welcome Offer");
 2026-08-21 → 09-28, new users also get four 50% profit boosts); a casino
 welcome (skipped, `product:casino`); and a promo-code stub whose terms id is
 `TERMS_FROM_IMS` — Playtech's marker for terms served only inside the account
-system, so none are fetched. `nj.betparx.com` is the same shape.
+system, so none are fetched; each public block is fetched once even where three
+weekly boosts share one terms id. `nj.betparx.com` is the same shape.
 
 Adapter: `src/promos/betparx.py`, built per state from
 `PromoRoute.betparx_url` (PA and NJ; no IL/DC licence, so no entry there), region
@@ -88,7 +89,22 @@ nobody holds. `PromoKind.CONTEST` now exists; the classifier's first rule catche
 free-to-play / pick 'em / prize-pool phrasing and pool-scale dollar figures
 ("$500,000 in", "$2 million"); the planner names it and computes nothing. Checked
 against the same run: all six re-read as `contest`, the DK "$5 → $150", TheLines
-"$10 → $150 if you win" and theScore's "$10 → $30" still read as bonus bets.
+"$10 → $150 if you win" and theScore's "$10 → $30" still read as bonus bets. The playbook text (`src/promos/strategy.py`) names a
+contest first for the same reason — its `reward_type` reads `bonus_bets` and the
+bonus-bet branch would have told the operator to hedge a prize pool.
+
+### Spending a promo from the dashboard — 2026-08-23
+
+Every plan card on a served page carries **Log this plan**: the planner's legs go
+into My bets as a `kind: promo` slip (credit leg as credit, hedges as cash, the
+offer named on the slip, `source_run_id` the odds run the plan was priced from),
+and a logged offer reads as done in the Campaign table in every browser — the
+per-browser checkbox stays for offers claimed outside the page, and is disabled
+once the ledger knows. Promo source names on the page come from the payload
+(`BRAND_LABELS`, or `PROMO_ONLY_LABELS` for the Ontario catalogues); the JS table
+that used to hold them had drifted and never learned `thescore`. Also fixed
+while here: `collect --source betparx_kambi` was refused under the default
+Illinois setting because the CLI's choices were the state-resolved registry.
 
 ## Scraping fixes proven live, and four path probes — 2026-08-16 (evening)
 

@@ -746,6 +746,7 @@ class BetLog:
             "slips": slips,
             "summary": summarize(slips),
             "statuses": list(STATUSES),
+            "stake_kinds": list(STAKE_KINDS),
         }
 
 

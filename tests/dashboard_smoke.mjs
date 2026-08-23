@@ -322,6 +322,12 @@ try {
     globalThis.__screenGames = () => eventSummaries(currentRows()
       .filter((r) => !currentLeague || str(r[COL.league]) === currentLeague)).length;
     globalThis.__promoPlanHtml = promoPlanHtml;
+    globalThis.__promoPlanCardHtml = promoPlanCardHtml;
+    globalThis.__promoSlipFor = promoSlipFor;
+    globalThis.__setBetSlips = (slips) => { BETS = { ...BETS, slips }; };
+    globalThis.__setBets = (patch) => { BETS = { ...BETS, ...patch }; };
+    globalThis.__slipTitle = slipTitle;
+    globalThis.__slipMeta = slipMeta;
     globalThis.__promoDetailHtml = promoDetailHtml;
     globalThis.__renderPromos = renderPromos;
     globalThis.__promoMoney = promoMoney;
@@ -4531,4 +4537,122 @@ function onAnEmbeddedRun() {   // a declaration, so block order cannot matter
     process.exit(1);
   }
   console.log('a legacy run reads its own source column, not the latest run’s');
+}
+
+// ── spending a promo from the page ─────────────────────────────────────────
+// A plan card is an instruction; logging it is the last step of following it.
+// The slip a card would post is built from the planner's own legs — the credit
+// leg as credit, the hedge as cash, the offer named — and once a promo slip is
+// in the ledger the Campaign table counts the offer as done in every browser,
+// not only the one whose checkbox was ticked.
+{
+  const problems = [];
+  const plan = {
+    event_key: 'MLB-PHI@MLB-MIA:2026-07-28', sport: 'baseball', league: 'MLB',
+    home_team: 'Miami Marlins', away_team: 'Philadelphia Phillies',
+    commence_time: '2026-07-28T22:41:00+00:00', market: 'moneyline', period: 'full_game',
+    side: null, line: null,
+    legs: [
+      { role: 'promo', source: 'draftkings', selection: 'away', line: null,
+        decimal_odds: 3.0, american_odds: 200, net_odds: 3.0, stake: 100.0,
+        stake_kind: 'bonus', is_alternate: false, observed_at: '2026-07-28T07:00:00+00:00',
+        link: { url: 'https://sportsbook.draftkings.com/event/1', precision: 'event' } },
+      { role: 'hedge', source: 'fanduel', selection: 'home', line: null,
+        decimal_odds: 1.5, american_odds: -200, net_odds: 1.5, stake: 133.33,
+        stake_kind: 'cash', is_alternate: false, observed_at: '2026-07-28T07:00:00+00:00' },
+    ],
+    outcome_profits: [['away', 71.41], ['home', 71.40], ['push', 0.0]],
+    guaranteed_cash: 0.0, settled_cash: 66.66, quote_age_seconds: 120, notes: [],
+    conversion_pct: 61.25,
+  };
+  const offer = { source: 'draftkings', offer_id: 'smoke-spend', kind: 'bonus_bet',
+                  title: 'Bet $5, get $150', summary: 'Bet $5, get $150 in bonus bets' };
+  globalThis.__setPromoPlans({ 'draftkings|smoke-spend': {
+    strategy: 'bonus_conversion', book: ['draftkings'], plans: [plan], skipped: {},
+    caveats: [], unit: { kind: 'bonus_credit', amount: 100.0, assumed: false },
+  } }, { odds_run_id: 7 });
+
+  const slip = globalThis.__promoSlipFor(offer, plan);
+  if (slip.kind !== 'promo') problems.push(`slip kind is ${slip.kind}, not promo`);
+  if (slip.promo_source !== 'draftkings' || slip.promo_offer_id !== 'smoke-spend') {
+    problems.push('the slip does not name the offer it spends');
+  }
+  if (slip.source_run_id !== 7) problems.push('the slip does not carry the odds run the plan was priced from');
+  if (slip.expected_profit !== 66.66) problems.push('expected_profit is not the settled floor');
+  if (slip.event_key !== plan.event_key || slip.home_team !== 'Miami Marlins') {
+    problems.push('the slip lost the game');
+  }
+  const [promoLeg, hedgeLeg] = slip.legs || [];
+  if (!promoLeg || promoLeg.book !== 'draftkings' || promoLeg.stake_kind !== 'bonus'
+      || promoLeg.stake !== 100.0 || promoLeg.american_odds !== 200) {
+    problems.push(`the promo leg is wrong: ${JSON.stringify(promoLeg)}`);
+  }
+  if (!hedgeLeg || hedgeLeg.book !== 'fanduel' || hedgeLeg.stake_kind !== 'cash'
+      || hedgeLeg.stake !== 133.33) {
+    problems.push(`the hedge leg is wrong: ${JSON.stringify(hedgeLeg)}`);
+  }
+  if (promoLeg && promoLeg.link_url !== 'https://sportsbook.draftkings.com/event/1') {
+    problems.push('the promo leg lost its bet link');
+  }
+  if (!(slip.note || '').includes('Bet $5, get $150')) problems.push('the slip note does not name the offer');
+  // A stake kind the ledger does not know must not reach it — and the page
+  // asks the ledger which kinds those are rather than keeping its own list:
+  // with the ledger's vocabulary on the page an unknown kind is posted as
+  // cash; without one, the planner's kind goes through for the ledger to judge.
+  globalThis.__setBets({ stake_kinds: ['cash', 'bonus', 'boosted'] });
+  const odd = globalThis.__promoSlipFor(offer, { ...plan, legs: [{ ...plan.legs[0], stake_kind: 'weird' }] });
+  if (odd.legs[0].stake_kind !== 'cash') problems.push('an unknown stake kind was posted as-is');
+  if (globalThis.__promoSlipFor(offer, plan).legs[0].stake_kind !== 'bonus') {
+    problems.push('a known credit kind was not kept');
+  }
+  globalThis.__setBets({ stake_kinds: undefined });
+  if (globalThis.__promoSlipFor(offer, plan).legs[0].stake_kind !== 'bonus') {
+    problems.push('with no ledger vocabulary the planner kind must pass through');
+  }
+
+  // The card itself: on a served page every plan carries its drawer with the
+  // slip on the node; on a file:// page (this harness) the control is absent
+  // and nothing else changes.
+  const card = globalThis.__promoPlanCardHtml(plan, offer, 0);
+  if (!card.includes('plan-card')) problems.push('the plan card did not render');
+  if (card.includes('data-bl-drawer')) problems.push('a view-only page rendered a log drawer');
+
+  // Done = ticked here OR logged in the ledger.
+  globalThis.__setPromoRun({ id: 5, started_at: '2026-07-28T07:00:00+00:00',
+                             finished_at: '2026-07-28T07:01:00+00:00', jurisdiction: 'PA',
+                             ok: true, offer_count: 1, source_count: 1 });
+  globalThis.__setPromoOffers([offer]);
+  globalThis.__setBetSlips([]);
+  globalThis.__renderPromos();
+  const before = nodes.get('promo-campaign')?.innerHTML || '';
+  if (!before.includes('smoke-spend')) problems.push('the campaign table did not render the offer');
+  if (before.includes('logged')) problems.push('an unlogged offer reads as logged');
+  globalThis.__setBetSlips([{ id: 1, kind: 'promo', status: 'pending', promo_source: 'draftkings',
+    promo_offer_id: 'smoke-spend', legs: [], placed_at: '2026-07-28T08:00:00+00:00',
+    home_team: 'Miami Marlins', away_team: 'Philadelphia Phillies' }]);
+  globalThis.__renderPromos();
+  const after = nodes.get('promo-campaign')?.innerHTML || '';
+  if (!after.includes('logged')) problems.push('a logged promo slip does not mark the offer');
+  if (!after.includes('is-claimed')) problems.push('a logged offer does not count as done');
+  // The checkbox cannot un-log a slip, so it must not pretend to: a logged
+  // row's box is checked and disabled, not a control that springs back.
+  if (!/checked disabled/.test(after)) problems.push('a logged offer still offers a live checkbox');
+  const note = nodes.get('promo-campaign-note')?.textContent || '';
+  if (!note.includes('1 done')) problems.push(`the note does not count the logged offer as done: "${note}"`);
+  // And the ledger says which promotion a slip was spending.
+  const logged = { id: 1, kind: 'promo', status: 'pending', promo_source: 'draftkings',
+                   promo_offer_id: 'smoke-spend', legs: [], placed_at: '2026-07-28T08:00:00+00:00' };
+  if (globalThis.__slipTitle(logged) !== 'Promo play') problems.push('a promo slip with no game is not titled as a promo play');
+  // Named through ``book()``, which echoes the key on a page with no DraftKings
+  // source and the label on one that has it — the sentence is what is pinned.
+  if (!/promo at draftkings/i.test(globalThis.__slipMeta(logged))) {
+    problems.push(`the slip meta does not name the promo book: "${globalThis.__slipMeta(logged)}"`);
+  }
+  globalThis.__setBetSlips([]);
+  globalThis.__restorePromos();
+  if (problems.length) {
+    console.error('SPENDING A PROMO: ' + problems.join('; '));
+    process.exit(1);
+  }
+  console.log('a plan card logs the slip it shows, and a logged offer is done everywhere');
 }

@@ -282,7 +282,11 @@ def state_promo_sources_for_state(state: str) -> tuple[PromoSourceDescriptor, ..
 
 
 def promo_sources_for_state(state: str) -> tuple[PromoSourceDescriptor, ...]:
-    """One FanDuel region and one BetRivers landing for the active state."""
+    """The state-scoped sources the state supplies, beside every global one.
+
+    FanDuel's region, the BetRivers landing and the betPARX lobby are built
+    per state; a state with no betPARX licence simply has no entry.
+    """
     configured = jurisdiction(state)
     state_entries = {
         entry.key: entry for entry in state_promo_sources_for_state(configured.state)
@@ -298,6 +302,18 @@ def promo_sources_for_state(state: str) -> tuple[PromoSourceDescriptor, ...]:
 
 
 PROMO_SOURCES: tuple[PromoSourceDescriptor, ...] = promo_sources_for_state(settings.STATE)
+
+
+def base_keys() -> tuple[str, ...]:
+    """Every promo source key, before state resolution.
+
+    The CLI's ``--source`` choices and its unknown-key check read this, not
+    :data:`PROMO_SOURCES`: that tuple is resolved for ``settings.STATE``, so
+    under the default Illinois it omits ``betparx_kambi`` — a PA/NJ-only
+    lobby — and ``collect --state PA --source betparx_kambi`` was refused as
+    unknown.  Which keys a *state* can build is the state builder's question.
+    """
+    return tuple(entry.key for entry in _BASE_PROMO_SOURCES)
 
 
 def keys() -> tuple[str, ...]:
@@ -321,6 +337,7 @@ __all__ = [
     "PromoSourceDescriptor",
     "global_promo_sources",
     "keys",
+    "base_keys",
     "promo_sources_for_state",
     "state_promo_sources_for_state",
 ]

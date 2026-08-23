@@ -589,6 +589,32 @@ _BET_WRITERS: dict[str, Any] = {
 # ── promotions ───────────────────────────────────────────────────────────────
 
 
+def _promo_brand_labels() -> dict[str, str]:
+    """One display name per promo source key, from the two authorities.
+
+    ``tl_fanduel`` is TheLines watching FanDuel, so it folds to FanDuel's name;
+    the page appends its own "(via TheLines)".  A promo-only catalogue (the
+    Ontario books) has no brand in :data:`report_copy.BRAND_LABELS` and is
+    named by :data:`report_copy.PROMO_ONLY_LABELS`.  The JS used to carry a
+    third table of these names, which had drifted ("Hard Rock" for "Hard Rock
+    Bet") and never learned ``thescore``.
+    """
+    from src.promos import registry as promo_registry
+    from src.report_copy import BRAND_LABELS, PROMO_ONLY_LABELS, SOURCE_NOTES
+
+    labels: dict[str, str] = {}
+    for key in promo_registry.base_keys():
+        brand = key[3:] if key.startswith("tl_") else key
+        label = (
+            BRAND_LABELS.get(brand)
+            or PROMO_ONLY_LABELS.get(brand)
+            or SOURCE_NOTES.get(brand, {}).get("label")
+        )
+        if label:
+            labels[key] = label
+    return labels
+
+
 def _promo_payload(
     odds_store: Store | None = None,
     *,
@@ -607,7 +633,7 @@ def _promo_payload(
     """
     empty: dict[str, Any] = {
         "run": None, "offers": [], "health": [], "kinds": [],
-        "plans": {}, "plan_meta": None,
+        "plans": {}, "plan_meta": None, "labels": _promo_brand_labels(),
     }
     try:
         from src.promos.schema import PromoKind
@@ -705,6 +731,7 @@ def _promo_payload(
             "kinds": empty["kinds"],
             "plans": plans,
             "plan_meta": plan_meta,
+            "labels": _promo_brand_labels(),
         }
     finally:
         store.close()

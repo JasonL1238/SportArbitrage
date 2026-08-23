@@ -125,11 +125,16 @@ def _route(
 
 
 def _betparx_unavailable(state: str, label: str) -> RetailRoute:
-    """betPARX holds licences in MD, MI, NJ and PA only; never invent a tenant."""
+    """betPARX holds licences in MD, MI, NJ and PA only; never invent a tenant.
+
+    No config, like every other ``UNAVAILABLE`` route: the registry never
+    builds one, and a Pennsylvania tenant written into an Illinois route is a
+    fallback waiting for a reader.
+    """
     return RetailRoute(
         source_key="betparx_kambi",
         host="eu-offering-api.kambicdn.com",
-        config={"operator": "parxuspa", "market": "US-PA", "lang": "en_US"},
+        config={},
         status=RouteStatus.UNAVAILABLE,
         routed_state=state,
         detail=f"betPARX is not {label} online sportsbook",
@@ -170,10 +175,12 @@ _AN_BOOK_IDS: Mapping[str, Mapping[str, int]] = MappingProxyType(
         "an_fanatics": {"IL": 2990, "PA": 2791, "NJ": 2988, "DC": 3679},
         "an_hardrock": {"IL": 3646, "NJ": 2724},
         "an_bally": {"NJ": 4693},
-        # State-licensed books with no first-party adapter here, so the
-        # republished feed is the *only* observation path.  betPARX and Unibet
-        # have no Illinois licence to republish; theScore Bet has one in all
-        # three.
+        # State-licensed books whose republished feed was, until the first-party
+        # routes arrived, the only observation path: theScore Bet gained one on
+        # 2026-08-13 and betPARX on 2026-08-23, so for those two this is now
+        # the cross-check beside ``thescore`` / ``betparx_kambi``; Unibet still
+        # has nothing else.  betPARX and Unibet have no Illinois licence to
+        # republish; theScore Bet has one in all three.
         #
         # **All three now parse.**  Captured 2026-08-08T16:38Z from a Pennsylvania
         # egress against a live pregame slate: 74 → 255 rows, 4623 → 225, 246 →
@@ -422,10 +429,12 @@ PA = Jurisdiction(
     state="PA",
     label="Pennsylvania",
     # Same standard IL met: routes promoted on live matching-egress evidence.
-    # Not a claim about every route — betmgm and caesars are still TEMPLATE,
-    # exactly as IL's caesars is.
+    # Not a claim about every route — caesars is still TEMPLATE, exactly as
+    # IL's is.
     routes={
-        # The three VALIDATED routes below earned it the same way on 2026-08-08:
+        # FanDuel and BetRivers earned VALIDATED on 2026-08-08 (DraftKings did
+        # too, and had it withdrawn — see its own comment); the other five were
+        # validated on the operator's first night in Pennsylvania, 2026-08-23:
         # two parser-clean runs each from a detected-PA egress, runs 29/30/31
         # replaying PASS offline.  FanDuel runs 29/30 (1579 and 1967 quotes, 0
         # rejections), BetRivers runs 28/29 (3699 and 3698, 0 rejections),

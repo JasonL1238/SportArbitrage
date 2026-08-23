@@ -34,6 +34,11 @@ PROMO_FACTORIES: dict[str, Callable[..., PromoSource]] = {
     entry.key: entry.factory() for entry in registry.PROMO_SOURCES
 }
 
+#: Every key a caller may name.  Wider than :data:`PROMO_FACTORIES`, which is
+#: resolved for ``settings.STATE`` and so omits a lobby the default state has
+#: no licence for — see :func:`src.promos.registry.base_keys`.
+KNOWN_PROMO_KEYS: tuple[str, ...] = registry.base_keys()
+
 #: Skips that mean "the venue answered with a structured empty catalog" — a
 #: real, useful fact — rather than "we got HTML chrome and invented nothing".
 _EMPTY_CATALOG_SKIPS = frozenset(
@@ -141,9 +146,15 @@ def build_sources(
         raise ValueError("state is required for state-scoped promo construction")
     factories = {entry.key: entry.factory() for entry in entries}
     selected = [key for key in (keys or factories) if key in factories]
-    unknown = [key for key in (keys or ()) if key not in PROMO_FACTORIES]
+    unknown = [key for key in (keys or ()) if key not in KNOWN_PROMO_KEYS]
     if unknown:
-        raise KeyError(f"unknown promo source(s): {unknown}; known: {sorted(PROMO_FACTORIES)}")
+        raise KeyError(f"unknown promo source(s): {unknown}; known: {sorted(KNOWN_PROMO_KEYS)}")
+    # A real key this scope cannot build — betPARX asked of a state with no
+    # betPARX lobby — is a fact about the state, said once rather than dropped.
+    for key in (keys or ()):
+        if key not in factories:
+            log.warning("%s: not built for this scope (%s) — no route in this state", key,
+                        state or route_scope)
     timeout = settings.HTTP_TIMEOUT if timeout is None else timeout
     sources: list[PromoSource] = []
     for key in selected:
@@ -855,7 +866,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     collect.add_argument(
         "--source",
         action="append",
-        choices=sorted(PROMO_FACTORIES),
+        choices=sorted(KNOWN_PROMO_KEYS),
         help="repeatable; default is every registered promo source",
     )
     collect.add_argument(

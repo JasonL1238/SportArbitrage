@@ -563,11 +563,11 @@ class TestTheDirectRouteIsCheckedToo:
 
         ``thescore`` joined on 2026-08-13, ``bet365`` on 2026-08-15 and
         ``betparx_kambi`` on 2026-08-23 (the Kambi tenant PA's own web app
-        names, answered from a Philadelphia egress the same day).  The first two PA
-        routes are ``TEMPLATE`` and neither has been asked over HTTP, which is
-        exactly why naming them here is safe: the table says *which* key would be
-        the direct route, and ``DIRECT`` is graded only on ``direct_rows > 0``,
-        so an unproven route cannot lift the grade on its own.  bet365 adds a
+        names, answered from a Philadelphia egress the same day).  All three PA
+        routes were ``TEMPLATE`` when first named here, and naming an unproven
+        route is safe: the table says *which* key would be the direct route,
+        and ``DIRECT`` is graded only on ``direct_rows > 0``, so a route that
+        has never produced cannot lift the grade on its own.  bet365 adds a
         second guarantee — its adapter refuses unless the host itself reports the
         routed state's licence, so a PA route asked from the wrong egress raises
         rather than producing rows Pennsylvania would then be graded on.
@@ -588,9 +588,11 @@ class TestTheDirectRouteIsCheckedToo:
         """Guarding against the opposite failure: an invariant so strict that the
         next real adapter cannot be declared.
 
-        theScore Bet and betPARX are both due a first-party Pennsylvania route.
-        Neither is registered yet, so the shape is checked with the registered
-        Kambi book that stands in for both — same platform, same PA licence.
+        Written when theScore Bet and betPARX were both still due a first-party
+        Pennsylvania route; both have one now (``thescore`` since 2026-08-13,
+        ``betparx_kambi`` since 2026-08-23).  The shape is still checked with the
+        longest-registered Kambi book, because the invariant is about the
+        declaration's shape, not about which adapter happens to be newest.
         """
         _check_locality_declarations(
             {

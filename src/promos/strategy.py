@@ -19,7 +19,16 @@ def build_usage_guidance(offer: PromoOffer) -> str:
     wagering = offer.wagering_requirement
     min_odds = offer.min_odds
 
-    if offer.kind in {PromoKind.BONUS_BET, PromoKind.FREE_BET} or reward_type in {
+    if offer.kind is PromoKind.CONTEST:
+        # First, because a contest's title promises "bonus bets" and its
+        # reward_type reads ``bonus_bets`` — the branch below would tell the
+        # operator to hedge a prize pool they do not hold.
+        parts.append(
+            "A contest or free-to-play game: a chance at credit, not credit in hand. "
+            "Enter it if entry is free; there is nothing to stake, hedge or convert, "
+            "and it takes no place in the campaign."
+        )
+    elif offer.kind in {PromoKind.BONUS_BET, PromoKind.FREE_BET} or reward_type in {
         "bonus_bets",
         "free_bet",
     }:

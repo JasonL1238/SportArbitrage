@@ -111,22 +111,18 @@ class BetParxPromoAdapter:
             endpoint=CONFIG_ENDPOINT,
         )
         raws = [config]
-        fetched = 0
-        for promo in self._sports_promotions(self._promotions(config)):
-            for content_id in self._content_ids(promo):
-                if fetched >= self.max_details:
-                    return raws
-                try:
-                    raws.append(
-                        self._http.get(
-                            f"{self.base_url}/webContent/en_US_{content_id}",
-                            endpoint=f"{CONTENT_ENDPOINT_PREFIX}{content_id}",
-                            expect_json=False,
-                        )
+        wanted = self._content_ids_to_fetch(self._sports_promotions(self._promotions(config)))
+        for content_id in wanted[: self.max_details]:
+            try:
+                raws.append(
+                    self._http.get(
+                        f"{self.base_url}/webContent/en_US_{content_id}",
+                        endpoint=f"{CONTENT_ENDPOINT_PREFIX}{content_id}",
+                        expect_json=False,
                     )
-                    fetched += 1
-                except Exception as exc:  # noqa: BLE001 - one block, not the catalogue
-                    log.warning("%s: web content %s failed: %s", self._source_key, content_id, exc)
+                )
+            except Exception as exc:  # noqa: BLE001 - one block, not the catalogue
+                log.warning("%s: web content %s failed: %s", self._source_key, content_id, exc)
         return raws
 
     # ── parse ────────────────────────────────────────────────────────────────
@@ -216,6 +212,21 @@ class BetParxPromoAdapter:
             if str(p.get("product") or "").lower() in SPORTS_PRODUCTS
             and p.get("isEnabledForGuest") is not False
         ]
+
+    @classmethod
+    def _content_ids_to_fetch(cls, promotions: Sequence[Mapping[str, Any]]) -> list[str]:
+        """Every public block the promotions name, once each, in first-seen order.
+
+        Three weekly boosts share one terms block and the promo-code stub has
+        none; fetching per promotion asked for that block three times and for
+        an empty id once.
+        """
+        seen: list[str] = []
+        for promo in promotions:
+            for content_id in cls._content_ids(promo):
+                if content_id and content_id not in seen:
+                    seen.append(content_id)
+        return seen
 
     @staticmethod
     def _content_ids(promo: Mapping[str, Any]) -> tuple[str, str]:

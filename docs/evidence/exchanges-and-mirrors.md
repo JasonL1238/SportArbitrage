@@ -463,10 +463,14 @@ ITF 38/38, Bundesliga 27/27, La Liga 27/27, ATP 26/26**, and its own prices on
 MLB, NFL and WNBA (a direct `listView/baseball/mlb` comparison the same evening
 had 22 of 30 shared MLB moneylines differing: Tigers 1900 vs 1910, Pirates 3400
 vs 3500). That is the LeoVegas shape exactly — run 32 reads `betrivers_kambi vs
-leovegas_kambi` at 25.6%, one feed in ITF and ATP — and the gate is built for
-it: `src.arb.counterparty_groups` folds the pair into one counterparty **per
-competition** where they are one feed and leaves them two where they are not,
-so a betPARX/BetRivers MLB position is real and an MLS one is refused. The
+leovegas_kambi` at 25.6%, one feed in ITF and ATP — and the gate treats it the
+way it treats LeoVegas, conservatively: `Agreement.verdict` is MIRROR when any
+one competition is one feed, and `src.arb.counterparty_groups` files a mirrored
+pair under `EVERY_LEAGUE`, so on such a run **no** betPARX/BetRivers position is
+reported, MLB included. A real MLB edge between the two is forgone rather than a
+phantom MLS one printed (an earlier draft of this paragraph claimed the gate was
+per-competition; it is not, by design — `src/arb.py` calls the per-league
+filing "the most expensive defect this gate has had"). The
 `an_parx`/`an_betrivers` NFL MIRROR above was the managed-feed half of the
 same picture seen through one thin republished slate. Declared failover pair:
 `("betparx_kambi", "an_parx")`.

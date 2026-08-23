@@ -417,11 +417,14 @@ _BASE_SOURCES: tuple[SourceDescriptor, ...] = (
     # competitions — and its own prices on MLB, NFL and WNBA (22 of 30 MLB
     # moneylines differed on the same slate: Tigers 1900 vs 1910, Pirates
     # 3400 vs 3500).  LeoVegas reads the same way against BetRivers (run 32:
-    # 25.6%, one feed in ITF and ATP), and the gate is built for exactly this
-    # shape: :func:`src.arb.counterparty_groups` folds the pair into one
-    # counterparty **per competition** where they are one feed, and leaves
-    # them two where they are not.  So a betPARX/BetRivers position on MLB is
-    # real and one on MLS is refused — measured on every run, never assumed
+    # 25.6%, one feed in ITF and ATP), and the gate treats both pairs the same
+    # way, **conservatively**: a pair that is one feed in any competition is
+    # MIRROR for the whole run, and :func:`src.arb.counterparty_groups` files
+    # it under ``EVERY_LEAGUE`` — so on a run where the soccer and tennis
+    # shelves are shared, no betPARX/BetRivers position is reported in MLB
+    # either, exactly as none is reported between LeoVegas and BetRivers.  A
+    # real MLB edge between the two is forgone rather than a phantom MLS one
+    # being printed; measured on every run, never assumed
     # (docs/evidence/exchanges-and-mirrors.md § betPARX).  The base config is
     # Pennsylvania's because that is the licence the operator sits in;
     # ``src.jurisdictions`` overrides it per state and refuses the two with

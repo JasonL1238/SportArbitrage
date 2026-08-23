@@ -54,9 +54,10 @@ SOURCE_NOTES: dict[str, dict[str, str]] = {
         "kind": "sportsbook",
         "what": "Pennsylvania's betPARX, read first-hand from the same Kambi platform as "
                 "BetRivers under its own tenant. Prices its own numbers on MLB, NFL and "
-                "WNBA and shares BetRivers' on Kambi-managed soccer and tennis, so the "
-                "two count as one counterparty only in those competitions — measured on "
-                "every run, not assumed, the same way LeoVegas is.",
+                "WNBA and shares BetRivers' on Kambi-managed soccer and tennis — and on a "
+                "run where any shelf is shared the two count as one counterparty "
+                "everywhere, the conservative reading, the same way LeoVegas is. "
+                "Measured on every run, not assumed.",
     },
     "bovada": {
         "label": "Bovada",
@@ -347,6 +348,14 @@ SOURCE_NOTES: dict[str, dict[str, str]] = {
 #: ``label`` above (a test pins it), so a brand cannot acquire a second
 #: spelling; the rest are the mirror labels with the feed parenthetical
 #: dropped, because the brand is the book, not the route to it.
+#: Display names for promo-only sources — catalogues with no odds feed, so
+#: :data:`BRAND_LABELS` has no brand for them.  Read through
+#: :func:`src.report._promo_brand_labels`; the page never keeps its own table.
+PROMO_ONLY_LABELS: dict[str, str] = {
+    "betmgm_on": "BetMGM Ontario",
+    "leovegas_on": "LeoVegas Ontario",
+}
+
 BRAND_LABELS: dict[str, str] = {
     "bally": "Bally Bet",
     "bet365": "bet365",

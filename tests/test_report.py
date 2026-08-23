@@ -2842,6 +2842,27 @@ def test_the_brand_fold_agrees_with_the_redundancy_pairs() -> None:
                 )
 
 
+def test_promo_source_names_come_from_the_two_label_authorities() -> None:
+    """The page used to keep a third table of promo brand names; it had drifted
+    ("Hard Rock" for "Hard Rock Bet") and never learned ``thescore``.  Now the
+    payload names every promo key from ``BRAND_LABELS`` (TheLines tenants fold
+    to their brand) or ``PROMO_ONLY_LABELS`` for the catalogues with no odds
+    feed, and nothing is left to drift."""
+    from src.promos import registry as promo_registry
+    from src.report import _promo_brand_labels
+    from src.report_copy import BRAND_LABELS, PROMO_ONLY_LABELS
+
+    labels = _promo_brand_labels()
+    assert set(labels) == set(promo_registry.base_keys()), (
+        set(promo_registry.base_keys()) - set(labels)
+    )
+    assert labels["thescore"] == BRAND_LABELS["thescore"] == "theScore Bet"
+    assert labels["tl_fanduel"] == BRAND_LABELS["fanduel"]
+    assert labels["hardrock"] == BRAND_LABELS["hardrock"] == "Hard Rock Bet"
+    assert labels["betmgm_on"] == PROMO_ONLY_LABELS["betmgm_on"]
+    assert not set(PROMO_ONLY_LABELS) & set(BRAND_LABELS)
+
+
 def test_the_promo_and_odds_brand_keys_meet() -> None:
     """The promo key space folds to the same brand keys as the odds side.
 

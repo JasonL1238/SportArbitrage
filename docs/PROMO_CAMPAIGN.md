@@ -56,7 +56,11 @@ bet-and-get harvest has built the float.
 ## Per-offer-type execution
 
 Every plan card carries legs (book, selection, odds, stake, link), the outcome table, and
-two floors (`worst` = all outcomes, `settles` = excluding pushes). Universal rules:
+two floors (`worst` = all outcomes, `settles` = excluding pushes). On a served page each
+card also has **Log this plan**: it pre-fills every leg into My bets as a `promo` slip —
+the credit leg as credit, the hedges as cash, the offer named on the slip — and ticks the
+offer **done** in the Campaign table. A logged offer reads as done in every browser, not
+only the one whose checkbox was ticked. Universal rules:
 **re-check both prices at placement** — a plan is a snapshot, and if the hedge has moved
 by more than the printed floor, walk away and re-plan; place the cash side first and the
 credit side last when the credit could expire.
