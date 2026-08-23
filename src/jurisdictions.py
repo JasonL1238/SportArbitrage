@@ -78,6 +78,10 @@ class PromoRoute:
     fanduel_region: str
     betrivers_url: str | None
     betrivers_label: str
+    #: betPARX's state lobby, whose public promotion configuration the promo
+    #: adapter reads; ``None`` where betPARX holds no licence.
+    betparx_url: str | None = None
+    betparx_label: str = ""
 
 
 @dataclass(frozen=True)
@@ -578,6 +582,8 @@ PA = Jurisdiction(
         fanduel_region="PA",
         betrivers_url="https://pa.betrivers.com/",
         betrivers_label="BetRivers PA",
+        betparx_url="https://pa.betparx.com/",
+        betparx_label="betPARX PA",
     ),
     # Retain observations and health history, but they cannot become PA arb
     # legs because the underlying books are not licensed PA online operators.
@@ -680,6 +686,8 @@ NJ = Jurisdiction(
         fanduel_region="NJ",
         betrivers_url="https://nj.betrivers.com/",
         betrivers_label="BetRivers NJ",
+        betparx_url="https://nj.betparx.com/",
+        betparx_label="betPARX NJ",
     ),
     republished=_republished_for("NJ"),
 )

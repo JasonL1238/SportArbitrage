@@ -20,6 +20,7 @@ From the same routing table the collector uses (`docs/MULTI_STATE.md`):
 | BetRivers, bet365 | ✓ | ✓ | ✓ | — | not DC |
 | Hard Rock | ✓ | — | ✓ | — | IL or NJ only |
 | theScore Bet | ✓ | ✓ | — | — | IL or PA only |
+| betPARX | — | ✓ | ✓ | — | PA or NJ only — its lobby's own promo feed is read per state since 2026-08-23 |
 
 **Scheduling rule:** constrained books get priority when you are physically in a state
 that carries them; flexible books are fill. A DC week should work the flexible four and

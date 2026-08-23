@@ -3731,3 +3731,141 @@ class TestThePlanCommand:
                      if line.startswith("    promo ") and "@" in line)
         assert " away " in promo, promo
         assert "3.000" in promo, promo
+
+
+# ── betPARX and theScore Bet: the two Pennsylvania-only books, first-party ────
+
+
+def test_betparx_parse_fixture_pa() -> None:
+    """The Playtech configuration captured from ``pa.betparx.com`` on 2026-08-23.
+
+    Six promotions on the lobby: four sportsbook (the bet-insurance sign-up
+    offer and three weekly Eagles boosts), one casino, one promo-code stub with
+    no public terms.  The casino tile is a counted skip, never an offer; every
+    offer carries PA as its region because the host is the licence; the
+    sign-up offer's terms come from the web-content block the page itself
+    fetches, and its window is read off the scheduler.
+    """
+    from src.promos.betparx import BetParxPromoAdapter
+
+    config = _first_contact("betparx_promotions_configuration_pa.json")
+    learn_more = _first_contact("betparx_webcontent_bet_insurance_learn_more_pa.html")
+    terms = _first_contact("betparx_webcontent_bet_insurance_terms_pa.html")
+    adapter = BetParxPromoAdapter(
+        base_url="https://pa.betparx.com",
+        region="PA",
+        client=httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(500))),
+    )
+    outcome = adapter.parse(
+        [
+            _raw("betparx_kambi", "promotions-configuration", config),
+            _raw("betparx_kambi", "webcontent-BET_INSURANCE_SIGNUP_OFFER_LEARN_MORE", learn_more),
+            _raw("betparx_kambi", "webcontent-TC_BET_INSURANCE_SIGNUP_OFFER", terms),
+        ]
+    )
+    adapter.close()
+    assert outcome.rejections == []
+    assert outcome.skipped == {"product:casino": 1}
+    assert len(outcome.offers) == 5
+    assert all(o.source == "betparx_kambi" for o in outcome.offers)
+    assert all(o.eligible_regions == ["PA"] for o in outcome.offers)
+    signup = next(o for o in outcome.offers if "Bet Insurance" in o.title)
+    assert signup.kind is PromoKind.RISK_FREE
+    assert "first eligible sports bet loses" in signup.terms
+    assert "deposit of at least $10" in signup.description
+    assert signup.url == "https://pa.betparx.com/bet_insurance_signup"
+    assert signup.starts_at is not None and signup.ends_at is not None
+    assert signup.starts_at.isoformat().startswith("2026-07-20")
+    assert signup.ends_at.isoformat().startswith("2026-08-20")
+    # The boosts had no web content in this capture: title and window only.
+    boost = next(o for o in outcome.offers if "Birds +50" in o.title)
+    assert boost.terms == "" and boost.url == "https://pa.betparx.com/birds_plus50"
+
+
+def test_betparx_skips_login_only_and_refuses_a_configuration_without_promotions() -> None:
+    from src.promos.betparx import BetParxPromoAdapter
+    from src.sources.guards import FormatChangeError
+
+    adapter = BetParxPromoAdapter(
+        client=httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(500))),
+    )
+    body = json.dumps(
+        {
+            "promotions": {
+                "Members": {
+                    "id": "m1", "name": "Members only", "description": "Bet $5 get $20",
+                    "product": "sportsbook", "isEnabledForGuest": False,
+                },
+                "Open": {
+                    "id": "o1", "name": "Open", "description": "Bet $5 get $20 in bonus bets",
+                    "product": "sportsbook", "isEnabledForGuest": True, "scheduler": [],
+                    "tileSettings": {"imageActionPageURL": "/open"},
+                },
+            }
+        }
+    )
+    outcome = adapter.parse([_raw("betparx_kambi", "promotions-configuration", body)])
+    assert [o.offer_id for o in outcome.offers] == ["o1"]
+    assert outcome.skipped == {"login_only": 1}
+    with pytest.raises(FormatChangeError):
+        adapter.parse([_raw("betparx_kambi", "promotions-configuration", json.dumps({"x": 1}))])
+    adapter.close()
+
+
+def test_thescore_parse_fixture() -> None:
+    """Two articles from the help centre's promotional-terms section, 2026-08-23.
+
+    The bet-and-get is an invitation-only casino cross-sell and says so in its
+    first paragraph; the live bet-and-get is a $10 Bet Reset.  Both carry the
+    state clause enrich reads eligibility from, and neither needs the index
+    to parse — the index only names the articles to fetch.
+    """
+    from src.promos.thescore import TheScorePromoAdapter
+
+    adapter = TheScorePromoAdapter(
+        client=httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(500))),
+    )
+    index = _first_contact("thescore_promo_terms_index.html")
+    urls = adapter._article_urls(index)
+    assert len(urls) == 10, [u for u, _ in urls]
+    assert all(u.startswith("https://sportsbook.thescore.bet/hc/en-us/articles/") for u, _ in urls)
+    assert not any("Responsible-Gaming" in u or "Promotional-Terms-and-Conditions" in u for u, _ in urls)
+
+    bet10 = _first_contact("thescore_promo_terms_article_bet10_get30.html")
+    live = _first_contact("thescore_promo_terms_article_live_bet_get.html")
+    outcome = adapter.parse(
+        [
+            _raw("thescore", "promo-terms-index", index),
+            _raw("thescore", "promo-terms-article-48263461087117", bet10,
+                 url="https://sportsbook.thescore.bet/hc/en-us/articles/48263461087117-Bet-10-Get-30-Bonus-Bet"),
+            _raw("thescore", "promo-terms-article-47882363775501", live,
+                 url="https://sportsbook.thescore.bet/hc/en-us/articles/47882363775501-Live-Bet-Get"),
+        ]
+    )
+    adapter.close()
+    assert outcome.rejections == []
+    by_id = {o.offer_id: o for o in outcome.offers}
+    assert set(by_id) == {"48263461087117", "47882363775501"}
+    first, second = by_id["48263461087117"], by_id["47882363775501"]
+    assert first.title == "Bet $10, Get $30 Bonus Bet"
+    assert first.kind is PromoKind.BONUS_BET
+    assert second.kind is PromoKind.NO_SWEAT  # a Bet Reset, classified off the terms
+    assert first.eligibility_notes == "invited players only"
+    assert "physically present in MI, NJ, PA, or WV" in first.terms
+    assert second.title == "Live Bet & Get"
+    assert "Bet Reset" in second.terms
+    assert second.url.endswith("/47882363775501-Live-Bet-Get")
+
+
+def test_registry_routes_betparx_per_state_and_thescore_globally() -> None:
+    from src.promos.registry import global_promo_sources, state_promo_sources_for_state
+
+    assert any(entry.key == "thescore" for entry in global_promo_sources())
+    assert not any(entry.key == "betparx_kambi" for entry in global_promo_sources())
+    pa = {entry.key: entry.config for entry in state_promo_sources_for_state("PA")}
+    nj = {entry.key: entry.config for entry in state_promo_sources_for_state("NJ")}
+    assert pa["betparx_kambi"] == {"base_url": "https://pa.betparx.com/", "region": "PA"}
+    assert nj["betparx_kambi"] == {"base_url": "https://nj.betparx.com/", "region": "NJ"}
+    # No Illinois or DC licence, so no lobby to read and no entry built.
+    assert "betparx_kambi" not in {e.key for e in state_promo_sources_for_state("IL")}
+    assert "betparx_kambi" not in {e.key for e in state_promo_sources_for_state("DC")}

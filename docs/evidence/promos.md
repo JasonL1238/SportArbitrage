@@ -4,6 +4,86 @@ What each promo source answered when asked, which offers confirmed which states,
 a state label on a promo run really asserts. Newest section first, dated headings, literal
 results — a refusal is recorded in the same detail as a success.
 
+## betPARX and theScore Bet: the two PA-only books get first-party promo feeds — 2026-08-23
+
+The operator arrived in Pennsylvania the same night (`state-routing.md` §
+"Pennsylvania arrival"). A PA promo collection from that egress (run #75, 57 offers
+from 13/24 sources) showed the gap plainly: the two books that can only be claimed
+here had **no promo source at all**, and the first-party pages of FanDuel
+(PerimeterX), Caesars (403), bet365 (no promo signals) and Fanatics (404) still
+refuse from PA, so their welcome offers arrive only second-hand via TheLines.
+
+### betPARX — `betparx_kambi`, a JSON catalogue per state lobby
+
+`pa.betparx.com` is a Playtech lobby. Its `/promotions` page renders from
+`GET /initialResources/promotionsConfiguration/en_US` (200, 21.6 KB): six promotions
+keyed by internal name, each with a headline, `product`, guest visibility, a
+scheduler window and two web-content ids. Those blocks are public too —
+`GET /webContent/en_US_{id}` (200, `text/plain` HTML fragment) — and the page
+itself fetches them, which is how the path was found (the `webContent/{id}_en_US`
+guess 404s to the SPA shell). No cookie, token or login anywhere.
+
+What it held on 2026-08-23 (PA): **"New Users Who Sign Up Will Receive 100% Bet
+Insurance on Their First Sports Bet up to $50"** (sportsbook; terms block
+`TC_BET_INSURANCE_SIGNUP_OFFER`, 30 KB: $10 min deposit, first cash bet back as a
+Bonus Bet if it loses; scheduler 2026-07-20 → 2026-08-20, so it is past its
+window and the tile now carries the Eagles boost as "Sports Welcome Offer");
+**"Lock It In: Birds +50 Points Boosted to +100 Odds"** three times (weeks 1–3,
+2026-08-21 → 09-28, new users also get four 50% profit boosts); a casino
+welcome (skipped, `product:casino`); and a promo-code stub whose terms id is
+`TERMS_FROM_IMS` — Playtech's marker for terms served only inside the account
+system, so none are fetched. `nj.betparx.com` is the same shape.
+
+Adapter: `src/promos/betparx.py`, built per state from
+`PromoRoute.betparx_url` (PA and NJ; no IL/DC licence, so no entry there), region
+stamped from the host like the BetRivers landing. Live from PA: **5 offers, 10
+requests, 0 rejections, 1 skipped, 0 unconfirmed**. Fixtures:
+`betparx_promotions_configuration_pa.json` and the two bet-insurance web-content
+blocks.
+
+### theScore Bet — `thescore`, the help centre's promotional-terms section
+
+The sportsbook host serves no promotions page anonymously: `sportsbook.us-pa.
+thescore.bet/promotions` is `Not Found` and `sportsbook.thescore.bet/promotions`
+is a 3.5 KB shell. The account menu in the app's own startup payload
+(`data/research/thescore/IL/…/response-111.json`) points at two public help-centre
+pages, and the second is the catalogue: **`https://sportsbook.thescore.bet/legal/
+promo-terms`** (Zendesk, 200, 31.6 KB) lists every running promotion's full T&Cs as
+an article — 10 promotions plus the section's own terms and the responsible-gaming
+policy, skipped by name. Each article is the complete document, including the
+state clause enrich reads (`Must be physically present in MI, NJ, PA, or WV` →
+eligible MI/NJ/PA; `geo` drops the trailing "or WV", a known quirk recorded
+below under 2026-08-16).
+
+What it held: "$50 Deposit Match" and "$100 Deposit Match" (100% matches, PA
+confirmed, invited players), "Bet $10, Get $30 Bonus Bet" (a Hollywood Casino
+cross-sell, invited, PA confirmed), "Live Bet & Get" ($10 Bet Reset, invited),
+"Kickoff Rewards", "Baseball Ticket Contest" (Ontario), three profit-boost packs
+and "Anytime Goalscorer Insurance" (PA confirmed). **No public welcome offer** —
+the sign-up bet-and-get lives in the app behind registration, so TheLines stays
+the only second-hand reader of it.
+
+Adapter: `src/promos/thescore.py`, a global source (the help centre is
+brand-wide; eligibility comes from the terms). Invitation-only articles are kept
+and labelled `invited players only` rather than dropped. Live from PA: **10 offers,
+11 requests, 0 rejections, 7 PA-confirmed**. Fixtures: the index and two
+articles.
+
+### One classifier change, because both catalogues are whole T&C documents
+
+`classify_kind` reads its inputs as one blob, first rule wins, so a sign-up
+offer whose 30 KB terms mention "profit boost" before "insurance" came out
+`profit_boost`, and deposit matches whose boilerplate says "bonus bets" came out
+`bonus_bet`. Both adapters now classify the headline first and fall back to the
+terms only when the headline says nothing; and "bet insurance" / "insurance"
+joined the `RISK_FREE` needles beside "first bet back", which is the same shape.
+
+### What this does not change
+
+The BetMGM free-to-play contests ("$100k Football Frenzy", "Pick 'Em") are still
+typed `bonus_bet` off their titles and float to the top of the plan with
+per-$100 figures; they are not credit anyone holds. That is the next fix.
+
 ## Scraping fixes proven live, and four path probes — 2026-08-16 (evening)
 
 Same-day follow-up to everything below: four parsing/enrichment defects fixed offline,

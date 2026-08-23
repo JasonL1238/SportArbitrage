@@ -24,6 +24,8 @@ from src.promos.landing import LandingPromoAdapter, LandingTarget
 from src.promos.leovegas import LeoVegasPromoAdapter
 from src.promos.schema import PromoKind
 from src.promos.thelines import TheLinesPromoAdapter
+from src.promos.thescore import TheScorePromoAdapter
+from src.promos.betparx import BetParxPromoAdapter
 
 @dataclass(frozen=True)
 class PromoSourceDescriptor:
@@ -107,6 +109,20 @@ _BASE_PROMO_SOURCES: tuple[PromoSourceDescriptor, ...] = (
     PromoSourceDescriptor(
         key="leovegas_kambi",
         adapter=LeoVegasPromoAdapter,
+    ),
+    # betPARX's Playtech lobby publishes its promotions as JSON per state
+    # host; the base descriptor is Pennsylvania's and
+    # ``state_promo_sources_for_state`` re-points it at the batch state's own
+    # lobby, so it is state-scoped like FanDuel and the BetRivers landing.
+    PromoSourceDescriptor(
+        key="betparx_kambi",
+        adapter=BetParxPromoAdapter,
+    ),
+    # theScore Bet's help centre publishes every running promotion's full
+    # terms anonymously; the sportsbook host itself serves no promotions page.
+    PromoSourceDescriptor(
+        key="thescore",
+        adapter=TheScorePromoAdapter,
     ),
     # First-party HTML catalogs for US majors (TheLines remains failover).
     # Do not stamp a static nationwide footprint — eligibility comes from terms
@@ -215,7 +231,7 @@ _BASE_PROMO_SOURCES: tuple[PromoSourceDescriptor, ...] = (
     _thelines("tl_fanatics", "fanatics"),
 )
 
-STATE_PROMO_SOURCE_KEYS: frozenset[str] = frozenset({"fanduel", "betrivers_kambi"})
+STATE_PROMO_SOURCE_KEYS: frozenset[str] = frozenset({"fanduel", "betrivers_kambi", "betparx_kambi"})
 
 
 def global_promo_sources() -> tuple[PromoSourceDescriptor, ...]:
@@ -251,6 +267,17 @@ def state_promo_sources_for_state(state: str) -> tuple[PromoSourceDescriptor, ..
                 region=configured.state,
             )
             built.append(replace(entry, config={**entry.config, "targets": (target,)}))
+        elif entry.key == "betparx_kambi" and promo.betparx_url:
+            built.append(
+                replace(
+                    entry,
+                    config={
+                        **entry.config,
+                        "base_url": promo.betparx_url,
+                        "region": configured.state,
+                    },
+                )
+            )
     return tuple(built)
 
 
