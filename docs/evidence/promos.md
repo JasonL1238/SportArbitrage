@@ -78,11 +78,17 @@ offer whose 30 KB terms mention "profit boost" before "insurance" came out
 terms only when the headline says nothing; and "bet insurance" / "insurance"
 joined the `RISK_FREE` needles beside "first bet back", which is the same shape.
 
-### What this does not change
+### Contests are a kind now, and the planner refuses them
 
-The BetMGM free-to-play contests ("$100k Football Frenzy", "Pick 'Em") are still
-typed `bonus_bet` off their titles and float to the top of the plan with
-per-$100 figures; they are not credit anyone holds. That is the next fix.
+Six of BetMGM's twelve live cards ("$100k Football Frenzy: Win Bonus Bets",
+"Fast Break: Win a $50 Bonus Bet & Other Daily Prizes", "Goal Rush: $500,000 in
+Bonus Bets", two Pick 'Ems, "Pick A Twin To Win") were typed `bonus_bet` off their
+titles and sat at the top of the plan with per-$100 conversion figures for credit
+nobody holds. `PromoKind.CONTEST` now exists; the classifier's first rule catches
+free-to-play / pick 'em / prize-pool phrasing and pool-scale dollar figures
+("$500,000 in", "$2 million"); the planner names it and computes nothing. Checked
+against the same run: all six re-read as `contest`, the DK "$5 → $150", TheLines
+"$10 → $150 if you win" and theScore's "$10 → $30" still read as bonus bets.
 
 ## Scraping fixes proven live, and four path probes — 2026-08-16 (evening)
 

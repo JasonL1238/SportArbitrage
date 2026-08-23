@@ -3869,3 +3869,26 @@ def test_registry_routes_betparx_per_state_and_thescore_globally() -> None:
     # No Illinois or DC licence, so no lobby to read and no entry built.
     assert "betparx_kambi" not in {e.key for e in state_promo_sources_for_state("IL")}
     assert "betparx_kambi" not in {e.key for e in state_promo_sources_for_state("DC")}
+
+
+def test_contests_are_not_bonus_bets() -> None:
+    """Prize pools and pick 'ems promise credit to some entrants; the titles
+    say "bonus bets" and "$500,000", and every other rule read that as credit
+    in hand.  Six BetMGM cards were priced that way on the first PA run."""
+    for title in (
+        "BetMGM $100k Football Frenzy: Win Bonus Bets",
+        "BetMGM Fast Break: Win a $50 Bonus Bet & Other Daily Prizes",
+        "BetMGM Goal Rush: $500,000 in Bonus Bets for U.S. Goals in World’s Game",
+        "March Matchups Pick ‘Em: Win a Share of $500,000 in Bonus Bets",
+        "Pick A Twin To Win: Pick Haley or Hanna Cavinder for a Share of $2 Million in Bonus Bets",
+        "World’s Game Pick ‘Em: Free-To-Play Game for $250,000 in Bonus Bets",
+        "theScore Bet Baseball Ticket Contest",
+    ):
+        assert classify_kind(title) is PromoKind.CONTEST, title
+    # The real bet-and-gets keep their kind: a per-customer figure is not a pool.
+    for title in (
+        "New DK Customers Bet $5 Get $150 in Bonus Bets, Paid Over 14 Days",
+        "Bet $10 get $150 in bonus bets if you win",
+        "Bet $10, Get $30 Bonus Bet",
+    ):
+        assert classify_kind(title) is PromoKind.BONUS_BET, title

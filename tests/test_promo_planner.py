@@ -4126,3 +4126,23 @@ class TestTheHedgeWindowIsWideEnoughToMatter:
                   for leg in card["legs"] if leg["role"] == "hedge"}
         assert hedges == {"fanduel"}, hedges
         assert plan["skipped"].get("implausible_price", 0) >= 1, plan["skipped"]
+
+
+class TestContestsAreRefusedByName:
+    """A contest is a chance at credit, not credit; the planner says so and
+    computes nothing, so the Campaign table ranks real offers above it."""
+
+    def test_a_contest_yields_no_plan_and_names_itself(self):
+        quotes = [
+            make_quote(source="betmgm", selection=Selection.AWAY, decimal_odds=3.0),
+            make_quote(source="fanduel", selection=Selection.HOME, decimal_odds=1.5),
+        ]
+        offer = _offer(
+            source="betmgm", offer_id="frenzy", kind=PromoKind.CONTEST,
+            title="BetMGM $100k Football Frenzy: Win Bonus Bets",
+            reward_type="bonus_bets",
+        )
+        out = _plans([offer], quotes)
+        plan = out["plans"]["betmgm|frenzy"]
+        assert plan["plans"] == []
+        assert any("contest or free-to-play" in c for c in plan["caveats"]), plan["caveats"]

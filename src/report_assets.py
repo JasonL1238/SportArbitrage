@@ -3524,6 +3524,7 @@ const PROMO_KIND_LABEL = {
   referral: 'Referral',
   loyalty: 'Loyalty',
   risk_free: 'Risk free',
+  contest: 'Contest',
   other: 'Other',
 };
 

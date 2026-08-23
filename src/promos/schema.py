@@ -34,6 +34,9 @@ class PromoKind(StrEnum):
     REFERRAL = "referral"
     LOYALTY = "loyalty"
     RISK_FREE = "risk_free"
+    #: Free-to-play games, pick 'ems and prize pools: a chance at credit, not
+    #: credit in hand.  Named so the planner can refuse to price it.
+    CONTEST = "contest"
     OTHER = "other"
 
 

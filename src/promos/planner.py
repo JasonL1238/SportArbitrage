@@ -1665,7 +1665,19 @@ def _plan_for_offer(
         "free_bet",
     }
 
-    if kind is PromoKind.PARLAY_BOOST and not credit_reward:
+    if kind is PromoKind.CONTEST:
+        # A pick 'em, free-to-play game or prize pool promises credit to some
+        # entrants; nothing is in hand to hedge or convert.  Priced as a bonus
+        # bet — which the "$500,000 in Bonus Bets" titles invited — six BetMGM
+        # contests sat at the top of the Campaign table with per-$100 figures
+        # for credit nobody held.  Refused by name, with no plan, so the table
+        # ranks real offers first.
+        out["caveats"].append(
+            "this is a contest or free-to-play game — a chance at credit, not "
+            "credit you hold, so there is nothing to hedge or convert; enter "
+            "it if it is free and ignore it in the campaign"
+        )
+    elif kind is PromoKind.PARLAY_BOOST and not credit_reward:
         # Genuinely unpriceable here, and now enforced rather than asserted in a
         # comment: the previous dispatch let a parlay boost whose reward_type
         # read ``bonus_bets`` fall through to conversion and print a card

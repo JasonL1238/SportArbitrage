@@ -7,6 +7,21 @@ from src.promos.schema import PromoKind
 #: Needles are matched as whole words/phrases (not bare substrings), so
 #: ``refer`` does not fire on ``referee`` / ``preferred``.
 _RULES: tuple[tuple[tuple[str, ...], PromoKind], ...] = (
+    # Contests first: their titles promise "bonus bets" and "$500,000", and
+    # every rule below would read that as credit the operator holds.  Six of
+    # BetMGM's twelve live cards were priced as bonus bets this way.
+    (
+        (
+            "free-to-play", "free to play", "pick 'em", "pick ‘em", "pick’em",
+            "pick em", "win a share", "share of $", "sweepstakes", "contest",
+            "daily prizes", "prize pool", "leaderboard", "win bonus bets",
+            "win a bonus bet", "chance to win", "win prizes",
+            # Pool-scale figures are never one customer's credit.
+            "$100,000 in", "$250,000 in", "$500,000 in", "$1,000,000 in",
+            "$1 million", "$2 million", "$5 million", "$100k ", "$250k ", "$500k ",
+        ),
+        PromoKind.CONTEST,
+    ),
     (("no sweat", "nosweat", "bet reset"), PromoKind.NO_SWEAT),
     (("profit boost",), PromoKind.PROFIT_BOOST),
     (("parlay boost", "sgp", "same game parlay"), PromoKind.PARLAY_BOOST),
