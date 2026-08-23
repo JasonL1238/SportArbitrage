@@ -5542,6 +5542,7 @@ class TestTheChargeAndTheSettlementRuleArePinnedPerVenue:
         "vsin_circa": "no commission (the venue's margin is already in the price)",
         "betmgm": "no commission (the venue's margin is already in the price)",
         "betrivers_kambi": "no commission (the venue's margin is already in the price)",
+        "betparx_kambi": "no commission (the venue's margin is already in the price)",
         "bovada": "no commission (the venue's margin is already in the price)",
         "cloudbet": "no commission (the venue's margin is already in the price)",
         "caesars": "no commission (the venue's margin is already in the price)",
@@ -5589,6 +5590,7 @@ class TestTheChargeAndTheSettlementRuleArePinnedPerVenue:
         "vsin_circa": 'void_and_refund',
         "betmgm": 'void_and_refund',
         "betrivers_kambi": 'void_and_refund',
+        "betparx_kambi": 'void_and_refund',
         "bovada": 'void_and_refund',
         "cloudbet": 'void_and_refund',
         "caesars": 'void_and_refund',
@@ -5970,7 +5972,7 @@ class TestTheWomensMarkerReachesEveryVenueThatNeedsIt:
     #: Every adapter that maps an unrecognised competition into a catch-all
     #: league, and therefore stops reading the venue's own name for it.
     NEEDS_MARKER = (
-        "pinnacle", "fanduel", "betrivers_kambi", "leovegas_kambi",
+        "pinnacle", "fanduel", "betrivers_kambi", "leovegas_kambi", "betparx_kambi",
         "smarkets", "matchbook", "sxbet",
         # Moved off IMMUNE when their soccer feeds gained a catch-all.  The claim
         # that they configured one named competition per route was never true of
@@ -12285,6 +12287,7 @@ class TestEachVenuesKindIsPinnedBecauseItPicksTheRule:
         "vi_fanduel": False,
         "vi_betrivers": False,
         "vsin_circa": False,
+        "betparx_kambi": False,
         "thescore": False,
         "bet365": False,
         "betmgm": False,

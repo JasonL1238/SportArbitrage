@@ -95,6 +95,11 @@ class Jurisdiction:
 
 
 _MGM_ACCESS_ID = "ZTg4YWEwMTgtZTlhYy00MWRkLWIzYWYtZjMzODI5ZDE0Mjc5"
+#: Pennsylvania's own BetMGM application key, read off the ``x-bwin-accessid``
+#: query parameter ``www.pa.betmgm.com`` sends on its ``cds-api`` calls
+#: (2026-08-23, one page load from a Philadelphia egress).  The Illinois id
+#: above is refused there with HTTP 400 "Access id not allowed for application".
+_MGM_ACCESS_ID_PA = "YWIzOGYzMjgtNzU3OS00NjU1LTk1MjUtZjQ4Y2UxODQyOTY0"
 
 
 def _route(
@@ -112,6 +117,18 @@ def _route(
         status=status,
         routed_state=routed_state,
         detail=detail,
+    )
+
+
+def _betparx_unavailable(state: str, label: str) -> RetailRoute:
+    """betPARX holds licences in MD, MI, NJ and PA only; never invent a tenant."""
+    return RetailRoute(
+        source_key="betparx_kambi",
+        host="eu-offering-api.kambicdn.com",
+        config={"operator": "parxuspa", "market": "US-PA", "lang": "en_US"},
+        status=RouteStatus.UNAVAILABLE,
+        routed_state=state,
+        detail=f"betPARX is not {label} online sportsbook",
     )
 
 
@@ -386,6 +403,7 @@ IL = Jurisdiction(
             "Illinois egress; promoted 2026-08-16 on runs 23 and 24, both "
             "replay-clean. Pull-pod scale only — no anonymous league board",
         ),
+        "betparx_kambi": _betparx_unavailable("IL", "an Illinois"),
     },
     promos=PromoRoute(
         fanduel_region="IL",
@@ -430,18 +448,27 @@ PA = Jurisdiction(
         ),
         "betmgm": _route(
             "betmgm",
-            "https://sports.pa.betmgm.com",
+            "https://www.pa.betmgm.com",
             {
-                "base_url": "https://sports.pa.betmgm.com",
+                "base_url": "https://www.pa.betmgm.com",
                 "subdivision": "US-Pennsylvania",
-                "access_id": _MGM_ACCESS_ID,
+                "access_id": _MGM_ACCESS_ID_PA,
             },
-            RouteStatus.TEMPLATE,
+            RouteStatus.VALIDATED,
             "PA",
             # 2026-08-08, PA egress: HTTP 400 "Access id not allowed for
-            # application" — the id above is another state's.  The PA web app
-            # has to supply its own before this route can be exercised.
-            "PA access_id unknown; the configured id is refused with HTTP 400",
+            # application" — the Illinois id is refused here.
+            #
+            # 2026-08-23, PA egress (Philadelphia, fingerprint 013576ce4de8):
+            # the PA web app's own id, read off the ``x-bwin-accessid`` query
+            # parameter the page sends on its ``cds-api`` calls (one page load
+            # of ``www.pa.betmgm.com/en/sports``), is accepted by
+            # ``bettingoffer/fixtures`` — 90 MLB quotes, 0 rejections.  The host
+            # is ``www.pa`` because ``sports.pa`` 301s there.  Promoted the same
+            # night on runs 33 and 34: 6,628 and 6,645 quotes over 576/577
+            # events, 0 rejections, both replaying PASS.
+            "validated from matching Pennsylvania egress on 2026-08-23 (runs 33 "
+            "and 34, the PA web app's own access id)",
         ),
         "draftkings": _route(
             "draftkings",
@@ -452,28 +479,16 @@ PA = Jurisdiction(
                     "sportscontent/controldata/league/primaryMarkets/v1"
                 ),
             },
-            RouteStatus.TEMPLATE,
+            RouteStatus.VALIDATED,
             "PA",
-            # Downgraded from VALIDATED on 2026-08-14, deliberately, because the
-            # thing that was validated no longer exists.
-            #
-            # The 2026-08-08 validation was of `leagueSubcategory/v1`, and it
-            # recorded a partial answer: eventgroups 94682, 42133 and 40253
-            # returned "access denied" from that egress, so MLB and tennis
-            # produced and WNBA/NFL/NHL did not.  That is the same breakage the
-            # Illinois route had, and it is what moving to `primaryMarkets/v1`
-            # fixed there — all seven leagues answered a plain client from an
-            # Illinois egress on 2026-08-14.
-            #
-            # The path above is therefore the *fixed* one, carrying PA's own
-            # US-PA-SB segment.  It has never been exercised from a Pennsylvania
-            # egress, and this machine has none (ODDS_HTTP_PROXY_PA is unset and
-            # it egresses Illinois natively), so the claim it deserves is
-            # structurally known and unproven.  Re-validate from a PA exit and
-            # promote; do not promote on the Illinois result.
-            "primaryMarkets route carries PA's own segment but has not been "
-            "exercised from a Pennsylvania egress; the 2026-08-08 validation "
-            "was of the retired leagueSubcategory route",
+            # The ``primaryMarkets`` route.  Its 2026-08-08 validation was of the
+            # retired ``leagueSubcategory`` path and was withdrawn on 2026-08-14;
+            # this path was validated from a Philadelphia egress on 2026-08-23
+            # (runs 32 and 33, 951 quotes over 163 events each, 0 rejections; 33
+            # replays PASS, 32 differs only on cloudbet rows).  History in
+            # docs/evidence/state-routing.md.
+            "validated from matching Pennsylvania egress on 2026-08-23 (runs 32 "
+            "and 33, primaryMarkets route)",
         ),
         "caesars": _route(
             "caesars",
@@ -510,41 +525,53 @@ PA = Jurisdiction(
             routed_state="PA",
             detail="Hard Rock is not a Pennsylvania online sportsbook",
         ),
-        # TEMPLATE in its exact sense — structurally known and unproven — and
-        # honest here rather than optimistic: the host is DNS-confirmed against
-        # a negative control (`sportsbook.us-pa` resolves, `us-zz` is NXDOMAIN,
-        # 2026-08-13), the path grammar is Illinois' with one segment changed,
-        # and theScore holds a PA licence (Action Network files it as id 4623).
-        # What makes it safe to carry unproven is that the adapter compares the
-        # edge's own `currentRegionCode` to this routed state on every fetch, so
-        # from anywhere but Pennsylvania it refuses instead of pricing.  That is
-        # the whole point of entering it now: the route works on arrival rather
-        # than needing a session.
+        # Entered as TEMPLATE on 2026-08-13 (DNS-confirmed host, Illinois' path
+        # grammar with one segment changed) and validated the first time it was
+        # asked, on arrival: the adapter compares the edge's own
+        # ``currentRegionCode`` to this routed state on every fetch, so from
+        # anywhere but Pennsylvania it refuses instead of pricing.
         "thescore": _route(
             "thescore",
             "https://sportsbook.us-pa.thescore.bet",
             {"api_base": "https://sportsbook.us-pa.thescore.bet"},
-            RouteStatus.TEMPLATE,
+            RouteStatus.VALIDATED,
             "PA",
-            "PA edge confirmed by DNS with a negative control on 2026-08-13; "
-            "never asked over HTTP",
+            # 2026-08-23, Philadelphia egress: the edge answered US-PA; runs 32
+            # and 33 each stored 519 quotes over 101 events, 0 rejections, 33
+            # replays PASS.
+            "validated from matching Pennsylvania egress on 2026-08-23 (runs 32 "
+            "and 33, edge reported US-PA)",
         ),
         "bet365": _route(
             "bet365",
             "https://www.pa.bet365.com",
             {"base_url": "https://www.pa.bet365.com", "csid": "56"},
-            RouteStatus.TEMPLATE,
+            RouteStatus.VALIDATED,
             "PA",
-            # Structurally known, never exercised.  The host resolves (DNS
-            # checked against a nonsense control on 2026-08-13) and ``csid=56``
-            # is Pennsylvania in the application's own USStateID table, but
-            # this machine egresses Illinois and ``ODDS_HTTP_PROXY_PA`` is
-            # unset, so no PA board has been read.  Carrying it unproven is
-            # safe because the adapter refuses on the licence the *host*
-            # reports: a PA request answered from an IL egress raises
-            # GeoRestrictedError rather than pricing Illinois as Pennsylvania.
-            "structurally known from the IL route's shape; never asked from a "
-            "Pennsylvania egress, and this machine has none",
+            # ``csid=56`` is Pennsylvania in the application's own USStateID
+            # table, and the adapter refuses unless the shell's ``STATE_LOCALE``
+            # names this routed state.  2026-08-23, Philadelphia egress: the
+            # shell reported USPA and the pods answered — runs 32 and 33, 120
+            # quotes over 22 events each, 0 rejections, 33 replays PASS.
+            "validated from matching Pennsylvania egress on 2026-08-23 (runs 32 "
+            "and 33, shell reported USPA)",
+        ),
+        # betPARX Pennsylvania: the Kambi tenant its own web app names.  The
+        # offering token ``parxuspa`` and market ``US-PA`` are what
+        # ``pa.betparx.com/kambi`` puts in ``window._kc`` (read 2026-08-23 from a
+        # Philadelphia egress).  One feed with BetRivers on Kambi's managed
+        # competitions and its own book on US sports — the registry entry has
+        # the measurement and the gate that handles it.
+        "betparx_kambi": _route(
+            "betparx_kambi",
+            "https://eu-offering-api.kambicdn.com",
+            {"operator": "parxuspa", "market": "US-PA", "lang": "en_US"},
+            RouteStatus.VALIDATED,
+            "PA",
+            # Runs 33 and 34 the same night: 3,548 quotes over 168 events each, 0
+            # rejections, both replaying PASS.
+            "validated from matching Pennsylvania egress on 2026-08-23 (runs 33 "
+            "and 34)",
         ),
     },
     promos=PromoRoute(
@@ -636,6 +663,18 @@ NJ = Jurisdiction(
             "structurally known from the IL route's shape; never asked from a "
             "New Jersey egress",
         ),
+        # betPARX New Jersey: ``nj.betparx.com/kambi`` names ``parxusnj`` /
+        # ``US-NJ`` in the same client config (read 2026-08-23 from a
+        # Pennsylvania egress).  Structurally known, never asked from New Jersey.
+        "betparx_kambi": _route(
+            "betparx_kambi",
+            "https://eu-offering-api.kambicdn.com",
+            {"operator": "parxusnj", "market": "US-NJ", "lang": "en_US"},
+            RouteStatus.TEMPLATE,
+            "NJ",
+            "tenant read from the NJ web app on 2026-08-23; never asked from a "
+            "New Jersey egress",
+        ),
     },
     promos=PromoRoute(
         fanduel_region="NJ",
@@ -708,6 +747,7 @@ DC = Jurisdiction(
             routed_state="DC",
             detail="Hard Rock is not a District of Columbia online sportsbook",
         ),
+        "betparx_kambi": _betparx_unavailable("DC", "a District of Columbia"),
     },
     promos=PromoRoute(
         fanduel_region="DC",

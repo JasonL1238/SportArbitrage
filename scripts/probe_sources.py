@@ -230,7 +230,7 @@ def state_candidates(state: str) -> tuple[Candidate, ...]:
         config = route.config
         if key == "fanduel":
             url = f"https://sbapi.{config['state']}.sportsbook.fanduel.com/api/content-managed-page"
-        elif key == "betrivers_kambi":
+        elif key in ("betrivers_kambi", "betparx_kambi"):
             url = (
                 "https://eu-offering-api.kambicdn.com/offering/v2018/"
                 f"{config['operator']}/listView/baseball/mlb.json"

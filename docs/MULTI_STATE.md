@@ -1,8 +1,10 @@
 # Multi-state adaptation runbook
 
 The collector supports batches for **IL**, **PA**, **NJ**, and **DC**. Illinois
-is the live baseline; other exact-state routes remain templates until their
-registered adapters pass from matching detected egresses.
+and Pennsylvania are both validated baselines — IL from the 2026-08 campaign,
+PA from the operator's arrival in Philadelphia on 2026-08-23 — and every other
+exact-state route remains a template until its registered adapter passes from a
+matching detected egress.
 
 ## Goals
 
@@ -48,12 +50,13 @@ this table is a summary, and the prose under it is the part the code cannot stat
 |---|---|---|---|---|
 | FanDuel | validated | validated | template | template |
 | BetRivers | validated | validated | template | unavailable |
-| BetMGM | validated | template | template | template |
-| DraftKings | validated | template | template | template |
-| Caesars | exact-state template | template | template | template |
+| BetMGM | validated | **validated** (2026-08-23, PA's own access id) | template | template |
+| DraftKings | validated | **validated** (2026-08-23, `primaryMarkets`) | template | template |
+| Caesars | exact-state template | template (WAF-blocked from PA too, 2026-08-23) | template | template |
 | Hard Rock | validated | unavailable | template | unavailable |
-| theScore Bet | template | template | no route yet | unavailable |
-| bet365 | **validated** | template | template | unavailable |
+| theScore Bet | validated | **validated** (2026-08-23, edge reported US-PA) | no route yet | unavailable |
+| bet365 | **validated** | **validated** (2026-08-23, shell reported USPA) | template | unavailable |
+| betPARX | unavailable | **validated** (2026-08-23, Kambi `parxuspa`) | template (`parxusnj`) | unavailable |
 | Promos (FD / BR) | IL / IL | PA / PA | NJ / NJ | DC / unavailable |
 
 State-agnostic feeds remain unchanged. Pennsylvania's Hard Rock absence is an
@@ -134,6 +137,16 @@ adds safety when both agree, and the `ipwho.is` fallback disagreed — on
 2026-08-14 it placed a known-Illinois egress in California, and did so exactly
 when `ipapi.co`'s free-tier cap had been spent. `egress.DEFAULT_DETECTION_URLS`
 records the measurement.
+
+`ipapi.co` has answered this client with a Cloudflare 403 since 2026-08-15, so
+on arrival in a new state the record has to be written by hand-checked
+agreement: on 2026-08-23 `ipwho.is`, `ipinfo.io` and `ip-api.com` all placed
+the operator's address in Philadelphia, PA, and `detect_state.py --url
+https://ipwho.is/<the IPv4 that checkip.amazonaws.com reports>` stored it —
+the explicit address because the repository client reaches `ipwho.is` over IPv6
+and the continuity check (`egress.CONTINUITY_URLS`) fingerprints the IPv4.
+Collection then runs on that stored record (`--state PA` names it outright);
+`recon_sources.py` confirms it by continuity.
 
 The public exit IP is necessarily disclosed to the provider but is reduced to a
 SHA-256 fingerprint before local persistence.
@@ -286,6 +299,7 @@ Use this when Step 2 fails for a venue.
 | Caesars | `locations/{st}` | Same |
 | Hard Rock | Add a segment only when licensed in that state | PA is explicitly unavailable; never invent `segment=pa` |
 | theScore Bet | `sportsbook.us-{st}.thescore.bet` | The edge reports the licence back, so a wrong-state egress refuses rather than answering |
+| betPARX | Kambi operator `parxus{st}` (`parxuspa`, `parxusnj`), market `US-{ST}` | Read off `window._kc` on `{st}.betparx.com/kambi`; one feed with BetRivers on Kambi-managed competitions, its own book on US sports — the per-competition counterparty gate handles it, as for LeoVegas |
 | bet365 | `www.{st}.bet365.com` **and** `csid` (28 IL, 56 PA, 3 NJ, 20 DC) | The host *is* the licence — the stateless `www.bet365.com` serves no board at all, so there is no origin to fall back to. `csid` travels with the host rather than replacing it: neither alone routes a price. The shell states its own licence as `STATE_LOCALE:"US{ST}"`, and the adapter refuses on disagreement *or absence* |
 | Bovada / Cloudbet / 1xBet / Pinnacle / exchanges / Kalshi / Polymarket | Usually none | Treat as state-agnostic once ok |
 | Action Network / VegasInsider / VSiN observations | None | Diagnostic only; not a jurisdiction substitute or executable leg |
@@ -309,6 +323,13 @@ Use this when Step 2 fails for a venue.
   DraftKings was demoted back to `template` on 2026-08-14: that promotion was
   earned by the since-retired `leagueSubcategory` route, so the evidence no
   longer describes the request the adapter makes.
+- Done 2026-08-23, the operator's first night in Pennsylvania: DraftKings
+  (`primaryMarkets`), theScore Bet, bet365, BetMGM (its PA access id read off
+  the PA site) and the newly registered betPARX (`betparx_kambi`, the Kambi
+  tenant the PA site names) all produced parser-clean quotes on two stored runs
+  each and were promoted; runs 33 and 34 replay PASS. Caesars is blocked at the
+  CDN edge from PA exactly as from IL. Evidence in `evidence/state-routing.md`
+  § "Pennsylvania arrival".
 - Resolved 2026-08-09: the three retained Action Network source keys
   (`an_fliff`, `an_circa`, `an_superbook`) that carried ids with no odds on
   either endpoint version were deregistered with the operator's approval,

@@ -149,6 +149,7 @@ COMMISSIONS: dict[str, Commission] = {
     "pinnacle": NO_COMMISSION,
     "betrivers_kambi": NO_COMMISSION,
     "leovegas_kambi": NO_COMMISSION,
+    "betparx_kambi": NO_COMMISSION,
     "bovada": NO_COMMISSION,
     "betmgm": NO_COMMISSION,
     "draftkings": NO_COMMISSION,

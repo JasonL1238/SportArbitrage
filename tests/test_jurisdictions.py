@@ -75,29 +75,47 @@ def test_pa_route_statuses_match_what_the_egress_actually_proved() -> None:
     VALIDATED was earned on 2026-08-08 by two parser-clean runs per book from a
     detected-PA egress: FanDuel runs 29/30, BetRivers runs 28/29, DraftKings
     runs 29/31, with runs 29/30/31 replaying PASS offline (28 replays FAIL on
-    another book's since-fixed rows; BetRivers' own rows in it are drift-free).  The two still-TEMPLATE routes
-    failed on the same day from the same egress — BetMGM with HTTP 400 on the
-    access id, Caesars blocked at the CDN edge — so promoting them would assert
-    evidence that does not exist, and demoting the three would discard evidence
-    that does.  Both directions are pinned: this table is read by
+    another book's since-fixed rows; BetRivers' own rows in it are drift-free).
+    On 2026-08-23 the operator arrived in Pennsylvania and the same bar was
+    met from a Philadelphia egress by DraftKings, theScore and bet365 (runs 32
+    and 33; 33 replays PASS, 32 FAILs only on cloudbet's zero-line rows), then
+    by BetMGM — once its PA access id was read off the PA site — and the newly
+    registered betPARX (runs 33 and 34, both replaying PASS).
+    Caesars failed on both days from both egresses — blocked at the CDN edge —
+    so promoting it would assert evidence that does not exist, and demoting the
+    validated routes would discard evidence that does.  Both directions are
+    pinned: this table is read by
     ``_state_retail_descriptor`` and graded by ``src.coverage``, and a status
     drifting in either direction misstates what a PA run can be trusted to be.
     """
     routes = jurisdiction("PA").routes
     assert routes["fanduel"].status is RouteStatus.VALIDATED
     assert routes["betrivers_kambi"].status is RouteStatus.VALIDATED
-    # DraftKings was demoted on 2026-08-14 and the demotion is the point: its
-    # 2026-08-08 evidence was earned by the ``leagueSubcategory`` route, which
-    # has since been retired and replaced with ``primaryMarkets``.  Keeping
-    # VALIDATED would assert evidence for a request this code no longer sends.
-    # The replacement carries PA's own US-PA-SB segment and was proven from an
-    # Illinois egress, which is not the same claim — promote it only after a
-    # Pennsylvania egress exercises it.
-    assert routes["draftkings"].status is RouteStatus.TEMPLATE
+    # DraftKings was demoted on 2026-08-14 because its 2026-08-08 evidence was
+    # earned by the retired ``leagueSubcategory`` route, and re-promoted on
+    # 2026-08-23 when the ``primaryMarkets`` replacement was exercised from a
+    # Pennsylvania egress (runs 32 and 33, 951 quotes each, 0 rejections).
+    # The assertion on the path is what keeps the status honest: VALIDATED is
+    # a claim about *this* request, not about the one that used to be made.
+    assert routes["draftkings"].status is RouteStatus.VALIDATED
     assert "primaryMarkets" in routes["draftkings"].config["content_base_url"]
-    assert routes["betmgm"].status is RouteStatus.TEMPLATE
+    # theScore and bet365 were TEMPLATE from 2026-08-13/15 until the operator
+    # arrived in Pennsylvania; both self-verify the licence the edge reports,
+    # and both answered from Philadelphia on 2026-08-23 (runs 32 and 33).
+    assert routes["thescore"].status is RouteStatus.VALIDATED
+    assert routes["bet365"].status is RouteStatus.VALIDATED
+    # BetMGM's PA access id came off the PA web app on 2026-08-23 (the
+    # Illinois id is refused with HTTP 400); runs 33 and 34 were parser-clean
+    # and replay PASS.  The id must stay PA's own — the shared IL constant is
+    # the 2026-08-08 failure.
+    assert routes["betmgm"].status is RouteStatus.VALIDATED
+    assert routes["betmgm"].config["access_id"] != jurisdiction("IL").routes["betmgm"].config["access_id"]
     assert routes["caesars"].status is RouteStatus.TEMPLATE
     assert routes["hardrock"].status is RouteStatus.UNAVAILABLE
+    # Registered 2026-08-23 off the PA web app's own Kambi tenant and
+    # validated on runs 33 and 34 the same night.
+    assert routes["betparx_kambi"].status is RouteStatus.VALIDATED
+    assert routes["betparx_kambi"].config["operator"] == "parxuspa"
 
 
 def test_pa_hardrock_is_unavailable_not_an_invented_pa_segment() -> None:

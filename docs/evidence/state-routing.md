@@ -3,6 +3,138 @@
 Per-state route evidence: what a licensed host returned from matching egress,
 which routes were promoted on it, and which feeds cover which book.
 
+## Pennsylvania arrival: seven of nine books first-party in one night — 2026-08-23
+
+The operator physically relocated to Philadelphia. Everything below was measured
+from the machine's own residential egress — IPv4 `165.123.231.162`
+(AS55, University of Pennsylvania), fingerprint `013576ce4de8…` — with **no
+`ODDS_HTTP_PROXY_*` set**. The task was first-party access to FanDuel,
+DraftKings, BetMGM, Fanatics, bet365, Caesars, BetRivers, betPARX and theScore
+Bet; re-test what worked before, iterate from the Illinois results.
+
+### Detection, with `ipapi.co` still gated
+
+`ipapi.co` answers this client `403` (Cloudflare interstitial, unchanged since
+2026-08-15), so `scripts/detect_state.py` fails outright and the stored record
+still said IL. Three providers were asked once each by hand and agreed:
+
+| provider | state | city | note |
+| --- | --- | --- | --- |
+| `ipwho.is` | PA | Philadelphia | answered over IPv6 (`2607:f470:…`) |
+| `ipinfo.io` | Pennsylvania | Philadelphia | IPv4 |
+| `ip-api.com` | PA | Philadelphia | IPv4; its field is `region`, which `detection_from_payload` does not read |
+
+Stored with `ODDS_STATE=PA python scripts/detect_state.py --url
+https://ipwho.is/165.123.231.162` — the explicit address because the repository
+client reaches `ipwho.is` over IPv6 while `CONTINUITY_URLS`
+(`checkip.amazonaws.com`) fingerprints the IPv4, and a record that the
+continuity check cannot confirm is a record `recon_sources.py` refuses.
+Collection then ran on the stored record (`auto-state: … using the last detected
+state PA`). This is the documented "second URL only when you have checked that
+it agrees" case, and the check is the table above.
+
+### Probe, one request per route
+
+`python scripts/probe_sources.py --state PA --verbose`:
+
+| route | verdict | detail |
+| --- | --- | --- |
+| fanduel | OK | 84 MLB quotes |
+| betrivers_kambi | OK | 543 MLB quotes |
+| betmgm | PARSE FAIL | HTTP 400 `Access id not allowed for application` — the Illinois id |
+| draftkings | OK | 90 MLB quotes — the `primaryMarkets` route, first time from PA |
+| caesars | BLOCKED | `request blocked` marker |
+| thescore | OK | 90 MLB quotes, edge reported `US-PA` — first time ever asked over HTTP |
+| bet365 | OK | 120 MLB quotes, shell reported `STATE_LOCALE:"USPA"` — first time from PA |
+| hardrock | UNTESTED | not a Pennsylvania book |
+
+### BetMGM: the PA access id is on the PA site, as a query parameter
+
+The shell (`www.pa.betmgm.com/en/sports`; `sports.pa` 301s there), `/en/api/
+clientconfig` and the bundles it names carry no access id. One headed page load
+of `/en/sports` showed the app's own `cds-api` calls spelling it as a query
+parameter — `x-bwin-accessid=YWIzOGYzMjgtNzU3OS00NjU1LTk1MjUtZjQ4Y2UxODQyOTY0`
+(base64 of GUID `ab38f328-7579-4655-9525-f48ce1842964`) on `offer-grouping/grid-
+view/all` and `bettingoffer/counts` — and a second id in a request header
+(`NDU0NjdhMDUt…`, GUID `45467a05-…`). `bettingoffer/fixtures` accepts the query-
+parameter one: 90 MLB quotes, 0 rejections, through the adapter with
+`subdivision=US-Pennsylvania`. It is `jurisdictions._MGM_ACCESS_ID_PA` now.
+Headless Chromium, for the record, is redirected to the stateless
+`www.betmgm.com` and never sees the PA id; headed Chromium stays on `www.pa`.
+
+### betPARX: the Kambi tenant is in the page, and every guess was wrong for a reason
+
+`betparx.com` is a state picker (MD, MI, NJ, PA). `pa.betparx.com` is a casino
+lobby whose "Sports" link is `/kambi`, and that page's `window._kc` reads
+`{"market":"US-PA","offering":"parxuspa",…}`; `nj.betparx.com/kambi` says
+`parxusnj`. Kambi's `settings-api.kambicdn.com/parxuspa__startup.json` answers
+200. So the tokens guessed on 2026-08-08 (`parx`, `betparx`, …) were never going
+to answer: the tenant is `parxus{st}`, and the 429 those guesses drew is the
+API's reply to an unknown operator.
+
+`eu-offering-api.kambicdn.com/offering/v2018/parxuspa/listView/baseball/mlb.json`
+(market `US-PA`) answered 200, 15 events, and against `rsiuspa` on the same
+request **22 of 30 shared moneyline outcomes differed** (Tigers 1900 vs 1910,
+Pirates 3400 vs 3500, Giants 2800 vs 2850). Registered as `betparx_kambi`
+through the existing Kambi adapter, with PA `VALIDATED`, NJ `TEMPLATE`
+(`parxusnj`, never asked from NJ), IL and DC `UNAVAILABLE`; the mirror
+measurement on a full slate and the per-competition gate verdict are in
+`exchanges-and-mirrors.md` § betPARX (61.1% identical with BetRivers; one feed
+on MLS/ITF/Bundesliga/La Liga/ATP, its own book on MLB/NFL/WNBA — the LeoVegas
+shape). Fixture: the MLB/WNBA/NFL envelopes of a `--no-store` capture the same
+night (10 files, 1,317 rows, 0 rejections).
+
+### The runs, and what replay said
+
+All with `--no-alert`; no SMS was sent (runs 33 and 34 each found one IND@WAS
+moneyline position at +0.96% margin / +0.00 guaranteed, draftkings/fanduel).
+
+| run | scope | bet365 | betmgm | betparx_kambi | betrivers_kambi | draftkings | fanduel | thescore | caesars | replay |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 31 | GLOBAL | — | — | — | — | — | — | — | — | FAIL, cloudbet only (44 `first_5_innings` spread rows `'0'`→`'-0'`) |
+| 32 | PA, `--tier core` | 120 / 22 ev | HTTP 400 (process predated the PA id) | not yet registered | 3,496 / 167 | 951 / 163 | 767 / 220 | 519 / 101 | blocked | FAIL, the same 44 cloudbet rows; no retail row differs |
+| 33 | PA, retail + PA republishers | 120 / 22 | **6,628 / 576** | **3,548 / 168** | 3,544 / 168 | 951 / 163 | 776 / 223 | 519 / 101 | blocked | **PASS** |
+| 34 | PA, same | 120 / 22 | 6,645 / 577 | 3,548 / 168 | 3,544 / 168 | 951 / 163 | 776 / 223 | 519 / 101 | blocked | **PASS** |
+
+Zero rejections on every retail source in every run. `coverage_for_state("PA")`
+on runs 33 and 34: **bet365, BetMGM, betPARX, BetRivers, DraftKings, FanDuel and
+theScore Bet all `DIRECT` and satisfied** — seven of the eleven required books,
+up from two. Promoted on that evidence (the 2026-08-08 bar: two parser-clean
+runs from a matching egress, replaying PASS): `draftkings`, `thescore`, `bet365`
+(runs 32+33), `betmgm` and `betparx_kambi` (runs 33+34). Run 32's FAIL is the
+run-28 precedent — a verdict that belongs to another source's rows; every
+retail row in it replays byte-for-byte.
+
+One new finding, not a route matter: bet365's NFL `SEA@TEN` carried **home 4.5
+and away 4.5** on runs 33 and 34 (`spread_not_mirrored`, ERROR). Filed for the
+adapter; the pod-split orientation trap of 2026-08-16 is the likely relative.
+
+### What stays closed, re-tested rather than assumed
+
+- **Caesars**: `probe_sources.py --only caesars` is `BLOCKED` on `curl_cffi` and
+  `403` CloudFront WAF under `--browser` Playwright from this egress too — the
+  same verdict as Illinois on 2026-08-15. The gate is bot classification, not
+  the exit IP, and a Pennsylvania address changes nothing. `single_source`
+  through `an_caesars`; route stays `TEMPLATE`.
+- **Fanatics**: nothing to re-test anonymously — the web host ends at marketing
+  behind Akamai and the board is in-app behind a login (2026-08-12/14). Not
+  re-probed from PA, because the wall is not an egress wall. The only path left
+  is the operator's own logged-in session (Track D), gated on whether the body
+  is personalised. `an_fanatics` (2791) returned no odds on the one late-night
+  event in runs 32–34 (`odds_for_other_book: 66`), so it graded `missing`
+  tonight and will grade `single_source` on a daytime slate.
+- **Mohegan PA / PlaySugarHouse**: outside the nine books asked for; untouched.
+  Mohegan graded `missing` on runs 33/34 only because `an_unibet` was not in
+  the narrowed source list — run 32 has it at 6 quotes.
+
+### Corrections to earlier notes this makes
+
+- `src/jurisdictions.py`'s DraftKings PA comment ("this machine egresses
+  Illinois natively") and bet365/theScore "never asked" notes are historical as
+  of tonight; each now carries its validation line.
+- `src/coverage.py`'s "a first-party Kambi route … does not exist under the
+  obvious tokens" is answered: it exists under the token the site names.
+
 ## What bet365's pods supply by the hour, and the two leagues that never arrive — 2026-08-16
 
 Before spending any request on widening this venue, the six stored bet365 runs were asked what

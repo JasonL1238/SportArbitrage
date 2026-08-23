@@ -1,7 +1,7 @@
 # Multi-sport odds collector
 
 A local pipeline that continuously collects real pregame betting data for **six
-sports** from **41 registered sources** — 18 venues read first-party (13 sportsbooks,
+sports** from **42 registered sources** — 19 venues read first-party (14 sportsbooks,
 3 betting exchanges, 2 prediction markets) plus 23 republished feeds that watch a
 book from outside it — and normalizes it into one validated schema.
 
@@ -54,7 +54,7 @@ containers only and produces no rows until October. See **Support status**.
 
 ## Sources
 
-Eighteen venues read first-party, of three kinds. The kind is not decoration: a sportsbook
+Nineteen venues read first-party, of three kinds. The kind is not decoration: a sportsbook
 posts a price it will take the other side of, an exchange shows you somebody
 else's order with a size and a commission, and a prediction market shows a
 contract price with an entry fee. The arbitrage engine prices all three
@@ -77,6 +77,7 @@ disappears and what is left is a one-sided bet for the whole stake.
 | `pinnacle` | sportsbook | `guest.api.arcadia.pinnacle.com/0.1/{leagues/{id}\|sports/{id}}/{matchups,markets/straight}` |
 | `betrivers_kambi` | sportsbook | `eu-offering-api.kambicdn.com/offering/v2018/rsiusil/{listView,betoffer}` |
 | `leovegas_kambi` | sportsbook | the same Kambi API under operator `leo` — a different book on one platform, [verified distinct](docs/evidence/exchanges-and-mirrors.md) |
+| `betparx_kambi` | sportsbook | the same Kambi API under operator `parxuspa` (betPARX Pennsylvania; `parxusnj` in NJ) — its own book on US sports, one feed with BetRivers on Kambi-managed competitions, [measured per run](docs/evidence/exchanges-and-mirrors.md) |
 | `bovada` | sportsbook | `www.bovada.lv/services/sports/event/coupon/events/A/description/{path}` — one request per league, states `competitors[].home` |
 | `betmgm` | sportsbook | `www.il.betmgm.com/cds-api/bettingoffer/fixtures` — public `x-bwin-accessid`, one paged request per sport |
 | `draftkings` | sportsbook | `sportsbook-nash.draftkings.com/sites/US-IL-SB/api/v5` — the site path *is* the state licence |
@@ -183,7 +184,8 @@ repeatable `--state` selections. Supported choices are IL, PA, NJ, and DC.
 `ODDS_STATE` remains a compatibility/probe setting and, when explicitly set for
 collection, is treated as another requested state.
 
-Illinois is the live baseline. PA, NJ, and DC exact-state routes remain
+Illinois and Pennsylvania are validated baselines (PA since the operator's
+arrival on 2026-08-23). NJ and DC exact-state routes remain
 template-only until their adapters pass from matching detected egresses. Hard
 Rock is unavailable in PA/DC and BetRivers is unavailable in DC; those adapters
 remain registered without inventing routes. A blocked state endpoint is shown as

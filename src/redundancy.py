@@ -53,6 +53,9 @@ REDUNDANT_PAIRS: tuple[tuple[str, str], ...] = (
     # independently confirms Action Network's id 4601 really is theScore
     # Illinois. Disagreement is the finding.
     ("thescore", "an_thescore"),
+    # betPARX gained a first-party Kambi route on 2026-08-23; its Action
+    # Network id 74 reads the same Pennsylvania licence.
+    ("betparx_kambi", "an_parx"),
     ("caesars", "an_caesars"),
     ("caesars", "vi_caesars"),
     ("an_caesars", "vi_caesars"),

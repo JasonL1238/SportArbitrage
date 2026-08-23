@@ -1,0 +1,31 @@
+{
+ "envelope_version": 3,
+ "source": "betparx_kambi",
+ "endpoint": "betoffer:parxuspa:american_football/nfl:batch-03",
+ "url": "https://eu-offering-api.kambicdn.com/offering/v2018/parxuspa/betoffer/event/1027638966.json?lang=en_US&market=US-PA",
+ "status_code": 200,
+ "content_type": "application/json",
+ "fetched_at": "2026-08-23T04:33:51.403282+00:00",
+ "request_params": {
+  "lang": "en_US",
+  "market": "US-PA",
+  "event_ids": "1027638966"
+ },
+ "headers": {
+  "content-type": "application/json",
+  "content-length": "1002",
+  "date": "Sun, 23 Aug 2026 04:33:46 GMT",
+  "content-encoding": "gzip",
+  "vary": "Accept-Encoding, Origin",
+  "x-cache": "Miss from cloudfront",
+  "via": "1.1 f01dafb3bec9893b47152910d47900a4.cloudfront.net (CloudFront)",
+  "x-amz-cf-pop": "IAD12-P3",
+  "x-amz-cf-id": "aupXnKcBYu0mX_3A8713SWymUNcG5XzZ2FEoS9FzsYxbZ6jUBMp2Xg==",
+  "x-xss-protection": "1",
+  "strict-transport-security": "max-age=31536000"
+ },
+ "capture_id": "b8eb9bdddf424d64",
+ "sha256": "e7c08f3bb13771e109f97f58f48e323d20ea45e33508fa9d5f7520e8a670c11d",
+ "byte_size": 3671,
+ "body": "{\"betOffers\":[{\"id\":2645370662,\"closed\":\"2026-09-18T00:15:00Z\",\"criterion\":{\"id\":1001159928,\"label\":\"Point Spread\",\"englishLabel\":\"Point Spread - Including Overtime\",\"order\":[],\"occurrenceType\":\"POINTS\",\"lifetime\":\"FULL_TIME_OVERTIME\"},\"betOfferType\":{\"id\":1,\"name\":\"Handicap\",\"englishName\":\"Handicap\"},\"eventId\":1027638966,\"outcomes\":[{\"id\":4181386694,\"label\":\"BUF Bills\",\"englishLabel\":\"Buffalo Bills\",\"odds\":1960,\"line\":-3000,\"participant\":\"BUF Bills\",\"type\":\"OT_ONE\",\"betOfferId\":2645370662,\"changedDate\":\"2026-06-10T11:05:44Z\",\"participantId\":1000017217,\"oddsFractional\":\"19/20\",\"oddsAmerican\":\"-105\",\"status\":\"OPEN\",\"cashOutStatus\":\"ENABLED\",\"displayOrder\":0},{\"id\":4181386695,\"label\":\"DET Lions\",\"englishLabel\":\"Detroit Lions\",\"odds\":1860,\"line\":3000,\"participant\":\"DET Lions\",\"type\":\"OT_TWO\",\"betOfferId\":2645370662,\"changedDate\":\"2026-06-10T11:05:44Z\",\"participantId\":1000047062,\"oddsFractional\":\"17/20\",\"oddsAmerican\":\"-117\",\"status\":\"OPEN\",\"cashOutStatus\":\"ENABLED\",\"displayOrder\":1}],\"tags\":[\"OFFERED_PREMATCH\",\"MAIN_LINE\",\"BET_BUILDER\"],\"cashOutStatus\":\"ENABLED\"},{\"id\":2645391267,\"closed\":\"2026-09-18T00:15:00Z\",\"criterion\":{\"id\":1004709447,\"label\":\"Moneyline\",\"englishLabel\":\"Moneyline - Including Overtime\",\"order\":[],\"occurrenceType\":\"POINTS\",\"lifetime\":\"FULL_TIME_OVERTIME\"},\"betOfferType\":{\"id\":2,\"name\":\"Match\",\"englishName\":\"Match\"},\"eventId\":1027638966,\"outcomes\":[{\"id\":4181349494,\"label\":\"1\",\"englishLabel\":\"1\",\"odds\":1610,\"participant\":\"BUF Bills\",\"type\":\"OT_ONE\",\"betOfferId\":2645391267,\"changedDate\":\"2026-05-12T17:51:48Z\",\"participantId\":1000017217,\"oddsFractional\":\"3/5\",\"oddsAmerican\":\"-165\",\"status\":\"OPEN\",\"cashOutStatus\":\"ENABLED\",\"displayOrder\":0},{\"id\":4181349495,\"label\":\"2\",\"englishLabel\":\"2\",\"odds\":2350,\"participant\":\"DET Lions\",\"type\":\"OT_TWO\",\"betOfferId\":2645391267,\"changedDate\":\"2026-05-12T17:51:48Z\",\"participantId\":1000047062,\"oddsFractional\":\"27/20\",\"oddsAmerican\":\"135\",\"status\":\"OPEN\",\"cashOutStatus\":\"ENABLED\",\"displayOrder\":1}],\"tags\":[\"OFFERED_PREMATCH\",\"BET_BUILDER\",\"MAIN\"],\"cashOutStatus\":\"ENABLED\"},{\"id\":2645391275,\"closed\":\"2026-09-18T00:15:00Z\",\"criterion\":{\"id\":1001159490,\"label\":\"Total Points - Including Overtime\",\"englishLabel\":\"Total Points - Including Overtime\",\"order\":[],\"occurrenceType\":\"POINTS\",\"lifetime\":\"FULL_TIME_OVERTIME\"},\"betOfferType\":{\"id\":6,\"name\":\"Over/Under\",\"englishName\":\"Over/Under\"},\"eventId\":1027638966,\"outcomes\":[{\"id\":4181349526,\"label\":\"Over\",\"englishLabel\":\"Over\",\"odds\":1910,\"line\":52500,\"type\":\"OT_OVER\",\"betOfferId\":2645391275,\"changedDate\":\"2026-06-10T11:05:44Z\",\"oddsFractional\":\"10/11\",\"oddsAmerican\":\"-110\",\"status\":\"OPEN\",\"cashOutStatus\":\"ENABLED\",\"displayOrder\":0},{\"id\":4181349527,\"label\":\"Under\",\"englishLabel\":\"Under\",\"odds\":1910,\"line\":52500,\"type\":\"OT_UNDER\",\"betOfferId\":2645391275,\"changedDate\":\"2026-06-10T11:05:44Z\",\"oddsFractional\":\"10/11\",\"oddsAmerican\":\"-110\",\"status\":\"OPEN\",\"cashOutStatus\":\"ENABLED\",\"displayOrder\":1}],\"tags\":[\"OFFERED_PREMATCH\",\"MAIN_LINE\",\"BET_BUILDER\"],\"cashOutStatus\":\"ENABLED\"}],\"events\":[{\"id\":1027638966,\"name\":\"DET Lions @ BUF Bills\",\"nameDelimiter\":\"@\",\"englishName\":\"Buffalo Bills - Detroit Lions\",\"homeName\":\"BUF Bills\",\"awayName\":\"DET Lions\",\"start\":\"2026-09-18T00:15:00Z\",\"group\":\"NFL\",\"groupId\":1000093656,\"path\":[{\"id\":1000093199,\"name\":\"Football\",\"englishName\":\"American Football\",\"termKey\":\"american_football\"},{\"id\":1000093656,\"name\":\"NFL\",\"englishName\":\"NFL\",\"termKey\":\"nfl\"}],\"nonLiveBoCount\":3,\"sport\":\"AMERICAN_FOOTBALL\",\"tags\":[\"AMERICAN_DISPLAY_FORMAT\",\"AWAY_HOME\",\"OFFERED_LIVE\",\"BET_BUILDER\",\"MATCH\"],\"state\":\"NOT_STARTED\",\"groupSortOrder\":2003000000000000000,\"prematchEnd\":\"2026-09-18T00:15:00Z\"}],\"prePacks\":[]}"
+}

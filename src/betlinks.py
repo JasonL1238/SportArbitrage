@@ -87,7 +87,9 @@ MIRROR_BOOK: Mapping[str, str] = {
     "an_fanatics": "fanatics",
     "an_fanduel": "fanduel",
     "an_hardrock": "hardrock",
-    "an_parx": "parx",
+    # betPARX gained a first-party Kambi route on 2026-08-23, so the brand
+    # key is that source key, as it is for BetRivers, DraftKings and theScore.
+    "an_parx": "betparx_kambi",
     "an_thescore": "thescore",
     # Action Network files this book as ``UnibetPA``; the Pennsylvania online
     # skin ran on Unibet's licence, so the front door is Unibet's.  Recorded
@@ -127,6 +129,13 @@ STATE_SITE: Mapping[str, Mapping[str, str]] = {
         "NJ": "https://nj.betrivers.com/?page=sportsbook",
         # No DC entry: BetRivers holds no DC licence, and no DC run can carry
         # a takeable betrivers_kambi leg to link.
+    },
+    # betPARX is partitioned by licence the same way: ``pa.betparx.com`` and
+    # ``nj.betparx.com`` each mount their own Kambi widget at ``/kambi``.
+    # No IL or DC door, because no licence — the routes say the same.
+    "betparx_kambi": {
+        "PA": "https://pa.betparx.com/kambi",
+        "NJ": "https://nj.betparx.com/kambi",
     },
     "caesars": {
         "IL": "https://sportsbook.caesars.com/us/il/bet",
@@ -182,7 +191,7 @@ SITE: Mapping[str, str] = {
     # pass, not here.
     "polymarket_us": "https://polymarket.us",
     "smarkets": "https://smarkets.com",
-    "parx": "https://www.betparx.com",
+    "betparx_kambi": "https://www.betparx.com",
     "thescore": "https://www.thescore.bet",
     # Deliberately Pennsylvania's door, in knowing tension with the "stateless
     # fallbacks" rule above: Unibet has no US brand chooser — ``unibet.com`` is

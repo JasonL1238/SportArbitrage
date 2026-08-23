@@ -48,6 +48,16 @@ SOURCE_NOTES: dict[str, dict[str, str]] = {
                 "company. Whether that makes it a second opinion or the same one twice is "
                 "measured on every run rather than assumed — see the sources page.",
     },
+    "betparx_kambi": {
+        "label": "betPARX",
+        "host": "eu-offering-api.kambicdn.com",
+        "kind": "sportsbook",
+        "what": "Pennsylvania's betPARX, read first-hand from the same Kambi platform as "
+                "BetRivers under its own tenant. Prices its own numbers on MLB, NFL and "
+                "WNBA and shares BetRivers' on Kambi-managed soccer and tennis, so the "
+                "two count as one counterparty only in those competitions — measured on "
+                "every run, not assumed, the same way LeoVegas is.",
+    },
     "bovada": {
         "label": "Bovada",
         "host": "www.bovada.lv",
@@ -244,8 +254,8 @@ SOURCE_NOTES: dict[str, dict[str, str]] = {
         "label": "betPARX (Action Network)",
         "host": "api.actionnetwork.com",
         "kind": "sportsbook",
-        "what": "betPARX prices from Action Network's public scoreboard — the only "
-                "observation path into this book until a first-party route exists.",
+        "what": "betPARX prices from Action Network's public scoreboard — the second "
+                "feed beside the first-party Kambi route, kept for cross-checking.",
     },
     "an_unibet": {
         "label": "Unibet (Action Network)",
@@ -354,7 +364,7 @@ BRAND_LABELS: dict[str, str] = {
     "leovegas_kambi": "LeoVegas",
     "matchbook": "Matchbook",
     "onexbet": "1xBet",
-    "parx": "betPARX",
+    "betparx_kambi": "betPARX",
     "pinnacle": "Pinnacle",
     "polymarket_us": "Polymarket US",
     "smarkets": "Smarkets",

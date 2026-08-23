@@ -559,9 +559,11 @@ class TestTheDirectRouteIsCheckedToo:
 
     def test_the_real_direct_routes_still_pass(self) -> None:
         """The check must not be so strict that the shipped table cannot express
-        a first-party route — seven of PA's eleven books have one.
+        a first-party route — eight of PA's eleven books have one.
 
-        ``thescore`` joined on 2026-08-13 and ``bet365`` on 2026-08-15.  Both PA
+        ``thescore`` joined on 2026-08-13, ``bet365`` on 2026-08-15 and
+        ``betparx_kambi`` on 2026-08-23 (the Kambi tenant PA's own web app
+        names, answered from a Philadelphia egress the same day).  The first two PA
         routes are ``TEMPLATE`` and neither has been asked over HTTP, which is
         exactly why naming them here is safe: the table says *which* key would be
         the direct route, and ``DIRECT`` is graded only on ``direct_rows > 0``,
@@ -575,7 +577,7 @@ class TestTheDirectRouteIsCheckedToo:
         }
         assert declared == {
             "fanduel", "betrivers_kambi", "draftkings", "betmgm", "caesars",
-            "thescore", "bet365",
+            "thescore", "bet365", "betparx_kambi",
         }
         for key in sorted(declared):
             _check_locality_declarations(

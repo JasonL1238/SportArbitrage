@@ -105,6 +105,7 @@ SETTLEMENT: dict[str, SettlementRegime] = {
     "pinnacle": SettlementRegime.VOID_AND_REFUND,
     "betrivers_kambi": SettlementRegime.VOID_AND_REFUND,
     "leovegas_kambi": SettlementRegime.VOID_AND_REFUND,
+    "betparx_kambi": SettlementRegime.VOID_AND_REFUND,
     "bovada": SettlementRegime.VOID_AND_REFUND,
     "betmgm": SettlementRegime.VOID_AND_REFUND,
     "draftkings": SettlementRegime.VOID_AND_REFUND,

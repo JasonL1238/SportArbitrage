@@ -47,7 +47,13 @@ python scripts/probe_sources.py --state IL
   for vintage coherence (2026-08-09) · The two endpoint versions are different
   catalogues (2026-08-08) · Two things to fix *before* the Pennsylvania recapture
   (2026-08-08) · v2 returns full-game only unless asked (2026-08-08)
-- **`evidence/state-routing.md`** — What bet365's pods supply by the hour, and
+- **`evidence/state-routing.md`** — Pennsylvania arrival: seven of nine books
+  first-party in one night (2026-08-23) · Detection, with `ipapi.co` still gated ·
+  Probe, one request per route · BetMGM: the PA access id is on the PA site, as a
+  query parameter · betPARX: the Kambi tenant is in the page, and every guess was
+  wrong for a reason · The runs, and what replay said · What stays closed,
+  re-tested rather than assumed · Corrections to earlier notes this makes · What
+  bet365's pods supply by the hour, and
   the two leagues that never arrive (2026-08-16) · The per-sport shelf does not
   answer either — measured with a closing control · The operator's own browser
   sees no board either — the reproduction gap was not one · Tennis was in the

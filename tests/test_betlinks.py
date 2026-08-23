@@ -305,7 +305,7 @@ class TestAStatePartitionedBookLinksItsOwnState:
         """
         from src.jurisdictions import JURISDICTIONS, RouteStatus
 
-        for book in ("bet365", "caesars"):
+        for book in ("bet365", "caesars", "betparx_kambi"):
             for state, jurisdiction in JURISDICTIONS.items():
                 route = jurisdiction.routes.get(book)
                 door = STATE_SITE[book].get(state)

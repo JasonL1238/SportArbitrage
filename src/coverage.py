@@ -247,16 +247,18 @@ def _required(
 #: Pennsylvania book Action Network carries and this table does not ask for is 912
 #: ``'Betway PA'``, which the operator did not name.
 #:
-#: A first-party Kambi route would satisfy the rule outright for the first three,
-#: since Rush Street's own books are Kambi tenants.  It does not exist under the
-#: obvious tokens: ``parx``, ``betparx``, ``sugarhouse``, ``playsugarhouse`` and
-#: ``mohegansun`` all answer the offering API with HTTP 429, and so does the
-#: deliberately fake ``zzznotarealbook``, while ``rsiuspa`` answers 200 both
-#: before and after in the same session.  **429 is this API's reply to an unknown
-#: operator, not throttling** — which is worth writing down, because reading those
-#: 429s as rate limiting is what makes the guessing look unfinished rather than
-#: answered.  Finding these books first-party needs the token from their own web
-#: application (:mod:`src.sources.research`), not more guesses.
+#: A first-party Kambi route satisfies the rule outright for a Kambi tenant, and
+#: guessing the tenant does not find one: ``parx``, ``betparx``, ``sugarhouse``,
+#: ``playsugarhouse`` and ``mohegansun`` all answer the offering API with HTTP
+#: 429, and so does the deliberately fake ``zzznotarealbook``, while ``rsiuspa``
+#: answers 200 both before and after in the same session.  **429 is this API's
+#: reply to an unknown operator, not throttling** — worth writing down, because
+#: reading those 429s as rate limiting is what made the guessing look unfinished
+#: rather than answered.  The token has to come from the book's own web
+#: application, and on 2026-08-23 it did: ``pa.betparx.com/kambi`` names its
+#: offering ``parxuspa`` in ``window._kc``, which is now the ``betparx_kambi``
+#: direct route above.  PlaySugarHouse and Mohegan are still waiting on the
+#: same question asked of their own sites.
 #:
 #: Illinois's list is the ten online operators on the IGB's authorized-sportsbook
 #: page (recorded 2026-08-03 in ``docs/evidence/state-routing.md`` § "Illinois
@@ -326,7 +328,7 @@ REQUIRED_BOOKS: Mapping[str, tuple[RequiredBook, ...]] = {
     "PA": (
         _required("bet365", "bet365", same=("an_bet365",), other=("vi_bet365",)),
         _required("BetMGM", "betmgm", same=("an_betmgm",), other=("vi_betmgm",)),
-        _required("betPARX", same=("an_parx",)),
+        _required("betPARX", "betparx_kambi", same=("an_parx",)),
         _required(
             "BetRivers",
             "betrivers_kambi",

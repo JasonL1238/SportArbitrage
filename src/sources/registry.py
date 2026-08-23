@@ -98,6 +98,7 @@ RETAIL_SOURCE_KEYS: frozenset[str] = frozenset(
         "bet365",
         "fanduel",
         "betrivers_kambi",
+        "betparx_kambi",
         "betmgm",
         "draftkings",
         "caesars",
@@ -403,6 +404,33 @@ _BASE_SOURCES: tuple[SourceDescriptor, ...] = (
         adapter=BetRiversKambiAdapter,
         kind=SourceKind.SPORTSBOOK,
         config={"operator": "leo", "market": "GB", "lang": "en_GB"},
+    ),
+    # The third Kambi tenant, and a Pennsylvania licence of its own.  betPARX
+    # PA's sportsbook is the Kambi widget at ``pa.betparx.com/kambi``, whose
+    # client config names the offering ``parxuspa`` / market ``US-PA`` (read
+    # off ``window._kc`` on 2026-08-23; ``parxusnj`` in New Jersey).
+    #
+    # It is registered on the same evidence, and with the same caveat, as
+    # ``leo`` above.  Run 33 (PA, 2026-08-23) measured ``betparx_kambi`` vs
+    # ``betrivers_kambi`` at 290/475 shared moneylines identical (61.1%): one
+    # feed in MLS, ITF, Bundesliga, La Liga and ATP — Kambi's managed
+    # competitions — and its own prices on MLB, NFL and WNBA (22 of 30 MLB
+    # moneylines differed on the same slate: Tigers 1900 vs 1910, Pirates
+    # 3400 vs 3500).  LeoVegas reads the same way against BetRivers (run 32:
+    # 25.6%, one feed in ITF and ATP), and the gate is built for exactly this
+    # shape: :func:`src.arb.counterparty_groups` folds the pair into one
+    # counterparty **per competition** where they are one feed, and leaves
+    # them two where they are not.  So a betPARX/BetRivers position on MLB is
+    # real and one on MLS is refused — measured on every run, never assumed
+    # (docs/evidence/exchanges-and-mirrors.md § betPARX).  The base config is
+    # Pennsylvania's because that is the licence the operator sits in;
+    # ``src.jurisdictions`` overrides it per state and refuses the two with
+    # no betPARX licence.
+    SourceDescriptor(
+        key="betparx_kambi",
+        adapter=BetRiversKambiAdapter,
+        kind=SourceKind.SPORTSBOOK,
+        config={"operator": "parxuspa", "market": "US-PA", "lang": "en_US"},
     ),
     # ── exchanges ────────────────────────────────────────────────────────────
     #

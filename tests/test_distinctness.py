@@ -39,6 +39,9 @@ TENANTS = {
     "betrivers_kambi_il_sample": MIRROR_DIR,
     "betrivers_kambi_nj": MIRROR_DIR,
     "leovegas_kambi": FIXTURE_RAW_DIR,
+    # betPARX Pennsylvania (``parxuspa``), captured 2026-08-23 from a
+    # Philadelphia egress — a fourth tenant, and a distinct one.
+    "betparx_kambi": FIXTURE_RAW_DIR,
 }
 
 
@@ -191,8 +194,8 @@ def test_every_registered_source_is_compared_against_every_other(tenant_quotes) 
     """The sweep is a full pairwise pass, not a chain: a mirror can enter the
     registry at any point, so every pair has to be looked at."""
     pairs = compare_all(tenant_quotes)
-    assert len(pairs) == 3  # three tenants -> three unordered pairs
-    assert len({tuple(sorted((p.source_a, p.source_b))) for p in pairs}) == 3
+    assert len(pairs) == 6  # four tenants -> six unordered pairs
+    assert len({tuple(sorted((p.source_a, p.source_b))) for p in pairs}) == 6
 
 
 class TestFrontEndsOfARegisteredBook:

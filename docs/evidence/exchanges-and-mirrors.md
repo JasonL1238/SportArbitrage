@@ -439,6 +439,7 @@ It is not, because most of those tokens are **licences of one book**:
 | `kambi` (reference tenant) | **mirror of the above** | as above |
 | `ub`, `ubuk`, `ubse`, `ubdk`, `ubnl`, `ubro`, `pafse`, `atg`, `jvh` | **mirrors of each other** | identical to one another |
 | `leo` (LeoVegas) | **distinct** | same slate, its own prices — Cleveland at 2.28 where BetRivers had 2.38 |
+| `parxuspa` (betPARX PA), `parxusnj` (NJ) | **distinct on US sports, one feed on Kambi-managed competitions** | run 33, 2026-08-23: 61.1% identical overall; MLB/NFL/WNBA priced independently, MLS/ITF/Bundesliga/La Liga/ATP byte-for-byte BetRivers' |
 
 **And betPARX prices like a Kambi tenant too — 2026-08-08.** On run 27's real
 rows, `compare_sources(an_betrivers, an_parx)` returns **MIRROR** ("one feed in
@@ -450,6 +451,25 @@ the PA books genuinely share a Kambi price feed, the pair must land MIRROR or
 UNDECIDED — a DISTINCT verdict on a thin slate would arm the false-arb trap this
 section documents. Run the gate on a full slate before promoting either, and
 treat "failed to prove a mirror" as exactly that.
+
+**betPARX got that first-party Kambi route on 2026-08-23, and the gate was run
+on a full slate before it was promoted.** Its own web app names the tenant —
+`pa.betparx.com/kambi` puts `offering: "parxuspa"`, `market: "US-PA"` in
+`window._kc` (and `nj.betparx.com` says `parxusnj`), which is why none of the
+guessed tokens above ever answered. Registered as `betparx_kambi`. Run 33 (PA,
+2026-08-23, Philadelphia egress) measured it against `betrivers_kambi` at
+**290/475 shared moneylines identical (61.1%) — MIRROR, one feed in MLS 51/51,
+ITF 38/38, Bundesliga 27/27, La Liga 27/27, ATP 26/26**, and its own prices on
+MLB, NFL and WNBA (a direct `listView/baseball/mlb` comparison the same evening
+had 22 of 30 shared MLB moneylines differing: Tigers 1900 vs 1910, Pirates 3400
+vs 3500). That is the LeoVegas shape exactly — run 32 reads `betrivers_kambi vs
+leovegas_kambi` at 25.6%, one feed in ITF and ATP — and the gate is built for
+it: `src.arb.counterparty_groups` folds the pair into one counterparty **per
+competition** where they are one feed and leaves them two where they are not,
+so a betPARX/BetRivers MLB position is real and an MLS one is refused. The
+`an_parx`/`an_betrivers` NFL MIRROR above was the managed-feed half of the
+same picture seen through one thin republished slate. Declared failover pair:
+`("betparx_kambi", "an_parx")`.
 
 A mirror is invisible to every other check in this pipeline. It satisfies the
 source contract, emits valid rows, raises the cross-source coverage counts, and
