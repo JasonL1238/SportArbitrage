@@ -48,6 +48,15 @@ qualifying and conversion legs hedge at the other. After that, every new book he
 the growing set. When a top plan names a hedge book you don't hold, the #2/#3 plan cards
 on the same offer usually give up only 1–3 points of conversion.
 
+The slate also holds venues you cannot open an account with from your state — Smarkets,
+Matchbook, Pinnacle, Bovada — and their prices are often the best hedge on the board. The
+plan cards keep them, because the best overall execution is worth knowing, but every such
+leg wears the same **offshore** / **not reachable** pill the arbitrage cards use and the
+card is marked **not takeable**. Beneath the overall plans, **Best takeable from here** is
+a second planner pass with every unreachable venue removed: either the best overall plan
+is itself takeable, a different takeable plan is shown, or no takeable plan exists and the
+gate-out counts say why. Stake the takeable one.
+
 **Float:** at typical prices (promo leg ~3.0, hedge ~1.5) the conversion hedge needs
 about **1.33 × the bonus** in cash at other books, returned as legs settle over 1–3 days.
 ~$1,500 of working float runs two book cycles at once. Sequence deposit matches after the

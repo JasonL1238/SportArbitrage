@@ -180,6 +180,17 @@ US_UNAVAILABLE_SOURCE_KEYS: frozenset[str] = frozenset(
     }
 )
 
+#: Venues fronted by an anti-bot layer that has actually fired on this
+#: pipeline: bet365 (Cloudflare — two recorded egress burns, 2026-08-15 and
+#: 2026-08-23, each following a burst of requests) and Caesars (AWS WAF, which
+#: classifies every anonymous client).  The collector refuses to touch these
+#: more often than :data:`src.settings.WAF_COOLDOWN_SECONDS`, because the
+#: burned state costs every bet365-dependent edge for ~40 hours and a repeat
+#: touch inside a few minutes has never yielded a byte the previous one did
+#: not.  Membership is evidence-based — a venue joins when its WAF has fired,
+#: not because it might.
+WAF_SENSITIVE_SOURCE_KEYS: frozenset[str] = frozenset({"bet365", "caesars"})
+
 #: Venues reachable from every state in :data:`~src.jurisdictions.JURISDICTIONS`
 #: without holding a per-state sportsbook licence — the second half of
 #: :func:`takeable_from_state`.
@@ -1238,6 +1249,7 @@ __all__ = [
     "STATE_LICENSED_REPUBLISHER_KEYS",
     "US_UNAVAILABLE_SOURCE_KEYS",
     "VIEW_ONLY_SOURCES",
+    "WAF_SENSITIVE_SOURCE_KEYS",
     "SourceDescriptor",
     "SourceKind",
     "accepts_leagues",

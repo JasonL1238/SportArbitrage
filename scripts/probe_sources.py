@@ -557,6 +557,22 @@ def main(argv: list[str] | None = None) -> int:
                     )
                     reachable += 1
                     continue
+                refusal = cache.fresh_refusal(
+                    candidate.source_key,
+                    state,
+                    fingerprint,
+                    ttl=timedelta(minutes=settings.PROBE_NEGATIVE_TTL_MINUTES),
+                )
+                if refusal is not None:
+                    # A wall that answered minutes ago will answer the same way
+                    # now, and re-touching it is how edges get burned; --force
+                    # remains the deliberate override.
+                    print(
+                        f"{candidate.family:<11} {candidate.name:<28} "
+                        f"{'CACHED ' + refusal.status.value.upper():<12} "
+                        f"{refusal.probed_at} (not re-touched; --force overrides)"
+                    )
+                    continue
             if candidate.source_key:
                 verdict, detail = probe_registered(candidate, state=state)
             else:

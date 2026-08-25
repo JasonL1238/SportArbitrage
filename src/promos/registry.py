@@ -143,12 +143,10 @@ _BASE_PROMO_SOURCES: tuple[PromoSourceDescriptor, ...] = (
         "hardrock",
         "https://www.hardrock.bet/promotions",
     ),
-    _html_catalog(
-        "bet365",
-        "https://www.bet365.com/en/o-hub/welcome-offer",
-        default_kind=PromoKind.SIGNUP_BONUS,
-        max_details=4,
-    ),
+    # ``bet365`` was deregistered 2026-08-24: 76 of 76 runs failed (Cloudflare
+    # challenge, 0 offers ever), and each attempt was one more daily touch on
+    # the same WAF that twice burned the *odds* egress.  ``tl_bet365`` remains
+    # the brand's promo feed; a first-party route returns only with evidence.
     # Canada / Ontario public surfaces (host itself is ON-scoped).
     _html_catalog(
         "leovegas_on",
@@ -175,52 +173,14 @@ _BASE_PROMO_SOURCES: tuple[PromoSourceDescriptor, ...] = (
         default_kind=PromoKind.SIGNUP_BONUS,
         empty_is_ok=True,
     ),
-    _landing(
-        "onexbet",
-        (
-            LandingTarget(
-                "https://1xbet.com/en/bonus",
-                "bonus",
-                "1xBet Bonus",
-            ),
-        ),
-        default_kind=PromoKind.SIGNUP_BONUS,
-    ),
-    _landing(
-        "pinnacle",
-        (
-            LandingTarget(
-                "https://www.pinnacle.com/en/",
-                "home",
-                "Pinnacle",
-            ),
-        ),
-        default_kind=PromoKind.OTHER,
-        empty_is_ok=True,
-    ),
-    _landing(
-        "smarkets",
-        (
-            LandingTarget(
-                "https://smarkets.com/en/promotions",
-                "promotions",
-                "Smarkets Promotions",
-            ),
-        ),
-        default_kind=PromoKind.SIGNUP_BONUS,
-    ),
-    _landing(
-        "matchbook",
-        (
-            LandingTarget(
-                "https://www.matchbook.com/",
-                "home",
-                "Matchbook",
-            ),
-        ),
-        default_kind=PromoKind.OTHER,
-        empty_is_ok=True,
-    ),
+    # ``onexbet``, ``pinnacle``, ``smarkets`` and ``matchbook`` were
+    # deregistered 2026-08-24.  All four are venues no US customer can hold an
+    # account with, so nothing they publish is ever claimable; measured over
+    # all 76 stored promo runs they produced 0 offers between them (onexbet
+    # and smarkets failing every run outright) while costing 73% of each promo
+    # scrape's bytes and 901 MiB of stored raw.  The adapters they exercised
+    # (``landing``, ``html_catalog``) keep their focused tests, which build
+    # the adapter directly rather than through this registry.
     # TheLines aggregator failover (Action Network–style secondaries).
     _thelines("tl_fanduel", "fanduel"),
     _thelines("tl_draftkings", "draftkings"),

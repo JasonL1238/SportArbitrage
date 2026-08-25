@@ -173,6 +173,20 @@ HTTP_TIMEOUT = _number("HTTP_TIMEOUT", "20", whole=False, minimum=0.001)
 #: Fresh successful live probes are reused for this many days.
 PROBE_TTL_DAYS = _number("PROBE_TTL_DAYS", "60", whole=True, minimum=1)
 
+#: Minimum seconds between live touches of a WAF-fronted venue
+#: (:data:`src.sources.registry.WAF_SENSITIVE_SOURCE_KEYS`).  Both recorded
+#: bet365 captcha burns followed burst-shaped request patterns that bought no
+#: new information — runs 32/33/34 hit it nine times in six minutes for three
+#: byte-identical payloads.  ``0`` disables the cooldown, which is what a
+#: deliberate route-validation session sets.
+WAF_COOLDOWN_SECONDS = _number("WAF_COOLDOWN_SECONDS", "900", whole=True, minimum=0)
+
+#: How long a BLOCKED/GEO probe verdict is served from cache before a venue is
+#: asked again.  Short on purpose: long enough that ``probe_sources`` cannot
+#: re-touch a wall on every invocation, short enough that a lapsed block
+#: (measured 33 minutes to ~40 hours) is noticed the same hour.
+PROBE_NEGATIVE_TTL_MINUTES = _number("PROBE_NEGATIVE_TTL_MINUTES", "45", whole=True, minimum=1)
+
 #: Minimum ideal-stake ROI (fraction) before an arb is texted.  Default 3%.
 #: Read as return on the bankroll actually staked, which is the same number the
 #: dashboard and ``arb`` print — deliberately not the market margin, so "3%"

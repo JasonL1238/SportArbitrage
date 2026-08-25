@@ -92,8 +92,16 @@ def unready_reason() -> str:
     return ""
 
 
-def opportunity_alert_key(opportunity: Opportunity) -> str:
-    """Stable id for dedupe: same books, selections, and prices → one text.
+def opportunity_alert_key(opportunity: Opportunity, *, state: str = "") -> str:
+    """Stable id for dedupe: same market, books and selections → one text.
+
+    *state* is the governed jurisdiction the position was found under, and it
+    is part of the key when present.  Source keys are jurisdiction-free
+    (``fanduel``, never ``fanduel_pa``), so without it the per-state passes of
+    one batch mint byte-identical keys for what are genuinely distinct,
+    separately-placeable retail positions — the PA text claimed the key and
+    the NJ position, at NJ's own prices, was swallowed forever.  An ungoverned
+    run contributes no state, exactly as before.
 
     Stakes are deliberately NOT part of the key.  They are an output of
     whatever bankroll the command was asked to size for, not part of the
@@ -101,6 +109,18 @@ def opportunity_alert_key(opportunity: Opportunity) -> str:
     re-minted every already-claimed position under a fresh key and the
     ledger waved it through, quietly scoping "at most one text per arb
     ever" to "per arb per bankroll".
+
+    Prices are not part of the key either, since 2026-08-24.  They were —
+    "same books, selections, and prices" — and at manual cadence that was
+    harmless, because a position was observed once.  A watch loop observes
+    the same standing position every five minutes, and books nudge a price a
+    tick without the edge closing: matchbook 1.9400 → 1.9500 minted a fresh
+    key, so one persistent edge became a text per tick, 288 a day.  The key
+    is now the position's *identity* (market plus who is on each side), which
+    scopes "at most one text per arb ever" the way the sentence reads.  The
+    cost is real and accepted: an edge that closes and later reopens at
+    better prices does not text again — the dashboard still shows it, and a
+    price is one ``arb --run`` away.
 
     ``side`` IS part of the key, because it is part of the detector's own
     market identity (``MarketGroup`` keys on event/market/period/side/line):
@@ -118,14 +138,14 @@ def opportunity_alert_key(opportunity: Opportunity) -> str:
     which is the acceptable direction of the error.
     """
     legs = "|".join(
-        f"{leg.source}:{leg.selection.value}:{leg.decimal_odds:.4f}"
-        for leg in opportunity.legs
+        f"{leg.source}:{leg.selection.value}" for leg in opportunity.legs
     )
     side = "" if opportunity.side is None else opportunity.side.value
     raw_line = opportunity.line
     line = "" if raw_line is None else f"{0.0 if raw_line == 0 else raw_line:g}"
+    prefix = f"{state.strip().upper()}|" if state else ""
     return (
-        f"{opportunity.event_key}|{opportunity.market.value}|"
+        f"{prefix}{opportunity.event_key}|{opportunity.market.value}|"
         f"{opportunity.period.value}|{side}|{line}|{legs}"
     )
 
@@ -169,6 +189,13 @@ def format_alert(
     the same ``[not reachable from ST]`` tag the CLI prints, and a disclaimer
     line sits in the head — the head rather than the tail, because the body is
     truncated from the end and a warning that can be cut off is not a warning.
+
+    Since 2026-08-24, :meth:`AlertBook.notify` suppresses any governed-run
+    position with a foreign leg before this function is reached, so on the
+    live path the disclaimer branches below fire only for **ungoverned** runs
+    (GLOBAL scope, empty jurisdiction).  They are kept because this function
+    also formats bodies for surfaces that print rather than send, and an
+    ungoverned body without its label is the original defect.
     """
     roi_pct = opportunity.roi * 100.0
     line = "" if opportunity.line is None else f" @ {opportunity.line:g}"
@@ -477,7 +504,33 @@ class AlertBook:
                 continue
             if not qualifies(opportunity, min_roi=min_roi):
                 continue
-            key = opportunity_alert_key(opportunity)
+            # The SMS is the place-money-now channel, and a position with any
+            # leg unreachable from the run's state cannot have money placed on
+            # it from there — every text this system had ever sent was a
+            # matchbook+bovada position untakeable from PA, wearing an "INFO
+            # ONLY" tail nobody asked to be woken for.  Such positions stay on
+            # the dashboard with their labels; they do not reach a phone.  The
+            # key is deliberately NOT claimed: the same position on a later
+            # differently-governed run may be takeable, and a suppressed study
+            # must not spend the arb's one ledger slot.  An ungoverned run
+            # (GLOBAL scope, empty jurisdiction) has no state to be takeable
+            # from and keeps its old behaviour — the label in the body is the
+            # safeguard there.
+            if marking is not None and marking.marking and any(
+                not marking.leg_is_local(leg.source) for leg in opportunity.legs
+            ):
+                log.info(
+                    "arb alert suppressed for %s: leg(s) %s not takeable from "
+                    "%s — shown on the dashboard, not texted",
+                    opportunity.event_key,
+                    ", ".join(marking.non_local_sources(opportunity)),
+                    marking.state,
+                )
+                continue
+            key = opportunity_alert_key(
+                opportunity,
+                state=marking.state if marking is not None and marking.marking else "",
+            )
             body = format_alert(opportunity, marking=marking)
             # Claimed *before* the send, so a delivery that reports failure
             # cannot be retried into a second text.  ``collect_batch_once`` is

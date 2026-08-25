@@ -809,3 +809,225 @@ class TestAddingAStateReachesTheCommandLine:
         assert "invalid choice: 'ZZ'" in refusal, refusal
         for state in JURISDICTIONS:
             assert state in refusal, f"{state} missing from {refusal}"
+
+
+class TestEveryWatchPassReconfirmsTheEgress:
+    """Rule (b) holds per pass, not per process.
+
+    ``_cmd_collect`` detects the state once, before ``while True`` — so a VPN
+    drop at hour three kept stamping runs ``PA`` from wherever the traffic now
+    exits.  ``_egress_still_matches`` runs before every pass after the first:
+    an unchanged fingerprint refreshes ``egress_state.json``, a changed or
+    unconfirmable one refuses the pass.
+    """
+
+    def _selection(self):
+        from src.state_selection import StateSelection
+
+        detected = detection_from_payload({"ip": "203.0.113.55", "region_code": "PA"})
+        return StateSelection(detected, ("PA",), "test"), detected
+
+    def test_an_unchanged_address_passes_and_restamps_the_record(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        import src.collector
+        import src.egress
+        import src.settings
+
+        selection, detected = self._selection()
+        monkeypatch.setattr(
+            src.settings, "EGRESS_STATE_PATH", tmp_path / "egress.json"
+        )
+        monkeypatch.setattr(
+            src.egress, "fingerprint_now",
+            lambda client, urls=None, **kw: detected.egress_fingerprint,
+        )
+        assert src.collector._egress_still_matches(selection) is True
+        stored = load_detection(tmp_path / "egress.json")
+        assert stored is not None and stored.state == "PA"
+        assert stored.egress_fingerprint == detected.egress_fingerprint
+
+    def test_a_moved_address_refuses_the_pass(self, tmp_path, monkeypatch) -> None:
+        import src.collector
+        import src.egress
+        import src.settings
+
+        selection, _ = self._selection()
+        monkeypatch.setattr(
+            src.settings, "EGRESS_STATE_PATH", tmp_path / "egress.json"
+        )
+        monkeypatch.setattr(
+            src.egress, "fingerprint_now",
+            lambda client, urls=None, **kw: hashlib.sha256(b"198.51.100.7").hexdigest(),
+        )
+        assert src.collector._egress_still_matches(selection) is False
+        assert load_detection(tmp_path / "egress.json") is None, (
+            "a refused pass must not overwrite the stored detection"
+        )
+
+    def test_an_unconfirmable_address_refuses_rather_than_guesses(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        import src.collector
+        import src.egress
+        import src.settings
+
+        selection, _ = self._selection()
+        monkeypatch.setattr(
+            src.settings, "EGRESS_STATE_PATH", tmp_path / "egress.json"
+        )
+
+        def down(client, urls=None, **kw):
+            raise RuntimeError("echo service unreachable")
+
+        monkeypatch.setattr(src.egress, "fingerprint_now", down)
+        assert src.collector._egress_still_matches(selection) is False
+
+    def test_a_forced_state_with_no_detection_is_not_blocked(self) -> None:
+        from src.state_selection import StateSelection
+
+        import src.collector
+
+        selection = StateSelection(None, ("PA",), "", note="operator's choice")
+        assert src.collector._egress_still_matches(selection) is True
+
+
+class TestWafFrontedVenuesAreNotReTouched:
+    """Both recorded bet365 burns followed bursts that bought no new bytes."""
+
+    def test_fresh_refusal_serves_blocked_within_ttl_and_expires(self, tmp_path) -> None:
+        from datetime import timedelta
+
+        cache = ProbeCache(tmp_path / "probe.sqlite3")
+        try:
+            when = datetime(2026, 8, 24, 12, 0, tzinfo=UTC)
+            cache.record("bet365", "PA", "fp", ProbeStatus.BLOCKED,
+                         "challenge", probed_at=when)
+            hit = cache.fresh_refusal(
+                "bet365", "PA", "fp", now=when + timedelta(minutes=30)
+            )
+            assert hit is not None and hit.status is ProbeStatus.BLOCKED
+            assert cache.fresh_refusal(
+                "bet365", "PA", "fp", now=when + timedelta(minutes=50)
+            ) is None, "an expired refusal must be re-probed, not remembered"
+            # OK and UNLICENSED are not refusals and must never be served here.
+            cache.record("fanduel", "PA", "fp", ProbeStatus.OK, probed_at=when)
+            assert cache.fresh_refusal("fanduel", "PA", "fp", now=when) is None
+            cache.record("hardrock", "PA", "fp", ProbeStatus.UNLICENSED,
+                         probed_at=when)
+            assert cache.fresh_refusal("hardrock", "PA", "fp", now=when) is None
+        finally:
+            cache.close()
+
+    def test_the_collector_cooldown_skips_a_recently_touched_venue(
+        self, monkeypatch
+    ) -> None:
+        from src import settings
+        from src.collector import _apply_waf_cooldown
+
+        class FakeSource:
+            def __init__(self, key):
+                self.source_key = key
+                self.closed = False
+
+            def close(self):
+                self.closed = True
+
+        class FakeStore:
+            def __init__(self, last):
+                self._last = last  # keyed (source, jurisdiction)
+
+            def last_fetch_at(self, source, *, jurisdiction):
+                return self._last.get((source, jurisdiction))
+
+        now = datetime(2026, 8, 24, 12, 0, tzinfo=UTC)
+        recent = now - timedelta(seconds=120)
+        stale = now - timedelta(hours=2)
+        bet365, fanduel = FakeSource("bet365"), FakeSource("fanduel")
+
+        kept = _apply_waf_cooldown(
+            [bet365, fanduel], FakeStore({("bet365", "PA"): recent}),
+            jurisdiction="PA", now=now,
+        )
+        assert [s.source_key for s in kept] == ["fanduel"]
+        assert bet365.closed, "a dropped source must not leak its transport"
+        assert not fanduel.closed
+
+        # The cooldown is per state, because the host is the licence: PA
+        # touching pa.bet365.com says nothing about il.bet365.com's wall — a
+        # source-only key let the first state of a multi-state batch starve
+        # every later one forever.
+        bet365_il = FakeSource("bet365")
+        kept = _apply_waf_cooldown(
+            [bet365_il], FakeStore({("bet365", "PA"): recent}),
+            jurisdiction="IL", now=now,
+        )
+        assert kept == [bet365_il] and not bet365_il.closed
+
+        # An old touch passes; a non-WAF venue is never checked at all.
+        bet365b = FakeSource("bet365")
+        kept = _apply_waf_cooldown(
+            [bet365b, FakeSource("fanduel")],
+            FakeStore({("bet365", "PA"): stale}), jurisdiction="PA", now=now,
+        )
+        assert [s.source_key for s in kept] == ["bet365", "fanduel"]
+
+        # 0 disables the cooldown — the deliberate validation session's setting.
+        monkeypatch.setattr(settings, "WAF_COOLDOWN_SECONDS", 0)
+        bet365c = FakeSource("bet365")
+        kept = _apply_waf_cooldown(
+            [bet365c], FakeStore({("bet365", "PA"): recent}),
+            jurisdiction="PA", now=now,
+        )
+        assert kept == [bet365c] and not bet365c.closed
+
+    def test_a_storeless_collection_applies_no_cooldown(self) -> None:
+        from src.collector import _apply_waf_cooldown
+
+        class FakeSource:
+            source_key = "bet365"
+
+            def close(self):
+                raise AssertionError("must not be closed")
+
+        source = FakeSource()
+        assert _apply_waf_cooldown([source], None, jurisdiction="PA") == [source]
+
+    def test_a_pass_whose_every_source_is_cooling_skips_instead_of_dying(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """SystemExit is a BaseException: the watch loop's ``except Exception``
+        guard never sees it, so a cooldown that emptied the slate killed
+        unattended operation on its second tick.  Such a pass is skipped."""
+        import src.collector as collector
+        from src.raw_store import RawStore
+        from src.store import Store
+        from src.validation import ValidationReport
+
+        db = tmp_path / "db.sqlite3"
+        with Store(db) as store:
+            run = store.start_run(datetime.now(UTC), jurisdiction="PA")
+            store.record_raw(
+                run,
+                __import__("src.raw_store", fromlist=["RawResponse"]).RawResponse(
+                    source="bet365", endpoint="shell", url="u", status_code=200,
+                    body="x", fetched_at=datetime.now(UTC),
+                ),
+                path=tmp_path / "raw.json",
+            )
+            store.finish_run(
+                run, finished_at=datetime.now(UTC),
+                report=ValidationReport(quote_count=0, event_count=0),
+            )
+
+        with Store(db) as store:
+            batch = collector.collect_batch_once(
+                ["PA"],
+                detected_state="PA",
+                raw_store=RawStore(tmp_path / "raw"),
+                store=store,
+                source_keys=["bet365"],
+                alert=False,
+            )
+        # No SystemExit, no state run — the pass was skipped, not killed.
+        assert batch.runs == ()

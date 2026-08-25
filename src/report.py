@@ -35,6 +35,7 @@ from typing import Any, Mapping, Sequence
 from src import settings
 from src.arb import (
     DEFAULT_TOTAL_STAKE,
+    NearMiss,
     Opportunity,
     counterparty_groups,
     find_opportunities,
@@ -832,25 +833,75 @@ def _promo_plans(
         odds_row = odds_store.run_row(run_id)
         odds_state = ((odds_row["jurisdiction"] if odds_row else "") or "").strip().upper()
         plan_state = odds_state or (state or "")
+        gate = merge_counterparty_groups(
+            {}
+            if recorded
+            else counterparty_groups(
+                everything, view_only=view_only_for_run(plan_state)
+            ),
+            recorded,
+        )
         built = build_promo_plans(
             offers,
             everything,
             as_of=as_of,
-            one_counterparty=merge_counterparty_groups(
-                {}
-                if recorded
-                else counterparty_groups(
-                    everything, view_only=view_only_for_run(plan_state)
-                ),
-                recorded,
-            ),
+            one_counterparty=gate,
             state=plan_state or None,
         )
         meta = dict(built["meta"])
         meta["odds_run_id"] = run_id
-        return built["plans"], meta
+        # Same two answers the arbitrage panel gives.  The plans above are the
+        # best execution on the whole slate, Smarkets hedge and all; they are
+        # labelled leg by leg with the same origin vocabulary the arb cards
+        # use, and a second pass with every unreachable venue removed gives the
+        # best execution the operator can actually place from this state.
+        marking = locality_marking(
+            plan_state, route_scope=((odds_row["route_scope"] if odds_row else "") or "")
+        )
+        plans = built["plans"]
+        if marking.marking:
+            foreign = frozenset(
+                q.source for q in everything if not marking.leg_is_local(q.source)
+            )
+            local = build_promo_plans(
+                offers,
+                everything,
+                as_of=as_of,
+                one_counterparty=gate,
+                state=plan_state or None,
+                exclude_sources=foreign,
+            )["plans"]
+            for key, entry in plans.items():
+                for plan in entry.get("plans", ()):
+                    _mark_promo_plan(plan, marking)
+                local_entry = local.get(key) or {}
+                for plan in local_entry.get("plans", ()):
+                    _mark_promo_plan(plan, marking)
+                entry["takeable_plans"] = list(local_entry.get("plans", ()))
+                entry["takeable_skipped"] = dict(local_entry.get("skipped") or {})
+                entry["takeable_expected_value"] = local_entry.get("expected_value")
+        return plans, meta
     except Exception as exc:  # noqa: BLE001 — the panel degrades, the page survives
         return {}, {"reason": f"planner_failed: {type(exc).__name__}: {exc}"}
+
+
+def _mark_promo_plan(plan: dict[str, Any], marking: LocalityMarking) -> None:
+    """Stamp one promo plan with the arb panel's locality vocabulary, in place.
+
+    Each leg gains the same ``origin`` / ``origin_label`` / ``origin_local``
+    keys an arbitrage leg carries — so the page renders both with one pill —
+    and the plan gains ``takeable`` (every leg placeable from the state) and
+    ``non_local_legs`` naming what blocks it.
+    """
+    non_local = []
+    for leg in plan.get("legs", ()):
+        origin = marking.leg_origin(str(leg.get("source", "")))
+        leg.update(_leg_origin_payload(origin))
+        leg["non_local_label"] = "" if origin.local else marking.label()
+        if not origin.local:
+            non_local.append({"source": leg["source"], "origin_label": origin.label})
+    plan["takeable"] = not non_local
+    plan["non_local_legs"] = non_local
 
 
 def _blank_sport(sport: str) -> dict[str, Any]:
@@ -960,8 +1011,21 @@ def _arb_payload(
             for diagnostic in report.diagnostics:
                 rejected[diagnostic.code] = rejected.get(diagnostic.code, 0) + 1
             return {
+                # Whether the locality rule governs this run at all — the page
+                # merges the offshore-admitted extras into the default view
+                # only when it does, because on an ungoverned run those extras
+                # carry no verdict and rendered as takeable money.
+                "governed": marking.marking,  # noqa: B023 - called in this iteration, never stored
                 "opportunities": [
                     _opportunity_entry(opp, marking) for opp in report.opportunities  # noqa: B023 - called in this iteration, never stored
+                ],
+                # The watchlist: closest non-crossing markets, computed and
+                # formerly discarded at the detector's margin gate.  Legs carry
+                # the same locality verdict the positions carry, so "this
+                # crosses when one book moves a tick" can also say whether the
+                # reader could take it from here.
+                "near_misses": [
+                    _near_miss_entry(miss, marking) for miss in report.near_misses  # noqa: B023 - called in this iteration, never stored
                 ],
                 "diagnostics": [
                     {"code": code, "count": count}
@@ -989,7 +1053,9 @@ def _arb_payload(
 def _blank_arb_bundle(total_stake: float) -> dict[str, Any]:
     """A run whose prices are not embedded, in both views."""
     empty: dict[str, Any] = {
+        "governed": False,
         "opportunities": [],
+        "near_misses": [],
         "diagnostics": [],
         "group_count": 0,
         "comparable_group_count": 0,
@@ -1011,6 +1077,36 @@ def _leg_origin_payload(origin: LegOrigin) -> dict[str, Any]:
     }
 
 
+def _near_miss_entry(miss: NearMiss, marking: LocalityMarking) -> dict[str, Any]:
+    """One watchlist row: the best cross-book position that did not cross."""
+    legs = [
+        {
+            "source": source,
+            "selection": selection,
+            "decimal_odds": round(odds, 4),
+            "local": marking.leg_is_local(source),
+            "origin_label": marking.leg_origin(source).label,
+        }
+        for source, selection, odds in miss.legs
+    ]
+    return {
+        "event_key": miss.event_key,
+        "sport": miss.sport.value if miss.sport else None,
+        "market": miss.market.value,
+        "period": miss.period.value,
+        "side": miss.side.value if miss.side else None,
+        "line": miss.line,
+        "margin_pct": round(miss.margin * 100.0, 3),
+        "home_team": miss.home_team,
+        "away_team": miss.away_team,
+        "commence_time": miss.commence_time.isoformat(),
+        "takeable": all(leg["local"] for leg in legs) if marking.marking else None,
+        "observed_spread_seconds": miss.observed_spread_seconds,
+        "simultaneous": miss.simultaneous,
+        "legs": legs,
+    }
+
+
 def _opportunity_entry(
     opportunity: Opportunity, marking: LocalityMarking
 ) -> dict[str, Any]:
@@ -1020,8 +1116,26 @@ def _opportunity_entry(
     same one ``arb``, ``lines`` and the SMS print — one vocabulary per fact.
     """
     league = opportunity.legs[0].quote.league if opportunity.legs else ""
+    # Two different questions, both answered here so no surface re-derives
+    # either.  ``no_local_leg`` is the whole-run account's unit ("wholly
+    # foreign"); ``takeable`` is the money question — every leg placeable from
+    # this state — and a position with one PA leg and one NJ leg fails it while
+    # passing the other.  The page counted the second as takeable for a round.
+    non_local = [
+        {"source": leg.source, "origin_label": marking.leg_origin(leg.source).label}
+        for leg in opportunity.legs
+        if not marking.leg_is_local(leg.source)
+    ]
+    # ``takeable`` is a claim about a state, so an ungoverned run makes none:
+    # ``leg_is_local`` answers True for everything when the rule does not
+    # govern, and writing that as ``takeable: true`` put a green pill and a
+    # "guaranteed $" contribution on Bovada/Pinnacle positions of every GLOBAL
+    # run.  ``None`` is "no verdict"; the page renders no pill and falls back
+    # to the older no-local-leg reading for its counts.
     return {
         "no_local_leg": not marking.has_local_leg(opportunity),
+        "takeable": (not non_local) if marking.marking else None,
+        "non_local_legs": non_local,
         "event_key": opportunity.event_key,
         "sport": opportunity.sport.value,
         "league": league,

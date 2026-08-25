@@ -48,14 +48,11 @@ def test_registry_covers_major_odds_books() -> None:
         "betrivers_kambi",
         "bovada",
         "cloudbet",
-        "pinnacle",
-        "onexbet",
         "leovegas_kambi",
         "betmgm",
         "caesars",
         "fanatics",
         "hardrock",
-        "bet365",
         "leovegas_on",
         "betmgm_on",
         # TheLines failover tenants.
@@ -68,6 +65,11 @@ def test_registry_covers_major_odds_books() -> None:
         "tl_fanatics",
     ):
         assert key in registered
+    # Deregistered 2026-08-24: US-unavailable venues whose promos are never
+    # claimable (76 runs, 0 offers between them), plus the bet365 landing that
+    # failed 76/76 behind the same WAF that burned the odds egress twice.
+    for key in ("bet365", "pinnacle", "smarkets", "matchbook", "onexbet"):
+        assert key not in registered, f"{key} promo feed was deregistered"
     # Every descriptor accepts source_key via the factory partial.
     for entry in PROMO_SOURCES:
         source = entry.factory()()

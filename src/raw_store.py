@@ -13,6 +13,7 @@ content type that the guards key off.
 """
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import re
@@ -122,17 +123,26 @@ class RawResponse:
             if str(key).lower() not in _HEADER_DENYLIST
         }
 
-    @property
+    # ``cached_property``, not ``property``: the body is frozen, so the digest
+    # can never change — and it was being recomputed once per parsed **quote**
+    # (``_common.priced_quote`` stamps ``raw_ref=raw.ref`` on every row), which
+    # hashed matchbook's 9.9 MB payload 5,067 times per run.  Measured: a full
+    # re-parse of one stored run dropped 44.1s → 5.9s with these memoized.
+    # ``cached_property`` writes straight into ``__dict__``, which a frozen
+    # dataclass permits (it blocks ``__setattr__``, not the dict), and dataclass
+    # equality compares declared fields only, so the cache never leaks into
+    # ``==`` or ``dataclasses.replace``.
+    @functools.cached_property
     def sha256(self) -> str:
         return hashlib.sha256(self.body.encode("utf-8")).hexdigest()
 
-    @property
+    @functools.cached_property
     def ref(self) -> str:
         """Stable, human-readable reference recorded on every parsed row."""
         stamp = self.fetched_at.astimezone(UTC).strftime("%Y%m%dT%H%M%SZ")
         return f"{self.source}/{stamp}/{_slug(self.endpoint)}/{self.sha256[:12]}"
 
-    @property
+    @functools.cached_property
     def byte_size(self) -> int:
         return len(self.body.encode("utf-8"))
 

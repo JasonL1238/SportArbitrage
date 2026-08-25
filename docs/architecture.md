@@ -128,7 +128,17 @@ server exposes the same-origin endpoints used to log, edit, settle, and delete.
   "reachable", not "licensed", on every surface that reports it. The count of
   positions with no local leg is reported everywhere the marking is applied;
   labels alone do not tell a reader skimming for a count how much of the board is
-  wholly foreign.
+  wholly foreign. The SMS goes one step further than labelling: `AlertBook.notify`
+  refuses to text any position with a leg unreachable from the governed run's
+  state — the phone is the place-money-now channel, and every text the system had
+  ever sent was an offshore pair wearing an "INFO ONLY" tail. Ungoverned runs
+  (GLOBAL scope) keep the labelled body. The dedupe key is the position's
+  *identity* (market plus who is on each side) with prices deliberately excluded:
+  with prices in the key, a watch loop re-texted the same standing edge on every
+  one-tick move. The detector also keeps a watchlist: every compared market's
+  best margin used to be discarded at the gate, and `ArbReport.near_misses` now
+  carries the closest few (capped at `arb.NEAR_MISS_LIMIT`) into the dashboard's
+  near-miss fold, each leg labelled with the same reachability verdict.
 - Only a scope the operator widened on purpose (`global`, `all`) is exempt.
   `legacy` — what the store backfills onto rows predating the `route_scope` column
   — is governed, because whether a leg is reachable from a state is a fact about

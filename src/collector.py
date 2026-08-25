@@ -562,6 +562,17 @@ def resolve_leagues(
     return DEFAULT_LEAGUES
 
 
+def _fetch_tier(key: str) -> int:
+    """Fetch order: takeable first, mirrors after, rate-limited last."""
+    if key in registry.SLOW_SOURCES:
+        return 3
+    if key in registry.REPUBLISHED_SOURCE_KEYS:
+        return 2
+    if key in registry.NATIONWIDE_SOURCE_KEYS:
+        return 0
+    return 1
+
+
 def build_sources(
     keys: Sequence[str] | None = None,
     *,
@@ -645,12 +656,18 @@ def build_sources(
     if unknown:
         raise SystemExit(f"unknown source(s): {unknown}; known: {sorted(known)}")
     selected = [key for key in (keys or factories) if key in factories]
-    # Slow sources last.  Every price in a run has to be comparable with the
-    # others, and a source paced to its own rate limit can take minutes — so
-    # where it sits in the order decides how many *other* sources it pushes out
-    # of that window.  Smarkets in the middle cost Kalshi and Polymarket 847
-    # comparable markets between them, purely by being ahead of them.
-    selected.sort(key=lambda key: key in registry.SLOW_SOURCES)
+    # Ordered by who must share a comparison window.  Every price in a run has
+    # to be comparable with the others, and a source paced to its own rate
+    # limit can take minutes — so where it sits decides how many *other*
+    # sources it pushes out of that window.  Smarkets in the middle cost
+    # Kalshi and Polymarket 847 comparable markets between them, purely by
+    # being ahead of them.  Three tiers now rather than two: venues a bet can
+    # actually be placed at come first (the nationwide pair ahead of the
+    # rest, since they are the only global venues takeable from a state),
+    # republished mirrors after them — a mirror is context, and its 37s of
+    # pacing was sitting inside the leg-eligible seam — and the slow sources
+    # last, exactly as before.
+    selected.sort(key=_fetch_tier)
     built: list[OddsSource] = []
     for key in selected:
         factory = factories[key]
@@ -2284,6 +2301,60 @@ def _open_store() -> Store:
         raise SystemExit(str(exc)) from None
 
 
+def _apply_waf_cooldown(
+    sources: list[OddsSource],
+    store: Store | None,
+    *,
+    jurisdiction: str,
+    now: datetime | None = None,
+) -> list[OddsSource]:
+    """Drop WAF-fronted venues touched more recently than the cooldown.
+
+    Both recorded bet365 captcha burns followed burst-shaped request patterns
+    that bought no new bytes, and a burned edge costs every bet365-dependent
+    surface for ~40 hours — so a repeat touch inside
+    :data:`settings.WAF_COOLDOWN_SECONDS` is refused here, before a transport
+    opens.  The dropped source leaves no health row: the run simply did not
+    configure it this pass, which the coverage rule already reports honestly
+    (``required_book_single_source``), while a health row would read as a new
+    failure every five minutes.
+
+    ``ODDS_WAF_COOLDOWN_SECONDS=0`` disables this — the deliberate
+    route-validation session that needs back-to-back fetches sets exactly that.
+    Store-less collection cannot know when a venue was last touched and applies
+    no cooldown rather than guessing.
+
+    Scoped per *jurisdiction*, because the host is the licence: the PA pass
+    touching ``pa.bet365.com`` says nothing about ``il.bet365.com``'s wall, and
+    a source-only cooldown made the first state of every multi-state batch
+    permanently starve the later ones (the earlier pass refreshed the clock
+    each time it lapsed).
+    """
+    from src.sources.registry import WAF_SENSITIVE_SOURCE_KEYS
+
+    cooldown = settings.WAF_COOLDOWN_SECONDS
+    if store is None or cooldown <= 0:
+        return sources
+    kept: list[OddsSource] = []
+    current = now or datetime.now(UTC)
+    for source in sources:
+        if source.source_key in WAF_SENSITIVE_SOURCE_KEYS:
+            last = store.last_fetch_at(source.source_key, jurisdiction=jurisdiction)
+            if last is not None:
+                age = (current - last.astimezone(UTC)).total_seconds()
+                if 0 <= age < cooldown:
+                    log.info(
+                        "%s: last touched %.0fs ago, inside the %ss WAF cooldown — "
+                        "skipping this pass (set ODDS_WAF_COOLDOWN_SECONDS=0 for a "
+                        "deliberate validation session)",
+                        source.source_key, age, cooldown,
+                    )
+                    source.close()
+                    continue
+        kept.append(source)
+    return kept
+
+
 def collect_batch_once(
     states: Sequence[str],
     *,
@@ -2305,11 +2376,15 @@ def collect_batch_once(
     # source — so emptiness is judged on the batch below, not per scope.  Before
     # that, asking for one republisher died with "none of [] can collect
     # league(s) ['MLB']", blaming the league for a scope mismatch.
-    globals_built = build_sources(
-        source_keys,
-        leagues=resolved_leagues,
-        route_scope="global",
-        allow_empty=True,
+    globals_built = _apply_waf_cooldown(
+        build_sources(
+            source_keys,
+            leagues=resolved_leagues,
+            route_scope="global",
+            allow_empty=True,
+        ),
+        store,
+        jurisdiction="GLOBAL",
     )
     cached_globals = [
         CachedOddsSource(source, capture_id=batch_id) for source in globals_built
@@ -2325,14 +2400,15 @@ def collect_batch_once(
                 leagues=leagues,
                 tier=tier,
                 on_progress=on_progress,
-                # The state passes are the alerting surfaces: their marking is
-                # governed, so their texts carry the locality disclaimer.  The
-                # GLOBAL pass sees the same cross-global positions minutes
-                # earlier with an ungoverned marking — letting it text first
-                # sends the bare body, and the dedupe key holds no
-                # jurisdiction, so the labelled state-pass text is then
-                # swallowed as a duplicate.  Only a batch with no state pass
-                # at all keeps its alert here.
+                # The state passes are the alerting surfaces: their marking
+                # is governed, so their alerts are gated to positions takeable
+                # from that state (a foreign-legged position is suppressed,
+                # never texted with a disclaimer — 2026-08-24).  The GLOBAL
+                # pass sees the same cross-global positions minutes earlier
+                # with an ungoverned marking and no gate — letting it text
+                # first sends an unlabelled call to action, and its stateless
+                # dedupe key would swallow the state pass's own claim.  Only a
+                # batch with no state pass at all keeps its alert here.
                 alert=alert and not states,
                 jurisdiction="GLOBAL",
                 batch_id=batch_id,
@@ -2341,13 +2417,15 @@ def collect_batch_once(
             runs.append(("GLOBAL", global_result))
 
         for state in states:
-            retail = build_sources(
+            built_retail = build_sources(
                 source_keys,
                 leagues=resolved_leagues,
                 state=state,
                 route_scope="state",
                 allow_empty=True,
             )
+            retail = _apply_waf_cooldown(built_retail, store, jurisdiction=state)
+            cooled = len(built_retail) - len(retail)
             state_keys = tuple(source.source_key for source in retail)
             # Built per state and *not* cached with the globals: a republisher's
             # book id is a state licence, so one shared instance can only have
@@ -2372,8 +2450,56 @@ def collect_batch_once(
             # Deliberately excluded from ``state_keys``: that set feeds the
             # "how many exact-state first-party sources produced" gate, and a
             # republished mirror must not be able to satisfy it.
-            combined: list[OddsSource] = [*retail, *republished, *cached_globals]
+            # The nationwide venues are re-fetched live inside each state
+            # pass rather than replayed from the batch cache.  They are the
+            # only global venues a state can actually bet at, and the cached
+            # copy carries the GLOBAL pass's timestamps — ~9.5 minutes older
+            # than the state books by the time this pass runs, which the
+            # 180s observation-spread gate then rightly refuses: on run 36 it
+            # refused every one of the 1,237 prediction-market × PA-book
+            # pairs, for collection order alone.  Measured cost of the fresh
+            # fetch: 13 requests, ~4s.  Every other global source stays
+            # cached — from PA they are context, and context does not need
+            # to share the window.  Fetched first, so the slowest retail book
+            # cannot push them out of it.
+            nationwide_in_batch = [
+                cached.source_key
+                for cached in cached_globals
+                if cached.source_key in registry.NATIONWIDE_SOURCE_KEYS
+            ]
+            fresh_nationwide = (
+                build_sources(
+                    nationwide_in_batch,
+                    leagues=resolved_leagues,
+                    route_scope="global",
+                    allow_empty=True,
+                )
+                if nationwide_in_batch
+                else []
+            )
+            cached_for_state = [
+                cached
+                for cached in cached_globals
+                if cached.source_key not in registry.NATIONWIDE_SOURCE_KEYS
+            ]
+            combined: list[OddsSource] = [
+                *fresh_nationwide, *retail, *republished, *cached_for_state
+            ]
             if not combined:
+                if cooled:
+                    # Everything this pass could have fetched is a WAF-fronted
+                    # venue inside its cooldown.  That is a pass to skip, not a
+                    # configuration error: SystemExit is a BaseException, so it
+                    # sails past the watch loop's ``except Exception`` guard
+                    # and killed unattended operation on its second tick.
+                    log.info(
+                        "%s: every selectable source is inside the WAF "
+                        "cooldown; skipping this pass",
+                        state,
+                    )
+                    for source in (*fresh_nationwide, *republished):
+                        source.close()
+                    continue
                 raise SystemExit(
                     f"none of {list(source_keys or ())} can collect league(s) "
                     f"{list(resolved_leagues or ())} in {state}"
@@ -2395,7 +2521,7 @@ def collect_batch_once(
                 )
                 runs.append((state, result))
             finally:
-                for source in (*retail, *republished):
+                for source in (*fresh_nationwide, *retail, *republished):
                     source.close()
     finally:
         for source in cached_globals:
@@ -2405,6 +2531,52 @@ def collect_batch_once(
         detected_state=detected_state,
         runs=tuple(runs),
     )
+
+
+def _egress_still_matches(selection) -> bool:  # StateSelection; imported lazily below
+    """Whether the public IP still carries the fingerprint the batch trusts.
+
+    ``True`` when the address hashes to the stored detection's fingerprint —
+    the stored record is then re-stamped so ``egress_state.json`` stays a live
+    fact rather than a pre-loop one.  ``True`` also when there is nothing to
+    compare against: an operator who forced ``--state`` with detection down
+    starts the loop on their own authority, and this check can confirm a
+    detection, never invent one.  ``False`` on a moved address *or* on an
+    unconfirmable one — for a state-routed pass those are the same refusal,
+    because "probably still Pennsylvania" is exactly the guess rule (b) exists
+    to forbid.
+    """
+    from src.egress import confirm_unchanged_egress, save_detection
+    from src.sources.transport import build_default_client
+
+    if selection.detected is None:
+        return True
+    client = None
+    try:
+        client = build_default_client(timeout=settings.HTTP_TIMEOUT)
+        confirmed = confirm_unchanged_egress(client, selection.detected)
+    except Exception as exc:  # noqa: BLE001 - unconfirmable is a refusal, not a crash
+        log.error(
+            "egress re-check failed (%s: %s); refusing this pass rather than "
+            "trusting a pre-loop detection",
+            type(exc).__name__, exc,
+        )
+        return False
+    finally:
+        if client is not None:
+            try:
+                client.close()
+            except Exception:  # noqa: BLE001 - a close failure must not mask the verdict
+                pass
+    if confirmed is None:
+        log.error(
+            "public IP no longer matches the %s detection this batch started "
+            "under; refusing the pass — re-run detect_state from the new address",
+            selection.detected.state,
+        )
+        return False
+    save_detection(settings.EGRESS_STATE_PATH, confirmed)
+    return True
 
 
 def _cmd_collect(args: argparse.Namespace) -> int:
@@ -2434,6 +2606,21 @@ def _cmd_collect(args: argparse.Namespace) -> int:
         iteration = 0
         while True:
             iteration += 1
+            if iteration > 1 and not _egress_still_matches(selection):
+                # The state contract holds per **pass**, not per process: the
+                # detection above ran once, before the loop, and a VPN drop or
+                # a drive across a state line at hour three would keep stamping
+                # runs with a state the egress no longer sits in.  A changed or
+                # unconfirmable address refuses the pass — the next attempt is
+                # one interval away and confirms again.
+                exit_code = 1
+                if not args.watch:
+                    break
+                if args.max_runs and iteration >= args.max_runs:
+                    break
+                log.info("sleeping %ss before the next run", args.interval)
+                time.sleep(args.interval)
+                continue
             try:
                 batch = collect_batch_once(
                     selection.states,

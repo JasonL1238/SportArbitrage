@@ -29,6 +29,43 @@ from tests.conftest import make_quote, make_raw
 # ── raw store ────────────────────────────────────────────────────────────────
 
 
+
+def test_raw_response_digests_are_computed_once() -> None:
+    """``sha256``/``byte_size``/``ref`` hash the frozen body exactly once.
+
+    ``priced_quote`` stamps ``raw_ref=raw.ref`` on every parsed row, so a plain
+    ``@property`` re-hashed the full payload once per quote — 50 GB of SHA-256
+    for one matchbook run.  The body is frozen, so caching cannot go stale; and
+    ``dataclasses.replace`` builds a fresh instance, so a relabeled envelope
+    never inherits another body's digest.
+    """
+    import dataclasses
+    from unittest import mock
+
+    from src import raw_store as raw_store_module
+
+    raw = RawResponse(
+        source="s", endpoint="e", url="u", status_code=200,
+        body="payload", fetched_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    calls = 0
+    real = raw_store_module.hashlib.sha256
+
+    def counting(data):
+        nonlocal calls
+        calls += 1
+        return real(data)
+
+    with mock.patch.object(raw_store_module.hashlib, "sha256", counting):
+        first = raw.sha256
+        assert raw.sha256 is first
+        raw.ref, raw.ref  # noqa: B018 - accessed for the cache, not the value
+        assert calls == 1, f"body hashed {calls} times"
+
+    replaced = dataclasses.replace(raw, body="other")
+    assert replaced.sha256 != first
+    assert raw == dataclasses.replace(raw), "the cache must not reach equality"
+
 def test_raw_response_round_trips_verbatim(tmp_path: Path) -> None:
     store = RawStore(tmp_path)
     raw = make_raw('{"events": [{"id": 1}]}')
@@ -1581,3 +1618,157 @@ def test_replay_uses_the_base_factory_only_for_stateless_runs(monkeypatch) -> No
         assert collector.replay_factory(stateless, "pinnacle") is (
             collector.SOURCE_FACTORIES["pinnacle"]
         ), stateless
+
+
+class TestNationwideVenuesShareTheStateWindow:
+    """kalshi/polymarket_us are re-fetched live inside each state pass.
+
+    They are the only global venues takeable from a state, and the batch
+    cache handed the state pass the GLOBAL pass's timestamps — ~9.5 minutes
+    stale, so the 180s observation-spread gate refused every one of run 36's
+    1,237 prediction-market × PA-book pairs on collection order alone.
+    """
+
+    def test_the_state_pass_gets_fresh_instances_first(self, tmp_path, monkeypatch):
+        import src.collector as collector
+        from src.collector import CachedOddsSource, collect_batch_once
+        from src.sources.base import ParseOutcome, SourceHealth
+
+        seen: list[tuple[str, str, bool]] = []  # (jurisdiction, key, cached?)
+        current_scope: dict[str, str] = {"state": "GLOBAL"}
+
+        real_collect_once = collector.collect_once
+
+        def spying_collect_once(sources, **kwargs):
+            current_scope["state"] = kwargs.get("jurisdiction") or "GLOBAL"
+            return real_collect_once(sources, **kwargs)
+
+        def fake_collect_source(source, **kwargs):
+            seen.append((
+                current_scope["state"],
+                source.source_key,
+                isinstance(source, CachedOddsSource),
+            ))
+            return (
+                SourceHealth(source_key=source.source_key, ok=True,
+                             checked_at=datetime.now(UTC)),
+                ParseOutcome(quotes=[]),
+            )
+
+        monkeypatch.setattr(collector, "collect_once", spying_collect_once)
+        monkeypatch.setattr(collector, "_collect_source", fake_collect_source)
+        batch = collect_batch_once(
+            ["PA"],
+            detected_state="PA",
+            raw_store=RawStore(tmp_path / "raw"),
+            store=None,
+            alert=False,
+        )
+        assert batch.runs, "the batch must have produced runs"
+
+        global_rows = [(k, cached) for st, k, cached in seen if st == "GLOBAL"]
+        pa_rows = [(k, cached) for st, k, cached in seen if st == "PA"]
+        # The GLOBAL pass fetches the nationwide venues through the batch cache…
+        assert ("kalshi", True) in global_rows
+        assert ("polymarket_us", True) in global_rows
+        # …and the state pass fetches them again, live, not from the cache.
+        assert ("kalshi", False) in pa_rows
+        assert ("polymarket_us", False) in pa_rows
+        assert ("kalshi", True) not in pa_rows and ("polymarket_us", True) not in pa_rows
+        # First in the pass, so the slowest retail book cannot push them out
+        # of the 180s comparison window.
+        pa_keys = [k for k, _ in pa_rows]
+        assert set(pa_keys[:2]) == {"kalshi", "polymarket_us"}, pa_keys[:6]
+        # Every other global source is still served from the batch cache.
+        cached_pa = {k for k, cached in pa_rows if cached}
+        assert "pinnacle" in cached_pa and "kalshi" not in cached_pa
+
+
+class TestSmarketsBatchesFiftyAndDegradesToTwenty:
+    """Requests are this source's whole cost (20/min, enforced), so ids per
+    request is the only lever: at 20 ids the batches were 487s of an 815s
+    batch. A refused chunk halves back down to the proven twenty."""
+
+    def _adapter(self, handler):
+        import httpx
+
+        from src.sources.smarkets import SmarketsAdapter
+
+        client = httpx.Client(transport=httpx.MockTransport(handler))
+        adapter = SmarketsAdapter(["MLB"], client=client)
+        adapter._http._pacer = type(  # no real sleeping in an offline test
+            "NoPacer", (), {"wait": lambda self, host, minimum=None: None}
+        )()
+        # One attempt per request: retries re-ask the same size and would blur
+        # the halving sequence these tests read.
+        adapter._http.retry = type(adapter._http.retry)(
+            attempts=1, backoff_seconds=0.0
+        )
+        return adapter
+
+    def test_fifty_ids_travel_in_one_request(self):
+        import httpx
+
+        urls: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            urls.append(str(request.url))
+            return httpx.Response(200, json={})
+
+        adapter = self._adapter(handler)
+        try:
+            raws = adapter._batched(
+                "https://api.smarkets.com/v3/markets/{ids}/quotes/",
+                [str(4_000_000 + n) for n in range(50)],
+                lambda n: f"quotes:baseball:{n:02d}",
+            )
+        finally:
+            adapter.close()
+        assert len(raws) == 1
+        assert urls[0].count(",") == 49
+        assert len(urls[0]) < 800, "fifty ids must stay far under URL limits"
+
+    def test_a_refused_batch_halves_down_to_the_proven_size(self):
+        import httpx
+
+        sizes: list[int] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            ids = str(request.url).split("/markets/")[1].split("/")[0].split(",")
+            sizes.append(len(ids))
+            if len(ids) > 20:
+                return httpx.Response(414, text="URI Too Long")
+            return httpx.Response(200, json={})
+
+        adapter = self._adapter(handler)
+        try:
+            raws = adapter._batched(
+                "https://api.smarkets.com/v3/markets/{ids}/quotes/",
+                [str(4_000_000 + n) for n in range(50)],
+                lambda n: f"quotes:baseball:{n:02d}",
+            )
+        finally:
+            adapter.close()
+        # 50 refused → 25 refused → 12+13 accepted, then the second 25 the
+        # same way.  Every accepted request is at or under the proven twenty.
+        assert sizes == [50, 25, 12, 13, 25, 12, 13]
+        assert len(raws) == 4
+        assert [r.endpoint for r in raws] == [
+            f"quotes:baseball:{n:02d}" for n in range(1, 5)
+        ], "endpoint labels must stay unique and sequential across a halved retry"
+
+    def test_below_the_proven_size_a_refusal_is_the_real_error(self):
+        import httpx
+
+        from src.sources.guards import SourceError
+
+        adapter = self._adapter(lambda request: httpx.Response(500, text="down"))
+        try:
+            with pytest.raises(SourceError):
+                adapter._batched(
+                    "https://api.smarkets.com/v3/markets/{ids}/quotes/",
+                    [str(4_000_000 + n) for n in range(10)],
+                    lambda n: f"quotes:baseball:{n:02d}",
+                )
+        finally:
+            adapter.close()

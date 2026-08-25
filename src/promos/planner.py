@@ -648,6 +648,7 @@ def _build_context(
     commissions: Mapping[str, Commission] | None,
     one_counterparty: Mapping[str, Sequence[frozenset[str]]] | None,
     state: str | None = None,
+    exclude_sources: Iterable[str] = (),
 ) -> _PlanContext:
     # The plan's own state decides which feeds are view-only — the ambient
     # constant is frozen from this process's ODDS_STATE and disagrees on
@@ -657,7 +658,7 @@ def _build_context(
     # republished-only set, the same generous fallback every other reader uses.
     from src.sources.registry import view_only_for_run
 
-    plan_view_only = view_only_for_run((state or "").strip().upper())
+    plan_view_only = view_only_for_run((state or "").strip().upper()) | frozenset(exclude_sources)
     usable = [quote for quote in quotes if quote.source not in plan_view_only]
     context = _PlanContext(
         as_of=as_of,
@@ -2216,6 +2217,7 @@ def build_promo_plans(
     commissions: Mapping[str, Commission] | None = None,
     one_counterparty: Mapping[str, Sequence[frozenset[str]]] | None = None,
     state: str | None = None,
+    exclude_sources: Iterable[str] = (),
 ) -> dict[str, Any]:
     """Concrete usage plans for every offer, keyed ``"source|offer_id"``.
 
@@ -2227,6 +2229,10 @@ def build_promo_plans(
     applies.  *state* is the run's jurisdiction, threaded to every leg link so
     a state-partitioned book links its own front door — offers are already
     state-matched, so their links must not point at another licence's site.
+    *exclude_sources* removes feeds from the slate on top of the state's
+    view-only set — the report passes every venue not reachable from the run's
+    state to build the "best takeable" plans beside the best-overall ones, so
+    a Smarkets hedge is shown and labelled in one and absent from the other.
     """
     context = _build_context(
         quotes,
@@ -2234,6 +2240,7 @@ def build_promo_plans(
         commissions=commissions,
         one_counterparty=one_counterparty,
         state=state,
+        exclude_sources=exclude_sources,
     )
     conversion_cache: dict[tuple[tuple[str, ...], float | None], tuple[list[_Candidate], Counter]] = {}
     plans: dict[str, Any] = {}

@@ -1281,6 +1281,56 @@ def test_promo_plans_ride_the_report_payload_end_to_end(
     json.dumps(data["promos"]["plans"])
 
 
+def test_promo_plans_carry_the_arb_panels_takeable_verdict(tmp_path, monkeypatch) -> None:
+    """Best overall and best takeable, side by side, legs labelled like arb legs.
+
+    On a PA run a DraftKings credit hedged at Smarkets is the best execution on
+    the board and not one the operator can place. The first pass keeps it and
+    labels the Smarkets leg; the second pass, every unreachable venue removed,
+    hedges at FanDuel and is what ``takeable_plans`` carries.
+    """
+    from src.report import _promo_plans
+
+    path, run_ids = _pa_state_run(tmp_path, [
+        ("draftkings", Selection.AWAY, 3.0),
+        ("smarkets", Selection.HOME, 1.6),
+        ("fanduel", Selection.HOME, 1.5),
+    ])
+    offer = {
+        "source": "draftkings", "offer_id": "o1", "kind": "bonus_bet",
+        "title": "Bonus bet drop", "summary": "", "description": "",
+        "reward_type": "bonus_bets", "bonus_amount": 100.0,
+        "min_odds": None, "wagering_requirement": None, "state_confirmed": True,
+    }
+    with Store(path) as opened:
+        plans, meta = _promo_plans(opened, [offer], run_ids, datetime.now(UTC), state="PA")
+    assert meta and "odds_run_id" in meta
+    entry = plans["draftkings|o1"]
+    best = entry["plans"][0]
+    assert best["takeable"] is False
+    assert best["non_local_legs"] == [{"source": "smarkets", "origin_label": "offshore"}]
+    hedge = best["legs"][1]
+    assert hedge["origin"] == "offshore" and hedge["origin_local"] is False
+    assert hedge["non_local_label"] == "not reachable from PA"
+    assert best["legs"][0]["origin_local"] is True
+    local = entry["takeable_plans"]
+    assert local and local[0]["takeable"] is True
+    assert [leg["source"] for leg in local[0]["legs"]] == ["draftkings", "fanduel"]
+    assert "takeable_skipped" in entry
+
+
+def test_the_page_renders_the_promo_takeable_section() -> None:
+    from src.report_assets import JS
+
+    assert "function promoTakeableHtml(entry, o)" in JS
+    assert "Best takeable from here" in JS
+    assert "best overall plan above is takeable from here" in JS
+    # Promo legs reuse the arb leg's pill, so one vocabulary reaches both.
+    body = JS[JS.index("function promoPlanCardHtml"):JS.index("function promoPlanHtml")]
+    assert "originPill(leg)" in body
+    assert "arbBlockers(plan)" in body
+
+
 def test_a_planner_failure_does_not_take_the_page_down(
     populated: Store, tmp_path, monkeypatch,
 ) -> None:
@@ -2216,6 +2266,93 @@ def test_the_dashboard_labels_positions_with_no_state_licensed_leg(tmp_path) -> 
     assert all(
         leg["non_local_label"] == "not reachable from PA" for leg in entry["legs"]
     )
+
+
+def test_near_misses_ride_the_arb_payload_with_locality(tmp_path) -> None:
+    """The watchlist reaches the page: closest non-crossing markets, each leg
+    carrying the same reachability verdict the positions carry."""
+    from src.report import _arb_payload
+
+    path, run_ids = _pa_state_run(tmp_path, [
+        ("draftkings", Selection.HOME, 2.05),
+        ("fanduel", Selection.AWAY, 1.90),
+    ])
+    with Store(path) as opened:
+        payload = _arb_payload(opened, run_ids, as_of=datetime.now(UTC))
+
+    bundle = payload[str(run_ids[0])]
+    assert bundle["opportunities"] == []
+    assert len(bundle["near_misses"]) == 1
+    miss = bundle["near_misses"][0]
+    assert miss["margin_pct"] < 0
+    assert miss["takeable"] is True
+    assert {leg["source"] for leg in miss["legs"]} == {"draftkings", "fanduel"}
+    assert all(leg["local"] for leg in miss["legs"])
+    # And a blank bundle carries the key too, so the page never branches.
+    from src.report import _blank_arb_bundle
+
+    assert _blank_arb_bundle(100.0)["near_misses"] == []
+
+
+def test_the_page_renders_the_watchlist_and_the_zero_floor_pill() -> None:
+    from src.report_assets import JS
+
+    assert "bag.near_misses" in JS
+    assert "Closest to crossing in this scrape" in JS
+    assert "floor $0 · protects a push, wins nothing" in JS
+
+
+def test_takeable_means_every_leg_placeable_from_the_state(tmp_path) -> None:
+    """``takeable`` is stricter than ``no_local_leg`` and the page reads the strict one.
+
+    A Pennsylvania board with one DraftKings leg and one Pinnacle leg is not
+    wholly foreign, so ``no_local_leg`` is false — and the page used to count
+    exactly that as takeable and add its profit to "guaranteed $". Neither leg
+    can be placed alone. The position only forms in the offshore-admitted
+    bundle (the US-only detector never admits Pinnacle as a leg), which is the
+    bundle the page now also draws from, so it is shown, marked not takeable,
+    and the blocking leg is named with where it is.
+    """
+    from src.report import _arb_payload
+
+    path, run_ids = _pa_state_run(tmp_path, [
+        ("draftkings", Selection.HOME, 2.20),
+        ("pinnacle", Selection.AWAY, 2.20),
+    ])
+    with Store(path) as opened:
+        payload = _arb_payload(opened, run_ids, as_of=datetime.now(UTC))
+
+    assert payload[str(run_ids[0])]["opportunities"] == []
+    bundle = payload[str(run_ids[0])]["with_offshore"]
+    assert len(bundle["opportunities"]) == 1
+    entry = bundle["opportunities"][0]
+    assert entry["no_local_leg"] is False
+    assert entry["takeable"] is False
+    assert entry["non_local_legs"] == [{"source": "pinnacle", "origin_label": "offshore"}]
+
+    path, run_ids = _pa_state_run(tmp_path / "local", [
+        ("draftkings", Selection.HOME, 2.20),
+        ("fanduel", Selection.AWAY, 2.20),
+    ])
+    with Store(path) as opened:
+        payload = _arb_payload(opened, run_ids, as_of=datetime.now(UTC))
+    entry = payload[str(run_ids[0])]["opportunities"][0]
+    assert entry["takeable"] is True
+    assert entry["non_local_legs"] == []
+
+
+def test_the_page_counts_takeable_with_the_strict_key() -> None:
+    """The headline numbers filter on ``arbTakeable``, never on ``no_local_leg`` alone."""
+    from src.report_assets import JS
+
+    assert "function arbTakeable(o)" in JS
+    assert "opps.filter(arbTakeable)" in JS
+    assert ".filter(arbTakeable).length" in JS, "the rail refresher counts the same way"
+    assert "o.takeable !== undefined" in JS, "older payloads fall back to the weaker key"
+    # Positions the US-only detector never formed — a leg at a book no US
+    # customer can bet — are shown and marked, not dropped.
+    assert "function arbPositions(bag)" in JS
+    assert "not takeable · " in JS
 
 
 def test_the_dashboard_links_a_state_partitioned_book_to_its_own_state(tmp_path) -> None:

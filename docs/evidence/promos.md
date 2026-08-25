@@ -4,6 +4,21 @@ What each promo source answered when asked, which offers confirmed which states,
 a state label on a promo run really asserts. Newest section first, dated headings, literal
 results — a refusal is recorded in the same detail as a success.
 
+## Five offshore/dead promo feeds deregistered — 2026-08-24
+
+Measured over all 76 stored promo runs: `bet365` failed 76/76 (Cloudflare
+challenge, 0 offers ever), `smarkets` failed 76/76 (cookie/bot wall), `onexbet`
+failed 76/76 (CAPTCHA), and `pinnacle`/`matchbook` answered honestly with **0
+offers in 76 runs** (`empty_is_ok` landings with no promo copy). Four of the
+five are venues no US customer can open an account with, so even a parsed offer
+would never be claimable; bet365's landing was, additionally, one more daily
+touch on the same WAF that burned the odds egress twice. Between them the five
+consumed 73% of each promo scrape's bytes and 901 MiB of stored raw. All five
+descriptors were removed from `src/promos/registry.py`; `tl_bet365` remains
+bet365's promo feed, and the `landing`/`html_catalog` adapter machinery keeps
+its focused tests (they construct adapters directly, not through the registry).
+Re-registration requires evidence of a reachable catalogue, not hope.
+
 ## betPARX and theScore Bet: the two PA-only books get first-party promo feeds — 2026-08-23
 
 The operator arrived in Pennsylvania the same night (`state-routing.md` §

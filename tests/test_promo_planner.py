@@ -132,6 +132,27 @@ class TestStakeableSources:
         assert "an_open" not in stakeable_odds_sources("open")
 
 
+class TestExcludedSourcesLeaveTheSlate:
+    """``exclude_sources`` removes a feed as a hedge on top of the state's view-only set."""
+
+    def _slate(self):
+        return [
+            make_quote(source="draftkings", selection=Selection.AWAY, decimal_odds=3.0),
+            make_quote(source="smarkets", selection=Selection.HOME, decimal_odds=1.6),
+            make_quote(source="fanduel", selection=Selection.HOME, decimal_odds=1.5),
+        ]
+
+    def test_the_best_hedge_is_offshore_until_it_is_excluded(self):
+        best = _the_plan(_plans([_offer()], self._slate()))["plans"][0]
+        assert best["legs"][1]["source"] == "smarkets"
+        local = _the_plan(_plans([_offer()], self._slate(), exclude_sources={"smarkets"}))
+        assert local["plans"][0]["legs"][1]["source"] == "fanduel"
+        assert all(
+            leg["source"] != "smarkets"
+            for plan in local["plans"] for leg in plan["legs"]
+        )
+
+
 class TestBonusConversionArithmetic:
     """$100 credit at 3.0 hedged at 1.5 → h = 200/1.5 = $133.33, floor $66.66."""
 

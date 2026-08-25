@@ -102,9 +102,18 @@ PRICE_SCALE = 10_000.0
 #: anyway, and this is what keeps it from being.
 HOST_INTERVAL = 3.1
 
-#: Ids per comma-separated batch.  Kept modest because the id strings are long
-#: and a URL has a length limit that fails as a 414 rather than as a truncation.
-BATCH = 20
+#: Ids per comma-separated batch.  Requests are the whole cost of this source
+#: — 20 per minute, enforced — so ids per request is the only lever that
+#: shortens it: at 20 ids the batches were 141 of a 156-request pass and 487s
+#: of an 815s batch.  Fifty ids is ~600 characters of URL, far under any
+#: practical limit; the guard in ``_batched`` halves a batch the venue refuses
+#: outright, back down to the 20 that years of passes have proven.
+BATCH = 50
+
+#: The batch size every stored pass has proven.  ``_batched`` halves a refused
+#: chunk until it reaches this size, and below it a refusal is re-raised as the
+#: real error it is rather than retried into smaller pieces.
+PROVEN_BATCH = 20
 
 #: Events per ``events`` request.
 DEFAULT_PAGE_SIZE = 100
@@ -563,15 +572,35 @@ class SmarketsAdapter:
         into: list[RawResponse] | None = None,
     ) -> list[RawResponse]:
         raws: list[RawResponse] = [] if into is None else into
-        for index in range(0, len(ids), BATCH):
-            batch = ids[index : index + BATCH]
-            raws.append(
-                self._http.get(
-                    template.format(ids=",".join(batch)),
-                    endpoint=label(index // BATCH + 1),
-                    record_params={"ids": ",".join(batch)},
+        # Same shape as Kambi's ``_fetch_betoffers``: a refused batch is split
+        # and both halves re-queued, so a URL the venue will not take degrades
+        # to the twenty-id requests every stored pass has proven rather than
+        # failing the phase.  At or below ``PROVEN_BATCH`` a refusal is the
+        # real error and is raised — halving a genuine 500 would only spend
+        # paced requests re-asking a question the venue already answered.
+        # ``number`` counts requests actually kept, so endpoint labels stay
+        # unique and sequential across a halved retry.
+        queue: list[Sequence[str]] = [
+            ids[index : index + BATCH] for index in range(0, len(ids), BATCH)
+        ]
+        number = 0
+        while queue:
+            batch = queue.pop(0)
+            number += 1
+            try:
+                raws.append(
+                    self._http.get(
+                        template.format(ids=",".join(batch)),
+                        endpoint=label(number),
+                        record_params={"ids": ",".join(batch)},
+                    )
                 )
-            )
+            except SourceError:
+                if len(batch) <= PROVEN_BATCH:
+                    raise
+                middle = len(batch) // 2
+                queue[:0] = [batch[:middle], batch[middle:]]
+                number -= 1
         return raws
 
     def parse(self, raws: Sequence[RawResponse]) -> ParseOutcome:

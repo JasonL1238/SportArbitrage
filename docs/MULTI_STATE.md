@@ -129,6 +129,8 @@ Settings and operational records:
 | `ODDS_EGRESS_STATE_PATH` | Privacy-reduced detection record under `data/` by default. |
 | `ODDS_PROBE_CACHE_PATH` | Separate SQLite live-probe cache. |
 | `ODDS_PROBE_TTL_DAYS` | Fresh-`ok` TTL; default 60 days. |
+| `ODDS_PROBE_NEGATIVE_TTL_MINUTES` | How long a BLOCKED/GEO probe verdict is served from cache before the venue is asked again; default 45 minutes. `probe_sources --force` overrides. |
+| `ODDS_WAF_COOLDOWN_SECONDS` | Minimum seconds between live touches of a WAF-fronted venue (`registry.WAF_SENSITIVE_SOURCE_KEYS`: bet365, caesars). Default 900; `0` disables, which is what a deliberate route-validation session sets. |
 
 Detection answers “where are we *effectively*?” — physical presence or proxy
 exit. Every live scrape performs one lookup, against `ipapi.co`. There is no
@@ -137,6 +139,13 @@ adds safety when both agree, and the `ipwho.is` fallback disagreed — on
 2026-08-14 it placed a known-Illinois egress in California, and did so exactly
 when `ipapi.co`'s free-tier cap had been spent. `egress.DEFAULT_DETECTION_URLS`
 records the measurement.
+
+The detection holds per **pass**, not per process: `collector collect --watch`
+re-confirms the egress fingerprint before every pass after the first
+(`confirm_unchanged_egress` against the stored record — one request to the
+continuity echo). An unchanged address re-stamps `egress_state.json`; a moved
+or unconfirmable one refuses the pass loudly and tries again next interval,
+because "probably still the same state" is exactly the guess rule (b) forbids.
 
 `ipapi.co` has answered this client with a Cloudflare 403 since 2026-08-15, so
 on arrival in a new state the record has to be written by hand-checked

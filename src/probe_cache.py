@@ -102,6 +102,42 @@ class ProbeCache:
         age = current.astimezone(UTC) - when.astimezone(UTC)
         return record if timedelta(0) <= age <= ttl else None
 
+    def fresh_refusal(
+        self,
+        source_key: str,
+        state: str,
+        fingerprint: str,
+        *,
+        now: datetime | None = None,
+        ttl: timedelta = timedelta(minutes=45),
+    ) -> ProbeRecord | None:
+        """A recent BLOCKED/GEO/CAPTCHA verdict, so callers can decline to re-ask.
+
+        The mirror of :meth:`fresh_ok`, with a much shorter default TTL: a
+        block is worth remembering long enough not to hammer the wall that
+        served it — every recorded bet365 burn followed a burst of touches —
+        but short enough that recovery (measured between 33 minutes and ~40
+        hours) is noticed the same hour it happens.  ``UNLICENSED`` is
+        deliberately excluded: it is a fact about the licence table, not a
+        live refusal, and the registry already answers it without a socket.
+        ``PARSE_FAIL`` is excluded too — a broken parser should be re-run, not
+        cached.
+        """
+        record = self.get(source_key, state, fingerprint)
+        if record is None or record.status not in (
+            ProbeStatus.BLOCKED, ProbeStatus.GEO_RESTRICTED
+        ):
+            return None
+        try:
+            when = datetime.fromisoformat(record.probed_at.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        current = now or datetime.now(UTC)
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=UTC)
+        age = current.astimezone(UTC) - when.astimezone(UTC)
+        return record if timedelta(0) <= age <= ttl else None
+
     def record(
         self,
         source_key: str,

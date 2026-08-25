@@ -232,6 +232,8 @@ try {
     globalThis.__isUsUnavailable = isUsUnavailable;
     globalThis.__currentRows = currentRows;
     globalThis.__arbBundle = arbBundle;
+    globalThis.__arbPositions = arbPositions;
+    globalThis.__arbTakeable = arbTakeable;
     globalThis.__sportGap = sportGap;
     globalThis.__buildSportPicker = buildSportPicker;
     globalThis.__setSport = (s) => { currentSport = s; };
@@ -323,6 +325,8 @@ try {
       .filter((r) => !currentLeague || str(r[COL.league]) === currentLeague)).length;
     globalThis.__promoPlanHtml = promoPlanHtml;
     globalThis.__promoPlanCardHtml = promoPlanCardHtml;
+    globalThis.__promoTakeableHtml = promoTakeableHtml;
+    globalThis.__nearMissHtml = nearMissHtml;
     globalThis.__promoSlipFor = promoSlipFor;
     globalThis.__setBetSlips = (slips) => { BETS = { ...BETS, slips }; };
     globalThis.__setBets = (patch) => { BETS = { ...BETS, ...patch }; };
@@ -4137,6 +4141,121 @@ function onAnEmbeddedRun() {   // a declaration, so block order cannot matter
   console.log('a still-valid filter choice survives its panel re-rendering');
 }
 
+// The three behaviours the substring pins cannot see: the offshore-extras
+// merge in arbPositions, the promo takeable section's three branches (plus
+// the step-sequence rule), and the near-miss table's pills and freshness
+// caveat. Each is EXECUTED here — a dead-coded branch keeps its substring in
+// the file and fails these instead.
+{
+  const problems = [];
+  const pos = (key, sources, extra = {}) => ({
+    event_key: key, market: 'moneyline', period: 'full_game', side: null,
+    line: null, margin_pct: 1.0, guaranteed_profit: 1.0,
+    legs: sources.map((source) => ({ source, selection: 'home' })),
+    ...extra,
+  });
+  // The merge keys "offshore" off the payload's own source table, so pick a
+  // key THIS page's payload marks us_unavailable rather than assuming one.
+  const offshoreKey = ['bovada', 'pinnacle', 'matchbook', 'smarkets', 'onexbet',
+    'cloudbet', 'sxbet'].find((k) => globalThis.__isUsUnavailable(k));
+  const local = pos('e1', ['draftkings', 'fanduel'], { takeable: true, no_local_leg: false });
+  if (!offshoreKey) {
+    console.log('  (merge check limited: this payload marks no source us_unavailable)');
+  } else {
+    const offshoreOnly = pos('e2', [offshoreKey], { takeable: false, no_local_leg: true });
+    const governed = {
+      governed: true,
+      opportunities: [local],
+      with_offshore: { opportunities: [pos('e1', ['draftkings', 'fanduel']), offshoreOnly] },
+    };
+    globalThis.__setShowOffshore(false);
+    const merged = globalThis.__arbPositions(governed);
+    if (merged.length !== 2) {
+      problems.push(`governed merge kept ${merged.length} positions; expected the offshore extra to join (2)`);
+    }
+    if (merged[0] !== local) {
+      problems.push('takeable positions must sort first in the merged view');
+    }
+    const ungoverned = { ...governed, governed: false,
+      opportunities: [ { ...local, takeable: null } ] };
+    const kept = globalThis.__arbPositions(ungoverned);
+    if (kept.length !== 1) {
+      problems.push(`an ungoverned run merged offshore extras (${kept.length} positions); the switch is the only door there`);
+    }
+  }
+  if (!globalThis.__arbTakeable({ takeable: null, no_local_leg: false })) {
+    problems.push('takeable:null (no verdict) must fall back to the no-local-leg reading');
+  }
+
+  // promoTakeableHtml: the three branches, and the step-sequence rule.
+  const offer = { source: 'draftkings', offer_id: 'o1' };
+  const plan = (takeable, step) => ({
+    takeable, step, sport: 'baseball', market: 'moneyline', period: 'full_game',
+    home_team: 'H', away_team: 'A', commence_time: '2026-09-01T00:00:00+00:00',
+    legs: [], outcome_profits: [], notes: [], guaranteed_cash: 0, settled_cash: 0,
+    quote_age_seconds: 0, non_local_legs: [],
+  });
+  const sameNote = globalThis.__promoTakeableHtml(
+    { plans: [plan(true)], takeable_plans: [plan(true)] }, offer);
+  if (!/best overall plan above is takeable from here/.test(sameNote)) {
+    problems.push('a takeable best-overall plan must collapse the section to one sentence');
+  }
+  const alt = globalThis.__promoTakeableHtml(
+    { plans: [plan(false)], takeable_plans: [plan(true)] }, offer);
+  if (!/Best takeable from here/.test(alt)) {
+    problems.push('a non-takeable best plan with a takeable alternative must render the section');
+  }
+  const none = globalThis.__promoTakeableHtml(
+    { plans: [plan(false)], takeable_plans: [], takeable_skipped: { no_hedge: 2 } }, offer);
+  if (!/no plan can be built from books you can bet at/.test(none) || !/no hedge/.test(none)) {
+    problems.push('an empty takeable pass must say so with the gate-out counts');
+  }
+  const twoStep = globalThis.__promoTakeableHtml(
+    { plans: [plan(true, 'qualify'), plan(false, 'convert')], takeable_plans: [plan(true)] },
+    offer);
+  if (/best overall plan above is takeable from here/.test(twoStep)) {
+    problems.push('a step sequence whose convert step is offshore must NOT read as takeable — step 1 alone is not the play');
+  }
+  if (globalThis.__promoTakeableHtml({ plans: [plan(false)] }, offer) !== '') {
+    problems.push('an ungoverned entry (no takeable_plans key) must render nothing');
+  }
+
+  // nearMissHtml: pills by verdict, and the freshness caveat.
+  const miss = (extra = {}) => ({
+    away_team: 'Away', home_team: 'Home', sport: 'baseball', market: 'moneyline',
+    period: 'full_game', line: null, margin_pct: -0.19,
+    legs: [{ source: 'draftkings', selection: 'home', decimal_odds: 2.05, local: true },
+           { source: 'fanduel', selection: 'away', decimal_odds: 1.9, local: true }],
+    takeable: true, simultaneous: true, observed_spread_seconds: 3, ...extra,
+  });
+  const fresh = globalThis.__nearMissHtml([miss()]);
+  if (!/short by 0.19%/.test(fresh) || !/takeable books/.test(fresh)) {
+    problems.push('a simultaneous takeable near-miss must say "short by" with its pill');
+  }
+  const stale = globalThis.__nearMissHtml([
+    miss({ simultaneous: false, observed_spread_seconds: 564, takeable: false })]);
+  if (!/prices 9m apart when scraped — never one market state/.test(stale)) {
+    problems.push('a non-simultaneous near-miss must say its prices were never one market state');
+  }
+  if (!/not takeable/.test(stale)) {
+    problems.push('a non-takeable near-miss lost its warning pill');
+  }
+  const ungovernedMiss = globalThis.__nearMissHtml([miss({ takeable: null })]);
+  if (/takeable books|not takeable/.test(ungovernedMiss)) {
+    problems.push('an ungoverned near-miss must carry no takeable verdict either way');
+  }
+  if (globalThis.__nearMissHtml([]) !== '') {
+    problems.push('an empty watchlist must render nothing');
+  }
+
+  if (problems.length) {
+    console.error('EXECUTED-BEHAVIOUR CHECKS FAILED:');
+    for (const problem of problems) console.error('  - ' + problem);
+    process.exit(1);
+  }
+  console.log('arbPositions merge, promoTakeableHtml branches and nearMissHtml render as claimed');
+}
+
 // A non-local leg must never render as the state's own price. The payload's
 // per-leg `non_local_label` and per-opportunity `no_local_leg` are composed in
 // Python; this block proves the page actually PAINTS them. A substring pin on
@@ -4164,7 +4283,7 @@ function onAnEmbeddedRun() {   // a declaration, so block order cannot matter
     pick.value = String(runId);
     pick.dispatch('change');
     const bag = globalThis.__arbBundle();
-    const candidates = bag ? (bag.opportunities || []) : [];
+    const candidates = globalThis.__arbPositions(bag);
     if (candidates.some((o) => (o.legs || []).some((l) => l.non_local_label))) {
       opps = candidates;
       break;
@@ -4181,7 +4300,7 @@ function onAnEmbeddedRun() {   // a declaration, so block order cannot matter
       problems.push(`a leg labelled ${JSON.stringify(label)} rendered without its badge`);
     }
     if (flagged.length) {
-      if (!list.includes('no leg reachable from this jurisdiction')) {
+      if (!list.includes('not takeable · no leg reachable from this jurisdiction')) {
         problems.push('a wholly-foreign position rendered without its position-level pill');
       }
       if (!list.includes('reach from this jurisdiction')) {
@@ -4192,7 +4311,13 @@ function onAnEmbeddedRun() {   // a declaration, so block order cannot matter
       // or the rail badge. Each is written independently in renderArb, so each
       // is pinned; the tile alone let the other two revert unnoticed.
       const statsHtml = ((nodes.get('arb-stats') || {}).innerHTML) || '';
-      const takeable = opps.length - flagged.length;
+      // "Takeable" is every leg placeable from here, which is stricter than
+      // "not wholly foreign": a PA/NJ position is neither flagged nor takeable.
+      const takeable = opps.filter(globalThis.__arbTakeable).length;
+      const blocked = opps.length - takeable;
+      if (blocked && !list.includes('not takeable ·')) {
+        problems.push(`${blocked} non-takeable position(s) rendered without a "not takeable" pill`);
+      }
       const positionsStat = statsHtml.match(/positions<\/span><b>(\d+)</);
       if (!positionsStat) {
         problems.push('the positions stat tile is missing, so the takeable count is unchecked');
@@ -4383,7 +4508,7 @@ function onAnEmbeddedRun() {   // a declaration, so block order cannot matter
   const arbNote = () => (nodes.get('arb-note')?.textContent) || '';
   const bag = globalThis.__arbBundle ? globalThis.__arbBundle() : null;
 
-  if (!bag || (bag.opportunities || []).length) {
+  if (!bag || globalThis.__arbPositions(bag).length) {
     console.log('  (arb empty-state check skipped; this page has positions)');
   } else {
     const checked = bag.comparable_group_count || 0;

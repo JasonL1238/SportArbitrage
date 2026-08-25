@@ -204,14 +204,49 @@ def test_the_alert_key_spells_zero_lines_one_way() -> None:
     )
 
 
-def test_the_alert_key_ignores_stakes() -> None:
-    """Same books, selections and prices → one key, whatever the bankroll.
+def test_the_alert_key_ignores_prices() -> None:
+    """A tick of price movement must not re-mint a standing position's key.
 
-    The key embedded ``{stake:.2f}`` per leg while its docstring promised
-    price-identity, so ``arb --run N --stake 200`` re-minted every claimed
-    position under a fresh key and the ledger waved the second text
-    through — "at most one text per arb ever" quietly became "per arb per
-    bankroll".
+    With prices in the key, a watch loop at five-minute cadence texted the
+    same persistent edge once per tick — matchbook 1.9400 → 1.9500 was a
+    "new" arb 288 times a day.  The key is the position's identity: market
+    plus who is on each side.
+    """
+    import inspect
+
+    assert opportunity_alert_key(
+        _opportunity(roi_prices=(2.20, 2.20))
+    ) == opportunity_alert_key(_opportunity(roi_prices=(2.21, 2.21)))
+    source = inspect.getsource(opportunity_alert_key)
+    assert "decimal_odds" not in source.split('"""')[-1], (
+        "a price crept back into the key"
+    )
+
+
+def test_the_alert_key_separates_states() -> None:
+    """One batch, two states, same books: two separately-placeable positions.
+
+    Source keys are jurisdiction-free, so with prices out of the key the PA
+    and NJ passes of one batch minted byte-identical keys — the PA text
+    claimed it and the NJ position, at NJ's own prices at NJ-licensed
+    accounts, was swallowed forever.  The governed state is part of the key;
+    an ungoverned run contributes nothing, exactly as before.
+    """
+    opp = _opportunity()
+    assert opportunity_alert_key(opp, state="PA") != opportunity_alert_key(
+        opp, state="NJ"
+    )
+    assert opportunity_alert_key(opp, state="") == opportunity_alert_key(opp)
+
+
+def test_the_alert_key_ignores_stakes() -> None:
+    """Same market, books and selections → one key, whatever the bankroll.
+
+    The key once embedded ``{stake:.2f}`` per leg, so ``arb --run N --stake
+    200`` re-minted every claimed position under a fresh key and the ledger
+    waved the second text through — "at most one text per arb ever" quietly
+    became "per arb per bankroll".  (Prices left the key too, 2026-08-24 —
+    the test above pins that.)
     """
     assert opportunity_alert_key(_opportunity(stake=100.0)) == opportunity_alert_key(
         _opportunity(stake=200.0)
@@ -852,3 +887,52 @@ class TestOneArbIsOneText:
         assert "repeat" not in _MESSAGES_SCRIPT, (
             "a repeat over services re-sends through the service already tried"
         )
+
+
+class TestOnlyTakeablePositionsReachThePhone:
+    """The SMS is the place-money-now channel; every text ever sent was a
+    matchbook+bovada position untakeable from PA wearing an INFO ONLY tail."""
+
+    def _ready_book(self, monkeypatch: pytest.MonkeyPatch):
+        from src import alerts as alerts_mod
+
+        monkeypatch.setattr(alerts_mod, "alert_ready", lambda: True)
+        sent: list[str] = []
+        return AlertBook(send=lambda body: sent.append(body) or "SM"), sent
+
+    def test_a_foreign_leg_suppresses_the_text_without_claiming(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from src.coverage import locality_marking
+
+        book, sent = self._ready_book(monkeypatch)
+        marking = locality_marking("PA", route_scope="state")
+        assert marking.marking, "PA must be governed or this test tests nothing"
+        opp = _pregame(sources=("fanduel", "pinnacle"))  # one PA leg, one offshore
+        assert book.notify([opp], marking=marking) == []
+        assert sent == []
+        # Not claimed: the same position on a later differently-governed run
+        # may be takeable, and a suppressed study must not spend its one slot.
+        assert opportunity_alert_key(opp) not in book.sent_keys
+
+    def test_an_all_local_position_still_texts(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from src.coverage import locality_marking
+
+        book, sent = self._ready_book(monkeypatch)
+        marking = locality_marking("PA", route_scope="state")
+        opp = _pregame(sources=("fanduel", "draftkings"))
+        assert len(book.notify([opp], marking=marking)) == 1
+        assert len(sent) == 1
+        assert "PLACE BOTH NOW" in sent[0]
+
+    def test_an_ungoverned_run_keeps_the_labelled_body(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """GLOBAL scope has no state to be takeable from; the body's label is
+        the safeguard there, exactly as before."""
+        book, sent = self._ready_book(monkeypatch)
+        opp = _pregame(sources=("fanduel", "pinnacle"))
+        assert len(book.notify([opp], marking=None)) == 1
+        assert len(sent) == 1

@@ -1152,6 +1152,30 @@ class Store:
 
     # ── writes ───────────────────────────────────────────────────────────────
 
+    def last_fetch_at(self, source: str, *, jurisdiction: str) -> datetime | None:
+        """When this source's bytes were last captured **for this jurisdiction**.
+
+        Feeds the WAF cooldown.  It ignores run boundaries and run outcomes — a
+        refused fetch that stored its block page counts, because the venue was
+        touched — but it must not ignore the state: the host is the licence
+        (``pa.bet365.com`` and ``il.bet365.com`` are different walls), and a
+        source-only lookup let the first state of a multi-state batch put every
+        later state inside the cooldown forever, since the earlier pass
+        refreshed the clock each time it lapsed.
+        """
+        row = self._conn.execute(
+            """SELECT MAX(r.fetched_at) AS at
+                 FROM raw_response r JOIN collection_run c ON c.id = r.run_id
+                WHERE r.source = ? AND c.jurisdiction = ?""",
+            (source, jurisdiction),
+        ).fetchone()
+        if row is None or row["at"] is None:
+            return None
+        try:
+            return datetime.fromisoformat(str(row["at"]).replace("Z", "+00:00"))
+        except ValueError:
+            return None
+
     def previous_sha(self, source: str, endpoint: str, *, before_run_id: int) -> str | None:
         """The sha256 this endpoint last returned, for change detection."""
         row = self._conn.execute(

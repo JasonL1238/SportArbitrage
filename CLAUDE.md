@@ -203,11 +203,11 @@ written, and the grep is what is true now.
 | File | Lines | Where to land |
 | --- | --- | --- |
 | `tests/test_adversarial_findings.py` | 14.9k | 17 banners, one per review round — they say nothing about subject. Search the production symbol or the exact test name instead |
-| `src/report_assets.py` | 7.7k | 42 banners, in `/* ── … */` form. `frame`, `panels and routing`, `venues`, `arbitrage`, `overview`. Four handwritten constants — `CSS`, `BODY`, `JS`, and `EMPTY_SHELL`, the nothing-collected-yet page. Every panel count and filter decision is here, not in `src/report.py` |
+| `src/report_assets.py` | 7.9k | 42 banners, in `/* ── … */` form. `frame`, `panels and routing`, `venues`, `arbitrage`, `overview`. Four handwritten constants — `CSS`, `BODY`, `JS`, and `EMPTY_SHELL`, the nothing-collected-yet page. Every panel count and filter decision is here, not in `src/report.py` |
 | `tests/test_promo_planner.py` | 4.1k | 8 banners |
-| `src/collector.py` | 3.8k | `coverage`, `one run`, `replay`, `CLI` |
+| `src/collector.py` | 4.0k | `coverage`, `one run`, `replay`, `CLI` |
 | `src/arb.py` | 2.7k | `the arithmetic`, `settlement model`, `grouping`, `detection`, `best-price surface` |
-| `tests/test_report.py` | 3.0k | 9 banners |
+| `tests/test_report.py` | 3.2k | 9 banners |
 | `src/report.py` | 2.4k | 11 banners now, one per region of the payload half — `the payload`, `the placed-bet ledger`, `promotions`, `arbitrage`, `coverage and quotes`, `identity, vocabulary and labels`, `venues`, `small readings off a run` — then `rendering`, `CLI` and `the serve control plane` |
 | `src/validation.py` | 2.5k | `consensus`, `row-level`, `market-level`, `cross-source` |
 | `src/promos/planner.py` | 2.3k | `offer-text parsing`, `brand → stakeable odds feeds`, `slate context`, `stake solving and outcome evaluation`, `the scan`, `plan payloads` |

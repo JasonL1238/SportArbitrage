@@ -3900,7 +3900,13 @@ class TestSmarketsKeepsTheBatchesItAlreadyPaidFor:
                 return httpx.Response(200, json={
                     "events": [{"id": f"{kind}{i}", "name": f"A vs B {i}",
                                 "start_date": "2026-12-01T18:00:00Z"}
-                               for i in range(40)],  # two batches of 20
+                               # Two batches under BATCH=50: one of 50, one of
+                               # 10.  The second is the one the handler fails,
+                               # and at ten ids it sits below PROVEN_BATCH, so
+                               # the halve-on-refusal guard re-raises rather
+                               # than splitting — which is exactly the "a batch
+                               # genuinely failed" case this class pins.
+                               for i in range(60)],
                     "pagination": {"next_page": None},
                 })
             return httpx.Response(200, json={})
@@ -14526,24 +14532,30 @@ class TestTheLiveRunFlagsTheSamePositionsReAnalysisDoes:
         )
         return sent
 
-    def test_the_text_for_a_flagged_position_carries_the_disclaimer(
+    def test_the_text_for_a_flagged_position_is_suppressed_entirely(
         self, tmp_path, monkeypatch
     ):
-        """Showing and disclaiming travel together, all the way to the SMS.
+        """A position no leg of which is takeable never reaches the phone.
 
-        The policy that lets a wholly non-local position out of the collector is
-        the labelling; a text that reaches a phone without the disclaimer is the
-        old defect with extra steps.
+        This inverts the previous pin, deliberately (2026-08-24).  The old
+        policy texted the position with a disclaimer, and its whole SMS
+        history was four such texts — offshore pairs wearing an "INFO ONLY"
+        tail nobody asked to be woken for.  The phone is the place-money-now
+        channel; the dashboard and the CLI keep showing the position with its
+        labels (the tests around this one still pin that), and the key is not
+        claimed, so a later governed run where it *is* takeable can still
+        text once.
         """
         sent = self._armed_alerts(monkeypatch)
         result = self._run(tmp_path, {
             "pinnacle": [(Selection.HOME, 2.20)],
             "bovada": [(Selection.AWAY, 2.20)],
         }, alert=True)
-        assert len(result.arb.opportunities) == 1
-        assert len(sent) == 1, "the flagged position no longer texts at all"
-        assert "NO LEG reachable from PA — informational, not PA prices" in sent[0]
-        assert "[not reachable from PA]" in sent[0]
+        assert len(result.arb.opportunities) == 1, (
+            "the position itself must survive — suppression is the SMS's, "
+            "not the detector's"
+        )
+        assert sent == [], "a wholly-foreign position must not text at all"
 
     def test_the_live_summary_prints_the_same_labels(self, tmp_path, capsys):
         """`collect` itself is a rendering surface, and it was the unlabelled one.
@@ -14585,16 +14597,18 @@ class TestTheLiveRunFlagsTheSamePositionsReAnalysisDoes:
         assert "... 2 more position(s)" in out, out
         assert "prints all of a stored run" in out, out
 
-    def test_the_re_analysis_text_carries_the_disclaimer_too(
+    def test_the_re_analysis_path_suppresses_the_text_too(
         self, tmp_path, monkeypatch, capsys
     ):
         """`arb --run` is the other path that texts, and it must not diverge.
 
         Its twin defect is the round's origin story: the stored-run path once
         printed and texted a "PA" position no Pennsylvanian could take.  The
-        collect-path test above cannot cover it — the two call sites build their
-        markings independently, so dropping ``marking=`` from this one leaves
-        every other test green.
+        collect-path test above cannot cover it — the two call sites build
+        their markings independently, so dropping ``marking=`` from this one
+        leaves every other test green.  Since 2026-08-24 the shared invariant
+        is suppression rather than a disclaimer: the printed summary keeps the
+        labels, the phone stays silent.
         """
         import src.collector
 
@@ -14626,10 +14640,11 @@ class TestTheLiveRunFlagsTheSamePositionsReAnalysisDoes:
                 counterparties={},
             )
         assert src.collector.main(["arb", "--run", str(run)]) == 0
-        capsys.readouterr()
-        assert len(sent) == 1, "the arb command no longer texts the position"
-        assert "NO LEG reachable from PA — informational, not PA prices" in sent[0]
-        assert "[not reachable from PA]" in sent[0]
+        out = capsys.readouterr().out
+        assert sent == [], "a wholly-foreign position must not text from arb --run"
+        # The printed surface keeps showing and labelling it — suppression is
+        # the phone's, not the report's.
+        assert "[not reachable from PA]" in out, out
 
 
 class TestEveryReadCommandNamesTheJurisdiction:

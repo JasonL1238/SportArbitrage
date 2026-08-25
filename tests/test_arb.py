@@ -1504,6 +1504,75 @@ class TestInputValidation:
             stake_split(bad, 100.0)
 
 
+class TestNearMissesAreKeptNotDiscarded:
+    """The detector computes every market's distance from arbitrage; the gate
+    used to throw it away.  Run 36 had eight markets within 0.5% of crossing
+    and the operator saw none of them."""
+
+    def test_a_short_market_lands_on_the_watchlist_with_its_legs(self) -> None:
+        rows = [
+            make_quote(source="draftkings", selection=Selection.HOME,
+                       decimal_odds=2.05, source_market_id="m"),
+            make_quote(source="fanduel", selection=Selection.AWAY,
+                       decimal_odds=1.90, source_market_id="m"),
+        ]
+        report = find_opportunities(rows)
+        assert report.opportunities == []
+        assert len(report.near_misses) == 1
+        miss = report.near_misses[0]
+        # 1/2.05 + 1/1.90 = 1.01411…, so the best margin is ≈ −1.41%.
+        assert miss.margin == pytest.approx(1.0 - (1 / 2.05 + 1 / 1.90), abs=1e-9)
+        assert miss.margin < 0
+        assert {(source, sel) for source, sel, _ in miss.legs} == {
+            ("draftkings", "home"), ("fanduel", "away"),
+        }
+
+    def test_the_watchlist_is_capped_and_closest_first(self) -> None:
+        from src.arb import NEAR_MISS_LIMIT
+
+        rows = []
+        for index in range(NEAR_MISS_LIMIT + 5):
+            # Wider juice as index grows → further from crossing.
+            odds = 1.90 - index * 0.01
+            key = f"MLB-A{index:02d}@MLB-B{index:02d}:2026-07-28"
+            rows += [
+                make_quote(source="draftkings", selection=Selection.HOME,
+                           decimal_odds=odds, source_market_id=f"m{index}",
+                           source_event_id=f"e{index}", event_key=key,
+                           home_participant=f"MLB-B{index:02d}",
+                           away_participant=f"MLB-A{index:02d}",
+                           home_team=f"Home {index}", away_team=f"Away {index}"),
+                make_quote(source="fanduel", selection=Selection.AWAY,
+                           decimal_odds=odds, source_market_id=f"m{index}",
+                           source_event_id=f"e{index}", event_key=key,
+                           home_participant=f"MLB-B{index:02d}",
+                           away_participant=f"MLB-A{index:02d}",
+                           home_team=f"Home {index}", away_team=f"Away {index}"),
+            ]
+        report = find_opportunities(rows)
+        assert len(report.near_misses) == NEAR_MISS_LIMIT
+        margins = [miss.margin for miss in report.near_misses]
+        assert margins == sorted(margins, reverse=True), "closest first"
+
+    def test_summary_splits_positive_floor_from_push_protected_zero(self) -> None:
+        """A $0-floor position protects a push and wins nothing; printing it
+        as "1 opportunity" is how a zero-profit NFL moneyline read as the
+        day's edge.  ``guaranteed_profit`` is derived, so the split is unit
+        tested on the report shape directly."""
+        from types import SimpleNamespace
+
+        from src.arb import ArbReport
+
+        paying = SimpleNamespace(guaranteed_profit=1.37)
+        floored = SimpleNamespace(guaranteed_profit=0.0)
+        both = ArbReport(opportunities=[paying, floored], diagnostics=[],
+                         comparable_group_count=5, group_count=9)
+        assert "(1 with positive floor, 1 push-protected $0)" in both.summary()
+        clean = ArbReport(opportunities=[paying], diagnostics=[],
+                          comparable_group_count=5, group_count=9)
+        assert "push-protected" not in clean.summary()
+
+
 class TestReportShape:
     def test_summary_distinguishes_no_data_from_no_edge(self) -> None:
         """"No opportunities" is only meaningful next to how many markets were

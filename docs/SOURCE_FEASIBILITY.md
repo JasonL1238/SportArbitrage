@@ -131,7 +131,8 @@ python scripts/probe_sources.py --state IL
   charges · Notes on settlement · Traps the adapters had to be corrected for
   (newest first: BetMGM's `sourceName` convention, and its substring league table,
   both 2026-08-14)
-- **`evidence/promos.md`** — betPARX and theScore Bet: the two PA-only books get
+- **`evidence/promos.md`** — Five offshore/dead promo feeds deregistered
+  (2026-08-24) · betPARX and theScore Bet: the two PA-only books get
   first-party promo feeds (2026-08-23) · betPARX — `betparx_kambi`, a JSON catalogue
   per state lobby · theScore Bet — `thescore`, the help centre's promotional-terms
   section · One classifier change, because both catalogues are whole T&C documents ·

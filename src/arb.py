@@ -84,7 +84,7 @@ from __future__ import annotations
 import itertools
 import math
 from collections import Counter, defaultdict
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Callable, Collection, Iterable, Mapping, Sequence
 
@@ -850,6 +850,43 @@ class Diagnostic:
     sport: Sport | None = None
 
 
+@dataclass(frozen=True)
+class NearMiss:
+    """A comparable market's best cross-book position, short of arbitrage.
+
+    The detector computes this distance for every market it compares and used
+    to throw it away at the margin gate.  It is exactly the watchlist a watch
+    loop wants: run 36 had eight markets within half a percent of crossing,
+    and the operator saw none of them.  ``margin`` is net of commissions;
+    negative means short of arbitrage by that much (−0.002 crosses when one
+    book moves a tick).
+    """
+
+    event_key: str
+    market: Market
+    period: Period
+    side: Side | None
+    line: float | None
+    margin: float
+    legs: tuple[tuple[str, str, float], ...]
+    """``(source, selection value, decimal odds)`` per leg of the best assignment."""
+    home_team: str
+    away_team: str
+    commence_time: datetime
+    sport: Sport | None = None
+    observed_spread_seconds: float = 0.0
+    """How far apart the two legs' prices were captured."""
+    simultaneous: bool = True
+    """Whether that spread is inside the detector's own comparison window.
+    A pair observed nine minutes apart was never one market state, and "short
+    by 0.15%" would claim it was — the watchlist says so instead of claiming."""
+
+
+#: How many near-misses a report keeps.  Every comparable market emits one at
+#: the gate; keeping them all would make the payload a second odds board.
+NEAR_MISS_LIMIT = 10
+
+
 @dataclass
 class ArbReport:
     opportunities: list[Opportunity]
@@ -857,11 +894,24 @@ class ArbReport:
     group_count: int = 0
     comparable_group_count: int = 0
     """Groups priced by at least two books with a compatible contract."""
+    near_misses: list[NearMiss] = field(default_factory=list)
+    """The closest non-crossing markets, best first, capped at
+    :data:`NEAR_MISS_LIMIT`."""
 
     def summary(self) -> str:
-        return (
+        positive = sum(1 for o in self.opportunities if o.guaranteed_profit > 0)
+        floored = len(self.opportunities) - positive
+        # A position whose floor is $0.00 protects a push and wins nothing —
+        # printing it as "1 opportunity" is how a zero-profit NFL moneyline
+        # read as the day's edge.  Say both numbers whenever they differ.
+        count = (
             f"{len(self.opportunities)} opportunit"
-            f"{'y' if len(self.opportunities) == 1 else 'ies'} from "
+            f"{'y' if len(self.opportunities) == 1 else 'ies'}"
+        )
+        if floored:
+            count += f" ({positive} with positive floor, {floored} push-protected $0)"
+        return (
+            f"{count} from "
             f"{self.comparable_group_count} cross-book markets "
             f"({self.group_count} total, {len(self.diagnostics)} rejected)"
         )
@@ -1125,6 +1175,13 @@ def find_opportunities(
     # pushable market can show a 9% margin against a floor of zero, and ordering
     # by margin would list it above a 2% position that really pays.
     report.opportunities.sort(key=lambda o: (o.guaranteed_profit, o.margin), reverse=True)
+    # Simultaneous pairs first, closest to crossing within each half, then
+    # the cap — every comparable market wrote one entry at the gate and only
+    # the watchlist-worthy few are worth shipping.  A pair whose legs were
+    # captured outside the comparison window is a weaker claim by construction
+    # and must not outrank a genuinely simultaneous near-cross.
+    report.near_misses.sort(key=lambda miss: (miss.simultaneous, miss.margin), reverse=True)
+    del report.near_misses[NEAR_MISS_LIMIT:]
     return report
 
 
@@ -1652,6 +1709,35 @@ def _examine_group(
 
         margin = 1.0 - sum_implied
         if margin <= min_margin + _EPSILON:
+            # The distance-from-arbitrage this market just measured, kept
+            # instead of discarded: the report trims to the closest few, and
+            # they are the "run the fast loop now" signal.  Pure bookkeeping —
+            # nothing here is an opportunity or reaches the alert path.
+            observed = [chosen[selection].observed_at for selection in needed]
+            spread = (max(observed) - min(observed)).total_seconds()
+            report.near_misses.append(
+                NearMiss(
+                    event_key=event_key,
+                    market=market,
+                    period=period,
+                    side=side,
+                    line=line,
+                    margin=margin,
+                    legs=tuple(
+                        (chosen[selection].source, selection.value,
+                         chosen[selection].decimal_odds)
+                        for selection in sorted(needed, key=lambda s: s.value)
+                    ),
+                    home_team=rows[0].home_team,
+                    away_team=rows[0].away_team,
+                    commence_time=max(
+                        chosen[selection].commence_time for selection in needed
+                    ),
+                    sport=sport,
+                    observed_spread_seconds=round(spread, 1),
+                    simultaneous=spread <= max_observation_spread.total_seconds(),
+                )
+            )
             continue
 
         # An impossible edge is a mapping fault, not money. Refused before

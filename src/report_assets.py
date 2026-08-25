@@ -942,7 +942,7 @@ BODY = """
 
       <div class="card" style="margin-top:14px">
         <div class="card-head">
-          <h3>Takeable positions</h3>
+          <h3>Positions</h3>
           <span class="eyebrow" id="arb-note">latest scrape only</span>
         </div>
         <div class="card-body" id="arb-list"></div>
@@ -3726,7 +3726,7 @@ function promoPlanCardHtml(plan, o, planIndex) {
       ? ` ${fmtLine(leg.line, plan.market)}` : '';
     return `<tr>
       <td><span class="pill flat">${leg.role === 'promo' ? 'promo' : 'hedge'}</span></td>
-      <td>${escapeHtml(promoBookLabel(leg.source))}</td>
+      <td>${escapeHtml(promoBookLabel(leg.source))}${originPill(leg)}</td>
       <td>${escapeHtml(promoSelectionLabel(plan, leg))}${escapeHtml(line)}</td>
       <td>${escapeHtml(fmtAmerican(leg.american_odds))}</td>
       <td>${promoMoney(leg.stake)}${leg.stake_kind === 'bonus' ? ' <span class="dim">credit</span>' : ''}</td>
@@ -3766,8 +3766,15 @@ function promoPlanCardHtml(plan, o, planIndex) {
           title="Pre-fill these legs into My bets">Log this plan</button>
       </div>${slipDrawerHtml(promoSlipFor(o, plan), index, { total: null })}`
     : '';
+  // The same verdict the arbitrage card carries, from the same Python
+  // marking: a plan whose hedge sits at Smarkets is the best execution on the
+  // board and not one this reader can place. Absent on an ungoverned run.
+  const verdict = plan.takeable === undefined ? ''
+    : plan.takeable
+      ? '<span class="arb-pill ok">takeable</span> '
+      : `<span class="arb-pill warn">not takeable · ${escapeHtml(arbBlockers(plan).join(', '))} out of reach</span> `;
   return `<div class="plan-card">
-    <h5>${stepBadge}${escapeHtml(plan.away_team || '')} at ${escapeHtml(plan.home_team || '')}</h5>
+    <h5>${stepBadge}${verdict}${escapeHtml(plan.away_team || '')} at ${escapeHtml(plan.home_team || '')}</h5>
     <p class="plan-sub">${escapeHtml(marketBits.filter(Boolean).join(' · '))}
       · ${escapeHtml(fmtClock(plan.commence_time))}${age ? ` · quotes ${escapeHtml(age)} old at build` : ''}</p>
     <table><tbody>${legs}</tbody></table>
@@ -3810,12 +3817,60 @@ function promoPlanHtml(o) {
   }
   if (entry.expected_value !== null && entry.expected_value !== undefined) {
     bits.push(`net value ${promoMoney(entry.expected_value)}`);
+    // The overall figure can be priced off a hedge the reader cannot reach;
+    // when the takeable pass says a different number, both are said. The
+    // Campaign table's ranking is a separate, planned change.
+    const local = entry.takeable_expected_value;
+    if (local !== null && local !== undefined
+        && Number(local).toFixed(2) !== Number(entry.expected_value).toFixed(2)) {
+      bits.push(`takeable from here ${promoMoney(local)}`);
+    }
   }
   return `<h4>${escapeHtml(label)}</h4>
     ${bits.length ? `<p class="plan-sub">${escapeHtml(bits.join(' · '))}</p>` : ''}
     ${(entry.plans || []).map((plan, i) => promoPlanCardHtml(plan, o, i)).join('')}
+    ${promoTakeableHtml(entry, o)}
     ${caveats}
     ${skippedHtml}`;
+}
+
+/** The best execution using only books reachable from this state.
+ *
+ *  The cards above are the best on the whole board and may hedge at a venue
+ *  the reader cannot open an account with. `takeable_plans` is a second
+ *  planner pass with every such venue removed, built in Python beside the
+ *  first; this says which of three things is true — the best overall plan is
+ *  itself takeable, a different takeable plan exists, or none does — rather
+ *  than leaving the reader to pick the first card without an offshore pill. */
+function promoTakeableHtml(entry, o) {
+  if (!Array.isArray(entry.takeable_plans)) return '';
+  // Two shapes share `plans`: ranked alternatives (best first) and the
+  // qualify-then-convert *step sequence*, where plans[0] is step 1 of an
+  // execution, not the best of anything. A two-step play is takeable only if
+  // every step is — judging it on the qualifying leg alone called a
+  // Smarkets-hedged conversion "takeable from here".
+  const overall = entry.plans || [];
+  const stepped = overall.some((plan) => plan.step);
+  const overallTakeable = stepped
+    ? overall.length > 0 && overall.every((plan) => plan.takeable === true)
+    : Boolean(overall[0] && overall[0].takeable);
+  if (overallTakeable) {
+    return `<p class="plan-sub">best overall plan above is takeable from here</p>`;
+  }
+  const plans = entry.takeable_plans;
+  if (!plans.length) {
+    const why = Object.entries(entry.takeable_skipped || {})
+      .map(([reason, count]) => `${String(reason).replace(/_/g, ' ')} ×${count}`)
+      .join(' · ');
+    return `<h4>Best takeable from here</h4>
+      <p class="dim">no plan can be built from books you can bet at from this state${
+        why ? ` — ${escapeHtml(why)}` : ''}</p>`;
+  }
+  const value = entry.takeable_expected_value;
+  return `<h4>Best takeable from here</h4>
+    ${value !== null && value !== undefined
+      ? `<p class="plan-sub">${escapeHtml(`net value ${promoMoney(value)}`)}</p>` : ''}
+    ${plans.map((plan, i) => promoPlanCardHtml(plan, o, `local-${i}`)).join('')}`;
 }
 
 function promoDetailHtml(o) {
@@ -4245,28 +4300,103 @@ function arbBundle() {
   return showOffshore ? (bag.with_offshore || bag) : bag;
 }
 
-/** Whether the offshore books changed anything for this run, as a sentence or ''.
- *  Counts only takeable positions: a wholly-foreign position the offshore view
- *  itself labels informational is not a reason to flip the switch, and "1 more
- *  position exists" pointing at a non-edge is the invitation this note must not
- *  make. */
-function offshoreDelta() {
-  const bags = DATA.arbs || {};
-  const bag = bags[String(currentRunId)] || bags[currentRunId] || null;
-  if (!bag || !bag.with_offshore) return '';
-  // The sportsbook picker's clause matches renderArb's, or this invitation
-  // would count positions the panel it invites the reader to is not showing.
-  const sportOf = (list) => (list || []).filter((o) =>
-    (!currentSport || o.sport === currentSport)
-    && (!currentBrand || (o.legs || []).some((leg) => keepBrand(leg.source)))
-    && !o.no_local_leg);
-  const here = sportOf(bag.opportunities).length;
-  const all = sportOf(bag.with_offshore.opportunities).length;
-  if (all === here) return '';
-  const extra = all - here;
-  return showOffshore
-    ? `${extra} of these ${extra === 1 ? 'needs' : 'need'} a book you cannot bet from the US`
-    : `${extra} more ${extra === 1 ? 'position' : 'positions'} exist if offshore books are allowed`;
+/** Every leg placeable from this jurisdiction — the money question.
+ *  `takeable` is composed in Python beside the locality labels; the fallback
+ *  is for a payload written before the key existed, where the best available
+ *  answer was the weaker "has at least one reachable leg". */
+function arbTakeable(o) {
+  // null is Python's "no verdict" (an ungoverned run has no state to be
+  // takeable from) and falls back like an absent key.
+  return o.takeable !== undefined && o.takeable !== null
+    ? Boolean(o.takeable) : !o.no_local_leg;
+}
+
+/** One line per leg the reader cannot place from here, for the card's pill. */
+function arbBlockers(o) {
+  const legs = o.non_local_legs !== undefined
+    ? o.non_local_legs
+    : (o.legs || []).filter((leg) => leg.non_local_label)
+        .map((leg) => ({ source: leg.source, origin_label: leg.origin_label || '' }));
+  // Once per book: a three-way hedge at one exchange is one blocker, not two.
+  return [...new Set(legs.map((leg) =>
+    `${book(leg.source)}${leg.origin_label ? ` (${leg.origin_label})` : ''}`))];
+}
+
+function arbKey(o) {
+  return [o.event_key, o.market, o.period, o.side, o.line].join('|');
+}
+
+/** The positions the panel lists for the run being viewed.
+ *
+ *  The US-only bundle and the offshore-admitted one are two detector runs, not
+ *  a list and its filter: with Bovada admitted the best price on a side moves
+ *  there and a DraftKings/FanDuel position becomes a DraftKings/Bovada one. So
+ *  with the switch off the panel shows the US-only positions *and* the
+ *  offshore-admitted positions that have no US-only twin, each marked by
+ *  `arbTakeable` — a position needing a book you cannot bet from the US is
+ *  shown and labelled, not dropped. With the switch on the offshore bundle is
+ *  the whole answer, as before. Takeable positions sort first. */
+function arbPositions(bag) {
+  if (!bag) return [];
+  const base = bag.opportunities || [];
+  let all = base;
+  // Only when the locality rule governs the run: on an ungoverned (GLOBAL)
+  // run the offshore extras carry no takeable verdict, and merging them put
+  // green pills and "guaranteed $" on Bovada/Pinnacle positions with the
+  // offshore switch off. Ungoverned runs keep the old behaviour — the switch
+  // is the only door to the offshore view.
+  if (!showOffshore && bag.with_offshore && bag.governed) {
+    const seen = new Set(base.map(arbKey));
+    const extra = (bag.with_offshore.opportunities || [])
+      .filter((o) => !seen.has(arbKey(o)))
+      .filter((o) => (o.legs || []).some((leg) => isUsUnavailable(leg.source)));
+    all = base.concat(extra);
+  }
+  return all.slice().sort((a, b) =>
+    (arbTakeable(b) - arbTakeable(a)) || ((b.margin_pct || 0) - (a.margin_pct || 0)));
+}
+
+/** The watchlist table: the detector computes every compared market's
+ *  distance from arbitrage and used to discard it at the gate. These are the
+ *  closest few, whole-run (no sport/book filter — a near-cross is worth
+ *  seeing even when the board is narrowed), each saying whether its legs are
+ *  takeable from here (no pill on an ungoverned run — there is no state to be
+ *  takeable from) and whether its prices were even simultaneous. −0.20%
+ *  crosses when one book moves a tick: that is the "run a fresh scrape now"
+ *  signal — unless the legs were captured minutes apart, which the row then
+ *  says instead of claiming a market state that never existed. */
+function nearMissHtml(misses) {
+  if (!misses.length) return '';
+  const rows = misses.map((m) => {
+    const legs = (m.legs || []).map((leg) =>
+      `${escapeHtml(book(leg.source))} ${escapeHtml(leg.selection)} ${Number(leg.decimal_odds).toFixed(3)}${
+        leg.local === false ? ` <span class="pill warn">${escapeHtml(leg.origin_label || 'not takeable')}</span>` : ''}`
+    ).join(' · ');
+    const away = nick(m.away_team || '');
+    const home = nick(m.home_team || '');
+    const gap = Number(m.margin_pct);
+    return `<tr>
+      <td><b>${escapeHtml(away)}</b> <span class="dim">@</span> <b>${escapeHtml(home)}</b>
+        <div class="dim">${escapeHtml(sportLabel(m.sport || ''))} · ${escapeHtml(m.market)}/${escapeHtml(m.period)}${
+          m.line !== null && m.line !== undefined ? ` · ${escapeHtml(fmtLine(m.line, m.market))}` : ''}</div></td>
+      <td class="num"><b>${gap.toFixed(2)}%</b><div class="dim">${
+        m.simultaneous === false
+          ? `prices ${Math.round((m.observed_spread_seconds || 0) / 60)}m apart when scraped — never one market state`
+          : gap >= 0 ? 'crosses at this size' : `short by ${Math.abs(gap).toFixed(2)}%`}</div></td>
+      <td>${legs}</td>
+      <td>${m.takeable === false
+        ? '<span class="pill warn">not takeable</span>'
+        : m.takeable === true
+        ? '<span class="pill">takeable books</span>'
+        : ''}</td>
+    </tr>`;
+  }).join('');
+  return `<p class="dim" style="margin:0 0 8px">Closest to crossing in this scrape — the whole run,
+       no sport or book filter. A market a fraction short becomes an arbitrage when one book
+       moves a tick, so these are what a fresh scrape is for.</p>
+      <div class="scroll-wrap"><table class="arb-legs"><thead><tr>
+        <th>Market</th><th>Best margin</th><th>Legs (best assignment)</th><th></th>
+      </tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
 function renderArb() {
@@ -4299,7 +4429,7 @@ function renderArb() {
     return;
   }
 
-  const opps = (bag.opportunities || []).filter((o) => {
+  const opps = arbPositions(bag).filter((o) => {
     if (currentSport && o.sport !== currentSport) return false;
     // "Has a leg at the picked book", never "entirely at it": an arbitrage
     // always spans two counterparties, so the whole position is kept — every
@@ -4311,17 +4441,25 @@ function renderArb() {
   // leg the reader can reach from this jurisdiction. A wholly-foreign position
   // is rendered below with its labels, but calling it "takeable" or adding its
   // profit to "guaranteed $" would make the labels a footnote to a lie.
-  const takeable = opps.filter((o) => !o.no_local_leg);
+  const takeable = opps.filter(arbTakeable);
+  const blocked = opps.length - takeable.length;
+  // A $0-floor position protects a push and wins nothing; counting it in the
+  // headline as a plain opportunity is how a zero-profit NFL moneyline read
+  // as the day's edge.
+  const zeroFloor = takeable.filter((o) => Number(o.guaranteed_profit) === 0).length;
   const withLeg = currentBrand ? ` with a ${brandLabel(currentBrand)} leg` : '';
   if (nav) nav.textContent = String(takeable.length);
+  const blockedClause = blocked ? ` · ${blocked} not takeable` : '';
+  const floorClause = zeroFloor ? ` (${zeroFloor} floor $0)` : '';
   summary.textContent = takeable.length
-    ? `${takeable.length} takeable${withLeg} · ${bag.comparable_group_count} cross-book markets`
-    : `none takeable${withLeg} · ${bag.comparable_group_count} cross-book markets checked`;
+    ? `${takeable.length} takeable${floorClause}${withLeg}${blockedClause} · ${bag.comparable_group_count} cross-book markets`
+    : `none takeable${withLeg}${blockedClause} · ${bag.comparable_group_count} cross-book markets checked`;
   if (note) {
-    // The delta is the answer to "am I leaving money on the table by staying
-    // US-only", and it is worth saying whether the switch is on or off — one
-    // way it warns, the other way it invites.
-    const delta = offshoreDelta();
+    // A non-takeable position is shown with the leg that blocks it named, so
+    // the note says what "not takeable" means rather than inviting a switch.
+    const delta = blocked
+      ? `${blocked} shown but not takeable — a leg is at a book you cannot bet from here`
+      : '';
     const base = takeable.length
       ? `stakes sized to $${Number(bag.stake || 100).toFixed(0)} total · sport filter applies${
           currentBrand ? ` · ${brandLabel(currentBrand)} legs only` : ''}`
@@ -4346,6 +4484,7 @@ function renderArb() {
     ['positions', takeable.length, 'risk-free right now'],
     ['best margin', takeable.length ? `${best.toFixed(2)}%` : '—', 'headline edge'],
     ['guaranteed $', takeable.length ? profit.toFixed(2) : '—', `on $${Number(bag.stake || 100).toFixed(0)} each`],
+    ['not takeable', blocked, 'a leg out of reach from here'],
     ['markets checked', bag.comparable_group_count || 0, `${bag.group_count || 0} total groups`],
   ].map(([name, value, sub]) =>
     `<div class="stat"><span>${escapeHtml(name)}</span><b>${escapeHtml(String(value))}</b><small>${escapeHtml(sub)}</small></div>`
@@ -4371,12 +4510,13 @@ function renderArb() {
   // flagged positions the filter hides are named so the note and the whole-run
   // total cannot silently disagree.
   const flagged = opps.filter((o) => o.no_local_leg).length;
-  const flaggedHidden = Number(bag.non_local_flagged || 0) - flagged;
   // Which reader-side filter is doing the hiding, named. The whole-run total
-  // (`bag.non_local_flagged`, composed in Python) is never recomputed here, so
-  // narrowing the board can only move flagged positions into `flaggedHidden` —
-  // the page cannot under-report unreachability, and this sentence says where
-  // the difference went.
+  // (`bag.non_local_flagged`, composed in Python) is never recomputed here.
+  // `opps` is no longer a subset of the US-only bundle — `arbPositions` can
+  // append offshore extras the Python count never saw — so the difference is
+  // clamped: it answers "how many flagged positions did a filter hide", and
+  // extras can only push it below zero, never hide anything.
+  const flaggedHidden = Math.max(0, Number(bag.non_local_flagged || 0) - flagged);
   const narrowedBy = [currentSport ? 'sport' : '', currentBrand ? 'book' : '']
     .filter(Boolean).join(' and ');
   const flaggedNote = flagged
@@ -4435,13 +4575,15 @@ function renderArb() {
     list.innerHTML = flaggedNote + opps.map((o, i) => arbCard(o, i)).join('');
   }
 
+  const missHtml = nearMissHtml(bag.near_misses || []);
+
   const diags = bag.diagnostics || [];
-  if (!diags.length) {
+  if (!diags.length && !missHtml) {
     rejected.innerHTML = `<div class="arb-empty">No near-misses recorded for this scrape.</div>`;
   } else {
-    rejected.innerHTML = `<div class="arb-reject">${diags.map((d) =>
+    rejected.innerHTML = missHtml + (diags.length ? `<div class="arb-reject">${diags.map((d) =>
       `<span><code>${escapeHtml(d.code)}</code> <b>${escapeHtml(String(d.count))}</b></span>`
-    ).join('')}</div>`;
+    ).join('')}</div>` : '');
   }
 }
 
@@ -4519,8 +4661,14 @@ function arbCard(o, index) {
           · <a href="${escapeHtml(href('fixture', o.event_key))}">open game</a>
         </div>
       </div>
-      <span>${o.no_local_leg
-        ? '<span class="arb-pill warn">no leg reachable from this jurisdiction</span> '
+      <span>${Number(o.guaranteed_profit) === 0
+        ? '<span class="arb-pill warn">floor $0 · protects a push, wins nothing</span> '
+        : ''}${o.takeable === true
+        ? '<span class="arb-pill ok">takeable</span> '
+        : o.takeable === false
+        ? `<span class="arb-pill warn">${o.no_local_leg
+            ? `not takeable · no leg reachable from this jurisdiction · ${escapeHtml(arbBlockers(o).join(', '))}`
+            : `not takeable · ${escapeHtml(arbBlockers(o).join(', '))} out of reach`}</span> `
         : ''}<span class="arb-pill ok">${Number(o.margin_pct).toFixed(2)}% edge</span></span>
     </div>
     <div class="arb-kpis">
@@ -7167,10 +7315,10 @@ function renderNavCounts() {
   const bag = arbBundle();
   setCount('nav-arb', !detailLoaded(currentRunId) ? ''
     : (!bag ? '—'
-      : String((bag.opportunities || [])
+      : String(arbPositions(bag)
         .filter((o) => !currentSport || o.sport === currentSport)
         .filter((o) => !currentBrand || (o.legs || []).some((leg) => keepBrand(leg.source)))
-        .filter((o) => !o.no_local_leg).length)));
+        .filter(arbTakeable).length)));
   // Unconditional, as renderPromos has it: with no promo scrape the honest count
   // is 0, and a blank would read as "not counted yet". `promoOffers()` is the
   // same list the panel counts, so the badge and the headline cannot drift.
