@@ -188,11 +188,6 @@ class TestCiRunsWhatTheDocsPromise:
     """
 
     @staticmethod
-    def _workflow() -> str:
-        root = Path(__file__).resolve().parents[1]
-        return (root / ".github/workflows/tests.yml").read_text(encoding="utf-8")
-
-    @staticmethod
     def _steps() -> list[dict]:
         """The steps CI would actually execute, parsed rather than grepped.
 

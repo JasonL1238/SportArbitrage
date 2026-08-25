@@ -46,11 +46,6 @@ _H1 = re.compile(r"<h1[^>]*>(.*?)</h1>", re.I | re.S)
 _ARTICLE_BODY = re.compile(r'<div[^>]+class="[^"]*article-body[^"]*"[^>]*>(.*?)</div>\s*<', re.I | re.S)
 _TITLE_SUFFIX = re.compile(r"\s*[–-]\s*theScore Bet\s*$", re.I)
 _INVITED = re.compile(r"\binvited\b", re.I)
-_WS = re.compile(r"\s+")
-
-
-def _text(fragment: str) -> str:
-    return _WS.sub(" ", strip_tags(fragment or "").replace("\xa0", " ")).strip()
 
 
 class TheScorePromoAdapter:
@@ -115,7 +110,7 @@ class TheScorePromoAdapter:
             source = envelope_source((raw,), fallback=self._source_key)
             body = raw.body or ""
             heading = _H1.search(body)
-            title = _text(heading.group(1)) if heading else ""
+            title = strip_tags(heading.group(1)) if heading else ""
             if not title:
                 page = page_title(body) or ""
                 title = _TITLE_SUFFIX.sub("", page).strip()
@@ -123,12 +118,12 @@ class TheScorePromoAdapter:
                 outcome.skipped["article_without_title"] += 1
                 continue
             article = _ARTICLE_BODY.search(body)
-            terms = _text(article.group(1)) if article else ""
+            terms = strip_tags(article.group(1)) if article else ""
             if not terms:
                 # Fall back to everything after the heading, which on this
                 # theme is the article and the section footer.
                 tail = body[heading.end():] if heading else body
-                terms = _text(tail)
+                terms = strip_tags(tail)
             if not terms:
                 outcome.skipped["article_without_terms"] += 1
                 continue

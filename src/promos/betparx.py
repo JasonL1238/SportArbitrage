@@ -46,11 +46,6 @@ CONTENT_ENDPOINT_PREFIX = "webcontent-"
 #: on site-wide tiles (the promo-code entry), which are kept and classified on
 #: their copy rather than dropped for having no product.
 SPORTS_PRODUCTS = frozenset({"sportsbook", ""})
-_WS = re.compile(r"\s+")
-
-
-def _text(fragment: str) -> str:
-    return _WS.sub(" ", strip_tags(fragment or "").replace("\xa0", " ")).strip()
 
 
 def _window(promo: Mapping[str, Any]) -> tuple[datetime | None, datetime | None]:
@@ -135,7 +130,7 @@ class BetParxPromoAdapter:
             return outcome
         source = envelope_source((config,), fallback=self._source_key)
         contents = {
-            r.endpoint[len(CONTENT_ENDPOINT_PREFIX):]: _text(r.body or "")
+            r.endpoint[len(CONTENT_ENDPOINT_PREFIX):]: strip_tags(r.body or "")
             for r in latest
             if r.endpoint.startswith(CONTENT_ENDPOINT_PREFIX)
         }
@@ -147,8 +142,8 @@ class BetParxPromoAdapter:
             if promo.get("isEnabledForGuest") is False:
                 outcome.skipped["login_only"] += 1
                 continue
-            headline = _text(str(promo.get("description") or ""))
-            name = _text(str(promo.get("name") or ""))
+            headline = strip_tags(str(promo.get("description") or ""))
+            name = strip_tags(str(promo.get("name") or ""))
             title = headline or name
             if not title:
                 outcome.skipped["untitled"] += 1
