@@ -72,6 +72,7 @@ from src.schema import (
     scoring_unit,
 )
 from src.settlement import SettlementRegime, regime_for
+from src.tax import TaxBasis, presets_payload as tax_presets
 from src.store import IncompatibleDatabase, Store
 
 #: How many recent runs to embed quote rows for.  Bounded because the page holds
@@ -482,6 +483,12 @@ def build_report(
         # ``file://`` copy of the page still shows the ledger; only a served page
         # can change it.
         "bets": _bets_payload(),
+        # The rates the after-tax picker offers.  Serialised rather than written
+        # into the page's script so they have one home, the same way brand
+        # labels do.  The rates are the only tax content here: what a rate does
+        # to a position is computed on the page, from the per-outcome bases the
+        # arbitrage, promo and ledger payloads already carry.
+        "tax": tax_presets(),
     }
 
 
@@ -1107,6 +1114,25 @@ def _near_miss_entry(miss: NearMiss, marking: LocalityMarking) -> dict[str, Any]
     }
 
 
+def _outcomes_with_bases(
+    opportunity: Opportunity,
+) -> list[tuple[str, float, TaxBasis | None]]:
+    """Pair each settlement outcome with its taxable basis, where there is one.
+
+    ``Opportunity.outcome_bases`` is defaulted to empty because a position built
+    by hand has no settlement grid behind it.  Zipping blindly would silently
+    drop outcomes when the two lengths disagree, so the pairing is by label and
+    anything unmatched yields ``None`` — which the caller renders as "no
+    after-tax figure" rather than as a basis of zero, a number that would read
+    as "tax-free" on a position that is nothing of the kind.
+    """
+    bases = dict(opportunity.outcome_bases)
+    return [
+        (label, profit, bases.get(label))
+        for label, profit in opportunity.outcome_profits
+    ]
+
+
 def _opportunity_entry(
     opportunity: Opportunity, marking: LocalityMarking
 ) -> dict[str, Any]:
@@ -1188,9 +1214,20 @@ def _opportunity_entry(
             }
             for leg in opportunity.legs
         ],
+        # ``winnings``/``losses`` are what this outcome would be taxed on, and
+        # they are carried beside the profit rather than derived from it: tax is
+        # charged on gross winnings while losses are only a capped deduction, so
+        # +$100 made of a $1,100 win against a $1,000 loss is a different input
+        # from +$100 made of a $150 win against a $50 loss.  Absent on a
+        # position built without a settlement grid, in which case the page shows
+        # no after-tax figure for it rather than guessing one.
         "outcome_profits": [
-            {"label": label, "profit": round(profit, 2)}
-            for label, profit in opportunity.outcome_profits
+            {
+                "label": label,
+                "profit": round(profit, 2),
+                **({} if basis is None else basis.payload()),
+            }
+            for label, profit, basis in _outcomes_with_bases(opportunity)
         ],
     }
 

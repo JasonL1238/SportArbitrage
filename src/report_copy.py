@@ -943,6 +943,24 @@ GLOSSARY: list[dict[str, str]] = [
                  "paid. Matchbook, Smarkets and SX Bet.",
     },
     {
+        "term": "After tax",
+        "plain": "What is left of a result once tax is taken. Off by default, and it "
+                 "changes nothing that was detected or ranked — it adds a second "
+                 "figure beside the first. Tax is charged on your gross winnings, and "
+                 "losses only come off as a deduction, so a hedge is taxed on far more "
+                 "than it made: $1,000 a side, the winner paying $2,100, is $100 of "
+                 "profit made of $1,100 won against $1,000 lost. From 2026 only 90% of "
+                 "losses can be deducted, so $200 of that $100 is taxable — which is "
+                 "what the 90% switch shows when you turn it off. The state rate is "
+                 "applied to gross winnings with no deduction at all, because that is "
+                 "the harshest arrangement in use (Illinois is one, at a flat 4.95%); if "
+                 "your state lets winnings and losses net, set it to none and read the "
+                 "federal figure. Because every settlement outcome has its own winnings, "
+                 "a position that pays the same in every outcome before tax does not "
+                 "after it — which is why an arbitrage is not risk-free after tax. "
+                 "Informational, not tax advice.",
+    },
+    {
         "term": "Prediction market",
         "plain": "Trades contracts that pay 1 if the thing happens, at a price between 0 "
                  "and 1, with a fee per contract. Each side is a separate order book, so "

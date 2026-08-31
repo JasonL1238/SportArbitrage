@@ -1735,3 +1735,97 @@ class TestRealFixtures:
                 frozenset({quote.selection}),
             )
             assert any(label.startswith("half_push") for label, _ in outcomes)
+
+
+# ── the taxable basis carried beside each outcome ────────────────────────────
+
+
+class TestOutcomeBases:
+    """``outcome_bases`` must describe the same settlements ``outcome_profits`` does.
+
+    The two are built from one multiplier grid but are separate tuples on the
+    dataclass and separate keys in the payload, so the failure mode worth
+    guarding is drift: a basis that belongs to a different outcome, or one that
+    quietly disagrees with the profit beside it.  ``winnings - losses == profit``
+    catches both, and it is checkable without knowing anything about tax rates —
+    none are applied here or anywhere in ``src``.
+    """
+
+    def _check(self, opportunity) -> None:
+        assert [label for label, _ in opportunity.outcome_profits] == [
+            label for label, _ in opportunity.outcome_bases
+        ], "bases are not aligned with profits, label for label and in order"
+        for (label, profit), (_, basis) in zip(
+            opportunity.outcome_profits, opportunity.outcome_bases
+        ):
+            assert basis.profit == pytest.approx(profit, abs=0.005), label
+            assert basis.winnings >= 0.0 and basis.losses >= 0.0, label
+
+    def test_a_plain_two_way_position(self) -> None:
+        report = find_opportunities(
+            [
+                make_quote(source="draftkings", selection=Selection.HOME,
+                           market=Market.MONEYLINE, decimal_odds=2.10),
+                make_quote(source="fanduel", selection=Selection.AWAY,
+                           market=Market.MONEYLINE, decimal_odds=2.10),
+            ],
+            total_stake=2000.0,
+        )
+        assert report.opportunities
+        opportunity = report.opportunities[0]
+        self._check(opportunity)
+        # The gross numbers are eleven times the profit, which is the entire
+        # reason they are carried: $100 is taxed as $1,100 won against $1,000
+        # lost, and only 90% of that loss may be deducted.
+        for _, basis in opportunity.outcome_bases:
+            assert basis.winnings == pytest.approx(1100.0)
+            assert basis.losses == pytest.approx(1000.0)
+
+    def test_a_push_costs_nothing_and_deducts_nothing(self) -> None:
+        """A refunded stake is not a deductible loss.
+
+        This is the case a result-based implementation gets wrong, and getting it
+        wrong invents a five-figure deduction on a market that never resolved.
+        """
+        report = find_opportunities(
+            [
+                make_quote(source="draftkings", selection=Selection.HOME,
+                           market=Market.SPREAD, line=-1.0, decimal_odds=2.10),
+                make_quote(source="fanduel", selection=Selection.AWAY,
+                           market=Market.SPREAD, line=1.0, decimal_odds=2.10),
+            ],
+            total_stake=2000.0,
+        )
+        assert report.opportunities
+        opportunity = report.opportunities[0]
+        self._check(opportunity)
+        push = dict(opportunity.outcome_bases)["push"]
+        assert push.winnings == 0.0 and push.losses == 0.0
+
+    def test_a_quarter_line_halves_both_sides(self) -> None:
+        report = find_opportunities(
+            [
+                make_quote(source="draftkings", selection=Selection.HOME,
+                           market=Market.SPREAD, line=-1.25, decimal_odds=2.10),
+                make_quote(source="fanduel", selection=Selection.AWAY,
+                           market=Market.SPREAD, line=1.25, decimal_odds=2.10),
+            ],
+            total_stake=2000.0,
+        )
+        assert report.opportunities
+        opportunity = report.opportunities[0]
+        self._check(opportunity)
+        bases = dict(opportunity.outcome_bases)
+        half = next(basis for label, basis in bases.items() if label.startswith("half_push"))
+        full = bases["away_covers"]
+        # Half the stake is refunded, so both sides of the basis are about half.
+        assert half.winnings < full.winnings
+        assert half.losses < full.losses
+
+    def test_every_detected_position_on_the_captured_slate_agrees(
+        self, all_fixture_quotes
+    ) -> None:
+        """Whatever the real slate happens to produce, the invariant holds on it."""
+        report = find_opportunities(all_fixture_quotes)
+        for opportunity in report.opportunities:
+            self._check(opportunity)

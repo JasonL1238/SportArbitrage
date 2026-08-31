@@ -26,6 +26,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
+# The ledger's only import from ``src``, and deliberately a stdlib-only leaf:
+# what counts as a taxable win versus a deductible loss is one rule, and the
+# integer-cent form of it lives beside the float form rather than being
+# re-spelled here.
+from src.tax import basis_cents
+
 SCHEMA_VERSION = 2
 
 #: How a leg finished.  ``pending`` is the only state that is not an outcome.
@@ -867,6 +873,14 @@ def summarize(slips: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
     pending_legs = 0
     settled_legs = 0
     unpriced = 0
+    # What the settled legs would be taxed on.  Accumulated leg by leg rather
+    # than derived from ``profit_cents`` below, because tax is charged on gross
+    # winnings and only allows a capped deduction for losses — so a $1,100 win
+    # against a $1,000 loss is not the same input as a $100 profit, even though
+    # the bankroll cannot tell them apart.  :mod:`src.tax` holds the rule; the
+    # dashboard applies the rates.
+    tax_winnings_cents = 0
+    tax_losses_cents = 0
     record = {"won": 0, "lost": 0, "push": 0, "void": 0, "cashout": 0}
     by_book: dict[str, dict[str, Any]] = {}
     slip_count = 0
@@ -905,6 +919,13 @@ def summarize(slips: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
                     back_cents = _cents(back, label="returned") or 0
                     settled_stake_cents += stake_cents
                     returned_cents += back_cents
+                    # ``stake_cents`` is already zero for a bonus leg, so a
+                    # converted credit's whole return counts as winnings and
+                    # none of it as a deductible loss — which is what it is:
+                    # none of the operator's money was ever at risk on it.
+                    won, lost = basis_cents(stake_cents, back_cents)
+                    tax_winnings_cents += won
+                    tax_losses_cents += lost
                     bucket["returned"] += back_cents / 100.0
                     bucket["profit"] += (back_cents - stake_cents) / 100.0
             bucket["staked"] += book_stake / 100.0
@@ -921,6 +942,10 @@ def summarize(slips: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
         "returned": _dollars(returned_cents),
         "profit": _dollars(profit_cents),
         "open_stake": _dollars(open_cents),
+        "tax_basis": {
+            "winnings": _dollars(tax_winnings_cents),
+            "losses": _dollars(tax_losses_cents),
+        },
         "roi_pct": (
             round(profit_cents / settled_stake_cents * 100.0, 2)
             if settled_stake_cents

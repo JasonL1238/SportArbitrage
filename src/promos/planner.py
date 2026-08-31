@@ -73,6 +73,7 @@ from src.redundancy import is_redundant_pair
 from src.schema import Market, Quote, QuoteStatus, Selection, Sport
 from src.settlement import regime_for
 from src.sources.registry import SOURCES, VIEW_ONLY_SOURCES
+from src.tax import NO_BASIS, TaxBasis, basis as taxable_basis
 from src.vocab import draw_is_priced
 
 #: How many concrete executions to keep per offer.  The dashboard shows a
@@ -832,7 +833,7 @@ def _outcome_profits(
     shape: frozenset[Selection],
     refund_rate: float = 0.0,
     refund_base: float = 0.0,
-) -> list[tuple[str, float]]:
+) -> list[tuple[str, float, TaxBasis]]:
     """Cash profit in every settlement outcome, from the rounded stakes.
 
     *refund_rate* / *refund_base* implement no-sweat refunds: when the promo
@@ -841,25 +842,44 @@ def _outcome_profits(
     rate).  A half-lose refunds nothing — books split quarter-line stakes into
     two bets and refund policies on the surviving half vary, so crediting it
     would overstate the floor.
+
+    The third element of each row is what that outcome would be **taxed** on
+    (:mod:`src.tax`), accumulated here rather than in a second walk over the
+    same settlement grid — a duplicated walk is how the promo planner and the
+    detector came to disagree about crossed markets, and this one has the
+    bonus-credit rule inside it, which is the part worth not writing twice.
     """
     event_key, market, period, _, line = view.key
     outcomes = settlement_outcomes(view.sport, market, period, line, shape)
-    rows: list[tuple[str, float]] = []
+    rows: list[tuple[str, float, TaxBasis]] = []
     for label, results in outcomes:
         total = 0.0
+        basis = NO_BASIS
         for leg in legs:
             result = results[leg.quote.selection]
             if leg.mode == MODE_BONUS:
-                total += leg.stake * _bonus_cash(result, leg.net_odds)
+                # None of the operator's money is on a credit stake, so it is
+                # never a deductible loss and its whole cash return is winnings.
+                cash = leg.stake * _bonus_cash(result, leg.net_odds)
+                total += cash
+                basis = basis + taxable_basis(0.0, cash)
             else:
-                total += leg.stake * _return_multiplier(result, leg.net_odds) - leg.stake
+                back = leg.stake * _return_multiplier(result, leg.net_odds)
+                total += back - leg.stake
+                basis = basis + taxable_basis(leg.stake, back)
             if leg.role == "promo" and result == LOSE and refund_rate > 0.0:
-                total += refund_rate * refund_base
-        rows.append((label, total))
+                refund = refund_rate * refund_base
+                total += refund
+                # Credit received for losing is value received, and it is
+                # counted as winnings on the same strict reading the rest of
+                # this repository applies to an uncertain charge.
+                basis = basis + taxable_basis(0.0, refund)
+        rows.append((label, total, basis))
     return rows
 
 
-def _settled_floor(promo_selection: Selection, outcome_profits: Sequence[tuple[str, float]],
+def _settled_floor(promo_selection: Selection,
+                   outcome_profits: Sequence[tuple[str, float, TaxBasis]],
                    view: _GroupView, shape: frozenset[Selection]) -> float:
     """Worst outcome in which the promo leg actually settles.
 
@@ -872,11 +892,11 @@ def _settled_floor(promo_selection: Selection, outcome_profits: Sequence[tuple[s
     event_key, market, period, _, line = view.key
     outcomes = settlement_outcomes(view.sport, market, period, line, shape)
     settled: list[float] = []
-    for (_, results), (_, profit) in zip(outcomes, outcome_profits):
+    for (_, results), (_, profit, _basis) in zip(outcomes, outcome_profits):
         if results[promo_selection] == PUSH:
             continue
         settled.append(profit)
-    return min(settled) if settled else min(p for _, p in outcome_profits)
+    return min(settled) if settled else min(row[1] for row in outcome_profits)
 
 
 def _round_cents(value: float) -> float:
@@ -891,7 +911,10 @@ class _Candidate:
     view: _GroupView
     promo_leg: _Leg
     hedge_legs: tuple[_Leg, ...]
-    outcome_profits: tuple[tuple[str, float], ...]
+    outcome_profits: tuple[tuple[str, float, TaxBasis], ...]
+    """``(label, profit, basis)`` per settlement outcome.  The basis is carried
+    beside the profit rather than derived from it because tax is charged on
+    gross winnings and only allows a capped deduction for losses."""
     floor: float
     settled_floor: float
     metric: float
@@ -1348,8 +1371,10 @@ def _solve(
         refund_rate=refund_rate,
         refund_base=refund_base,
     )
-    rounded = tuple((label, round(profit, 2) or 0.0) for label, profit in profits)
-    floor = min(profit for _, profit in rounded)
+    rounded = tuple(
+        (label, round(profit, 2) or 0.0, basis.rounded()) for label, profit, basis in profits
+    )
+    floor = min(profit for _, profit, _basis in rounded)
     settled = _settled_floor(promo_selection, rounded, view, shape)
     return _Candidate(
         view=view,
@@ -1408,7 +1433,16 @@ def _candidate_payload(
             }
             for leg in candidate.legs
         ],
-        "outcome_profits": [[label, profit] for label, profit in candidate.outcome_profits],
+        "outcome_profits": [
+            [label, profit] for label, profit, _basis in candidate.outcome_profits
+        ],
+        # Aligned with ``outcome_profits`` by position and by label.  Carried
+        # separately rather than widened into the rows above, which the page and
+        # a dozen tests read as exactly two-wide pairs.
+        "outcome_bases": [
+            [label, basis.winnings, basis.losses]
+            for label, _profit, basis in candidate.outcome_profits
+        ],
         "guaranteed_cash": round(candidate.floor or 0.0, 2),
         "settled_cash": round(candidate.settled_floor or 0.0, 2),
         "quote_age_seconds": max(0, int((as_of - oldest).total_seconds())),
@@ -2194,8 +2228,10 @@ def _rescale(candidate: _Candidate, scale: float) -> _Candidate | None:
         return None
     shape = frozenset(leg.quote.selection for leg in legs)
     profits = _outcome_profits(candidate.view, legs, shape=shape)
-    rounded = tuple((label, round(profit, 2) or 0.0) for label, profit in profits)
-    floor = min(profit for _, profit in rounded)
+    rounded = tuple(
+        (label, round(profit, 2) or 0.0, basis.rounded()) for label, profit, basis in profits
+    )
+    floor = min(profit for _, profit, _basis in rounded)
     settled = _settled_floor(scaled_promo.quote.selection, rounded, candidate.view, shape)
     return _Candidate(
         view=candidate.view,

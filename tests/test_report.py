@@ -759,6 +759,7 @@ def test_the_page_script_runs_and_fills_every_region(populated: Store, tmp_path)
         "the remembered switch and pick round-trip through storage",
         "the scrape machine drives both kinds",
         "an impossible sportsbook pick is forgotten",
+        "the after-tax rule caps the deduction",
         "each sortable table holds its own sort",
         "a venue page with nothing to show asks for a venue",
     ):
@@ -792,7 +793,17 @@ def test_the_page_wakes_up_holding_what_was_left_in_storage(
         env={
             **os.environ,
             "SPORTARB_SMOKE_SEED": json.dumps(
-                {"sportarb.showOffshore": "1", "sportarb.book": "book_a"}
+                {
+                    "sportarb.showOffshore": "1",
+                    "sportarb.book": "book_a",
+                    # The rates are parsed out of these strings once, while the
+                    # script evaluates.  A rate stored as a number reads back as
+                    # no tax, which is indistinguishable from never having set
+                    # one — the same class of defect as the switch above.
+                    "sportarb.taxFed": "0.24",
+                    "sportarb.taxState": "0.0495",
+                    "sportarb.taxCap": "0",
+                }
             ),
         },
     )
@@ -3056,6 +3067,74 @@ def test_the_book_picker_is_wired_to_every_section() -> None:
     # refresh wiring list the literal below anchors (see the f-feed test).
     assert "'f-feed', 'f-source'" in JS
     assert "'book-pick'" not in JS.split("const refreshOdds")[1].split("afterTyping")[0]
+
+
+def test_the_after_tax_controls_are_wired_and_the_rate_rule_is_written_once() -> None:
+    """The rate arithmetic exists exactly once, and nothing else applies a rate.
+
+    The whole design rests on a split: Python computes the taxable *basis* of
+    every outcome and applies no rate at all, so the picker can move without a
+    new run, and so the rule that turns a basis into a bill has one home.  A
+    second copy of ``winnings - deductible`` anywhere would be the drift this is
+    here to prevent — the same failure ``arb.crossed_against_itself`` was folded
+    together to fix.
+    """
+    from src.report_assets import BODY, JS
+
+    assert 'id="tax-fed"' in BODY
+    assert 'id="tax-state"' in BODY
+    assert 'id="tax-cap"' in BODY
+    assert 'id="tax-meta"' in BODY
+    for control in ("tax-fed", "tax-state", "tax-cap"):
+        assert f"el('{control}')" in JS, f"{control} is rendered but nothing reads it"
+    assert "taxFedPick.addEventListener" in JS
+    assert "taxStatePick.addEventListener" in JS
+    assert "taxCapToggle.addEventListener" in JS
+
+    # One implementation of the rule, and one of each helper built on it.
+    assert JS.count("function taxBill(") == 1
+    assert JS.count("function afterTax(") == 1
+    assert JS.count("function afterTaxFloor(") == 1
+    assert JS.count("DEDUCTIBLE_SHARE") == 3, (
+        "the deduction cap is spelled somewhere other than the constant, "
+        "the rule that reads it, and the rail line that describes it"
+    )
+    # The rate is multiplied in one place only.  Every surface reaches the
+    # arithmetic through the helpers above.
+    assert JS.count("* taxFed") == 1
+    assert JS.count("* taxState") == 1
+
+    # Every after-tax figure is gated on a rate being set, so the default page
+    # is what it was before this existed.
+    assert JS.count("function taxOn(") == 1
+    assert JS.count("taxOn()") >= 5
+
+    # Display only: the picker must not reach the detector's own verdicts.
+    bill = JS.split("function taxBill(")[1].split("\n}")[0]
+    for forbidden in ("takeable", "margin_pct", "roi_pct", "guaranteed_profit"):
+        assert forbidden not in bill, f"the tax rule reads {forbidden}"
+
+
+def test_the_after_tax_rates_come_from_python_not_the_page() -> None:
+    """One home for the rates, like brand labels.
+
+    A rate list written into the page's script could not be tested, reviewed or
+    changed beside the module that documents what the layers mean.
+    """
+    from src.report_assets import BODY, JS
+    from src.tax import FEDERAL_PRESETS, STATE_PRESETS
+
+    assert "DATA.tax" in JS
+    assert "TAX.federal" in JS and "TAX.state" in JS
+    # The labels are the distinctive half — a bare rate like 0.1 is a substring
+    # of unrelated CSS, so matching on those would fail on the wrong thing.
+    for label, rate in (*FEDERAL_PRESETS, *STATE_PRESETS):
+        if rate:
+            assert label not in JS and label not in BODY, (
+                f"the rate label {label!r} is written into the page instead of served"
+            )
+    # And the pickers are built from that list rather than from fixed markup.
+    assert "<option" not in BODY.split('id="tax-fed"')[1].split("</div>")[0]
 
 
 def test_the_compare_the_books_surfaces_keep_every_book() -> None:

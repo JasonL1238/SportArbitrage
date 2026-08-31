@@ -351,7 +351,7 @@ class TestTheHotspotTableIsTrue:
     """The banner table routes an agent into a 7,000-line file. Nothing checked it.
 
     Three of its claims were false at once — `src/report_assets.py` was described as
-    having no banners when it has 42, `tests/test_adversarial_findings.py` likewise
+    having no banners when it has 43, `tests/test_adversarial_findings.py` likewise
     with 17, and `src/collector.py`'s row omitted one of four — and the whole tree was
     green, because the checker validates *paths* and no path was wrong. A table that
     sends an agent to grep a marker that is not there costs it exactly the scroll the

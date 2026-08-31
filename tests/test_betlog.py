@@ -68,6 +68,7 @@ def test_records_scraped_snapshot_and_exact_totals(tmp_path) -> None:
         "returned": 0.0,
         "profit": 0.0,
         "open_stake": 95.45,
+        "tax_basis": {"winnings": 0.0, "losses": 0.0},
         "roi_pct": None,
         "record": {"won": 0, "lost": 0, "push": 0, "void": 0, "cashout": 0},
         "by_book": [
@@ -260,3 +261,106 @@ def test_v1_ledger_grows_the_promo_columns(tmp_path) -> None:
         assert all(leg["stake_kind"] == "cash" for leg in old["legs"])
         slip_id = log.record(slip_from_payload(_promo_payload()))
         assert log.slip(slip_id)["legs"][0]["stake_kind"] == "bonus"
+
+
+# ── the taxable basis over settled legs ──────────────────────────────────────
+
+
+class TestTaxBasis:
+    """What the settled legs would be taxed on, beside what they made.
+
+    The ledger is the one surface where these are not a projection: they are the
+    operator's own record, and the substantiation for the gross numbers a return
+    asks for.  ``winnings - losses == profit`` ties them to the bankroll figure
+    printed next to them.
+    """
+
+    def test_nothing_settled_means_no_basis(self, tmp_path) -> None:
+        """An open position is not yet taxable in either direction."""
+        with BetLog(tmp_path / "bets.sqlite3") as log:
+            log.record(slip_from_payload(_arb_payload()))
+            summary = log.payload()["summary"]
+        assert summary["tax_basis"] == {"winnings": 0.0, "losses": 0.0}
+
+    def test_a_won_and_a_lost_leg_are_counted_on_opposite_sides(self, tmp_path) -> None:
+        with BetLog(tmp_path / "bets.sqlite3") as log:
+            slip_id = log.record(slip_from_payload(_arb_payload()))
+            first, second = log.slip(slip_id)["legs"]
+            log.update_leg(first["id"], {"status": "won"})
+            log.update_leg(second["id"], {"status": "lost"})
+            summary = log.payload()["summary"]
+        # The winner staked 45.45 and returned 99.99; the loser staked 50.00.
+        assert summary["tax_basis"]["winnings"] == pytest.approx(54.54)
+        assert summary["tax_basis"]["losses"] == pytest.approx(50.00)
+
+    def test_the_basis_reconciles_with_the_profit_beside_it(self, tmp_path) -> None:
+        with BetLog(tmp_path / "bets.sqlite3") as log:
+            slip_id = log.record(slip_from_payload(_arb_payload()))
+            first, second = log.slip(slip_id)["legs"]
+            log.update_leg(first["id"], {"status": "won"})
+            log.update_leg(second["id"], {"status": "lost"})
+            summary = log.payload()["summary"]
+        basis = summary["tax_basis"]
+        assert basis["winnings"] - basis["losses"] == pytest.approx(summary["profit"])
+        # And the two are nowhere near each other, which is the point: $4.54 made
+        # is taxed on $54.54 won against a $50.00 loss that is only 90%
+        # deductible.
+        assert summary["profit"] == pytest.approx(4.54)
+        assert basis["winnings"] > summary["profit"] * 10
+
+    def test_a_pushed_leg_is_neither_won_nor_deducted(self, tmp_path) -> None:
+        """A refunded stake never reaches either side of the basis."""
+        with BetLog(tmp_path / "bets.sqlite3") as log:
+            slip_id = log.record(slip_from_payload(_arb_payload()))
+            for leg in log.slip(slip_id)["legs"]:
+                log.update_leg(leg["id"], {"status": "push"})
+            summary = log.payload()["summary"]
+        assert summary["tax_basis"] == {"winnings": 0.0, "losses": 0.0}
+        assert summary["profit"] == 0.0
+
+    def test_a_converted_bonus_bet_is_all_winnings(self, tmp_path) -> None:
+        """No cash was at risk, so the whole return is won and nothing is deducted.
+
+        The same rule ``_cash_stake`` already applies to the bankroll: a credit
+        stake is not the operator's money.  Counting its face amount as a
+        deductible loss would invent a deduction for a wager that cost nothing.
+        """
+        payload = _arb_payload()
+        payload["legs"] = [dict(payload["legs"][0], stake_kind="bonus")]
+        with BetLog(tmp_path / "bets.sqlite3") as log:
+            slip_id = log.record(slip_from_payload(payload))
+            leg = log.slip(slip_id)["legs"][0]
+            log.update_leg(leg["id"], {"status": "won"})
+            summary = log.payload()["summary"]
+        basis = summary["tax_basis"]
+        assert basis["losses"] == 0.0
+        assert basis["winnings"] == pytest.approx(summary["returned"])
+        assert basis["winnings"] - basis["losses"] == pytest.approx(summary["profit"])
+
+    def test_a_losing_bonus_bet_deducts_nothing(self, tmp_path) -> None:
+        """Credit that lost cost the operator nothing, so there is nothing to deduct."""
+        payload = _arb_payload()
+        payload["legs"] = [dict(payload["legs"][0], stake_kind="bonus")]
+        with BetLog(tmp_path / "bets.sqlite3") as log:
+            slip_id = log.record(slip_from_payload(payload))
+            leg = log.slip(slip_id)["legs"][0]
+            log.update_leg(leg["id"], {"status": "lost"})
+            summary = log.payload()["summary"]
+        assert summary["tax_basis"] == {"winnings": 0.0, "losses": 0.0}
+
+    def test_an_unpriced_settled_leg_stays_out_of_the_basis(self, tmp_path) -> None:
+        """The same population ``profit`` uses, so the two cannot disagree.
+
+        A settled leg whose return was never entered is excluded from the
+        realized figures; including it here would print a loss the operator did
+        not take.
+        """
+        with BetLog(tmp_path / "bets.sqlite3") as log:
+            slip_id = log.record(slip_from_payload(_arb_payload()))
+            first, second = log.slip(slip_id)["legs"]
+            log.update_leg(first["id"], {"status": "won"})
+            log.update_leg(second["id"], {"status": "cashout", "returned": None})
+            summary = log.payload()["summary"]
+        basis = summary["tax_basis"]
+        assert summary["unpriced_legs"] == 1
+        assert basis["winnings"] - basis["losses"] == pytest.approx(summary["profit"])

@@ -181,6 +181,7 @@ let two agents edit the same file; integrate and validate before completion.
 | `src/events.py` | Event keys, orientation, time clustering |
 | `src/validation.py` | Row, market, cross-source, and completeness findings |
 | `src/arb.py`, `src/commission.py`, `src/settlement.py` | Net pricing, settlement compatibility, opportunity detection |
+| `src/tax.py` | The taxable basis of a settled position — gross winnings and deductible losses. Applies no rate; the dashboard does that |
 | `src/distinctness.py`, `src/redundancy.py` | Counterparty independence and feed-pair completeness |
 | `src/betlinks.py` | Where a leg gets placed; `verified=True` is set only on evidence from `scripts/verify_betlinks.py`, never on a guess |
 | `src/alerts.py` | ROI floor, dedupe key, one wall-clock, Messages/Twilio transports |
@@ -203,12 +204,12 @@ written, and the grep is what is true now.
 | File | Lines | Where to land |
 | --- | --- | --- |
 | `tests/test_adversarial_findings.py` | 14.9k | 17 banners, one per review round — they say nothing about subject. Search the production symbol or the exact test name instead |
-| `src/report_assets.py` | 7.9k | 42 banners, in `/* ── … */` form. `frame`, `panels and routing`, `venues`, `arbitrage`, `overview`. Four handwritten constants — `CSS`, `BODY`, `JS`, and `EMPTY_SHELL`, the nothing-collected-yet page. Every panel count and filter decision is here, not in `src/report.py` |
-| `tests/test_promo_planner.py` | 4.1k | 8 banners |
+| `src/report_assets.py` | 8.2k | 43 banners, in `/* ── … */` form. `frame`, `panels and routing`, `venues`, `arbitrage`, `overview`. Four handwritten constants — `CSS`, `BODY`, `JS`, and `EMPTY_SHELL`, the nothing-collected-yet page. Every panel count and filter decision is here, not in `src/report.py` |
+| `tests/test_promo_planner.py` | 4.2k | 9 banners |
 | `src/collector.py` | 4.0k | `coverage`, `one run`, `replay`, `CLI` |
 | `src/arb.py` | 2.7k | `the arithmetic`, `settlement model`, `grouping`, `detection`, `best-price surface` |
 | `tests/test_report.py` | 3.2k | 9 banners |
-| `src/report.py` | 2.4k | 11 banners now, one per region of the payload half — `the payload`, `the placed-bet ledger`, `promotions`, `arbitrage`, `coverage and quotes`, `identity, vocabulary and labels`, `venues`, `small readings off a run` — then `rendering`, `CLI` and `the serve control plane` |
+| `src/report.py` | 2.6k | 11 banners now, one per region of the payload half — `the payload`, `the placed-bet ledger`, `promotions`, `arbitrage`, `coverage and quotes`, `identity, vocabulary and labels`, `venues`, `small readings off a run` — then `rendering`, `CLI` and `the serve control plane` |
 | `src/validation.py` | 2.5k | `consensus`, `row-level`, `market-level`, `cross-source` |
 | `src/promos/planner.py` | 2.3k | `offer-text parsing`, `brand → stakeable odds feeds`, `slate context`, `stake solving and outcome evaluation`, `the scan`, `plan payloads` |
 | `src/store.py` | 1.7k | `schema compatibility`, `the store`, then `runs`, `writes`, `reads` inside it |
@@ -240,6 +241,19 @@ written, and the grep is what is true now.
   storage, report serialization, adapters, and contract tests.
 - **Arbitrage behavior** → `src/arb.py` and the commission/settlement/distinctness
   modules, with focused mathematical and adversarial tests.
+- **After-tax figures** → the rule is split on purpose and neither half may grow the
+  other's job. `src/tax.py` owns the *basis* — `basis(at_risk, cash_back)` per leg,
+  summed per settlement outcome, emitted by `src/arb.py`, `betlog.summarize` and
+  `src/promos/planner.py` — and applies no rate anywhere. The *rate* arithmetic is
+  `taxBill` in `src/report_assets.py` and exists only there, because the after-tax
+  floor is a fresh minimum over outcomes *after* the rate lands and has to move when
+  the reader moves the picker. Winnings and losses are carried as a pair and never
+  netted: tax is charged on gross winnings while losses are only a capped deduction,
+  so `+$100` made of `$1,100` against `$1,000` is not the same input as `+$100` made
+  of `$150` against `$50`. A bonus-credit stake is never a deductible loss. Nothing in
+  detection, ranking, `takeable` or alerting reads any of it. Validate with
+  `tests/test_tax.py` plus the `winnings - losses == profit` invariant each consuming
+  module's tests assert.
 - **Event matching** → `src/events.py` and the participant/league modules; validate
   with event, participant, and integration tests.
 - **Promotions** → stay inside `src/promos/`; never add promo tables to the odds store.

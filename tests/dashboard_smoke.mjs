@@ -252,6 +252,11 @@ try {
       renderRunScoped();
     };
     globalThis.__currentBrand = () => currentBrand;
+    globalThis.__taxState = () => ({ fed: taxFed, state: taxState, cap: taxCap });
+    globalThis.__taxBill = taxBill;
+    globalThis.__afterTaxFloor = afterTaxFloor;
+    globalThis.__taxOn = taxOn;
+    globalThis.__arbCard = arbCard;
     // Mirrors the real listener: set, sync the control, then the whole
     // reconcile-then-rebuild path — which is also where an impossible brand
     // gets forgotten, so setting one is itself an assertion opportunity.
@@ -374,6 +379,27 @@ if (SEED) {
     const want = offered.has(seeded) ? seeded : '';
     if (globalThis.__currentBrand() !== want) {
       problems.push(`the sportsbook picker woke up '${globalThis.__currentBrand()}' with '${seeded}' in storage (expected '${want}')`);
+    }
+  }
+  // The rates are read once, at evaluation time, and parsed out of strings —
+  // so a rate written as a number, or a cap written as a boolean, wakes up as
+  // "no tax" and is indistinguishable from a reader who never set one.
+  if ('sportarb.taxFed' in SEED) {
+    const want = Number(SEED['sportarb.taxFed']);
+    if (globalThis.__taxState().fed !== want) {
+      problems.push(`the federal rate woke up ${globalThis.__taxState().fed} with '${SEED['sportarb.taxFed']}' in storage`);
+    }
+  }
+  if ('sportarb.taxState' in SEED) {
+    const want = Number(SEED['sportarb.taxState']);
+    if (globalThis.__taxState().state !== want) {
+      problems.push(`the state rate woke up ${globalThis.__taxState().state} with '${SEED['sportarb.taxState']}' in storage`);
+    }
+  }
+  if ('sportarb.taxCap' in SEED) {
+    const want = SEED['sportarb.taxCap'] !== '0';
+    if (globalThis.__taxState().cap !== want) {
+      problems.push(`the deduction cap woke up ${globalThis.__taxState().cap} with '${SEED['sportarb.taxCap']}' in storage`);
     }
   }
   if (problems.length) {
@@ -2457,6 +2483,151 @@ if (process.argv[3]) {
     console.log(ran.length
       ? `the remembered switch and pick round-trip through storage (wrote: ${ran.join(', ')})`
       : 'the remembered switch and pick round-trip through storage — neither control is on this page, not asserted');
+  }
+
+  // ── THE ONE PLACE A TAX RATE IS APPLIED TO ANYTHING ──────────────────────
+  //
+  // Python computes the basis and stops; this file's `taxBill` is the whole
+  // rule. Asserted numerically rather than by "a number appeared", because the
+  // two halves that make it non-obvious are exactly the two that would pass a
+  // presence check while being wrong: the deduction is capped at a share of
+  // losses *and* at the winnings, and the state layer has no offset at all.
+  // The expected values here are the same worked example as
+  // `tests/test_tax.py::TestTheRuleTheDashboardWillApply`.
+  {
+    const store = globalThis.localStorage;
+    const fed = nodes.get('tax-fed');
+    const state = nodes.get('tax-state');
+    const cap = nodes.get('tax-cap');
+    const problems = [];
+    if (fed && state && cap) {
+      // $1,000 + $1,000 staked, the winner returns $2,100: +$100 profit made of
+      // $1,100 won against $1,000 lost.
+      const basis = { winnings: 1100, losses: 1000 };
+      const at = (f, st, capped) => {
+        fed.value = String(f); fed.dispatch('change');
+        state.value = String(st); state.dispatch('change');
+        cap.checked = capped; cap.dispatch('change');
+        return globalThis.__taxBill(basis);
+      };
+      const near = (got, want, what) => {
+        if (Math.abs(got - want) > 0.005) problems.push(`${what}: got ${got}, expected ${want}`);
+      };
+      near(at(0, 0, true), 0, 'no rate must cost nothing');
+      // 1100 - 900 = 200 taxable at 24%.
+      near(at(0.24, 0, true), 48, '24% federal under the 90% cap');
+      // The cap off restores the full deduction: 1100 - 1000 = 100 at 24%.
+      near(at(0.24, 0, false), 24, '24% federal with the deduction uncapped');
+      // The state layer ignores the loss entirely: 3.07% of the gross 1100.
+      near(at(0, 0.0307, true), 33.77, 'state rate on gross winnings');
+      near(at(0.24, 0.0307, true), 81.77, 'both layers together');
+      // A position that only lost is not a refund: the deduction cannot exceed
+      // the winnings, so the bill is zero rather than negative.
+      fed.value = '0.37'; fed.dispatch('change');
+      state.value = '0'; state.dispatch('change');
+      cap.checked = true; cap.dispatch('change');
+      if (globalThis.__taxBill({ winnings: 0, losses: 2000 }) !== 0) {
+        problems.push('a losing position produced a negative tax bill');
+      }
+      // The floor is re-minimised after tax rather than taxed once: the outcome
+      // paying least before tax need not be the one keeping least after it.
+      const floor = globalThis.__afterTaxFloor([
+        { profit: 100, winnings: 1100, losses: 1000 },
+        { profit: 105, winnings: 4000, losses: 3895 },
+      ]);
+      if (floor === null || floor > 100 - 0.37 * (1100 - 900) - 0.005) {
+        problems.push(`the after-tax floor took the pre-tax worst outcome (${floor})`);
+      }
+      // A row with no basis yields no figure at all, rather than the untaxed
+      // number under an "after tax" label.
+      if (globalThis.__afterTaxFloor([{ profit: 100 }]) !== null) {
+        problems.push('a position with no basis still produced an after-tax figure');
+      }
+
+      // Round trip. Both rates are compared as numbers parsed out of strings and
+      // the cap as a string, so storing a raw number or boolean would silently
+      // disable persistence while every in-session behaviour above stays right.
+      fed.value = '0.24'; fed.dispatch('change');
+      state.value = '0.0495'; state.dispatch('change');
+      cap.checked = false; cap.dispatch('change');
+      if (store.getItem('sportarb.taxFed') !== '0.24') {
+        problems.push(`the federal picker stored ${JSON.stringify(store.getItem('sportarb.taxFed'))}, not '0.24'`);
+      }
+      if (store.getItem('sportarb.taxState') !== '0.0495') {
+        problems.push(`the state picker stored ${JSON.stringify(store.getItem('sportarb.taxState'))}, not '0.0495'`);
+      }
+      if (store.getItem('sportarb.taxCap') !== '0') {
+        problems.push(`the cap switch stored ${JSON.stringify(store.getItem('sportarb.taxCap'))}, which does not read back as a switch position`);
+      }
+      // The card itself, not just the arithmetic. A rule that computes the
+      // right number and a card that never prints it are the same bug to a
+      // reader, and every substring the wiring test pins can survive the
+      // rendering being dead. The position is the worked example twice over —
+      // `tests/test_tax.py` and the glossary use the same one.
+      const opp = {
+        event_key: 'e-tax', sport: 'baseball', league: 'MLB',
+        home_team: 'Miami Marlins', away_team: 'Philadelphia Phillies',
+        commence_time: '2026-07-28T22:41:00+00:00',
+        market: 'moneyline', period: 'full_game', side: null, line: null,
+        margin_pct: 4.76, roi_pct: 5.0, guaranteed_profit: 100.0,
+        total_stake: 2000.0, max_total_stake: null, sum_implied: 0.9524,
+        notes: [], takeable: true, no_local_leg: false,
+        legs: [
+          { source: 'draftkings', selection: 'home', line: null, american_odds: 110,
+            decimal_odds: 2.1, net_decimal_odds: 2.1, stake: 1000.0, payout: 2100.0,
+            link: null, non_local_label: '' },
+          { source: 'fanduel', selection: 'away', line: null, american_odds: 110,
+            decimal_odds: 2.1, net_decimal_odds: 2.1, stake: 1000.0, payout: 2100.0,
+            link: null, non_local_label: '' },
+        ],
+        // $100 profit in either outcome, made of $1,100 won against $1,000 lost.
+        outcome_profits: [
+          { label: 'home', profit: 100.0, winnings: 1100.0, losses: 1000.0 },
+          { label: 'away', profit: 100.0, winnings: 1100.0, losses: 1000.0 },
+        ],
+      };
+      fed.value = '0'; fed.dispatch('change');
+      state.value = '0'; state.dispatch('change');
+      const plainCard = globalThis.__arbCard(opp, 0);
+      if (/after tax/i.test(plainCard)) {
+        problems.push('an after-tax figure appeared with no rate set');
+      }
+      fed.value = '0.24'; fed.dispatch('change');
+      state.value = '0.0307'; state.dispatch('change');
+      cap.checked = true; cap.dispatch('change');
+      const taxedCard = globalThis.__arbCard(opp, 0);
+      // 1100 - 900 = 200 at 24% is 48.00; 3.07% of the gross 1100 is 33.77.
+      // 100 - 81.77 leaves 18.23, in every outcome and therefore as the floor.
+      for (const expected of ['after tax', '$18.23', '+18.23 after tax']) {
+        if (!taxedCard.includes(expected)) {
+          problems.push(`the arb card never printed ${JSON.stringify(expected)}`);
+        }
+      }
+      // The pre-tax figures stay exactly where they were: this is an addition,
+      // not a replacement, and the position is still ranked on the first one.
+      if (!taxedCard.includes('$100.00') || !taxedCard.includes('5.00%')) {
+        problems.push('the after-tax figure displaced the pre-tax one');
+      }
+      if (/NaN|undefined/.test(taxedCard)) {
+        problems.push('the taxed arb card rendered NaN/undefined');
+      }
+
+      // Back to no tax: the default page must be what it was before any of this
+      // existed, and later checks below read the rendered numbers.
+      fed.value = '0'; fed.dispatch('change');
+      state.value = '0'; state.dispatch('change');
+      cap.checked = true; cap.dispatch('change');
+      if (globalThis.__taxOn() !== false) {
+        problems.push('clearing both rates did not turn the after-tax figures off');
+      }
+    }
+    if (problems.length) {
+      console.error('AFTER TAX WRONG: ' + problems.join('; '));
+      process.exit(1);
+    }
+    console.log(fed && state && cap
+      ? 'the after-tax rule caps the deduction, taxes state winnings gross, and round-trips through storage'
+      : 'the after-tax rule — the controls are not on this page, not asserted');
   }
 
   // An impossible pick is forgotten on the change itself, before nav counts read it.

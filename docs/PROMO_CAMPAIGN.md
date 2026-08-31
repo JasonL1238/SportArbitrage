@@ -107,7 +107,13 @@ credit side last when the credit could expire.
   this.
 - **Taxes are real** (informational, not advice): gambling winnings are taxable; Illinois
   taxes them at a flat 4.95% with no loss offset; other states differ. Hedged promo
-  profit is still profit; the betlog's leg-level record is the substantiation.
+  profit is still profit; the betlog's leg-level record is the substantiation. The
+  dashboard's rail has an **After tax** picker that puts a second figure beside the
+  plan's worst case, the arbitrage floors and the ledger's realized profit — it changes
+  nothing that was planned or ranked. Two things it will show you that the pre-tax
+  numbers cannot: only 90% of losses are deductible from tax year 2026, and a converted
+  bonus bet is winnings with nothing to set against it, because none of your money was
+  ever at risk on it.
 - **Never override a plan the planner refused.** The `gated out` counts on a card are
   reasons — several of them were learned from measured losses.
 

@@ -1869,7 +1869,8 @@ class TestThePayloadAndTheRendererAgreeOnFieldNames:
     #: Every plan-level key the renderer reads, read off the JS source below.
     RENDERED_PLAN_FIELDS = frozenset({
         "market", "period", "line", "side", "home_team", "away_team",
-        "commence_time", "legs", "outcome_profits", "guaranteed_cash",
+        "commence_time", "legs", "outcome_profits", "outcome_bases",
+        "guaranteed_cash",
         "settled_cash", "conversion_pct", "quote_age_seconds", "notes", "step",
         "breakeven_boost_pct", "cost_per_100_wagered", "qualifying_cost",
     })
@@ -4167,3 +4168,68 @@ class TestContestsAreRefusedByName:
         plan = out["plans"]["betmgm|frenzy"]
         assert plan["plans"] == []
         assert any("contest or free-to-play" in c for c in plan["caveats"]), plan["caveats"]
+
+
+# ── the taxable basis carried beside each outcome ────────────────────────────
+
+
+class TestOutcomeBases:
+    """``outcome_bases`` must describe the same settlements ``outcome_profits`` does.
+
+    Promo plans are the case where the basis differs most from the profit, and
+    for a reason the profit alone cannot express: a bonus-credit stake is not the
+    operator's money, so it is never a deductible loss, while every cent it
+    returns is a taxable win.  A converted $100 credit is $100 of winnings with
+    nothing to set against it.
+    """
+
+    def _check(self, plan) -> None:
+        profits = plan["outcome_profits"]
+        bases = plan["outcome_bases"]
+        assert [label for label, _ in profits] == [label for label, _w, _l in bases], (
+            "bases are not aligned with profits, label for label and in order"
+        )
+        for (label, profit), (_, winnings, losses) in zip(profits, bases):
+            assert winnings >= 0.0 and losses >= 0.0, label
+            assert winnings - losses == pytest.approx(profit, abs=0.02), label
+
+    def _quotes(self):
+        return [
+            make_quote(source="draftkings", selection=Selection.HOME, decimal_odds=3.0),
+            make_quote(source="fanduel", selection=Selection.AWAY, decimal_odds=1.5),
+        ]
+
+    def test_a_bonus_bet_plan_agrees_with_its_profits(self):
+        for plan in _the_plan(_plans([_offer()], self._quotes()))["plans"]:
+            self._check(plan)
+
+    def test_a_bonus_stake_is_never_a_deductible_loss(self):
+        """The credit leg cannot appear on the loss side in any outcome.
+
+        The hedge is cash and can lose; the credit cannot, because none of the
+        operator's money was ever on it.  So the losses in every outcome stay at
+        or below the cash actually staked.
+        """
+        plans = _the_plan(_plans([_offer()], self._quotes()))["plans"]
+        assert plans
+        for plan in plans:
+            cash = sum(
+                leg["stake"] for leg in plan["legs"] if leg["stake_kind"] != "bonus"
+            )
+            for label, _winnings, losses in plan["outcome_bases"]:
+                assert losses <= cash + 0.01, (label, losses, cash)
+
+    def test_the_gross_winnings_exceed_the_profit(self):
+        """Which is the whole point of carrying the pair.
+
+        A plan that nets +$60 is not taxed on $60; it is taxed on what the
+        winning side actually paid, less a capped deduction for the other.
+        """
+        plans = _the_plan(_plans([_offer()], self._quotes()))["plans"]
+        assert plans
+        best = plans[0]
+        worst_label = min(best["outcome_profits"], key=lambda row: row[1])[0]
+        winnings = dict(
+            (label, winnings) for label, winnings, _losses in best["outcome_bases"]
+        )[worst_label]
+        assert winnings > 0.0

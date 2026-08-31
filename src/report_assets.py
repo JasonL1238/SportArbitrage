@@ -907,6 +907,25 @@ BODY = """
       <span class="rail-foot" id="offshore-meta" style="margin:0"></span>
     </div>
 
+    <div class="rail-block">
+      <!-- Display only. Nothing here changes what was detected, what is
+           takeable, or how anything is ranked — it adds a second figure beside
+           the pre-tax one, and at the default of no tax it adds nothing at all.
+           Informational, not tax advice. -->
+      <label for="tax-fed">After tax</label>
+      <select id="tax-fed" aria-label="Federal rate on taxable gambling income"></select>
+      <select id="tax-state" aria-label="State rate on gross winnings"></select>
+      <!-- Same two rules as the switch above: the block heading is a bare
+           <label> so it cannot steal the control's accessible name, and this
+           label contains the checkbox rather than pointing at it. -->
+      <label class="switch">
+        <input type="checkbox" id="tax-cap"
+               aria-label="Deduct only 90% of losses">
+        <span>90% loss-deduction cap</span>
+      </label>
+      <span class="rail-foot" id="tax-meta" style="margin:0"></span>
+    </div>
+
     <div class="rail-foot" id="built"></div>
   </aside>
 
@@ -2492,6 +2511,94 @@ const BOOK_KEY = 'sportarb.book';
 
 let currentBrand = storedValue(BOOK_KEY, '');
 
+/* ── after tax ──────────────────────────────────────────────────────────────
+   The one place on this page — or anywhere in this repository — where a tax
+   rate is applied to anything.
+
+   Python computes the *basis* of every settlement outcome (`src/tax.py`): the
+   gross winnings and the deductible losses it produces. It stops there, because
+   the answer has to move when the reader moves these pickers, and because the
+   after-tax floor of a position is the minimum over its outcomes *after* the
+   rate is applied — and which outcome is worst changes with the rate. So there
+   is no second implementation to drift from: the basis rule is Python's alone,
+   the rate rule is this file's alone.
+
+   Why the pair rather than the profit: tax is charged on gross winnings, and
+   losses are only a capped deduction against them. A $100 profit made of a
+   $1,100 win against a $1,000 loss and a $100 profit made of a $150 win against
+   a $50 loss are taxed on very different numbers. That is also why an arb is
+   *not* risk-free after tax even though it is before: every outcome has its own
+   basis, so the outcomes stop being equal.
+
+   Stored as strings, and read back through `Number` — a value written in the
+   wrong format reads as "not set" and is indistinguishable from a browser that
+   refuses storage, which is the defect `storedValue` exists to make impossible
+   to reintroduce quietly. */
+const TAX_FED_KEY = 'sportarb.taxFed';
+const TAX_STATE_KEY = 'sportarb.taxState';
+const TAX_CAP_KEY = 'sportarb.taxCap';
+
+const TAX = DATA.tax || {};
+/* 0.90 from tax year 2026. Falls back to 1.0 — no cap — rather than to a
+   guess, so a payload written before this existed under-states nothing. */
+const DEDUCTIBLE_SHARE = Number(TAX.deductible_share ?? 1);
+
+let taxFed = Number(storedValue(TAX_FED_KEY, '0')) || 0;
+let taxState = Number(storedValue(TAX_STATE_KEY, '0')) || 0;
+/* The cap is on unless it was explicitly turned off: it is the rule in force,
+   and the switch exists to show what it costs, not to opt out of it. */
+let taxCap = storedValue(TAX_CAP_KEY, '1') !== '0';
+
+/* Is any rate set at all? When not, every after-tax figure is suppressed and
+   the page is exactly what it was before this feature existed. */
+function taxOn() {
+  return taxFed > 0 || taxState > 0;
+}
+
+/* The bill on one basis. `winnings` and `losses` are gross and non-negative.
+
+   The federal layer taxes winnings less the capped loss deduction; the
+   deduction can never exceed the winnings, because a losing year is not a
+   refund. The state layer taxes gross winnings with no offset at all — the
+   harshest arrangement in use (Illinois is one) and the strict reading, on the
+   same reasoning `src/commission.py` gives for its rates: a charge understated
+   manufactures an edge that is not there, while one overstated only costs a
+   position. A reader whose state lets winnings and losses net sets it to
+   none. */
+function taxBill(basis) {
+  if (!basis) return null;
+  const winnings = Number(basis.winnings) || 0;
+  const losses = Number(basis.losses) || 0;
+  const deductible = Math.min(losses * (taxCap ? DEDUCTIBLE_SHARE : 1), winnings);
+  return Math.max(0, winnings - deductible) * taxFed + winnings * taxState;
+}
+
+/* Profit after tax, for a basis paired with the profit already computed for it.
+   Returns null when there is no basis — a position built without a settlement
+   grid — so callers omit the figure rather than printing the pre-tax number
+   under an "after tax" label, which is the one wrong answer here. */
+function afterTax(profit, basis) {
+  const bill = taxBill(basis);
+  return bill === null ? null : Number(profit) - bill;
+}
+
+/* The floor of a position after tax, from rows of {profit, winnings, losses}.
+
+   Taken as a fresh minimum rather than as "the pre-tax floor, taxed": the
+   outcome that pays least before tax is often not the one that keeps least
+   after it, because the outcome with the larger gross win carries the larger
+   bill. Reading the wrong one overstates what a position actually keeps. */
+function afterTaxFloor(rows) {
+  let worst = null;
+  for (const row of rows || []) {
+    if (row.winnings === undefined || row.winnings === null) return null;
+    const net = afterTax(row.profit, row);
+    if (net === null) return null;
+    if (worst === null || net < worst) worst = net;
+  }
+  return worst;
+}
+
 // '' means every sport.  The filter is applied at the one place the rest of the
 // page reads its rows from, so no section can forget to honour it and show a
 // different sport's numbers under the same heading.  The offshore filter rides
@@ -2974,6 +3081,7 @@ function renderChrome() {
   // Before the early return: the rail lines describe the controls, which are on
   // screen and meaningful even on a page with no scrape to show yet.
   paintOffshoreMeta();
+  paintTaxMeta();
   if (!run) {
     el('lede').textContent = 'No scrapes yet. Hit Scrape now (via --serve) to pull prices.';
     el('brand-sub').textContent = DATA.meta.db_name || '';
@@ -3750,6 +3858,19 @@ function promoPlanCardHtml(plan, o, planIndex) {
   if (plan.settled_cash !== plan.guaranteed_cash) {
     metrics.push(`if it settles ${promoMoney(plan.settled_cash)}`);
   }
+  /* `outcome_bases` is aligned with `outcome_profits` by position and by label;
+     it is a separate key because a dozen readers destructure the rows above as
+     exactly two-wide pairs. A promo plan's basis is the one most unlike its
+     profit: a bonus stake is never a deductible loss, so a converted credit is
+     winnings with nothing to set against it. */
+  if (taxOn() && (plan.outcome_bases || []).length) {
+    const rows = plan.outcome_profits.map(([label, profit], i) => {
+      const basis = plan.outcome_bases[i];
+      return { profit, winnings: basis && basis[1], losses: basis && basis[2] };
+    });
+    const net = afterTaxFloor(rows);
+    if (net !== null) metrics.push(`worst case ${promoMoney(net)} after tax`);
+  }
   const age = promoAge(plan.quote_age_seconds);
   const outcomes = (plan.outcome_profits || [])
     .map(([label, profit]) => `${String(label).replace(/_/g, ' ')} ${promoMoney(profit)}`)
@@ -4480,10 +4601,24 @@ function renderArb() {
     ? Math.max(...takeable.map((o) => o.margin_pct || 0))
     : 0;
   const profit = takeable.reduce((n, o) => n + (o.guaranteed_profit || 0), 0);
+  /* Summed from each position's own after-tax floor, not by taxing the total:
+     the deduction cap bites per position, and a position whose floor goes
+     negative after tax has to drag the sum down rather than be netted away by a
+     better one. Suppressed entirely when no rate is set, and when any position
+     lacks a basis, so the tile never mixes taxed and untaxed money. */
+  const takeableNet = taxOn()
+    ? takeable.map((o) => afterTaxFloor(o.outcome_profits))
+    : [];
+  const netProfit = takeableNet.length && takeableNet.every((v) => v !== null)
+    ? takeableNet.reduce((n, v) => n + v, 0)
+    : null;
+  const guaranteedSub = netProfit === null
+    ? `on $${Number(bag.stake || 100).toFixed(0)} each`
+    : `${usdSigned(netProfit)} after tax · on $${Number(bag.stake || 100).toFixed(0)} each`;
   stats.innerHTML = [
     ['positions', takeable.length, 'risk-free right now'],
     ['best margin', takeable.length ? `${best.toFixed(2)}%` : '—', 'headline edge'],
-    ['guaranteed $', takeable.length ? profit.toFixed(2) : '—', `on $${Number(bag.stake || 100).toFixed(0)} each`],
+    ['guaranteed $', takeable.length ? profit.toFixed(2) : '—', guaranteedSub],
     ['not takeable', blocked, 'a leg out of reach from here'],
     ['markets checked', bag.comparable_group_count || 0, `${bag.group_count || 0} total groups`],
   ].map(([name, value, sub]) =>
@@ -4642,9 +4777,23 @@ function arbCard(o, index) {
       <td class="num">${betLink(leg.link)}</td>
     </tr>`;
   }).join('');
-  const outcomes = (o.outcome_profits || []).map((row) =>
-    `${escapeHtml(row.label)} ${Number(row.profit) >= 0 ? '+' : ''}${Number(row.profit).toFixed(2)}`
-  ).join(' · ');
+  /* Per outcome, and after tax per outcome when a rate is set. This is the line
+     where the feature earns its place: before tax an arb pays the same in every
+     outcome, and after tax it does not, because the outcome with the larger
+     gross win carries the larger bill. */
+  const outcomes = (o.outcome_profits || []).map((row) => {
+    const gross = `${escapeHtml(row.label)} ${
+      Number(row.profit) >= 0 ? '+' : ''}${Number(row.profit).toFixed(2)}`;
+    if (!taxOn()) return gross;
+    const net = afterTax(row.profit, row);
+    if (net === null) return gross;
+    return `${gross} (${net >= 0 ? '+' : ''}${net.toFixed(2)} after tax)`;
+  }).join(' · ');
+  const netFloor = taxOn() ? afterTaxFloor(o.outcome_profits) : null;
+  /* Beside the guaranteed figure, never instead of it. The pre-tax floor is
+     what the position is detected and ranked on; this says what is left of it. */
+  const afterTaxKpi = netFloor === null ? '' :
+    `<span>after tax <strong>${usdSigned(netFloor)}</strong></span>`;
   const notes = (o.notes || []).length
     ? `<div class="arb-notes">${o.notes.map((n) => escapeHtml(n)).join(' · ')}</div>`
     : '';
@@ -4675,6 +4824,7 @@ function arbCard(o, index) {
       <span>guaranteed <strong>$${Number(o.guaranteed_profit).toFixed(2)}</strong></span>
       <span>on <strong>$${Number(o.total_stake).toFixed(2)}</strong></span>
       <span>ROI <strong>${Number(o.roi_pct).toFixed(2)}%</strong></span>
+      ${afterTaxKpi}
       <span>Σ implied <strong>${Number(o.sum_implied).toFixed(4)}</strong></span>
       ${limit}
     </div>
@@ -4851,11 +5001,23 @@ function renderBets() {
     const roi = summary.roi_pct === null || summary.roi_pct === undefined
       ? '—' : Number(summary.roi_pct).toFixed(2) + '%';
     const record = summary.record || {};
+    /* The one after-tax figure on the page that is not a projection: it is
+       computed from the legs the operator actually settled, and its gross
+       winnings are the number a return asks for. Python supplies the basis for
+       the same reason it supplies the rest of this strip — see the comment
+       above about not re-deriving ledger money here. */
+    const netProfit = taxOn() ? afterTax(summary.profit, summary.tax_basis) : null;
+    const netRoi = netProfit !== null && summary.settled_stake
+      ? `${(netProfit / summary.settled_stake * 100).toFixed(2)}%`
+      : null;
     stats.innerHTML = [
-      ['profit', usdSigned(summary.profit), 'settled bets only'],
+      ['profit', usdSigned(summary.profit),
+        netProfit === null ? 'settled bets only' : `${usdSigned(netProfit)} after tax`],
       ['staked', usd(summary.staked), `${summary.leg_count || 0} legs logged`],
       ['still open', usd(summary.open_stake), `${summary.pending_legs || 0} unsettled`],
-      ['ROI', roi, `on ${usd(summary.settled_stake)} settled`],
+      ['ROI', roi, netRoi === null
+        ? `on ${usd(summary.settled_stake)} settled`
+        : `${netRoi} after tax · on ${usd(summary.settled_stake)} settled`],
       ['record', `${record.won || 0}-${record.lost || 0}-${
         (record.push || 0) + (record.void || 0)}`, 'won-lost-push'],
     ].map(([name, value, sub]) =>
@@ -7476,6 +7638,88 @@ if (bookPick) {
     selectedEvent = null;
     renderRunScoped();
   });
+}
+
+/* The after-tax pickers. Unlike the three global controls above, these change
+   no row's membership in anything — they add a second figure beside numbers
+   that are already on screen. So the reconcile-then-rebuild path is not run:
+   `buildEventsFilters` has nothing to reconcile and no nav count reads a rate.
+   Every panel is marked stale and the one on screen rebuilds, which is what
+   makes the arbitrage, promo and ledger figures move together.
+   Guarded: the empty scrape shell does not carry the controls. */
+function fillTaxPicker(node, presets, selected) {
+  if (!node) return selected;
+  const rates = (presets || []).map((entry) => Number(entry.rate));
+  // A rate remembered from a payload that no longer offers it would leave the
+  // control showing one thing while the arithmetic used another. Decided from
+  // the rate list rather than from what the control reports back: a <select>
+  // only answers with its `selected` option once the markup is really in the
+  // document, so trusting `node.value` here reads as "nothing was remembered"
+  // wherever it is not.
+  const chosen = rates.includes(selected) ? selected : (rates.length ? rates[0] : 0);
+  node.innerHTML = presets.map((entry) =>
+    `<option value="${Number(entry.rate)}"${
+      Number(entry.rate) === chosen ? ' selected' : ''
+    }>${escapeHtml(String(entry.label))}</option>`).join('');
+  node.value = String(chosen);
+  return chosen;
+}
+
+const taxFedPick = el('tax-fed');
+const taxStatePick = el('tax-state');
+const taxCapToggle = el('tax-cap');
+
+taxFed = fillTaxPicker(taxFedPick, TAX.federal, taxFed);
+taxState = fillTaxPicker(taxStatePick, TAX.state, taxState);
+
+function applyTaxChange() {
+  storeValue(TAX_FED_KEY, String(taxFed));
+  storeValue(TAX_STATE_KEY, String(taxState));
+  storeValue(TAX_CAP_KEY, taxCap ? '1' : '0');
+  paintTaxMeta();
+  invalidatePanels();
+  showCurrentPanel();
+}
+
+if (taxFedPick) {
+  taxFedPick.addEventListener('change', () => {
+    taxFed = Number(taxFedPick.value) || 0;
+    applyTaxChange();
+  });
+}
+if (taxStatePick) {
+  taxStatePick.addEventListener('change', () => {
+    taxState = Number(taxStatePick.value) || 0;
+    applyTaxChange();
+  });
+}
+if (taxCapToggle) {
+  taxCapToggle.checked = taxCap;
+  taxCapToggle.addEventListener('change', () => {
+    taxCap = taxCapToggle.checked;
+    applyTaxChange();
+  });
+}
+
+/** The rail's line under the pickers: what the rates currently do, in words. */
+function paintTaxMeta() {
+  const node = el('tax-meta');
+  if (!node) return;
+  if (!taxOn()) {
+    node.textContent = 'every figure on the page is pre-tax';
+    return;
+  }
+  const parts = [];
+  if (taxFed > 0) {
+    const deducted = taxCap
+      ? `${(DEDUCTIBLE_SHARE * 100).toFixed(0)}% of losses`
+      : 'losses';
+    parts.push(`${(taxFed * 100).toFixed(0)}% federal on winnings less ${deducted}`);
+  }
+  if (taxState > 0) {
+    parts.push(`${(taxState * 100).toFixed(2)}% state on gross winnings, no offset`);
+  }
+  node.textContent = `${parts.join(' · ')} — informational, not tax advice`;
 }
 
 /** The rail's line under the switch: what it is currently hiding or admitting. */

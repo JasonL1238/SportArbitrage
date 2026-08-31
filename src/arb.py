@@ -92,6 +92,7 @@ from src.commission import Commission, commission_for
 from src.redundancy import REDUNDANT_PAIRS, is_redundant_pair
 from src.sources.registry import VIEW_ONLY_SOURCES
 from src.settlement import mismatch as settlement_mismatch
+from src.tax import TaxBasis, basis as taxable_basis, combine as combine_bases
 
 if TYPE_CHECKING:
     from src.distinctness import Agreement
@@ -743,6 +744,16 @@ class Opportunity:
     max_total_stake: float | None
     """Largest bankroll the books' stated limits allow, when they state any."""
     notes: tuple[str, ...] = ()
+    outcome_bases: tuple[tuple[str, TaxBasis], ...] = ()
+    """Gross winnings and deductible losses in every settlement outcome, aligned
+    with :attr:`outcome_profits`.
+
+    Reporting only — nothing in detection, ranking or alerting reads it, and
+    :mod:`src.tax` explains why the pair cannot be collapsed to the profit
+    beside it.  Defaulted to empty because a position built by hand (the alert
+    tests do) has no settlement grid to derive it from; a surface that finds it
+    empty must omit its after-tax figures rather than invent a basis, which is
+    the only honest reading of "not computed"."""
 
     @property
     def sources(self) -> tuple[str, ...]:
@@ -2583,6 +2594,27 @@ def _build_opportunity(
     profits, _ = evaluate(best_stakes)
     labels = [label for label, _ in profits]
 
+    # What each outcome would be taxed on, off the same grid ``evaluate`` uses.
+    # Built once here, for the chosen split only, rather than inside ``evaluate``
+    # — that runs once per stake candidate in the sweep above, and keeping it
+    # linear in candidates is the whole point of precomputing the multipliers.
+    #
+    # Winnings and losses are accumulated per leg, not netted per outcome: the
+    # winning leg's whole profit is taxable while the losing leg's stake is only
+    # a capped deduction, so the pair carries information the profit beside it
+    # cannot.  A push leg returns its stake and lands in neither total, which is
+    # exactly what ``tax.basis`` gives for ``cash_back == at_risk``.
+    outcome_bases = tuple(
+        (
+            label,
+            combine_bases(
+                taxable_basis(stake, stake * mult)
+                for stake, mult in zip(best_stakes, multipliers)
+            ),
+        )
+        for label, multipliers in outcome_multipliers
+    )
+
     notes: list[str] = []
     if "push" in labels:
         if line is None:
@@ -2721,6 +2753,7 @@ def _build_opportunity(
         outcome_profits=tuple(profits),
         max_total_stake=max_total_stake,
         notes=tuple(notes),
+        outcome_bases=outcome_bases,
     )
 
 

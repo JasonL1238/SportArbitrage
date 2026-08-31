@@ -44,6 +44,40 @@ keys into collected odds, so pruning or re-scraping odds cannot rewrite history.
 A static dashboard embeds the current ledger read-only; the localhost report
 server exposes the same-origin endpoints used to log, edit, settle, and delete.
 
+## After-tax reporting
+
+```text
+settlement grid (arb / planner / ledger legs) -> src/tax.py basis per outcome
+    -> payload: winnings + losses beside every profit
+    -> src/report_assets.py applies the reader's rates -> after-tax figures
+```
+
+Split across the boundary on purpose, in both directions.
+
+`src/tax.py` computes only the **basis** — the gross winnings and the deductible
+losses an outcome produces — from one primitive, `basis(at_risk, cash_back)`.
+`src/arb.py` derives it per settlement outcome off the same multiplier grid the
+profits come from, `betlog.summarize` accumulates it over priced settled legs, and
+`src/promos/planner.py` builds it inside its existing outcome walk. The client cannot
+derive any of this: it never sees what a leg returns under a push or a half-push,
+and the ledger's money is deliberately not re-derived on the page.
+
+The **rates** are applied only in `src/report_assets.py` (`taxBill`). They cannot be
+precomputed per run: the reader changes them with a picker, and a position's
+after-tax floor is a fresh minimum over its outcomes *after* the rate lands, because
+the outcome with the larger gross win carries the larger bill. So each half of the
+rule has exactly one implementation and there is nothing to drift.
+
+Winnings and losses are carried as a pair rather than netted because tax is charged
+on gross winnings while losses are only a capped deduction (90% from tax year 2026),
+so two positions with the same profit are taxed on different numbers. A bonus-credit
+stake has nothing at risk, so its whole return is winnings and none of it is ever
+deductible — the same rule `betlog._cash_stake` applies to the bankroll.
+
+This is a reporting overlay. Detection, stake solving, ranking, `takeable`, the
+zero-floor guard and alerting all read pre-tax numbers and are unaffected; with no
+rate set the page renders exactly as it did before the feature existed.
+
 ## Entry points
 
 - `python -m src` and `python -m src.collector`: odds collector and operational CLI;
@@ -147,7 +181,7 @@ server exposes the same-origin endpoints used to log, edit, settle, and delete.
   being wrong is a labelled position with its count reported rather than an
   unlabelled SMS naming a book nobody can reach.
 - Promotions may reuse settings, raw storage, and transport guards, but its schema, registry, and database remain separate.
-- The bet ledger has a separate schema and lifecycle from both collected odds and promotions; collection never writes or deletes it.
+- The bet ledger has a separate schema and lifecycle from both collected odds and promotions; collection never writes or deletes it. Its one import from `src/` is `src/tax.py`, a stdlib-only leaf, so that what counts as a taxable win versus a deductible loss is stated once for the ledger, the detector and the promo planner alike.
 - The report layer may read and combine all three domains. Only its localhost control plane writes the bet ledger; collection/domain modules must not depend on report rendering.
 - `src/report_assets.py` is handwritten presentation source (`CSS`, `BODY`, `JS`, and
   `EMPTY_SHELL` — the standalone page a wiped database shows so it can still scrape),
